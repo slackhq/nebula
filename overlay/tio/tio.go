@@ -93,14 +93,6 @@ type CapsProvider interface {
 	Capabilities() Capabilities
 }
 
-// QueueCapabilities returns q's negotiated offload capabilities, or the zero value when q does not advertise any.
-func QueueCapabilities(q io.Writer) Capabilities {
-	if cp, ok := q.(CapsProvider); ok {
-		return cp.Capabilities()
-	}
-	return Capabilities{}
-}
-
 // GSOProto selects the L4 protocol for a GSO superpacket.
 // Determines which VIRTIO_NET_HDR_GSO_* type the writer stamps and which checksum offset
 // inside the transport header virtio NEEDS_CSUM expects.
@@ -126,9 +118,10 @@ const (
 // Every segment in pays except possibly the last is exactly the same size.
 // proto picks the L4 protocol so the writer knows which gsoType / CsumOffset to set.
 //
-// Callers should also consult CapsProvider (via SupportsGSO or QueueCapabilities)
-// for the per-protocol negotiated capability: USO may not have been negotiated even when TSO was.
+// Callers should also consult CapsProvider (via SupportsGSO) for the per-protocol negotiated capability:
+// USO may not have been negotiated even when TSO was.
 type GSOWriter interface {
+	io.Writer
 	CapsProvider
 	WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, proto GSOProto) error
 }

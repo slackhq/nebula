@@ -173,7 +173,7 @@ func (r *Offload) Read() ([]Packet, error) {
 			return nil, err
 		}
 		if err := r.decodeRead(n); err != nil {
-			// Drop and read again — a bad packet should not kill the reader.
+			// Drop and read again. A bad packet should not kill the reader.
 			continue
 		}
 		break

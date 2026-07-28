@@ -2,6 +2,7 @@ package batch
 
 import (
 	"encoding/binary"
+	"io"
 	"testing"
 )
 
@@ -58,27 +59,31 @@ func buildUDPv6(sport, dport uint16, payload []byte) []byte {
 	return pkt
 }
 
-func TestUDPCoalescerPassthroughWhenGSOUnavailable(t *testing.T) {
-	w := &fakeTunWriter{gsoEnabled: false}
+// newTestUDPCoalescer builds a coalescer over w and fails the test if w can't
+// do USO. See newTestTCPCoalescer.
+func newTestUDPCoalescer(tb testing.TB, w io.Writer) *UDPCoalescer {
+	tb.Helper()
 	c := NewUDPCoalescer(w)
-	pkt := buildUDPv4(1000, 53, make([]byte, 100))
-	if err := c.Commit(pkt); err != nil {
-		t.Fatal(err)
+	if c == nil {
+		tb.Fatal("NewUDPCoalescer: writer does not support USO")
 	}
-	if len(w.writes) != 0 || len(w.gsoWrites) != 0 {
-		t.Fatalf("no Add-time writes: writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
+	return c
+}
+
+// TestNewUDPCoalescerRefusesWhenGSOUnavailable mirrors the TCP precondition:
+// no USO, no coalescer.
+func TestNewUDPCoalescerRefusesWhenGSOUnavailable(t *testing.T) {
+	if c := NewUDPCoalescer(&fakeTunWriter{gsoEnabled: false}); c != nil {
+		t.Fatalf("want nil for a non-USO writer, got %v", c)
 	}
-	if err := c.Flush(); err != nil {
-		t.Fatal(err)
-	}
-	if len(w.writes) != 1 || len(w.gsoWrites) != 0 {
-		t.Fatalf("want single plain write, got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
+	if c := NewUDPCoalescer(&plainOnlyWriter{}); c != nil {
+		t.Fatalf("want nil for a plain writer, got %v", c)
 	}
 }
 
 func TestUDPCoalescerNonUDPPassthrough(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewUDPCoalescer(w)
+	c := newTestUDPCoalescer(t, w)
 	// ICMP packet
 	pkt := make([]byte, 28)
 	pkt[0] = 0x45
@@ -99,7 +104,7 @@ func TestUDPCoalescerNonUDPPassthrough(t *testing.T) {
 
 func TestUDPCoalescerSeedThenFlushAlone(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewUDPCoalescer(w)
+	c := newTestUDPCoalescer(t, w)
 	pkt := buildUDPv4(1000, 53, make([]byte, 800))
 	if err := c.Commit(pkt); err != nil {
 		t.Fatal(err)
@@ -116,7 +121,7 @@ func TestUDPCoalescerSeedThenFlushAlone(t *testing.T) {
 
 func TestUDPCoalescerCoalescesEqualSized(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewUDPCoalescer(w)
+	c := newTestUDPCoalescer(t, w)
 	pay := make([]byte, 1200)
 	for i := 0; i < 3; i++ {
 		if err := c.Commit(buildUDPv4(1000, 53, pay)); err != nil {
@@ -156,7 +161,7 @@ func TestUDPCoalescerCoalescesEqualSized(t *testing.T) {
 // Last segment may be shorter, sealing the chain.
 func TestUDPCoalescerShortLastSegmentSeals(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewUDPCoalescer(w)
+	c := newTestUDPCoalescer(t, w)
 	full := make([]byte, 1200)
 	tail := make([]byte, 600)
 	if err := c.Commit(buildUDPv4(1000, 53, full)); err != nil {
@@ -189,7 +194,7 @@ func TestUDPCoalescerShortLastSegmentSeals(t *testing.T) {
 // A larger-than-gsoSize packet cannot extend the slot — it reseeds.
 func TestUDPCoalescerLargerThanSeedReseeds(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewUDPCoalescer(w)
+	c := newTestUDPCoalescer(t, w)
 	if err := c.Commit(buildUDPv4(1000, 53, make([]byte, 800))); err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +212,7 @@ func TestUDPCoalescerLargerThanSeedReseeds(t *testing.T) {
 // Different 5-tuples must not coalesce.
 func TestUDPCoalescerDifferentFlowsKeepSeparate(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewUDPCoalescer(w)
+	c := newTestUDPCoalescer(t, w)
 	pay := make([]byte, 800)
 	if err := c.Commit(buildUDPv4(1000, 53, pay)); err != nil {
 		t.Fatal(err)
@@ -238,7 +243,7 @@ func TestUDPCoalescerDifferentFlowsKeepSeparate(t *testing.T) {
 // Caps at udpCoalesceMaxSegs.
 func TestUDPCoalescerCapsAtMaxSegs(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewUDPCoalescer(w)
+	c := newTestUDPCoalescer(t, w)
 	pay := make([]byte, 100)
 	for i := 0; i < udpCoalesceMaxSegs+5; i++ {
 		if err := c.Commit(buildUDPv4(1000, 53, pay)); err != nil {
@@ -267,7 +272,7 @@ func TestUDPCoalescerCapsAtMaxSegs(t *testing.T) {
 // trailing Not-ECT datagram seeds another.
 func TestUDPCoalescerDifferingECNReseeds(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewUDPCoalescer(w)
+	c := newTestUDPCoalescer(t, w)
 	pay := make([]byte, 800)
 	pkt0 := buildUDPv4(1000, 53, pay) // ECN=00 (Not-ECT)
 	pkt1 := buildUDPv4(1000, 53, pay)
@@ -298,7 +303,7 @@ func TestUDPCoalescerDifferingECNReseeds(t *testing.T) {
 // IPv6 path: same flow, equal-sized → coalesced.
 func TestUDPCoalescerIPv6Coalesces(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewUDPCoalescer(w)
+	c := newTestUDPCoalescer(t, w)
 	pay := make([]byte, 1200)
 	for i := 0; i < 3; i++ {
 		if err := c.Commit(buildUDPv6(1000, 53, pay)); err != nil {
@@ -334,7 +339,7 @@ func TestUDPCoalescerIPv6Coalesces(t *testing.T) {
 // DSCP differences must reseed: udpHeadersMatch compares the full ToS byte.
 func TestUDPCoalescerDSCPMismatchReseeds(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewUDPCoalescer(w)
+	c := newTestUDPCoalescer(t, w)
 	pay := make([]byte, 800)
 	pkt0 := buildUDPv4(1000, 53, pay)
 	pkt1 := buildUDPv4(1000, 53, pay)
@@ -356,7 +361,7 @@ func TestUDPCoalescerDSCPMismatchReseeds(t *testing.T) {
 // Fragmented IPv4 must not be coalesced.
 func TestUDPCoalescerFragmentedIPv4PassesThrough(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewUDPCoalescer(w)
+	c := newTestUDPCoalescer(t, w)
 	pkt := buildUDPv4(1000, 53, make([]byte, 200))
 	binary.BigEndian.PutUint16(pkt[6:8], 0x2000) // MF=1
 	if err := c.Commit(pkt); err != nil {
@@ -377,7 +382,7 @@ func TestUDPCoalescerFragmentedIPv4PassesThrough(t *testing.T) {
 // reach the GSO path. Regression: must not panic and must be written.
 func TestUDPCoalescerZeroLengthPayloadPassesThrough(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewUDPCoalescer(w)
+	c := newTestUDPCoalescer(t, w)
 	pkt := buildUDPv4(1000, 53, nil) // UDP length 8, zero payload
 	if err := c.Commit(pkt); err != nil {
 		t.Fatal(err)
@@ -396,7 +401,7 @@ func TestUDPCoalescerZeroLengthPayloadPassesThrough(t *testing.T) {
 // IPv6 zero-length UDP datagram: same passthrough contract as v4.
 func TestUDPCoalescerZeroLengthPayloadIPv6PassesThrough(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewUDPCoalescer(w)
+	c := newTestUDPCoalescer(t, w)
 	pkt := buildUDPv6(1000, 53, nil) // UDP length 8, zero payload
 	if err := c.Commit(pkt); err != nil {
 		t.Fatal(err)
@@ -417,7 +422,7 @@ func TestUDPCoalescerZeroLengthPayloadIPv6PassesThrough(t *testing.T) {
 // wire — per-flow arrival order (full, empty, full) must be preserved.
 func TestUDPCoalescerZeroLengthMidFlowSealsAndPreservesOrder(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewUDPCoalescer(w)
+	c := newTestUDPCoalescer(t, w)
 	full := make([]byte, 800)
 	if err := c.Commit(buildUDPv4(1000, 53, full)); err != nil {
 		t.Fatal(err)
@@ -441,7 +446,7 @@ func TestUDPCoalescerZeroLengthMidFlowSealsAndPreservesOrder(t *testing.T) {
 // IPv4 with options is not admissible (we require IHL=5).
 func TestUDPCoalescerIPv4WithOptionsPassesThrough(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewUDPCoalescer(w)
+	c := newTestUDPCoalescer(t, w)
 	pkt := buildUDPv4(1000, 53, make([]byte, 200))
 	pkt[0] = 0x46 // IHL = 6 (24-byte IPv4 header — has options)
 	if err := c.Commit(pkt); err != nil {

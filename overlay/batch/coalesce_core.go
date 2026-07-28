@@ -8,21 +8,20 @@ import (
 // flowKey identifies a transport flow by {src, dst, sport, dport, family}.
 // Comparable, so map lookups and linear scans over the slot list stay tight.
 // Shared by the TCP and UDP coalescers; each coalescer keeps its own
-// openSlots map, so a TCP and UDP flow on the same 5-tuple-without-proto
-// never alias.
+// openSlots map, so a TCP and UDP flow on the same 5-tuple-without-proto never alias.
 type flowKey struct {
 	src, dst     [16]byte
 	sport, dport uint16
 	isV6         bool
 }
 
-// initialSlots is the starting capacity of the slot pool. One flow per
-// packet is the worst case so this matches a typical carrier-side
-// recvmmsg batch on the encrypted UDP socket.
+// initialSlots is the starting capacity of the slot pool.
+// One flow per packet is the worst case,
+// so this matches a typical carrier-side recvmmsg batch on the UDP socket.
 const initialSlots = 64
 
-// parsedIP is the IP-level result of parseIPPrologue. The caller layers
-// L4-specific parsing (TCP / UDP) on top.
+// parsedIP is the IP-level result of parseIPPrologue.
+// The caller layers L4-specific parsing (TCP / UDP) on top.
 type parsedIP struct {
 	fk       flowKey
 	ipHdrLen int
@@ -92,15 +91,13 @@ func parseIPPrologue(pkt []byte, wantProto byte) (parsedIP, bool) {
 }
 
 // ipHeadersMatch compares the IP portion of two packet header prefixes for
-// byte-for-byte equality on every field that must be identical across
-// coalesced segments. Size/IPID/IPCsum are masked out. The full DSCP/ECN
-// byte (IPv4 ToS / IPv6 traffic class) is compared, matching Linux kernel
-// GRO: segments with differing ECN codepoints must not coalesce, otherwise
-// ORing e.g. ECT(0) with ECT(1) would fabricate a false CE (congestion)
-// mark or mark a Not-ECT flow as ECN-capable.
+// byte-for-byte equality on every field that must be identical across coalesced segments.
+// Size/IPID/IPCsum are masked out.
+// The full DSCP/ECN byte (IPv4 ToS / IPv6 traffic class) is compared, matching Linux kernel GRO:
+// segments with differing ECN codepoints must not coalesce,
+// otherwise ORing e.g. ECT(0) with ECT(1) would fabricate a false CE (congestion) mark or mark a Not-ECT flow as ECN-capable.
 //
-// The transport (L4) portion of the header is checked separately by the
-// per-protocol matcher.
+// The transport (L4) portion of the header is checked separately by the per-protocol matcher.
 func ipHeadersMatch(a, b []byte, isV6 bool) bool {
 	if isV6 {
 		// IPv6: byte 0 = version/TC[7:4], byte 1 = TC[3:0]/flow[19:16],
@@ -145,17 +142,14 @@ type Arena struct {
 	buf []byte
 }
 
-// NewArena returns an Arena with a pre-allocated backing of the given
-// capacity. Pass 0 if you don't intend to call Reserve (e.g. a test that
-// only feeds the coalescer pre-made []byte packets via Commit).
+// NewArena returns an Arena with a pre-allocated backing of the given capacity.
 func NewArena(capacity int) *Arena {
 	return &Arena{buf: make([]byte, 0, capacity)}
 }
 
-// Reserve hands out a non-overlapping sz-byte slice from the arena. If the
-// request doesn't fit the current backing, a fresh, larger backing is
-// allocated; already-borrowed slices reference the old backing and remain
-// valid until Reset.
+// Reserve hands out a non-overlapping sz-byte slice from the arena.
+// If the request doesn't fit the current backing, a fresh, larger backing is allocated.
+// Already-borrowed slices reference the old backing and remain valid until Reset.
 func (a *Arena) Reserve(sz int) []byte {
 	if len(a.buf)+sz > cap(a.buf) {
 		newCap := max(cap(a.buf)*2, sz)
@@ -166,9 +160,9 @@ func (a *Arena) Reserve(sz int) []byte {
 	return a.buf[start : start+sz : start+sz]
 }
 
-// Reset releases every slice handed out since the last Reset. Callers must
-// not use any previously-borrowed slice after this returns. The underlying
-// backing array is retained so subsequent Reserves don't re-allocate.
+// Reset releases every slice handed out since the last Reset.
+// Callers must not use any previously-borrowed slice after this returns.
+// The underlying backing array is retained so subsequent Reserves don't re-allocate.
 func (a *Arena) Reset() {
 	a.buf = a.buf[:0]
 }

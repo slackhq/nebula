@@ -27,13 +27,13 @@ const tcpCoalesceMaxSegs = 64
 // into. IPv6 (40) + TCP with full options (60) = 100 bytes.
 const tcpCoalesceHdrCap = 100
 
-// coalesceSlot is one entry in the coalescer's ordered event queue. When
-// passthrough is true the slot holds a single borrowed packet that must be
-// emitted verbatim (non-TCP, non-admissible TCP, or oversize seed). When
-// passthrough is false the slot is an in-progress coalesced superpacket:
-// hdrBuf is a mutable copy of the seed's IP+TCP header (we patch total
-// length and pseudo-header partial at flush), and payIovs are *borrowed*
-// slices from the caller's plaintext buffers — no payload is ever copied.
+// coalesceSlot is one entry in the coalescer's ordered event queue.
+// When passthrough is true the slot holds a single borrowed packet that must be
+// emitted verbatim (non-TCP, non-admissible TCP, or oversize seed).
+// When passthrough is false the slot is an in-progress coalesced superpacket.
+// hdrBuf is a mutable copy of the seed's IP+TCP header
+// (we patch total length and pseudo-header partial at flush)
+// payIovs are *borrowed* slices from the caller's plaintext buffers.
 // The caller (listenOut) must keep those buffers alive until Flush.
 type coalesceSlot struct {
 	passthrough bool
@@ -50,20 +50,18 @@ type coalesceSlot struct {
 	nextSeq  uint32
 	// sealed marks the chain permanently closed: the last-accepted segment had PSH or was sub-gsoSize,
 	// so no append or flush-time merge may follow.
-	// Distinct from mere eviction out of openSlots (e.g. on seq mismatch),
+	// Distinct from eviction out of openSlots (e.g. on seq mismatch),
 	// which leaves sealed=false so reorderForFlush can still merge the slot.
 	sealed  bool
 	payIovs [][]byte
 }
 
-// TCPCoalescer accumulates adjacent in-flow TCP data segments across
-// multiple concurrent flows and emits each flow's run as a single TSO
-// superpacket via tio.GSOWriter. All output — coalesced or not — is
-// deferred until Flush so arrival order is preserved on the wire. Owns
-// no locks; one coalescer per TUN write queue.
+// TCPCoalescer accumulates adjacent in-flow TCP data segments across multiple concurrent flows
+// and emits each flow's run as a single TSO superpacket via tio.GSOWriter.
+// All output, coalesced or not, is deferred until Flush so arrival order is preserved on the wire.
+// Owns no locks; one coalescer per TUN write queue.
 type TCPCoalescer struct {
-	plainW io.Writer
-	gsoW   tio.GSOWriter // nil when the queue doesn't support TSO
+	w tio.GSOWriter
 
 	// slots is the ordered event queue. Flush walks it once and emits each
 	// entry as either a WriteGSO (coalesced) or a plainW.Write (passthrough).
@@ -84,18 +82,19 @@ type TCPCoalescer struct {
 	l        *slog.Logger
 }
 
+// NewTCPCoalescer wraps w, returning nil if w can't accept GSO_TCP writes.
 func NewTCPCoalescer(w io.Writer, l *slog.Logger) *TCPCoalescer {
-	c := &TCPCoalescer{
-		plainW:    w,
+	gw, ok := tio.SupportsGSO(w, tio.GSOProtoTCP)
+	if !ok {
+		return nil
+	}
+	return &TCPCoalescer{
+		w:         gw,
 		slots:     make([]*coalesceSlot, 0, initialSlots),
 		openSlots: make(map[flowKey]*coalesceSlot, initialSlots),
 		pool:      make([]*coalesceSlot, 0, initialSlots),
 		l:         l,
 	}
-	if gw, ok := tio.SupportsGSO(w, tio.GSOProtoTCP); ok {
-		c.gsoW = gw
-	}
-	return c
 }
 
 // parsedTCP holds the fields extracted from a single parse so later steps
@@ -111,8 +110,7 @@ type parsedTCP struct {
 }
 
 // parseTCPBase extracts the flow key and IP/TCP offsets for any TCP packet,
-// regardless of whether it's admissible for coalescing. Returns ok=false
-// for non-TCP or malformed input.
+// regardless of whether it's admissible for coalescing. Returns ok=false for non-TCP or malformed input.
 // Accepts IPv4 (no options or fragmentation) and IPv6 (no extension headers).
 func parseTCPBase(pkt []byte) (parsedTCP, bool) {
 	var p parsedTCP
@@ -169,10 +167,6 @@ func (p parsedTCP) coalesceable() bool {
 }
 
 func (c *TCPCoalescer) Commit(pkt []byte) error {
-	if c.gsoW == nil {
-		c.addPassthrough(pkt)
-		return nil
-	}
 	info, ok := parseTCPBase(pkt)
 	if !ok {
 		c.addPassthrough(pkt)
@@ -186,10 +180,6 @@ func (c *TCPCoalescer) Commit(pkt []byte) error {
 // Used by MultiCoalescer.Commit to avoid re-walking the IP/TCP header
 // after the dispatcher has already done so.
 func (c *TCPCoalescer) commitParsed(pkt []byte, info parsedTCP) error {
-	if c.gsoW == nil {
-		c.addPassthrough(pkt)
-		return nil
-	}
 	if !info.coalesceable() {
 		// TCP but not admissible (SYN/FIN/RST/URG/CWR or zero-payload).
 		// Seal this flow's open slot so later in-flow packets don't extend
@@ -240,7 +230,7 @@ func (c *TCPCoalescer) Flush() error {
 	for _, s := range c.slots {
 		var err error
 		if s.passthrough {
-			_, err = c.plainW.Write(s.rawPkt)
+			_, err = c.w.Write(s.rawPkt)
 		} else {
 			err = c.flushSlot(s)
 		}
@@ -266,7 +256,7 @@ func (c *TCPCoalescer) addPassthrough(pkt []byte) {
 
 func (c *TCPCoalescer) seed(pkt []byte, info parsedTCP) {
 	if info.hdrLen > tcpCoalesceHdrCap || info.hdrLen+info.payLen > tcpCoalesceBufSize {
-		// Pathological shape — can't fit our scratch, emit as-is.
+		// Pathological shape. Can't fit our scratch, emit as-is.
 		c.addPassthrough(pkt)
 		return
 	}
@@ -317,8 +307,8 @@ func (c *TCPCoalescer) canAppend(s *coalesceSlot, pkt []byte, info parsedTCP) bo
 	if s.hdrLen+s.totalPay+info.payLen > tcpCoalesceBufSize {
 		return false
 	}
-	// ECE state must be stable across a burst — receivers expect the
-	// flag set on every segment of a CE-echoing window or none.
+	// ECE state must be stable across a burst.
+	// Receivers expect the flag set on every segment of a CE-echoing window or none.
 	seedFlags := s.hdrBuf[s.ipHdrLen+13]
 	if (seedFlags^info.flags)&tcpFlagEce != 0 {
 		return false
@@ -389,7 +379,7 @@ func (c *TCPCoalescer) flushSlot(s *coalesceSlot) error {
 	tcsum := s.ipHdrLen + 16
 	binary.BigEndian.PutUint16(hdr[tcsum:tcsum+2], foldOnceNoInvert(psum))
 
-	return c.gsoW.WriteGSO(hdr[:s.ipHdrLen], hdr[s.ipHdrLen:], s.payIovs, tio.GSOProtoTCP)
+	return c.w.WriteGSO(hdr[:s.ipHdrLen], hdr[s.ipHdrLen:], s.payIovs, tio.GSOProtoTCP)
 }
 
 // headersMatch compares two IP+TCP header prefixes for byte-for-byte
@@ -421,9 +411,9 @@ func headersMatch(a, b []byte, isV6 bool, ipHdrLen int) bool {
 }
 
 // reorderForFlush neutralizes wire-side reorder that the rxOrder buffer
-// couldn't catch (anything crossing a recvmmsg batch boundary). Without
-// this pass a small wire reorder — counter 250 arriving in batch K when
-// 200..249 are coming in batch K+1 — would seed an out-of-seq slot first
+// couldn't catch (anything crossing a recvmmsg batch boundary).
+// Without this pass a small wire reorder, counter 250 arriving in batch K when
+// 200..249 are coming in batch K+1, would seed an out-of-seq slot first
 // and emit it ahead of the lower-seq slot, manifesting at the inner TCP
 // receiver as a much larger reorder than the wire actually had.
 //
@@ -434,7 +424,7 @@ func headersMatch(a, b []byte, isV6 bool, ipHdrLen int) bool {
 //  2. Sweep once and merge adjacent same-flow slots whose ranges are now
 //     contiguous AND whose tail is gsoSize-aligned. The tail constraint
 //     matters because the kernel TSO splitter chops at gsoSize from the
-//     start of the merged payload — a short segment in the middle would
+//     start of the merged payload. A short segment in the middle would
 //     desynchronize every later segment.
 //
 // Passthrough slots act as barriers: the merge check skips them on either

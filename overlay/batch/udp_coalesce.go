@@ -36,44 +36,35 @@ type udpSlot struct {
 	numSeg   int
 	totalPay int
 	// sealed closes the chain: set when a sub-gsoSize segment is appended
-	// (kernel UDP-GSO requires every segment but the last to be exactly
-	// gsoSize) or when limits are hit. No further appends after.
+	// (kernel UDP-GSO requires every segment but the last to be exactly gsoSize)
+	// or when limits are hit. No further appends after.
 	sealed  bool
 	payIovs [][]byte
 }
 
 // UDPCoalescer accumulates adjacent in-flow UDP datagrams across multiple
-// concurrent flows and emits each flow's run as a single GSO_UDP_L4
-// superpacket via tio.GSOWriter. Falls back to per-packet writes when the
-// underlying writer doesn't support USO.
+// concurrent flows and emits each flow's run as a single GSO_UDP_L4 superpacket via tio.GSOWriter.
 // Preserves the in-flow order of packets as they are Commit-ed
 //
 // Owns no locks; one coalescer per TUN write queue.
 type UDPCoalescer struct {
-	plainW io.Writer
-	gsoW   tio.GSOWriter // nil when the queue can't accept GSO_UDP_L4
-
+	w         tio.GSOWriter
 	slots     []*udpSlot
 	openSlots map[flowKey]*udpSlot
 	pool      []*udpSlot
 }
 
-// NewUDPCoalescer wraps w. The caller is responsible for only constructing
-// this when the underlying Queue's Capabilities advertise USO; otherwise
-// the kernel may reject GSO_UDP_L4 writes. If w does not implement
-// tio.GSOWriter at all (single-packet Queue), the coalescer degrades to
-// plain Writes — same defensive shape as the TCP coalescer.
 func NewUDPCoalescer(w io.Writer) *UDPCoalescer {
-	c := &UDPCoalescer{
-		plainW:    w,
+	gw, ok := tio.SupportsGSO(w, tio.GSOProtoUDP)
+	if !ok {
+		return nil
+	}
+	return &UDPCoalescer{
+		w:         gw,
 		slots:     make([]*udpSlot, 0, initialSlots),
 		openSlots: make(map[flowKey]*udpSlot, initialSlots),
 		pool:      make([]*udpSlot, 0, initialSlots),
 	}
-	if gw, ok := tio.SupportsGSO(w, tio.GSOProtoUDP); ok {
-		c.gsoW = gw
-	}
-	return c
 }
 
 // parsedUDP holds the fields extracted from a single parse so later steps
@@ -115,10 +106,6 @@ func parseUDP(pkt []byte) (parsedUDP, bool) {
 
 // Commit borrows pkt. The caller must keep pkt valid until the next Flush.
 func (c *UDPCoalescer) Commit(pkt []byte) error {
-	if c.gsoW == nil {
-		c.addPassthrough(pkt)
-		return nil
-	}
 	info, ok := parseUDP(pkt)
 	if !ok {
 		c.addPassthrough(pkt)
@@ -131,16 +118,8 @@ func (c *UDPCoalescer) Commit(pkt []byte) error {
 // already verified parseUDP succeeded. Used by MultiCoalescer.Commit to
 // avoid re-walking the IP/UDP header.
 func (c *UDPCoalescer) commitParsed(pkt []byte, info parsedUDP) error {
-	if c.gsoW == nil {
-		c.addPassthrough(pkt)
-		return nil
-	}
 	// A zero-length UDP datagram (UDP `length` == 8) is legal and must still
-	// reach the TUN, but it can't be coalesced: a GSO slot would store an
-	// empty payload iovec and the kernel has nothing to segment. Seal any
-	// open chain for this flow (so a later, non-empty datagram seeds fresh
-	// *after* this one and per-flow arrival order is preserved) and deliver
-	// it as a plain single datagram.
+	// reach the TUN, but it can't be coalesced.
 	if info.payLen == 0 {
 		delete(c.openSlots, info.fk)
 		c.addPassthrough(pkt)
@@ -154,7 +133,7 @@ func (c *UDPCoalescer) commitParsed(pkt []byte, info parsedUDP) error {
 			}
 			return nil
 		}
-		// Can't extend — seal it and fall through to seed a fresh slot.
+		// Can't extend. Seal it and fall through to seed a fresh slot.
 		delete(c.openSlots, info.fk)
 	}
 	c.seed(pkt, info)
@@ -166,7 +145,7 @@ func (c *UDPCoalescer) Flush() error {
 	for _, s := range c.slots {
 		var err error
 		if s.passthrough {
-			_, err = c.plainW.Write(s.rawPkt)
+			_, err = c.w.Write(s.rawPkt)
 		} else {
 			err = c.flushSlot(s)
 		}
@@ -296,7 +275,7 @@ func (c *UDPCoalescer) flushSlot(s *udpSlot) error {
 	udpCsumOff := s.ipHdrLen + 6
 	binary.BigEndian.PutUint16(hdr[udpCsumOff:udpCsumOff+2], foldOnceNoInvert(psum))
 
-	return c.gsoW.WriteGSO(hdr[:s.ipHdrLen], hdr[s.ipHdrLen:], s.payIovs, tio.GSOProtoUDP)
+	return c.w.WriteGSO(hdr[:s.ipHdrLen], hdr[s.ipHdrLen:], s.payIovs, tio.GSOProtoUDP)
 }
 
 // udpHeadersMatch compares two IP+UDP header prefixes for byte-equality on
@@ -308,7 +287,7 @@ func udpHeadersMatch(a, b []byte, isV6 bool, ipHdrLen int) bool {
 	if !ipHeadersMatch(a, b, isV6) {
 		return false
 	}
-	// UDP: compare sport+dport ([0:4]). Skip length [4:6] and checksum [6:8] —
+	// UDP: compare sport+dport ([0:4]). Skip length [4:6] and checksum [6:8]
 	// length varies (we rewrite at flush) and the checksum will be redone.
 	udp := ipHdrLen
 	if a[udp] != b[udp] || a[udp+1] != b[udp+1] || a[udp+2] != b[udp+2] || a[udp+3] != b[udp+3] {

@@ -301,16 +301,7 @@ func (f *Interface) activate() error {
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
 
 	for i := range f.queues {
-		caps := tio.QueueCapabilities(f.queues[i])
-		if caps.TSO || caps.USO {
-			// Multi-lane: TCP gets coalesced when TSO is on, UDP when USO
-			// is on, everything else (and either lane disabled) falls
-			// through to passthrough so non-IP / non-TCP-UDP traffic still
-			// reaches the TUN.
-			f.batchers[i] = batch.NewMultiCoalescer(f.queues[i], f.l, caps.TSO, caps.USO)
-		} else {
-			f.batchers[i] = batch.NewPassthrough(f.queues[i])
-		}
+		f.batchers[i] = batch.NewMultiCoalescer(f.queues[i], f.l)
 	}
 
 	// On error the caller owns the cleanup, Control.Start cancels the service context

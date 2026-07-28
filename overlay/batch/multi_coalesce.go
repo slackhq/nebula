@@ -10,46 +10,33 @@ import (
 // on the IP/L4 protocol of the packet.
 //
 // Lanes are processed independently: the TCP coalescer only sees TCP, the
-// UDP coalescer only sees UDP, and the passthrough lane handles everything
-// else. Per-flow arrival order is preserved because a single 5-tuple only
+// UDP coalescer only sees UDP, and the passthrough lane handles everything else.
+// Per-flow delivery order is preserved because a single 5-tuple only
 // ever lands in one lane and each lane preserves its own slot order.
 //
-// Cross-lane order is NOT preserved across the TCP/UDP/passthrough split.
-// This is acceptable because the carrier-side recvmmsg path already
-// stable-sorts by (peer, message counter) before delivering plaintext
-// here, so replay-window invariants are unaffected, and apps observe
-// correct per-flow ordering; which is all the IP layer guarantees anyway.
-// Do not "fix" this by interleaving lane outputs at flush time; that
-// negates the entire point of coalescing (each lane needs to see runs of
-// adjacent same-flow packets to coalesce them).
+// Cross-lane order is intentionally NOT preserved across the TCP/UDP/passthrough split.
 type MultiCoalescer struct {
 	tcp *TCPCoalescer
 	udp *UDPCoalescer
 	pt  *Passthrough
 }
 
-// NewMultiCoalescer builds a multi-lane batcher. tcpEnabled lets the caller
-// opt out of TCP coalescing (e.g. when the queue can't do TSO); udpEnabled
-// likewise gates UDP coalescing (only enable when USO was negotiated).
-// Either lane disabled redirects its traffic into the passthrough lane.
-func NewMultiCoalescer(w io.Writer, l *slog.Logger, tcpEnabled, udpEnabled bool) *MultiCoalescer {
+// NewMultiCoalescer builds a multi-lane batcher over w, based on available protocol support.
+func NewMultiCoalescer(w io.Writer, l *slog.Logger) RxBatcher {
 	m := &MultiCoalescer{
 		pt: NewPassthrough(w),
 	}
-	if tcpEnabled {
-		m.tcp = NewTCPCoalescer(w, l)
-	}
-	if udpEnabled {
-		m.udp = NewUDPCoalescer(w)
+	m.tcp = NewTCPCoalescer(w, l)
+	m.udp = NewUDPCoalescer(w)
+	if m.tcp == nil && m.udp == nil {
+		return m.pt //no offloads? Use passthrough directly.
 	}
 	return m
 }
 
 // Commit dispatches pkt to the appropriate lane based on IP version + L4 proto.
-//
 // On the success path the IP/TCP-or-UDP parse happens here once and the
-// parsed struct is handed to the lane via commitParsed so the lane doesn't
-// re-walk the header.
+// parsed struct is handed to the lane via commitParsed so the lane doesn't re-walk the header.
 func (m *MultiCoalescer) Commit(pkt []byte) error {
 	if len(pkt) < 20 {
 		return m.pt.Commit(pkt)
