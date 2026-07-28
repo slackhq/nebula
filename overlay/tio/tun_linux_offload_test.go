@@ -353,9 +353,13 @@ func buildUSOv4(t *testing.T, payLen, gsoSize int) ([]byte, virtio.Hdr) {
 	copy(pkt[12:16], []byte{10, 0, 0, 1})
 	copy(pkt[16:20], []byte{10, 0, 0, 2})
 
-	// UDP header (length + checksum filled in per segment by segmentUDPYield)
-	binary.BigEndian.PutUint16(pkt[20:22], 12345) // sport
-	binary.BigEndian.PutUint16(pkt[22:24], 53)    // dport
+	// UDP header. The kernel hands us a USO superpacket whose length field
+	// covers the WHOLE superpacket; the segmenter overwrites it per segment.
+	// Populating it here matters: leaving it zero makes the base-checksum path
+	// that must exclude it untestable, since excluding zero is a no-op.
+	binary.BigEndian.PutUint16(pkt[20:22], 12345)                 // sport
+	binary.BigEndian.PutUint16(pkt[22:24], 53)                    // dport
+	binary.BigEndian.PutUint16(pkt[24:26], uint16(udpLen+payLen)) // superpacket length
 
 	for i := 0; i < payLen; i++ {
 		pkt[ipLen+udpLen+i] = byte(i & 0xff)
@@ -465,6 +469,8 @@ func TestSegmentUDPv6(t *testing.T) {
 
 	binary.BigEndian.PutUint16(pkt[40:42], 12345)
 	binary.BigEndian.PutUint16(pkt[42:44], 53)
+	// Superpacket-wide length, as the kernel supplies it; see buildUSOv4.
+	binary.BigEndian.PutUint16(pkt[44:46], uint16(udpLen+payLen))
 
 	for i := 0; i < payLen; i++ {
 		pkt[ipLen+udpLen+i] = byte(i)
@@ -666,6 +672,75 @@ func TestTunFileWriteVnetHdrNoAlloc(t *testing.T) {
 	})
 	if allocs != 0 {
 		t.Fatalf("Write allocated %.1f times per call, want 0", allocs)
+	}
+}
+
+// TestSegmentSuperpacketNoAlloc pins the segmenters' zero-allocation
+// contract. Both SegmentTCP and SegmentUDP derive their per-superpacket
+// constants into fixed-size arrays (tmp/ipTmp/savedHdr) that must stay on
+// the stack, and both take a yield closure that must not escape. Any of
+// those escaping turns one allocation into one-per-superpacket on the
+// hottest path in the reader, which BenchmarkSegmentSuperpacketAllocsTSO
+// reports but nothing fails on. This does.
+//
+// The yield closure here only touches captured scalars: appending segments
+// to a slice would allocate in the test itself and mask the measurement.
+func TestSegmentSuperpacketNoAlloc(t *testing.T) {
+	const mss = 1400
+	const numSeg = 8
+
+	cases := []struct {
+		name  string
+		build func() ([]byte, virtio.Hdr)
+	}{
+		{"tso-v4", func() ([]byte, virtio.Hdr) { return buildTSOv4(t, mss*numSeg, mss) }},
+		{"uso-v4", func() ([]byte, virtio.Hdr) { return buildUSOv4(t, mss*numSeg, mss) }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			master, hdr := tc.build()
+			proto, err := protoFromGSOType(hdr.GSOType())
+			if err != nil {
+				t.Fatalf("protoFromGSOType: %v", err)
+			}
+			work := make([]byte, len(master))
+			p := Packet{Bytes: work, GSO: GSOInfo{
+				Size:      hdr.GSOSize,
+				HdrLen:    hdr.HdrLen,
+				CsumStart: hdr.CsumStart,
+				Proto:     proto,
+			}}
+
+			// Segmentation consumes its input destructively, so restore from
+			// the master copy each run; copy(2) into an existing slice does
+			// not allocate. seen/bytes keep the closure from being optimized
+			// away and double as a sanity check that work actually happened.
+			var seen, bytes int
+			run := func() {
+				copy(work, master)
+				seen, bytes = 0, 0
+				if err := SegmentSuperpacket(p, func(seg []byte) error {
+					seen++
+					bytes += len(seg)
+					return nil
+				}); err != nil {
+					t.Fatalf("SegmentSuperpacket: %v", err)
+				}
+			}
+
+			run() // warm up: absorb any one-time allocation elsewhere
+			if seen != numSeg {
+				t.Fatalf("yielded %d segments, want %d", seen, numSeg)
+			}
+
+			if allocs := testing.AllocsPerRun(200, run); allocs != 0 {
+				t.Fatalf("SegmentSuperpacket allocated %.1f times per call, want 0", allocs)
+			}
+			if seen != numSeg || bytes == 0 {
+				t.Fatalf("post-measure sanity: seen=%d bytes=%d", seen, bytes)
+			}
+		})
 	}
 }
 
@@ -954,6 +1029,111 @@ func TestWriteGSORejectsBadGeometry(t *testing.T) {
 			}
 			if !tc.wantErr && err != nil {
 				t.Errorf("WriteGSO = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// BenchmarkSegmentUDPv4 is the USO counterpart to BenchmarkSegmentTCPv4. The
+// yield is a no-op so the measurement is segmentation plus checksum work only.
+func BenchmarkSegmentUDPv4(b *testing.B) {
+	sizes := []struct {
+		name    string
+		payLen  int
+		gsoSize int
+	}{
+		{"64KiB_GSO1400", 64000, 1400},
+		{"16KiB_GSO1400", 16384, 1400},
+		{"4KiB_GSO1400", 4096, 1400},
+	}
+	for _, sz := range sizes {
+		b.Run(sz.name, func(b *testing.B) {
+			const ipLen = 20
+			const udpLen = 8
+			pkt := make([]byte, ipLen+udpLen+sz.payLen)
+			pkt[0] = 0x45
+			binary.BigEndian.PutUint16(pkt[2:4], uint16(ipLen+udpLen+sz.payLen))
+			binary.BigEndian.PutUint16(pkt[4:6], 0x4242)
+			pkt[8] = 64
+			pkt[9] = unix.IPPROTO_UDP
+			copy(pkt[12:16], []byte{10, 0, 0, 1})
+			copy(pkt[16:20], []byte{10, 0, 0, 2})
+			binary.BigEndian.PutUint16(pkt[20:22], 12345)
+			binary.BigEndian.PutUint16(pkt[22:24], 53)
+			binary.BigEndian.PutUint16(pkt[24:26], uint16(udpLen+sz.payLen))
+			for i := 0; i < sz.payLen; i++ {
+				pkt[ipLen+udpLen+i] = byte(i)
+			}
+
+			master := append([]byte(nil), pkt...)
+			work := make([]byte, len(pkt))
+			p := Packet{Bytes: work, GSO: GSOInfo{
+				Size:      uint16(sz.gsoSize),
+				HdrLen:    ipLen + udpLen,
+				CsumStart: ipLen,
+				Proto:     GSOProtoUDP,
+			}}
+
+			b.SetBytes(int64(len(pkt)))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				copy(work, master)
+				if err := SegmentSuperpacket(p, func(seg []byte) error { return nil }); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkSegmentUDPv6 mirrors BenchmarkSegmentUDPv4 for IPv6, where the
+// pseudo-header address sum is 32 bytes rather than 8.
+func BenchmarkSegmentUDPv6(b *testing.B) {
+	sizes := []struct {
+		name    string
+		payLen  int
+		gsoSize int
+	}{
+		{"64KiB_GSO1400", 64000, 1400},
+		{"16KiB_GSO1400", 16384, 1400},
+		{"4KiB_GSO1400", 4096, 1400},
+	}
+	for _, sz := range sizes {
+		b.Run(sz.name, func(b *testing.B) {
+			const ipLen = 40
+			const udpLen = 8
+			pkt := make([]byte, ipLen+udpLen+sz.payLen)
+			pkt[0] = 0x60
+			binary.BigEndian.PutUint16(pkt[4:6], uint16(udpLen+sz.payLen))
+			pkt[6] = unix.IPPROTO_UDP
+			pkt[7] = 64
+			pkt[8], pkt[9], pkt[23] = 0xfe, 0x80, 1
+			pkt[24], pkt[25], pkt[39] = 0xfe, 0x80, 2
+			binary.BigEndian.PutUint16(pkt[40:42], 12345)
+			binary.BigEndian.PutUint16(pkt[42:44], 53)
+			binary.BigEndian.PutUint16(pkt[44:46], uint16(udpLen+sz.payLen))
+			for i := 0; i < sz.payLen; i++ {
+				pkt[ipLen+udpLen+i] = byte(i)
+			}
+
+			master := append([]byte(nil), pkt...)
+			work := make([]byte, len(pkt))
+			p := Packet{Bytes: work, GSO: GSOInfo{
+				Size:      uint16(sz.gsoSize),
+				HdrLen:    ipLen + udpLen,
+				CsumStart: ipLen,
+				Proto:     GSOProtoUDP,
+			}}
+
+			b.SetBytes(int64(len(pkt)))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				copy(work, master)
+				if err := SegmentSuperpacket(p, func(seg []byte) error { return nil }); err != nil {
+					b.Fatal(err)
+				}
 			}
 		})
 	}

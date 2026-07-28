@@ -494,3 +494,102 @@ func TestFoldComplementMatchesReference(t *testing.T) {
 		}
 	}
 }
+
+// referenceBaseIPv4HdrSum and referenceBaseTCPHdrSum are the straightforward
+// implementations that baseIPv4HdrSum/baseTCPHdrSum replaced: copy the header
+// into scratch, zero the fields the segment loop rewrites, sum. The production
+// versions instead sum in place and subtract those fields via one's-complement
+// arithmetic, which is faster but far less obvious — particularly for the TCP
+// flags byte, which is only half of a 16-bit word. These references exist so
+// that trade is checked rather than asserted.
+func referenceBaseIPv4HdrSum(pkt []byte, ihl int, zeroID bool) uint32 {
+	var ipTmp [ipv4HeaderMaxLen]byte
+	copy(ipTmp[:ihl], pkt[:ihl])
+	ipTmp[ipv4TotalLenOff], ipTmp[ipv4TotalLenOff+1] = 0, 0
+	ipTmp[ipv4ChecksumOff], ipTmp[ipv4ChecksumOff+1] = 0, 0
+	if zeroID {
+		ipTmp[ipv4IDOff], ipTmp[ipv4IDOff+1] = 0, 0
+	}
+	return uint32(checksum.Checksum(ipTmp[:ihl], 0))
+}
+
+func referenceBaseTCPHdrSum(pkt []byte, csumStart, headerLen int) uint32 {
+	tcpLen := headerLen - csumStart
+	var tmp [tcpHeaderMaxLen]byte
+	copy(tmp[:tcpLen], pkt[csumStart:headerLen])
+	tmp[tcpSeqOff], tmp[tcpSeqOff+1], tmp[tcpSeqOff+2], tmp[tcpSeqOff+3] = 0, 0, 0, 0
+	tmp[tcpFlagsOff] = 0
+	tmp[tcpChecksumOff], tmp[tcpChecksumOff+1] = 0, 0
+	return uint32(checksum.Checksum(tmp[:tcpLen], 0))
+}
+
+// randSeed is a tiny deterministic PRNG so this test needs no imports beyond
+// what the file already has and reproduces identically on every run.
+func randByte(state *uint32) byte {
+	*state = *state*1664525 + 1013904223
+	return byte(*state >> 24)
+}
+
+func TestBaseSumsMatchZeroingReference(t *testing.T) {
+	state := uint32(12345)
+
+	t.Run("ipv4", func(t *testing.T) {
+		for ihl := ipv4HeaderMinLen; ihl <= ipv4HeaderMaxLen; ihl += 4 {
+			for _, zeroID := range []bool{true, false} {
+				for iter := 0; iter < 5000; iter++ {
+					pkt := make([]byte, ihl)
+					for i := range pkt {
+						pkt[i] = randByte(&state)
+					}
+					pkt[0] = byte(0x40 | (ihl / 4))
+
+					want := referenceBaseIPv4HdrSum(pkt, ihl, zeroID)
+					got, err := baseIPv4HdrSum(pkt, ihl, zeroID)
+					if err != nil {
+						t.Fatalf("ihl=%d: %v", ihl, err)
+					}
+					// Compare the value that reaches the wire: the raw partial
+					// sums may legally differ by one's-complement -0 vs +0.
+					for _, tl := range []uint32{20, 1500, 65535} {
+						for _, id := range []uint32{0, 0x4242, 0xffff} {
+							if a, b := foldComplement(want+tl+id), foldComplement(got+tl+id); a != b {
+								t.Fatalf("ihl=%d zeroID=%v tl=%d id=%d: %#04x != %#04x", ihl, zeroID, tl, id, a, b)
+							}
+						}
+					}
+				}
+			}
+		}
+	})
+
+	t.Run("tcp", func(t *testing.T) {
+		const csumStart = 20
+		for dataOff := 5; dataOff <= 15; dataOff++ {
+			tcpLen := dataOff * 4
+			headerLen := csumStart + tcpLen
+			for iter := 0; iter < 5000; iter++ {
+				pkt := make([]byte, headerLen+64)
+				for i := range pkt {
+					pkt[i] = randByte(&state)
+				}
+				pkt[0] = 0x45
+				pkt[csumStart+tcpDataOffOff] = byte(dataOff << 4)
+
+				want := referenceBaseTCPHdrSum(pkt, csumStart, headerLen)
+				got := baseTCPHdrSum(pkt, csumStart, headerLen)
+				for _, seq := range []uint32{0, 1, 0x4242_4242, 0xffff_ffff} {
+					for _, fl := range []uint32{0x00, 0x10, 0x18, 0x19, 0xff} {
+						for _, l4 := range []uint32{20, 1460, 65535} {
+							a := foldComplement(want + seq + fl + l4)
+							b := foldComplement(got + seq + fl + l4)
+							if a != b {
+								t.Fatalf("dataOff=%d seq=%#x fl=%#x l4=%d: %#04x != %#04x",
+									dataOff, seq, fl, l4, a, b)
+							}
+						}
+					}
+				}
+			}
+		}
+	})
+}
