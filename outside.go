@@ -162,13 +162,14 @@ func (f *Interface) readOutsidePackets(via ViaSender, scratch []byte, packet []b
 		case header.TestRequest:
 			const maxCipherOverhead = 16 //todo we use this too often, needs a real importable const
 			const maxOverhead = header.Len + header.Len + maxCipherOverhead + maxCipherOverhead
-			if maxOverhead+len(out) <= len(scratch) {
-				f.send(header.Test, header.TestReply, hostinfo.ConnectionState, hostinfo, out, nb, scratch[:0])
-				return
-			} else if f.l.Enabled(context.Background(), slog.LevelDebug) {
-				hostinfo.logger(f.l).Debug("dropping oversized test request", "payloadLen", len(out), "from", via)
+			if maxOverhead+len(out) > len(scratch) {
+				// A reply that cannot fit in scratch is dropped no matter the log level.
+				if f.l.Enabled(context.Background(), slog.LevelDebug) {
+					hostinfo.logger(f.l).Debug("dropping oversized test request", "payloadLen", len(out), "from", via)
+				}
 				return
 			}
+			f.send(header.Test, header.TestReply, hostinfo.ConnectionState, hostinfo, out, nb, scratch[:0])
 		default:
 			hostinfo.logger(f.l).Error("IsValidSubType was true, but unexpected test subtype seen", "from", via, "header", h)
 			return
