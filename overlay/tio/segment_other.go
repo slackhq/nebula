@@ -1,4 +1,4 @@
-//go:build !linux || android || e2e_testing
+//go:build !linux || android
 
 package tio
 
