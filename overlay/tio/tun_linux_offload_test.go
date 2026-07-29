@@ -997,6 +997,8 @@ func TestWriteGSORejectsBadGeometry(t *testing.T) {
 		{"undersize-middle-fragment", ipHdr, udpHdr, [][]byte{seg, make([]byte, 100), seg}, GSOProtoUDP, true},
 		{"oversize-last-fragment", ipHdr, tcpHdr, [][]byte{seg, make([]byte, 1201)}, GSOProtoTCP, true},
 		{"short-last-fragment-ok", ipHdr, udpHdr, [][]byte{seg, seg, make([]byte, 100)}, GSOProtoUDP, false},
+		{"multi-segment-bad-ip-version", []byte{0x05}, udpHdr, [][]byte{seg, seg}, GSOProtoUDP, true},
+		{"single-segment-bad-ip-version-ok", []byte{0x05}, udpHdr, [][]byte{seg}, GSOProtoUDP, false},
 		{"no-pays-noop", ipHdr, udpHdr, nil, GSOProtoUDP, false},
 		{"valid-udp", ipHdr, udpHdr, [][]byte{seg, seg}, GSOProtoUDP, false},
 		{"valid-tcp", ipHdr, tcpHdr, [][]byte{seg, seg}, GSOProtoTCP, false},
