@@ -2,6 +2,7 @@ package batch
 
 import (
 	"bytes"
+	"encoding/binary"
 	"io"
 	"testing"
 
@@ -128,6 +129,72 @@ func TestMultiCoalescerNoOffloadsIsPassthrough(t *testing.T) {
 		if !bytes.Equal(w.writes[i], want) {
 			t.Errorf("write %d out of order or corrupt", i)
 		}
+	}
+}
+
+// buildUDPv6Fragment builds an IPv6 packet whose extension chain is a
+// single fragment header (NH=44) naming UDP as the terminal protocol —
+// a first fragment (offset 0, MF set) carrying the UDP header and a
+// partial payload.
+func buildUDPv6Fragment(sport, dport uint16, payload []byte) []byte {
+	const ipHdrLen = 40
+	const fragHdrLen = 8
+	const udpHdrLen = 8
+	total := ipHdrLen + fragHdrLen + udpHdrLen + len(payload)
+	pkt := make([]byte, total)
+
+	pkt[0] = 0x60
+	binary.BigEndian.PutUint16(pkt[4:6], uint16(total-ipHdrLen))
+	pkt[6] = 44 // fragment extension header
+	pkt[7] = 64
+	pkt[8] = 0xfe
+	pkt[9] = 0x80
+	pkt[23] = 1
+	pkt[24] = 0xfe
+	pkt[25] = 0x80
+	pkt[39] = 2
+
+	pkt[40] = ipProtoUDP                              // fragment's next header
+	binary.BigEndian.PutUint16(pkt[42:44], 0x0001)    // offset 0, MF set
+	binary.BigEndian.PutUint32(pkt[44:48], 0x1badf00) // identification
+
+	binary.BigEndian.PutUint16(pkt[48:50], sport)
+	binary.BigEndian.PutUint16(pkt[50:52], dport)
+	binary.BigEndian.PutUint16(pkt[52:54], uint16(udpHdrLen+len(payload)))
+	copy(pkt[56:], payload)
+	return pkt
+}
+
+// TestMultiCoalescerIPv6FragmentStaysInLane locks in extension-header
+// routing: a fragment whose chain terminates in UDP must ride the UDP lane
+// as an in-lane passthrough — emitted ahead of later same-flow datagrams —
+// not the passthrough lane, which flushes after every coalescer lane and
+// would reorder it behind data that arrived after it.
+func TestMultiCoalescerIPv6FragmentStaysInLane(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	m := newTestMultiCoalescer(t, w)
+
+	if err := m.Commit(buildUDPv6Fragment(2000, 53, make([]byte, 512))); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800))); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800))); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.writes) != 1 {
+		t.Fatalf("want the fragment as 1 plain write, got %d", len(w.writes))
+	}
+	if len(w.gsoWrites) != 1 {
+		t.Fatalf("want the two whole datagrams coalesced into 1 gso write, got %d", len(w.gsoWrites))
+	}
+	// Arrival order was fragment-then-data; same-lane routing must keep it.
+	if w.order[0] != "write" {
+		t.Fatalf("fragment must be emitted before later data (in-lane passthrough), order=%v", w.order)
 	}
 }
 

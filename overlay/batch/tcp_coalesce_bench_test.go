@@ -55,6 +55,30 @@ func buildTCPv4Interleaved(nFlows, perFlow, payloadLen int) [][]byte {
 	return pkts
 }
 
+// buildTCPv4RunInterleaved returns nFlows*perFlow packets delivered in
+// runs of runLen per flow — the arrival pattern wire-side GRO actually
+// produces (deliverSegments splits each superdatagram into up to 64
+// same-flow packets back to back). Contrast with buildTCPv4Interleaved's
+// per-packet round-robin, the adversarial worst case for a last-slot cache.
+func buildTCPv4RunInterleaved(nFlows, perFlow, runLen, payloadLen int) [][]byte {
+	pay := make([]byte, payloadLen)
+	seqs := make([]uint32, nFlows)
+	for i := range seqs {
+		seqs[i] = uint32(1000 + i*1000000)
+	}
+	pkts := make([][]byte, 0, nFlows*perFlow)
+	for done := 0; done < perFlow; done += runLen {
+		for f := range nFlows {
+			sport := uint16(10000 + f)
+			for range runLen {
+				pkts = append(pkts, buildTCPv4Ports(sport, 2000, seqs[f], tcpAck, pay))
+				seqs[f] += uint32(payloadLen)
+			}
+		}
+	}
+	return pkts
+}
+
 // buildICMPv4 returns a minimal non-TCP packet that takes the passthrough
 // branch in Commit.
 func buildICMPv4() []byte {
@@ -109,6 +133,15 @@ func BenchmarkCommitInterleaved4(b *testing.B) {
 // BenchmarkCommitInterleaved16 stresses the map at higher flow counts.
 func BenchmarkCommitInterleaved16(b *testing.B) {
 	pkts := buildTCPv4Interleaved(16, tcpCoalesceMaxSegs, 1200)
+	runCommitBench(b, pkts, len(pkts))
+}
+
+// BenchmarkCommitRunInterleaved4 is 4 concurrent flows arriving in
+// GRO-burst runs of 16 — the realistic multi-flow pattern. A last-slot
+// cache hits for the length of each run; the per-packet round-robin
+// benches above are its worst case.
+func BenchmarkCommitRunInterleaved4(b *testing.B) {
+	pkts := buildTCPv4RunInterleaved(4, tcpCoalesceMaxSegs, 16, 1200)
 	runCommitBench(b, pkts, len(pkts))
 }
 

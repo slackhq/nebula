@@ -353,7 +353,7 @@ func IPv6FindUpperProtocol(packet []byte) (nextHeader uint8, offset int, isFragm
 	nextHeader = packet[6]
 	offset = ipv6.HeaderLen
 
-	for {
+	for range maxIPv6ExtHeaders {
 		switch nextHeader {
 		case 0, 43, 60: // Hop-by-Hop, Routing, Destination
 			if len(packet) < offset+2 {
@@ -389,6 +389,7 @@ func IPv6FindUpperProtocol(packet []byte) (nextHeader uint8, offset int, isFragm
 			return nextHeader, offset, isFragment, nil
 		}
 	}
+	return nextHeader, offset, isFragment
 }
 
 func CreateICMPEchoResponse(packet, out []byte) []byte {

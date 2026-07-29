@@ -4,6 +4,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+
+	"github.com/slackhq/nebula/iputil"
 )
 
 // MultiCoalescer fans plaintext packets out to lane-specific batchers based
@@ -13,6 +15,10 @@ import (
 // UDP coalescer only sees UDP, and the passthrough lane handles everything else.
 // Per-flow delivery order is preserved because a single 5-tuple only
 // ever lands in one lane and each lane preserves its own slot order.
+// Routing follows the flow, not the coalesceability: IPv4 fragments keep
+// their L4 proto visible and IPv6 extension chains are walked to the
+// terminal proto, so a flow's non-coalesceable shapes ride its lane as
+// in-lane passthroughs rather than falling to the later-flushed pt lane.
 //
 // Cross-lane order is intentionally NOT preserved across the TCP/UDP/passthrough split.
 type MultiCoalescer struct {
@@ -34,6 +40,28 @@ func NewMultiCoalescer(w io.Writer, l *slog.Logger) RxBatcher {
 	return m
 }
 
+// IANA protocol numbers for the IPv6 extension headers
+// iputil.IPv6FindUpperProtocol can step over. The set here must match what
+// that walker walks: it is the hot path's cheap pre-guard, so the walk is
+// only paid when it can actually make progress.
+const (
+	ipProtoHopByHop = 0
+	ipProtoRouting  = 43
+	ipProtoFragment = 44
+	ipProtoAH       = 51
+	ipProtoDestOpts = 60
+)
+
+// isIPv6ExtHeader reports whether nh is an extension header the terminal-
+// protocol walk knows how to step over.
+func isIPv6ExtHeader(nh byte) bool {
+	switch nh {
+	case ipProtoHopByHop, ipProtoRouting, ipProtoFragment, ipProtoAH, ipProtoDestOpts:
+		return true
+	}
+	return false
+}
+
 // Commit dispatches pkt to the appropriate lane based on IP version + L4 proto.
 // On the success path the IP/TCP-or-UDP parse happens here once and the
 // parsed struct is handed to the lane via commitParsed so the lane doesn't re-walk the header.
@@ -51,6 +79,22 @@ func (m *MultiCoalescer) Commit(pkt []byte) error {
 			return m.pt.Commit(pkt)
 		}
 		proto = pkt[6]
+		if isIPv6ExtHeader(proto) {
+			// Walk to the terminal protocol so the packet routes to its
+			// flow's lane. It stays non-coalesceable — the lane's parser
+			// rejects the ext-header shape and emits it as an in-lane
+			// passthrough — but landing in the right lane preserves
+			// per-flow order, exactly like IPv4 fragments (whose header
+			// keeps the L4 proto visible) already do. Fragments are the
+			// case that matters: every fragment names the flow's L4, so a
+			// fragmented datagram travels with its flow's unfragmented
+			// siblings instead of the passthrough lane, which flushes
+			// after every coalescer lane and would emit it behind data
+			// that arrived later. An unresolved walk (truncated or crafted
+			// over-long chain) yields a non-transport number and falls to
+			// the pt lane below.
+			proto, _, _ = iputil.IPv6FindUpperProtocol(pkt)
+		}
 	default:
 		return m.pt.Commit(pkt)
 	}

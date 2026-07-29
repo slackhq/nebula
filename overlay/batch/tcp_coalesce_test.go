@@ -1,6 +1,7 @@
 package batch
 
 import (
+	"bytes"
 	"encoding/binary"
 	"io"
 	"testing"
@@ -21,6 +22,9 @@ type fakeTunWriter struct {
 	noUSO      bool
 	writes     [][]byte
 	gsoWrites  []fakeGSOWrite
+	// order records the interleaving of Write ("write") and WriteGSO ("gso")
+	// calls for tests that assert cross-call emission order.
+	order []string
 }
 
 // fakeGSOWrite captures one WriteGSO call. hdr is the concatenation of the
@@ -56,6 +60,7 @@ func (w *fakeTunWriter) Write(p []byte) (int, error) {
 	buf := make([]byte, len(p))
 	copy(buf, p)
 	w.writes = append(w.writes, buf)
+	w.order = append(w.order, "write")
 	return len(p), nil
 }
 
@@ -81,6 +86,7 @@ func (w *fakeTunWriter) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte,
 		isV6:      isV6,
 		csumStart: uint16(len(hdr)),
 	})
+	w.order = append(w.order, "gso")
 	return nil
 }
 
@@ -131,6 +137,18 @@ const (
 	tcpFin    = 0x01
 	tcpAckPsh = tcpAck | tcpPsh
 )
+
+// setIPv4ID stamps an IPv4 ID and DF state onto a builder packet. The
+// builders default to DF=1/ID=0 (an atomic datagram); the ID-admission
+// tests use this to fabricate non-atomic (DF=0) senders.
+func setIPv4ID(pkt []byte, id uint16, df bool) {
+	binary.BigEndian.PutUint16(pkt[4:6], id)
+	var flags uint16
+	if df {
+		flags = 0x4000
+	}
+	binary.BigEndian.PutUint16(pkt[6:8], flags)
+}
 
 // newTestTCPCoalescer builds a coalescer over w and fails the test if w can't
 // do TSO. Every test but TestNewTCPCoalescerRefusesWhenGSOUnavailable wants the
@@ -1211,5 +1229,133 @@ func TestCoalescerMergePreservesRealPSH(t *testing.T) {
 	const ipHdrLen = 20
 	if flags := g.hdr[ipHdrLen+13]; flags&tcpPsh == 0 {
 		t.Errorf("merged header flags=%#x: real PSH lost in merge", flags)
+	}
+}
+
+// TestCoalescerSeqWrapAroundSortsAndMerges pins the serial-number
+// arithmetic through the sort-and-merge path: a chain that crosses the
+// 2^32 seq wrap must still sort pre-wrap before post-wrap and merge into
+// one superpacket when contiguous.
+func TestCoalescerSeqWrapAroundSortsAndMerges(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	c := newTestTCPCoalescer(t, w)
+
+	payA := bytes.Repeat([]byte{'A'}, 32)
+	payB := bytes.Repeat([]byte{'B'}, 32)
+	seqA := uint32(0xffffffe0) // 32 before the wrap: nextSeq lands exactly on 0
+
+	// The post-wrap segment arrives first — wire reorder across a batch
+	// boundary, the case reorderForFlush exists for.
+	if err := c.Commit(buildTCPv4(0, tcpAck, payB)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Commit(buildTCPv4(seqA, tcpAck, payA)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.gsoWrites) != 1 {
+		t.Fatalf("want 1 merged gso write across the wrap, got %d (plain=%d)", len(w.gsoWrites), len(w.writes))
+	}
+	g := w.gsoWrites[0]
+	const ipHdrLen = 20
+	if seedSeq := binary.BigEndian.Uint32(g.hdr[ipHdrLen+4 : ipHdrLen+8]); seedSeq != seqA {
+		t.Errorf("merged seed seq=%#x want %#x (pre-wrap segment first)", seedSeq, seqA)
+	}
+	if len(g.pays) != 2 {
+		t.Fatalf("merged segs=%d want 2", len(g.pays))
+	}
+	if !bytes.Equal(g.pays[0], payA) || !bytes.Equal(g.pays[1], payB) {
+		t.Errorf("payload order wrong across the wrap: got %q then %q", g.pays[0][:1], g.pays[1][:1])
+	}
+}
+
+// TestCoalescerNonAtomicSequentialIDsCoalesce: with DF clear, coalescing
+// is allowed when the IPv4 IDs already run seed+1 per segment — kernel
+// TSO's re-stamp then reproduces the originals exactly (the kernel GRO
+// admission rule).
+func TestCoalescerNonAtomicSequentialIDsCoalesce(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	c := newTestTCPCoalescer(t, w)
+	pay := make([]byte, 1200)
+
+	seq := uint32(1000)
+	for i := range 3 {
+		pkt := buildTCPv4(seq, tcpAck, pay)
+		setIPv4ID(pkt, uint16(700+i), false)
+		if err := c.Commit(pkt); err != nil {
+			t.Fatal(err)
+		}
+		seq += uint32(len(pay))
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.gsoWrites) != 1 || len(w.gsoWrites[0].pays) != 3 {
+		t.Fatalf("sequential-ID DF=0 chain must coalesce: gso=%d", len(w.gsoWrites))
+	}
+	if id := binary.BigEndian.Uint16(w.gsoWrites[0].hdr[4:6]); id != 700 {
+		t.Errorf("superpacket seed ID=%d want 700", id)
+	}
+}
+
+// TestCoalescerNonAtomicIDGapDoesNotCoalesce: with DF clear and an ID jump
+// mid-flow, neither the append path nor the flush-time merge may combine
+// the segments — TSO would re-stamp seed+n and rewrite the second
+// packet's ID, which is meaningful on non-atomic datagrams.
+func TestCoalescerNonAtomicIDGapDoesNotCoalesce(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	c := newTestTCPCoalescer(t, w)
+	pay := make([]byte, 1200)
+
+	p1 := buildTCPv4(1000, tcpAck, pay)
+	setIPv4ID(p1, 700, false)
+	p2 := buildTCPv4(1000+uint32(len(pay)), tcpAck, pay)
+	setIPv4ID(p2, 900, false)
+
+	if err := c.Commit(p1); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Commit(p2); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.gsoWrites) != 2 {
+		t.Fatalf("ID gap on DF=0 must not coalesce (append or merge): gso=%d", len(w.gsoWrites))
+	}
+	for i, want := range []uint16{700, 900} {
+		if id := binary.BigEndian.Uint16(w.gsoWrites[i].hdr[4:6]); id != want {
+			t.Errorf("write %d: ID=%d want %d (must be preserved)", i, id, want)
+		}
+	}
+}
+
+// TestCoalescerAtomicRandomIDsCoalesce guards the other direction: DF set
+// makes the datagram atomic (RFC 6864), so arbitrary IDs must not block
+// coalescing.
+func TestCoalescerAtomicRandomIDsCoalesce(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	c := newTestTCPCoalescer(t, w)
+	pay := make([]byte, 1200)
+
+	p1 := buildTCPv4(1000, tcpAck, pay)
+	setIPv4ID(p1, 0x1234, true)
+	p2 := buildTCPv4(1000+uint32(len(pay)), tcpAck, pay)
+	setIPv4ID(p2, 0x0007, true)
+
+	if err := c.Commit(p1); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Commit(p2); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.gsoWrites) != 1 || len(w.gsoWrites[0].pays) != 2 {
+		t.Fatalf("DF=1 chain with arbitrary IDs must coalesce: gso=%d", len(w.gsoWrites))
 	}
 }

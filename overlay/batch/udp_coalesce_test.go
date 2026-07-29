@@ -459,3 +459,57 @@ func TestUDPCoalescerIPv4WithOptionsPassesThrough(t *testing.T) {
 		t.Fatalf("ipv4-with-options must pass through plain, got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
 	}
 }
+
+// TestUDPCoalescerNonAtomicSequentialIDsCoalesce mirrors the TCP rule: DF
+// clear is fine as long as the IDs already run seed+1 per datagram, so
+// kernel USO's re-stamp reproduces them.
+func TestUDPCoalescerNonAtomicSequentialIDsCoalesce(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	c := newTestUDPCoalescer(t, w)
+	pay := make([]byte, 1200)
+
+	for i := range 2 {
+		pkt := buildUDPv4(40000, 443, pay)
+		setIPv4ID(pkt, uint16(40+i), false)
+		if err := c.Commit(pkt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.gsoWrites) != 1 || len(w.gsoWrites[0].pays) != 2 {
+		t.Fatalf("sequential-ID DF=0 datagrams must coalesce: gso=%d", len(w.gsoWrites))
+	}
+}
+
+// TestUDPCoalescerNonAtomicIDGapReseeds: an ID jump on a DF=0 flow breaks
+// the chain; each datagram must keep its own (meaningful) ID.
+func TestUDPCoalescerNonAtomicIDGapReseeds(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	c := newTestUDPCoalescer(t, w)
+	pay := make([]byte, 1200)
+
+	p1 := buildUDPv4(40000, 443, pay)
+	setIPv4ID(p1, 40, false)
+	p2 := buildUDPv4(40000, 443, pay)
+	setIPv4ID(p2, 50, false)
+
+	if err := c.Commit(p1); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Commit(p2); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.gsoWrites) != 2 {
+		t.Fatalf("ID gap on DF=0 must reseed: gso=%d", len(w.gsoWrites))
+	}
+	for i, want := range []uint16{40, 50} {
+		if id := binary.BigEndian.Uint16(w.gsoWrites[i].hdr[4:6]); id != want {
+			t.Errorf("write %d: ID=%d want %d (must be preserved)", i, id, want)
+		}
+	}
+}

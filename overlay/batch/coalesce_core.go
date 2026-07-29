@@ -136,6 +136,30 @@ func ipHeadersMatch(a, b []byte, isV6 bool) bool {
 	return true
 }
 
+// ipv4FlagDF is the Don't Fragment bit in the IPv4 flags byte (header byte 6).
+const ipv4FlagDF = 0x40
+
+// ipv4CanCoalesceID reports whether an IPv4 packet whose header starts at
+// nextHdr may join a chain whose seed header is seedHdr as segment index seg
+// (the seed is segment 0). Kernel GSO re-stamps outgoing segment IDs as
+// seed_id+n, so coalescing is only transparent when that re-stamp is either
+// harmless (DF set: RFC 6864 atomic datagrams, the ID carries no meaning) or
+// reproduces the original IDs exactly (DF clear + IDs already sequential —
+// the same admission rule kernel GRO applies). Without this, a DF=0 sender
+// with non-sequential IDs (e.g. OpenBSD's randomized IDs) could have IDs
+// rewritten into ranges that collide across superpackets, corrupting
+// reassembly if the packets are fragmented after the TUN write.
+//
+// DF itself is guaranteed uniform across a chain by ipHeadersMatch (byte 6
+// is inside its compared range), so checking the seed's copy suffices.
+func ipv4CanCoalesceID(seedHdr, nextHdr []byte, seg int) bool {
+	if seedHdr[6]&ipv4FlagDF != 0 {
+		return true
+	}
+	expect := binary.BigEndian.Uint16(seedHdr[4:6]) + uint16(seg)
+	return binary.BigEndian.Uint16(nextHdr[4:6]) == expect
+}
+
 // Arena is an injectable byte-slab that hands out non-overlapping borrowed
 // slices via Reserve and releases them in bulk via Reset.
 type Arena struct {

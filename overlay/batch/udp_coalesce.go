@@ -51,7 +51,14 @@ type UDPCoalescer struct {
 	w         tio.GSOWriter
 	slots     []*udpSlot
 	openSlots map[flowKey]*udpSlot
-	pool      []*udpSlot
+	// lastSlot caches the most recently touched open slot; see the
+	// TCPCoalescer field of the same name. Single-flow QUIC bulk is the
+	// dominant USO workload, and multi-flow arrival comes in GRO runs, so
+	// the fk compare beats the map's 38-byte key hash on most packets.
+	// Kept in lockstep with openSlots: nil whenever the slot it pointed at
+	// is removed/sealed.
+	lastSlot *udpSlot
+	pool     []*udpSlot
 }
 
 func NewUDPCoalescer(w io.Writer) *UDPCoalescer {
@@ -119,22 +126,41 @@ func (c *UDPCoalescer) Commit(pkt []byte) error {
 // avoid re-walking the IP/UDP header.
 func (c *UDPCoalescer) commitParsed(pkt []byte, info parsedUDP) error {
 	// A zero-length UDP datagram (UDP `length` == 8) is legal and must still
-	// reach the TUN, but it can't be coalesced.
+	// reach the TUN, but it can't be coalesced. The len guard skips hashing
+	// the key when no flow is open.
 	if info.payLen == 0 {
-		delete(c.openSlots, info.fk)
+		if len(c.openSlots) != 0 {
+			if last := c.lastSlot; last != nil && last.fk == info.fk {
+				c.lastSlot = nil
+			}
+			delete(c.openSlots, info.fk)
+		}
 		c.addPassthrough(pkt)
 		return nil
 	}
-	if open := c.openSlots[info.fk]; open != nil {
+	// Cached-slot fast path; see the TCPCoalescer equivalent.
+	var open *udpSlot
+	if last := c.lastSlot; last != nil && last.fk == info.fk {
+		open = last
+	} else {
+		open = c.openSlots[info.fk]
+	}
+	if open != nil {
 		if c.canAppend(open, pkt, info) {
 			c.appendPayload(open, pkt, info)
 			if open.sealed {
 				delete(c.openSlots, info.fk)
+				c.lastSlot = nil
+			} else {
+				c.lastSlot = open
 			}
 			return nil
 		}
 		// Can't extend. Seal it and fall through to seed a fresh slot.
 		delete(c.openSlots, info.fk)
+		if c.lastSlot == open {
+			c.lastSlot = nil
+		}
 	}
 	c.seed(pkt, info)
 	return nil
@@ -157,6 +183,7 @@ func (c *UDPCoalescer) Flush() error {
 	clear(c.slots)
 	c.slots = c.slots[:0]
 	clear(c.openSlots)
+	c.lastSlot = nil
 	return first
 }
 
@@ -187,6 +214,7 @@ func (c *UDPCoalescer) seed(pkt []byte, info parsedUDP) {
 	s.payIovs = append(s.payIovs[:0], pkt[info.hdrLen:info.hdrLen+info.payLen])
 	c.slots = append(c.slots, s)
 	c.openSlots[info.fk] = s
+	c.lastSlot = s
 }
 
 // canAppend reports whether info's packet extends the slot's seed.
@@ -206,6 +234,9 @@ func (c *UDPCoalescer) canAppend(s *udpSlot, pkt []byte, info parsedUDP) bool {
 		return false
 	}
 	if s.hdrLen+s.totalPay+info.payLen > udpCoalesceBufSize {
+		return false
+	}
+	if !s.isV6 && !ipv4CanCoalesceID(s.hdrBuf[:], pkt, s.numSeg) {
 		return false
 	}
 	if !udpHeadersMatch(s.hdrBuf[:s.hdrLen], pkt[:info.hdrLen], s.isV6, s.ipHdrLen) {
@@ -242,6 +273,12 @@ func (c *UDPCoalescer) release(s *udpSlot) {
 	s.numSeg = 0
 	s.totalPay = 0
 	s.sealed = false
+	// Zero the identity fields too; see TCPCoalescer.release.
+	s.fk = flowKey{}
+	s.hdrLen = 0
+	s.ipHdrLen = 0
+	s.isV6 = false
+	s.gsoSize = 0
 	c.pool = append(c.pool, s)
 }
 

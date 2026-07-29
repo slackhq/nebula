@@ -71,10 +71,11 @@ type TCPCoalescer struct {
 	// removed from this map when they close (PSH or short-last-segment),
 	// when a non-admissible packet for that flow arrives, or in Flush.
 	openSlots map[flowKey]*coalesceSlot
-	// lastSlot caches the most recently touched open slot. Steady-state
-	// bulk traffic is dominated by a single flow, so comparing the
-	// incoming key against the cached slot's own fk lets the hot path
-	// skip the map lookup (and the aeshash of a 38-byte key) entirely.
+	// lastSlot caches the most recently touched open slot. Bulk traffic
+	// arrives in same-flow runs (single-flow steady state, or GRO bursts
+	// under multi-flow), so comparing the incoming key against the cached
+	// slot's own fk lets the hot path skip the map lookup (and the aeshash
+	// of a 38-byte key) for the length of each run.
 	// Kept in lockstep with openSlots: nil whenever the slot it pointed
 	// at is removed/sealed.
 	lastSlot *coalesceSlot
@@ -183,21 +184,26 @@ func (c *TCPCoalescer) commitParsed(pkt []byte, info parsedTCP) error {
 	if !info.coalesceable() {
 		// TCP but not admissible (SYN/FIN/RST/URG/CWR or zero-payload).
 		// Seal this flow's open slot so later in-flow packets don't extend
-		// it and accidentally reorder past this passthrough.
-		if last := c.lastSlot; last != nil && last.fk == info.fk {
-			c.lastSlot = nil
+		// it and accidentally reorder past this passthrough. The len guard
+		// skips hashing the 38-byte key on ack-dominant queues, where the
+		// map is almost always empty.
+		if len(c.openSlots) != 0 {
+			if last := c.lastSlot; last != nil && last.fk == info.fk {
+				c.lastSlot = nil
+			}
+			delete(c.openSlots, info.fk)
 		}
-		delete(c.openSlots, info.fk)
 		c.addPassthrough(pkt)
 		return nil
 	}
 
-	// Single-flow fast path: with only one open flow the cache hits every
-	// packet, and len(openSlots)==1 lets us skip the 38-byte fk compare
-	// when there are multiple flows in flight (where the hit rate would
-	// be ~0 and the compare is pure overhead).
+	// Cached-slot fast path. Arrival isn't per-packet interleaved even with
+	// many flows: wire-side GRO delivers runs of same-flow packets
+	// (deliverSegments splits a superdatagram into up to 64), so the cache
+	// hits for the length of each run and a miss costs one fk compare
+	// before the map lookup carries the weight.
 	var open *coalesceSlot
-	if last := c.lastSlot; last != nil && len(c.openSlots) == 1 && last.fk == info.fk {
+	if last := c.lastSlot; last != nil && last.fk == info.fk {
 		open = last
 	} else {
 		open = c.openSlots[info.fk]
@@ -313,6 +319,9 @@ func (c *TCPCoalescer) canAppend(s *coalesceSlot, pkt []byte, info parsedTCP) bo
 	if (seedFlags^info.flags)&tcpFlagEce != 0 {
 		return false
 	}
+	if !s.isV6 && !ipv4CanCoalesceID(s.hdrBuf[:], pkt, s.numSeg) {
+		return false
+	}
 	if !headersMatch(s.hdrBuf[:s.hdrLen], pkt[:info.hdrLen], s.isV6, s.ipHdrLen) {
 		return false
 	}
@@ -352,6 +361,15 @@ func (c *TCPCoalescer) release(s *coalesceSlot) {
 	s.numSeg = 0
 	s.totalPay = 0
 	s.sealed = false
+	// Zero the identity fields too: addPassthrough doesn't set them, so a
+	// pooled slot reused as a passthrough must not carry a stale flow key
+	// that a future refactor could mistake for real.
+	s.fk = flowKey{}
+	s.hdrLen = 0
+	s.ipHdrLen = 0
+	s.isV6 = false
+	s.gsoSize = 0
+	s.nextSeq = 0
 	c.pool = append(c.pool, s)
 }
 
@@ -618,6 +636,13 @@ func canMergeSlots(prev, s *coalesceSlot) bool {
 	prevFlags := prev.hdrBuf[prev.ipHdrLen+13]
 	sFlags := s.hdrBuf[s.ipHdrLen+13]
 	if (prevFlags^sFlags)&tcpFlagEce != 0 {
+		return false
+	}
+	// Same IPv4 ID rule as canAppend: s becomes segment prev.numSeg of the
+	// merged chain, so its seed ID must continue prev's sequence (or DF must
+	// make the IDs meaningless). s's own interior segments already passed
+	// this check against s's seed when they were appended.
+	if !prev.isV6 && !ipv4CanCoalesceID(prev.hdrBuf[:], s.hdrBuf[:], prev.numSeg) {
 		return false
 	}
 	if !headersMatch(prev.hdrBuf[:prev.hdrLen], s.hdrBuf[:s.hdrLen], prev.isV6, prev.ipHdrLen) {
