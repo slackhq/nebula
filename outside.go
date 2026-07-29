@@ -458,27 +458,6 @@ func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
 	return nil
 }
 
-// decrypt authenticates and decrypts a Message packet IN PLACE: the dst is
-// packet[header.Len:header.Len], the exact-alias append pattern
-// (ciphertext[:0]) that crypto/cipher.AEAD.Open documents, so the plaintext
-// lands where the ciphertext sat and no separate plaintext buffer exists.
-// On a failed auth the AEAD zeroes the would-be plaintext region (both
-// AES-GCM and ChaCha20-Poly1305 do) but never writes outside it, so the
-// other segments of a shared GRO receive row stay intact; nothing reads a
-// packet after its decrypt fails. The returned slice aliases packet.
-func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, packet []byte, nb []byte) ([]byte, error) {
-	out, err := hostinfo.ConnectionState.dKey.DecryptDanger(packet[header.Len:header.Len], packet[:header.Len], packet[header.Len:], mc, nb)
-	if err != nil {
-		return nil, err
-	}
-
-	if !hostinfo.ConnectionState.window.Update(f.l, mc) {
-		return nil, ErrOutOfWindow
-	}
-
-	return out, nil
-}
-
 // 2-bit IP-level ECN codepoints (lower bits of IPv4 ToS / IPv6 TC).
 const (
 	ecnNotECT = 0x00
