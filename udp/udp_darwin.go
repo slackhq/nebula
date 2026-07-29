@@ -142,6 +142,9 @@ func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
 
 func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, _ []byte) (int, error) {
 	// An un-sendable destination costs its own packet, never the ones behind it in the batch.
+	// TODO: WriteTo maps EWOULDBLOCK to an error, so a full send buffer
+	// silently drops the rest of a burst (linux blocks instead). Poll for
+	// writability on EAGAIN before giving up on the remainder.
 	written := 0
 	for i, b := range bufs {
 		if err := u.WriteTo(b, addrs[i]); err == nil {

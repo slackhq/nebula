@@ -289,6 +289,12 @@ func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []b
 				i = baseI
 				continue
 			}
+			// TODO: a transient zero-sent errno (ENOBUFS under socket-memory
+			// pressure, or a theoretical EINTR) lands here too and drops
+			// entry 0's entire run (up to 63/127 packets). The RX path
+			// retries EINTR; consider a bounded retry for those two before
+			// falling through to the per-entry drop.
+			//
 			// Any other zero-sent error is a per-entry failure:
 			// an unreachable destination, a firewall EPERM, or a PMTU shrink after a roam
 			// (EINVAL, or EMSGSIZE since kernel 6.14, once gso_size no longer fits the path).

@@ -47,6 +47,11 @@ func (t *Poll) blockOnWrite() error {
 	return blockOn(int32(t.fd), int32(t.shutdownFd), unix.POLLOUT)
 }
 
+// TODO: port Offload's post-wake drain loop here so one poll wake amortizes
+// over a burst (up to tunDrainCap packets) instead of paying a syscall and a
+// wake per packet. Hosts on the TUNSETOFFLOAD-failure fallback or a tun.fd
+// config currently lose that batching. blockOn and the EAGAIN plumbing are
+// already shared; kept one-packet-per-Read for now to preserve behavior.
 func (t *Poll) Read() ([]Packet, error) {
 	n, err := t.readOne(t.readBuf)
 	if err != nil {

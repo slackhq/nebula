@@ -987,7 +987,9 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		nb := make([]byte, 12, 12)
 		out := make([]byte, mtu)
 		for _, cp := range hh.packetStore {
-			//todo use a sendbatcher
+			// TODO: use a SendBatch here. Each callback lands in
+			// sendNoMetrics -> WriteTo: one syscall per cached packet,
+			// where one sendmmsg could flush the whole store.
 			cp.callback(cp.messageType, cp.messageSubType, hostinfo, cp.packet, nb, out)
 		}
 		f.cachedPacketMetrics.sent.Inc(int64(len(hh.packetStore)))

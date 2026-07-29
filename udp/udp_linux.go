@@ -313,6 +313,9 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 
 	for {
 		if cmsgSpace > 0 {
+			// TODO: the kernel only rewrites Controllen on entries it fills,
+			// so resetting just the first `n` from the previous wakeup would
+			// save ~(batch-n) stores per wakeup on trickle traffic.
 			for i := range msgs {
 				setMsgControllen(&msgs[i].Hdr, cmsgSpace)
 			}

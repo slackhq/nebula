@@ -292,6 +292,13 @@ func (f *Interface) activate() error {
 		return err
 	}
 	if len(queues) < f.routines {
+		// TODO: this clamp is only safe because it is unreachable when the
+		// udp side has multiple readers (linux Queues opens exactly n or
+		// errors; every other platform already clamped routines to 1 above).
+		// If a platform ever returns fewer queues than routines with
+		// SO_REUSEPORT sockets already bound, the surplus sockets get no
+		// listenOut and the kernel blackholes every flow it hashes to them —
+		// fail loudly or close the extra sockets instead.
 		f.l.Warn("tun multiqueue is not supported on this platform, falling back to fewer routines",
 			"requested", f.routines, "opened", len(queues))
 		f.routines = len(queues)
