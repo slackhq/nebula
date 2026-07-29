@@ -46,15 +46,19 @@ func (h *Hdr) Decode(b []byte) {
 	h.CsumOffset = binary.NativeEndian.Uint16(b[8:10])
 }
 
+func EncodeHeader(b []byte, flags, gsoType uint8, hdrLen, gsoSize, csumStart, csumOffset uint16) {
+	b[0] = flags
+	b[1] = gsoType
+	binary.NativeEndian.PutUint16(b[2:4], hdrLen)
+	binary.NativeEndian.PutUint16(b[4:6], gsoSize)
+	binary.NativeEndian.PutUint16(b[6:8], csumStart)
+	binary.NativeEndian.PutUint16(b[8:10], csumOffset)
+}
+
 // Encode is the inverse of Decode: writes the virtio_net_hdr fields into b
 // (must be at least Size bytes). Used to emit a TSO superpacket on egress.
 func (h *Hdr) Encode(b []byte) {
-	b[0] = h.Flags
-	b[1] = h.gsoType
-	binary.NativeEndian.PutUint16(b[2:4], h.HdrLen)
-	binary.NativeEndian.PutUint16(b[4:6], h.GSOSize)
-	binary.NativeEndian.PutUint16(b[6:8], h.CsumStart)
-	binary.NativeEndian.PutUint16(b[8:10], h.CsumOffset)
+	EncodeHeader(b, h.Flags, h.gsoType, h.HdrLen, h.GSOSize, h.CsumStart, h.CsumOffset)
 }
 
 // GSOType returns gsoType with the ECN-flag masked out

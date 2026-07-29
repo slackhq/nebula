@@ -358,7 +358,8 @@ func (r *Offload) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, proto
 	if gsoType != unix.VIRTIO_NET_HDR_GSO_NONE {
 		gsoSize = uint16(segSize)
 	}
-	vhdr := virtio.NewHeader(
+	virtio.EncodeHeader(
+		r.gsoHdrBuf[:],
 		unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,   /*flags*/
 		gsoType,                            /*gsoType*/
 		uint16(len(hdr)+len(transportHdr)), /*hdrLen*/
@@ -366,7 +367,6 @@ func (r *Offload) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, proto
 		uint16(len(hdr)),                   /*csumStart*/
 		csumOff,                            /*csumOffset*/
 	)
-	vhdr.Encode(r.gsoHdrBuf[:])
 
 	_, err := r.rawWrite(r.gsoIovs)
 	return err
