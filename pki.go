@@ -339,7 +339,6 @@ func newCertStateFromConfig(c *config.C, cipher string) (*CertState, error) {
 
 		if fips140.Enforced() && crt.Curve() != cert.Curve_P256 {
 			return nil, fmt.Errorf("pki: use of %s is not allowed in FIPS 140-only mode", crt.Curve())
-
 		}
 
 		switch crt.Version() {
