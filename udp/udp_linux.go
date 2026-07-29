@@ -133,24 +133,24 @@ func (u *StdConn) prepareGRO() {
 // field of each arriving datagram is delivered as ancillary data alongside
 // the payload. ListenOut reads it via parseRecvCmsg and passes the codepoint
 // through the EncReader for RFC 6040 combine on the decap side. Best-effort:
-// we keep going on failure. Only the socket's own family gates support; on a
-// dual-stack v6 socket a failed IPv4 probe just degrades v4 peers to Not-ECT
-// (could be a v6-specific bind).
+// we keep going on failure, and each family degrades independently — a peer
+// whose family's probe failed just delivers no cmsg and lands as Not-ECT.
+// Only a failure of every family the socket speaks turns the parsing off.
 func (u *StdConn) prepareECNRecv() {
 	v4err := unix.SetsockoptInt(u.sysFd, unix.IPPROTO_IP, unix.IP_RECVTOS, 1)
-	err := v4err
+	var v6err error
 	if !u.isV4 {
-		err = unix.SetsockoptInt(u.sysFd, unix.IPPROTO_IPV6, unix.IPV6_RECVTCLASS, 1)
-		if err != nil {
-			err = errors.Join(v4err, err)
-		} else if v4err != nil {
-			u.l.Debug("udp: outer-ECN RX degraded", "reason", "kernel rejected probe on IPv4", "error", v4err)
-		}
+		v6err = unix.SetsockoptInt(u.sysFd, unix.IPPROTO_IPV6, unix.IPV6_RECVTCLASS, 1)
 	}
-	if err != nil {
-		u.l.Info("udp: outer-ECN RX disabled", "reason", "kernel rejected probe", "error", err)
+	switch {
+	case v4err != nil && (u.isV4 || v6err != nil):
+		u.l.Info("udp: outer-ECN RX disabled", "reason", "kernel rejected probe", "error", errors.Join(v4err, v6err))
 		recordCapability("udp.ecn_rx.enabled", false)
 		return
+	case v4err != nil:
+		u.l.Debug("udp: outer-ECN RX degraded", "reason", "kernel rejected probe on IPv4", "error", v4err)
+	case v6err != nil:
+		u.l.Debug("udp: outer-ECN RX degraded", "reason", "kernel rejected probe on IPv6", "error", v6err)
 	}
 	u.ecnRecvSupported = true
 	u.l.Info("udp: outer-ECN RX enabled")
