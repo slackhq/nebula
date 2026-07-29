@@ -243,7 +243,10 @@ func newTunGeneric(c *config.C, l *slog.Logger, fd int, vnetHdr bool, offloadFla
 	}
 	err = qs.Add(fd)
 	if err != nil {
+		// Add only appends on success, so closing the set here can't
+		// double-close fd; it releases the set's shutdown eventfd.
 		_ = unix.Close(fd)
+		_ = qs.Close()
 		return nil, err
 	}
 
