@@ -126,7 +126,6 @@ func (f *Interface) sendInsideEncrypt(hostinfo *HostInfo, ci *ConnectionState, s
 	c := ci.messageCounter.Add(1)
 
 	out := header.Encode(scratch, header.Version, header.Message, 0, hostinfo.remoteIndexId, c)
-	f.connectionManager.Out(hostinfo)
 
 	out, encErr := ci.eKey.EncryptDanger(out, out, seg, c, nb)
 	if noiseutil.EncryptLockNeeded {
@@ -158,6 +157,11 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 	if ci.eKey == nil {
 		return
 	}
+
+	// One traffic-out mark covers every segment of the superpacket; doing it
+	// per segment in sendInsideEncrypt paid an atomic store up to ~45 extra
+	// times per TSO packet, inside writeLock under boring crypto.
+	f.connectionManager.Out(hostinfo)
 
 	remote := hostinfo.GetRemote()
 	ecnEnabled := f.ecnEnabled.Load()
