@@ -337,6 +337,11 @@ func newCertStateFromConfig(c *config.C, cipher string) (*CertState, error) {
 			return nil, err
 		}
 
+		if fips140.Enforced() && crt.Curve() != cert.Curve_P256 {
+			return nil, fmt.Errorf("pki: use of %s is not allowed in FIPS 140-only mode", crt.Curve())
+
+		}
+
 		switch crt.Version() {
 		case cert.Version1:
 			if v1 != nil {
@@ -416,7 +421,7 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 			//NOTE: We do not currently have a method to verify a public private key pair when the private key is in an hsm
 		} else {
 			if err := v1.VerifyPrivateKey(privateKeyCurve, privateKey); err != nil {
-				return nil, fmt.Errorf("private key is not a pair with public key in nebula cert")
+				return nil, fmt.Errorf("private key is not a pair with public key in nebula cert: %w", err)
 			}
 		}
 
@@ -441,7 +446,7 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 			//NOTE: We do not currently have a method to verify a public private key pair when the private key is in an hsm
 		} else {
 			if err := v2.VerifyPrivateKey(privateKeyCurve, privateKey); err != nil {
-				return nil, fmt.Errorf("private key is not a pair with public key in nebula cert")
+				return nil, fmt.Errorf("private key is not a pair with public key in nebula cert: %w", err)
 			}
 		}
 
