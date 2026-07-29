@@ -83,9 +83,11 @@ func newBatchWriter(fd int, isV4 bool, l *slog.Logger) *batchWriter {
 //	[0 .. cmsgSegSpace)          UDP_SEGMENT (gso_size, uint16)
 //	[cmsgSegSpace .. cmsgSpace)  IP_TOS or IPV6_TCLASS (int32)
 //
-// Both headers are pre-filled once here; per-call we only rewrite the data
-// payload and toggle Hdr.Control / Hdr.Controllen to point at whichever
-// subset applies (none / segment-only / ecn-only / both).
+// The UDP_SEGMENT header is pre-filled once here and only its data payload
+// is rewritten per call. The ECN header is written entirely per entry by
+// writeEntryCmsg, since its Level/Type follow the destination's family, not
+// the socket's. Per call we toggle Hdr.Control / Hdr.Controllen to point at
+// whichever subset applies (none / segment-only / ecn-only / both).
 func (w *batchWriter) prepareWriteMessages(n int) {
 	w.msgs = make([]rawMessage, n)
 	w.iovs = make([]iovec, n)
@@ -97,28 +99,12 @@ func (w *batchWriter) prepareWriteMessages(n int) {
 	w.cmsgSpace = w.cmsgSegSpace + w.cmsgEcnSpace
 	w.cmsg = make([]byte, n*w.cmsgSpace)
 
-	// Default the ECN header to the socket's own family. writeEntryCmsg
-	// finalizes Level/Type per entry from the destination address (a v4-mapped
-	// dst on a dual-stack v6 socket needs IP_TOS, not IPV6_TCLASS), so this is
-	// only the value used before the first per-entry rewrite.
-	ecnLevel := int32(unix.IPPROTO_IP)
-	ecnType := int32(unix.IP_TOS)
-	if !w.isV4 {
-		ecnLevel = unix.IPPROTO_IPV6
-		ecnType = unix.IPV6_TCLASS
-	}
-
 	for k := 0; k < n; k++ {
 		base := k * w.cmsgSpace
 		seg := (*unix.Cmsghdr)(unsafe.Pointer(&w.cmsg[base]))
 		seg.Level = unix.SOL_UDP
 		seg.Type = unix.UDP_SEGMENT
 		setCmsgLen(seg, unix.CmsgLen(2))
-
-		ecn := (*unix.Cmsghdr)(unsafe.Pointer(&w.cmsg[base+w.cmsgSegSpace]))
-		ecn.Level = ecnLevel
-		ecn.Type = ecnType
-		setCmsgLen(ecn, unix.CmsgLen(4))
 	}
 
 	for i := range w.msgs {
@@ -427,10 +413,10 @@ func (w *batchWriter) planRun(bufs [][]byte, addrs []netip.AddrPort, ecns []byte
 // The outer-ECN cmsg family must match the *destination*, not the socket: on
 // the default dual-stack v6 bind, a v4-mapped destination is routed through
 // the kernel's IPv4 path, which parses IP_TOS (IPPROTO_IP) and ignores an
-// IPV6_TCLASS cmsg. prepareWriteMessages pre-fills a default header; here we
-// rewrite its Level/Type (and Len) per entry from dstIsV4 so v4 peers get
-// IP_TOS and v6 peers get IPV6_TCLASS. The data payload is a 4-byte int for
-// both families, so the pre-computed cmsg space is unchanged.
+// IPV6_TCLASS cmsg. The ECN header is written here in full, per entry, from
+// dstIsV4 so v4 peers get IP_TOS and v6 peers get IPV6_TCLASS. The data
+// payload is a 4-byte int for both families, so the pre-computed cmsg space
+// is unchanged.
 func (w *batchWriter) writeEntryCmsg(entry, runLen, segSize int, ecn byte, dstIsV4 bool) {
 	hdr := &w.msgs[entry].Hdr
 	useSeg := runLen >= 2
