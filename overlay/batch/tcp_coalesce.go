@@ -37,7 +37,11 @@ const tcpCoalesceHdrCap = 100
 // The caller (listenOut) must keep those buffers alive until Flush.
 type coalesceSlot struct {
 	passthrough bool
-	rawPkt      []byte // borrowed when passthrough
+	// rawPkt is borrowed: the whole packet for passthrough slots, the seed
+	// packet for coalesce slots. A coalesce slot that never grows past one
+	// segment is emitted from rawPkt so its original (already valid) L4
+	// checksum ships DATA_VALID instead of making the kernel recompute it.
+	rawPkt []byte
 
 	fk       flowKey
 	hdrBuf   [tcpCoalesceHdrCap]byte
@@ -235,7 +239,12 @@ func (c *TCPCoalescer) Flush() error {
 	var first error
 	for _, s := range c.slots {
 		var err error
-		if s.passthrough {
+		if s.passthrough || s.numSeg == 1 {
+			// A slot that never grew (nor absorbed a merge) is byte-identical
+			// to the packet it was seeded from; ship the original so its valid
+			// checksum rides the DATA_VALID path instead of paying a kernel
+			// software csum. appendPayload and mergeSlots only touch hdrBuf
+			// once numSeg >= 2, so rawPkt is still pristine here.
 			_, err = c.w.Write(s.rawPkt)
 		} else {
 			err = c.flushSlot(s)
@@ -268,7 +277,7 @@ func (c *TCPCoalescer) seed(pkt []byte, info parsedTCP) {
 	}
 	s := c.take()
 	s.passthrough = false
-	s.rawPkt = nil
+	s.rawPkt = pkt // kept for the numSeg==1 fast path in Flush
 	copy(s.hdrBuf[:], pkt[:info.hdrLen])
 	s.hdrLen = info.hdrLen
 	s.ipHdrLen = info.ipHdrLen

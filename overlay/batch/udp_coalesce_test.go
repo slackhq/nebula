@@ -1,6 +1,7 @@
 package batch
 
 import (
+	"bytes"
 	"encoding/binary"
 	"io"
 	"testing"
@@ -112,10 +113,15 @@ func TestUDPCoalescerSeedThenFlushAlone(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	// Single-segment flush goes through WriteGSO; the writer infers GSO_NONE
-	// from len(pays)==1 and the kernel fills in the UDP csum (NEEDS_CSUM).
-	if len(w.gsoWrites) != 1 || len(w.writes) != 0 {
+	// A slot that never grew past one datagram flushes as a plain Write of
+	// the original packet bytes: the original (already valid) checksum
+	// ships via the DATA_VALID path, so the kernel does no csum work.
+	// WriteGSO is reserved for slots that actually coalesced (>=2 segs).
+	if len(w.writes) != 1 || len(w.gsoWrites) != 0 {
 		t.Fatalf("single-seg flush: writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
+	}
+	if !bytes.Equal(w.writes[0], pkt) {
+		t.Errorf("plain write not byte-identical to committed packet: got %d bytes want %d", len(w.writes[0]), len(pkt))
 	}
 }
 
@@ -180,14 +186,16 @@ func TestUDPCoalescerShortLastSegmentSeals(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if len(w.gsoWrites) != 2 {
-		t.Fatalf("want 2 gso writes (sealed + new seed), got %d", len(w.gsoWrites))
+	// The sealed 3-datagram chain is a real superpacket; the re-seed stays
+	// single-segment and flushes as a plain write of the original packet.
+	if len(w.gsoWrites) != 1 || len(w.writes) != 1 {
+		t.Fatalf("want 1 gso (sealed) + 1 plain (new seed), got gso=%d plain=%d", len(w.gsoWrites), len(w.writes))
 	}
 	if len(w.gsoWrites[0].pays) != 3 {
-		t.Errorf("first super: want 3 pays, got %d", len(w.gsoWrites[0].pays))
+		t.Errorf("super: want 3 pays, got %d", len(w.gsoWrites[0].pays))
 	}
-	if len(w.gsoWrites[1].pays) != 1 {
-		t.Errorf("second super: want 1 pay (re-seed), got %d", len(w.gsoWrites[1].pays))
+	if got, want := len(w.writes[0]), 20+8+1200; got != want {
+		t.Errorf("re-seed plain write len=%d want %d", got, want)
 	}
 }
 
@@ -204,8 +212,14 @@ func TestUDPCoalescerLargerThanSeedReseeds(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if len(w.gsoWrites) != 2 {
-		t.Fatalf("want 2 separate seeds, got %d", len(w.gsoWrites))
+	// Both seeds stay single-segment → two plain writes in arrival order.
+	if len(w.writes) != 2 || len(w.gsoWrites) != 0 {
+		t.Fatalf("want 2 separate plain writes, got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
+	}
+	for i, want := range []int{20 + 8 + 800, 20 + 8 + 1200} {
+		if len(w.writes[i]) != want {
+			t.Errorf("write %d len=%d want %d", i, len(w.writes[i]), want)
+		}
 	}
 }
 
@@ -268,8 +282,9 @@ func TestUDPCoalescerCapsAtMaxSegs(t *testing.T) {
 
 // Differing IP ECN codepoints must not coalesce: udpHeadersMatch compares
 // the full ToS byte (matching kernel GRO). A CE-marked datagram mid-run
-// seals the Not-ECT chain and seeds a fresh superpacket that keeps CE; the
-// trailing Not-ECT datagram seeds another.
+// seals the Not-ECT chain and reseeds; the trailing Not-ECT datagram
+// reseeds again. All three stay single-segment, so each ships as a plain
+// write of its original bytes, keeping its own codepoint.
 func TestUDPCoalescerDifferingECNReseeds(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := newTestUDPCoalescer(t, w)
@@ -286,16 +301,13 @@ func TestUDPCoalescerDifferingECNReseeds(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if len(w.gsoWrites) != 3 {
-		t.Fatalf("want 3 separate seeds (differing ECN), got %d (plain=%d)", len(w.gsoWrites), len(w.writes))
+	if len(w.writes) != 3 || len(w.gsoWrites) != 0 {
+		t.Fatalf("want 3 separate plain writes (differing ECN), got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
 	}
 	wantECN := []byte{0x00, 0x03, 0x00}
-	for i, g := range w.gsoWrites {
-		if len(g.pays) != 1 {
-			t.Errorf("gso %d pay count=%d want 1", i, len(g.pays))
-		}
-		if got := g.hdr[1] & 0x03; got != wantECN[i] {
-			t.Errorf("gso %d ECN=%#x want %#x", i, got, wantECN[i])
+	for i, p := range w.writes {
+		if got := p[1] & 0x03; got != wantECN[i] {
+			t.Errorf("write %d ECN=%#x want %#x", i, got, wantECN[i])
 		}
 	}
 }
@@ -353,8 +365,9 @@ func TestUDPCoalescerDSCPMismatchReseeds(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if len(w.gsoWrites) != 2 {
-		t.Fatalf("want 2 separate seeds (different DSCP), got %d", len(w.gsoWrites))
+	// Both seeds stay single-segment → two plain writes, no gso.
+	if len(w.writes) != 2 || len(w.gsoWrites) != 0 {
+		t.Fatalf("want 2 separate plain writes (different DSCP), got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
 	}
 }
 
@@ -437,9 +450,16 @@ func TestUDPCoalescerZeroLengthMidFlowSealsAndPreservesOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The empty datagram sealed the first slot, so the trailing full packet
-	// can't join it: two single-segment superpackets bracket one plain write.
-	if len(w.gsoWrites) != 2 || len(w.writes) != 1 {
-		t.Fatalf("want 2 gso writes + 1 plain, got gso=%d plain=%d", len(w.gsoWrites), len(w.writes))
+	// can't join it. All three emit as plain writes (the two full datagrams
+	// stayed single-segment; the empty one is passthrough) in per-flow
+	// arrival order: full, empty, full.
+	if len(w.writes) != 3 || len(w.gsoWrites) != 0 {
+		t.Fatalf("want 3 plain writes, got gso=%d plain=%d", len(w.gsoWrites), len(w.writes))
+	}
+	for i, want := range []int{20 + 8 + 800, 20 + 8, 20 + 8 + 800} {
+		if len(w.writes[i]) != want {
+			t.Errorf("write %d len=%d want %d (order full, empty, full)", i, len(w.writes[i]), want)
+		}
 	}
 }
 
@@ -484,7 +504,8 @@ func TestUDPCoalescerNonAtomicSequentialIDsCoalesce(t *testing.T) {
 }
 
 // TestUDPCoalescerNonAtomicIDGapReseeds: an ID jump on a DF=0 flow breaks
-// the chain; each datagram must keep its own (meaningful) ID.
+// the chain; each datagram stays a single-segment slot and flushes as a
+// plain write that keeps its own (meaningful) ID.
 func TestUDPCoalescerNonAtomicIDGapReseeds(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := newTestUDPCoalescer(t, w)
@@ -504,11 +525,11 @@ func TestUDPCoalescerNonAtomicIDGapReseeds(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if len(w.gsoWrites) != 2 {
-		t.Fatalf("ID gap on DF=0 must reseed: gso=%d", len(w.gsoWrites))
+	if len(w.writes) != 2 || len(w.gsoWrites) != 0 {
+		t.Fatalf("ID gap on DF=0 must reseed: writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
 	}
 	for i, want := range []uint16{40, 50} {
-		if id := binary.BigEndian.Uint16(w.gsoWrites[i].hdr[4:6]); id != want {
+		if id := binary.BigEndian.Uint16(w.writes[i][4:6]); id != want {
 			t.Errorf("write %d: ID=%d want %d (must be preserved)", i, id, want)
 		}
 	}

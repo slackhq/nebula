@@ -217,17 +217,15 @@ func TestCoalescerSeedThenFlushAlone(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	// Single-segment flush goes through WriteGSO with GSO_NONE
-	// (virtio NEEDS_CSUM lets the kernel fill in the L4 csum).
-	if len(w.gsoWrites) != 1 || len(w.writes) != 0 {
+	// A slot that never grew past one segment flushes as a plain Write of
+	// the original packet bytes: the original (already valid) checksum
+	// ships via the DATA_VALID path, so the kernel does no csum work.
+	// WriteGSO is reserved for slots that actually coalesced (>=2 segs).
+	if len(w.writes) != 1 || len(w.gsoWrites) != 0 {
 		t.Fatalf("single-seg flush: writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
 	}
-	g := w.gsoWrites[0]
-	if g.total() != 40+1000 {
-		t.Errorf("super total=%d want %d", g.total(), 40+1000)
-	}
-	if g.payLen() != 1000 {
-		t.Errorf("payLen=%d want 1000", g.payLen())
+	if !bytes.Equal(w.writes[0], pkt) {
+		t.Errorf("plain write not byte-identical to committed packet: got %d bytes want %d", len(w.writes[0]), len(pkt))
 	}
 }
 
@@ -284,9 +282,10 @@ func TestCoalescerRejectsSeqGap(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	// Each packet flushes as its own single-segment WriteGSO.
-	if len(w.gsoWrites) != 2 || len(w.writes) != 0 {
-		t.Fatalf("seq gap: want 2 gso writes got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
+	// Each packet stays a single-segment slot and flushes as its own plain
+	// write of the original bytes.
+	if len(w.writes) != 2 || len(w.gsoWrites) != 0 {
+		t.Fatalf("seq gap: want 2 plain writes got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
 	}
 }
 
@@ -297,8 +296,9 @@ func TestCoalescerRejectsFlagMismatch(t *testing.T) {
 	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
-	// SYN|ACK is non-admissible. Must flush matching flow's slot (gso)
-	// and then plain-write the SYN packet itself.
+	// SYN|ACK is non-admissible. Must flush the matching flow's slot —
+	// single-segment, so a plain write of the original bytes — and then
+	// plain-write the SYN packet itself.
 	syn := buildTCPv4(2200, tcpSyn|tcpAck, pay)
 	if err := c.Commit(syn); err != nil {
 		t.Fatal(err)
@@ -306,8 +306,11 @@ func TestCoalescerRejectsFlagMismatch(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if len(w.writes) != 1 || len(w.gsoWrites) != 1 {
-		t.Fatalf("flag mismatch: want 1 plain + 1 gso, got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
+	if len(w.writes) != 2 || len(w.gsoWrites) != 0 {
+		t.Fatalf("flag mismatch: want 2 plain writes (flushed seed + SYN), got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
+	}
+	if !bytes.Equal(w.writes[1], syn) {
+		t.Errorf("second plain write should be the SYN packet, got %d bytes", len(w.writes[1]))
 	}
 }
 
@@ -346,19 +349,23 @@ func TestCoalescerShortLastSegmentClosesChain(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	// Expect two gso writes: the first two packets coalesced, then the
-	// third flushed alone (single-seg via GSO_NONE).
-	if len(w.gsoWrites) != 2 {
-		t.Fatalf("want 2 gso writes got %d", len(w.gsoWrites))
+	// Expect one gso write for the first two packets coalesced, then the
+	// third — still single-segment — flushed as a plain write of the
+	// original packet.
+	if len(w.gsoWrites) != 1 {
+		t.Fatalf("want 1 gso write got %d", len(w.gsoWrites))
 	}
-	if len(w.writes) != 0 {
-		t.Fatalf("want 0 plain writes got %d", len(w.writes))
+	if len(w.writes) != 1 {
+		t.Fatalf("want 1 plain write got %d", len(w.writes))
 	}
 	if w.gsoWrites[0].gsoSize != 1200 {
 		t.Errorf("gsoSize=%d want 1200", w.gsoWrites[0].gsoSize)
 	}
 	if got, want := w.gsoWrites[0].total(), 40+1200+500; got != want {
 		t.Errorf("super len=%d want %d", got, want)
+	}
+	if got, want := len(w.writes[0]), 40+1200; got != want {
+		t.Errorf("plain write len=%d want %d", got, want)
 	}
 }
 
@@ -378,12 +385,13 @@ func TestCoalescerPSHFinalizesChain(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	// First two coalesce; the third seeds a fresh slot that flushes alone.
-	if len(w.gsoWrites) != 2 {
-		t.Fatalf("want 2 gso writes got %d", len(w.gsoWrites))
+	// First two coalesce into one gso write; the third seeds a fresh slot
+	// that stays single-segment and flushes as a plain write.
+	if len(w.gsoWrites) != 1 {
+		t.Fatalf("want 1 gso write got %d", len(w.gsoWrites))
 	}
-	if len(w.writes) != 0 {
-		t.Fatalf("want 0 plain writes got %d", len(w.writes))
+	if len(w.writes) != 1 {
+		t.Fatalf("want 1 plain write got %d", len(w.writes))
 	}
 }
 
@@ -436,9 +444,10 @@ func TestCoalescerRejectsDifferentFlow(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	// Two independent flows, each flushes its own single-segment WriteGSO.
-	if len(w.gsoWrites) != 2 || len(w.writes) != 0 {
-		t.Fatalf("diff flow: want 2 gso writes got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
+	// Two independent flows, each stays single-segment and flushes as its
+	// own plain write of the original bytes.
+	if len(w.writes) != 2 || len(w.gsoWrites) != 0 {
+		t.Fatalf("diff flow: want 2 plain writes got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
 	}
 }
 
@@ -544,12 +553,15 @@ func TestCoalescerMultipleFlowsInSameBatch(t *testing.T) {
 // coalesced events both queued, Flush emits them in Add order rather than
 // writing passthrough packets synchronously.
 func TestCoalescerPreservesArrivalOrder(t *testing.T) {
-	w := &orderedFakeWriter{gsoEnabled: true}
+	w := &fakeTunWriter{gsoEnabled: true}
 	c := newTestTCPCoalescer(t, w)
 	// Sequence: coalesceable TCP, ICMP (passthrough), coalesceable TCP on
-	// a different flow. Expected emit order: gso(X), plain(ICMP), gso(Y).
+	// a different flow. Both TCP slots stay single-segment, so all three
+	// emit as plain writes; the packet order (X, ICMP, Y) is asserted by
+	// byte content since the kinds no longer distinguish them.
 	pay := make([]byte, 1200)
-	if err := c.Commit(buildTCPv4Ports(1000, 2000, 100, tcpAck, pay)); err != nil {
+	tcpX := buildTCPv4Ports(1000, 2000, 100, tcpAck, pay)
+	if err := c.Commit(tcpX); err != nil {
 		t.Fatal(err)
 	}
 	icmp := make([]byte, 28)
@@ -561,40 +573,25 @@ func TestCoalescerPreservesArrivalOrder(t *testing.T) {
 	if err := c.Commit(icmp); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Commit(buildTCPv4Ports(3000, 2000, 500, tcpAck, pay)); err != nil {
+	tcpY := buildTCPv4Ports(3000, 2000, 500, tcpAck, pay)
+	if err := c.Commit(tcpY); err != nil {
 		t.Fatal(err)
 	}
 	// Nothing should have hit the writer synchronously.
-	if len(w.events) != 0 {
-		t.Fatalf("Add emitted events synchronously: %v", w.events)
+	if len(w.order) != 0 {
+		t.Fatalf("Add emitted events synchronously: %v", w.order)
 	}
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := w.events, []string{"gso", "plain", "gso"}; !stringSliceEq(got, want) {
+	if got, want := w.order, []string{"write", "write", "write"}; !stringSliceEq(got, want) {
 		t.Fatalf("flush order=%v want %v", got, want)
 	}
-}
-
-// orderedFakeWriter records only the sequence of call types so tests can
-// assert arrival order without inspecting bytes.
-type orderedFakeWriter struct {
-	gsoEnabled bool
-	events     []string
-}
-
-func (w *orderedFakeWriter) Write(p []byte) (int, error) {
-	w.events = append(w.events, "plain")
-	return len(p), nil
-}
-
-func (w *orderedFakeWriter) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, _ tio.GSOProto) error {
-	w.events = append(w.events, "gso")
-	return nil
-}
-
-func (w *orderedFakeWriter) Capabilities() tio.Capabilities {
-	return tio.Capabilities{TSO: w.gsoEnabled, USO: w.gsoEnabled}
+	for i, want := range [][]byte{tcpX, icmp, tcpY} {
+		if !bytes.Equal(w.writes[i], want) {
+			t.Fatalf("write %d out of arrival order: got %d bytes, want %d bytes", i, len(w.writes[i]), len(want))
+		}
+	}
 }
 
 func stringSliceEq(a, b []string) bool {
@@ -761,17 +758,14 @@ func TestCoalescerCwrSealsFlow(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if len(w.writes) != 1 {
-		t.Fatalf("want 1 plain write (CWR), got %d", len(w.writes))
+	// All three emissions are plain writes: the seed before CWR and the
+	// fresh seed after both stay single-segment, and the CWR packet itself
+	// is passthrough. Order: seed, CWR, reseed.
+	if len(w.writes) != 3 || len(w.gsoWrites) != 0 {
+		t.Fatalf("want 3 plain writes (seed, CWR, reseed), got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
 	}
-	// Two GSO writes: the first seed before CWR, and a fresh seed after.
-	if len(w.gsoWrites) != 2 {
-		t.Fatalf("want 2 gso writes, got %d", len(w.gsoWrites))
-	}
-	for i, g := range w.gsoWrites {
-		if len(g.pays) != 1 {
-			t.Errorf("gso %d pay count=%d want 1", i, len(g.pays))
-		}
+	if flags := w.writes[1][20+13]; flags&tcpCwr == 0 {
+		t.Errorf("middle write flags=0x%02x want CWR (passthrough in arrival order)", flags)
 	}
 }
 
@@ -791,22 +785,25 @@ func TestCoalescerEceMismatchReseeds(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if len(w.gsoWrites) != 2 {
-		t.Fatalf("want 2 separate seeds, got %d gso writes", len(w.gsoWrites))
+	// Each seed stays single-segment and flushes as its own plain write.
+	if len(w.writes) != 2 || len(w.gsoWrites) != 0 {
+		t.Fatalf("want 2 separate plain writes, got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
 	}
-	for i, g := range w.gsoWrites {
-		if len(g.pays) != 1 {
-			t.Errorf("gso %d pay count=%d want 1", i, len(g.pays))
-		}
+	if flags := w.writes[0][20+13]; flags&tcpEce == 0 {
+		t.Errorf("first write lost ECE: flags=0x%02x", flags)
+	}
+	if flags := w.writes[1][20+13]; flags&tcpEce != 0 {
+		t.Errorf("second write gained ECE: flags=0x%02x", flags)
 	}
 }
 
 // TestCoalescerDifferingECNReseeds confirms that segments with differing IP
 // ECN codepoints do NOT coalesce: headersMatch compares the full ToS byte,
-// matching kernel GRO. Two ECT(0) segments merge; a CE stamp mid-run seals
-// the ECT(0) chain and starts a fresh superpacket that keeps CE; a trailing
-// ECT(0) starts yet another. Each superpacket keeps its own codepoint —
-// ORing the marks (the old buggy behavior) would have fabricated a false CE
+// matching kernel GRO. Two ECT(0) segments merge into a superpacket; a CE
+// stamp mid-run seals the ECT(0) chain and reseeds, and the trailing ECT(0)
+// reseeds again — those reseeds stay single-segment and ship as plain
+// writes of the original packets, each keeping its own codepoint. ORing
+// the marks (the old buggy behavior) would have fabricated a false CE
 // across the whole burst.
 func TestCoalescerDifferingECNReseeds(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
@@ -828,31 +825,34 @@ func TestCoalescerDifferingECNReseeds(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if len(w.gsoWrites) != 3 {
-		t.Fatalf("want 3 superpackets (ECN split), got %d (plain=%d)", len(w.gsoWrites), len(w.writes))
-	}
-	// gso[0]: the two ECT(0) segments merged; gso[1]: CE alone; gso[2]:
+	// gso: the two ECT(0) segments merged; then plain CE alone; then plain
 	// trailing ECT(0) alone. Emitted in seq order.
-	type want struct {
-		pays int
-		ecn  byte
+	if len(w.gsoWrites) != 1 || len(w.writes) != 2 {
+		t.Fatalf("want 1 gso (ECT0 pair) + 2 plain (ECN split), got gso=%d plain=%d", len(w.gsoWrites), len(w.writes))
 	}
-	wants := []want{{2, ecnECT0}, {1, ecnCE}, {1, ecnECT0}}
-	for i, wnt := range wants {
-		g := w.gsoWrites[i]
-		if len(g.pays) != wnt.pays {
-			t.Errorf("gso %d pay count=%d want %d", i, len(g.pays), wnt.pays)
-		}
-		if got := g.hdr[1] & 0x03; got != wnt.ecn {
-			t.Errorf("gso %d ECN=0x%02x want 0x%02x", i, got, wnt.ecn)
+	if got, want := w.order, []string{"gso", "write", "write"}; !stringSliceEq(got, want) {
+		t.Fatalf("emission order=%v want %v", got, want)
+	}
+	g := w.gsoWrites[0]
+	if len(g.pays) != 2 {
+		t.Errorf("gso pay count=%d want 2", len(g.pays))
+	}
+	if got := g.hdr[1] & 0x03; got != ecnECT0 {
+		t.Errorf("gso ECN=0x%02x want 0x%02x", got, ecnECT0)
+	}
+	wantECN := []byte{ecnCE, ecnECT0}
+	for i, wnt := range wantECN {
+		if got := w.writes[i][1] & 0x03; got != wnt {
+			t.Errorf("plain %d ECN=0x%02x want 0x%02x", i, got, wnt)
 		}
 	}
 }
 
 // TestCoalescerECT0ThenECT1NoCE is the core regression for the ECN merge
 // bug: ORing ECT(0)=0b10 with ECT(1)=0b01 fabricates CE=0b11. The two
-// segments must land in separate superpackets, each preserving its own
-// codepoint, and neither may end up CE-marked.
+// segments must land in separate emissions — both stay single-segment, so
+// each ships as a plain write of its original bytes, preserving its own
+// codepoint — and neither may end up CE-marked.
 func TestCoalescerECT0ThenECT1NoCE(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := newTestTCPCoalescer(t, w)
@@ -866,16 +866,16 @@ func TestCoalescerECT0ThenECT1NoCE(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if len(w.gsoWrites) != 2 {
-		t.Fatalf("want 2 separate superpackets (ECT0 vs ECT1), got %d", len(w.gsoWrites))
+	if len(w.writes) != 2 || len(w.gsoWrites) != 0 {
+		t.Fatalf("want 2 separate plain writes (ECT0 vs ECT1), got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
 	}
 	wantECN := []byte{ecnECT0, ecnECT1}
-	for i, g := range w.gsoWrites {
-		if got := g.hdr[1] & 0x03; got != wantECN[i] {
-			t.Errorf("gso %d ECN=0x%02x want 0x%02x", i, got, wantECN[i])
+	for i, p := range w.writes {
+		if got := p[1] & 0x03; got != wantECN[i] {
+			t.Errorf("write %d ECN=0x%02x want 0x%02x", i, got, wantECN[i])
 		}
-		if got := g.hdr[1] & 0x03; got == ecnCE {
-			t.Errorf("gso %d fabricated CE from ECT merge", i)
+		if got := p[1] & 0x03; got == ecnCE {
+			t.Errorf("write %d fabricated CE from ECT merge", i)
 		}
 	}
 }
@@ -899,8 +899,9 @@ func TestCoalescerDscpMismatchReseeds(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if len(w.gsoWrites) != 2 {
-		t.Fatalf("want 2 separate seeds (different DSCP), got %d", len(w.gsoWrites))
+	// Both seeds stay single-segment → two plain writes, no gso.
+	if len(w.writes) != 2 || len(w.gsoWrites) != 0 {
+		t.Fatalf("want 2 separate plain writes (different DSCP), got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
 	}
 }
 
@@ -1043,8 +1044,10 @@ func TestCoalescerSortKeepsPSHBoundary(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if len(w.gsoWrites) != 2 {
-		t.Fatalf("want 2 gso writes (PSH-sealed and fresh seed), got %d", len(w.gsoWrites))
+	// The PSH-sealed pair is a real superpacket; the fresh seed stays
+	// single-segment and flushes as a plain write.
+	if len(w.gsoWrites) != 1 || len(w.writes) != 1 {
+		t.Fatalf("want 1 gso (PSH-sealed pair) + 1 plain (fresh seed), got gso=%d plain=%d", len(w.gsoWrites), len(w.writes))
 	}
 }
 
@@ -1075,11 +1078,19 @@ func TestCoalescerSortKeepsPassthroughBarrier(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	// We expect: gso(merged 1000+3400 ranges sorted but not contiguous so 2
-	// gso writes), plain(SYN), gso(2200 alone). The pre-barrier sort should
-	// land 1000 before 3400, and the post-barrier 2200 stays after the SYN.
-	if len(w.writes) != 1 {
-		t.Fatalf("want 1 plain SYN passthrough, got %d", len(w.writes))
+	// All four packets emit as plain writes: 1000 and 3400 are separate
+	// single-segment slots (not contiguous, so the post-sort merge can't
+	// fold them), the SYN is passthrough, and the post-barrier 2200 stays
+	// a single-segment slot after the SYN. The pre-barrier sort must land
+	// 1000 before 3400, and 2200 must never move before the SYN.
+	if len(w.writes) != 4 || len(w.gsoWrites) != 0 {
+		t.Fatalf("want 4 plain writes, got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
+	}
+	wantSeqs := []uint32{1000, 3400, 9999, 2200}
+	for i, want := range wantSeqs {
+		if seq := binary.BigEndian.Uint32(w.writes[i][24:28]); seq != want {
+			t.Errorf("write %d seq=%d want %d", i, seq, want)
+		}
 	}
 }
 
@@ -1106,23 +1117,25 @@ func TestCoalescerIPv6DifferingECNReseeds(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if len(w.gsoWrites) != 3 {
-		t.Fatalf("want 3 superpackets (ECN split), got %d", len(w.gsoWrites))
+	// Like the v4 test: the ECT(0) pair merges into one superpacket; the CE
+	// and trailing ECT(0) reseeds stay single-segment and ship as plain
+	// writes, in seq order.
+	if len(w.gsoWrites) != 1 || len(w.writes) != 2 {
+		t.Fatalf("want 1 gso (ECT0 pair) + 2 plain (ECN split), got gso=%d plain=%d", len(w.gsoWrites), len(w.writes))
 	}
 	// Byte 1 high nibble holds TC[3:0]; ECN is the low 2 bits of that nibble,
 	// which appears in byte 1 mask 0x30 (>>4 to read the codepoint value).
-	type want struct {
-		pays int
-		ecn  byte
+	g := w.gsoWrites[0]
+	if len(g.pays) != 2 {
+		t.Errorf("gso pay count=%d want 2", len(g.pays))
 	}
-	wants := []want{{2, ecnECT0}, {1, ecnCE}, {1, ecnECT0}}
-	for i, wnt := range wants {
-		g := w.gsoWrites[i]
-		if len(g.pays) != wnt.pays {
-			t.Errorf("gso %d pay count=%d want %d", i, len(g.pays), wnt.pays)
-		}
-		if got := (g.hdr[1] >> 4) & 0x03; got != wnt.ecn {
-			t.Errorf("gso %d v6 ECN=0x%02x want 0x%02x", i, got, wnt.ecn)
+	if got := (g.hdr[1] >> 4) & 0x03; got != ecnECT0 {
+		t.Errorf("gso v6 ECN=0x%02x want 0x%02x", got, ecnECT0)
+	}
+	wantECN := []byte{ecnCE, ecnECT0}
+	for i, wnt := range wantECN {
+		if got := (w.writes[i][1] >> 4) & 0x03; got != wnt {
+			t.Errorf("plain %d v6 ECN=0x%02x want 0x%02x", i, got, wnt)
 		}
 	}
 }
@@ -1303,7 +1316,8 @@ func TestCoalescerNonAtomicSequentialIDsCoalesce(t *testing.T) {
 // TestCoalescerNonAtomicIDGapDoesNotCoalesce: with DF clear and an ID jump
 // mid-flow, neither the append path nor the flush-time merge may combine
 // the segments — TSO would re-stamp seed+n and rewrite the second
-// packet's ID, which is meaningful on non-atomic datagrams.
+// packet's ID, which is meaningful on non-atomic datagrams. Each stays a
+// single-segment slot and flushes as a plain write with its original ID.
 func TestCoalescerNonAtomicIDGapDoesNotCoalesce(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := newTestTCPCoalescer(t, w)
@@ -1323,11 +1337,11 @@ func TestCoalescerNonAtomicIDGapDoesNotCoalesce(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if len(w.gsoWrites) != 2 {
-		t.Fatalf("ID gap on DF=0 must not coalesce (append or merge): gso=%d", len(w.gsoWrites))
+	if len(w.writes) != 2 || len(w.gsoWrites) != 0 {
+		t.Fatalf("ID gap on DF=0 must not coalesce (append or merge): writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
 	}
 	for i, want := range []uint16{700, 900} {
-		if id := binary.BigEndian.Uint16(w.gsoWrites[i].hdr[4:6]); id != want {
+		if id := binary.BigEndian.Uint16(w.writes[i][4:6]); id != want {
 			t.Errorf("write %d: ID=%d want %d (must be preserved)", i, id, want)
 		}
 	}
