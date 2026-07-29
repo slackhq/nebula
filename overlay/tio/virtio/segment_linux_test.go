@@ -305,9 +305,10 @@ func TestSegmentUDPHeaderNotCorrupted(t *testing.T) {
 				if dport := binary.BigEndian.Uint16(seg[22:24]); dport != 53 {
 					t.Errorf("seg %d: dport=%d want 53", i, dport)
 				}
-				// UDP-GSO keeps the same IPv4 ID across every segment.
-				if id := binary.BigEndian.Uint16(seg[4:6]); id != 0x4242 {
-					t.Errorf("seg %d: ip id=%#x want 0x4242", i, id)
+				// Software UDP GSO bumps the IPv4 ID per segment just like TSO
+				// (inet_gso_segment's fixed-ID case is TCP-only).
+				if id := binary.BigEndian.Uint16(seg[4:6]); id != 0x4242+uint16(i) {
+					t.Errorf("seg %d: ip id=%#x want %#x", i, id, 0x4242+uint16(i))
 				}
 
 				segPayLen := len(seg) - int(hdrLen)
@@ -459,7 +460,7 @@ func TestCheckValidMasksGSOECN(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := CheckValid(tc.pkt, NewHeader(0, tc.gsoType, 0, 0, 0, 0))
+			err := CheckValid(tc.pkt, NewHeader(0, tc.gsoType, 0, 100, 0, 0))
 			if tc.wantErr && err == nil {
 				t.Errorf("CheckValid(gsoType=%#x) = nil, want error", tc.gsoType)
 			}
@@ -467,6 +468,16 @@ func TestCheckValidMasksGSOECN(t *testing.T) {
 				t.Errorf("CheckValid(gsoType=%#x) = %v, want nil", tc.gsoType, err)
 			}
 		})
+	}
+}
+
+// TestCheckValidRejectsZeroGSOSize: a GSO-typed header with gso_size=0 must be
+// rejected. It would produce a Packet whose GSOInfo.IsSuperpacket() is false,
+// dodging both segmentation and FinishChecksum on its way downstream.
+func TestCheckValidRejectsZeroGSOSize(t *testing.T) {
+	v4pkt, _, _ := buildTCPv4Super(100)
+	if err := CheckValid(v4pkt, NewHeader(0, unix.VIRTIO_NET_HDR_GSO_TCPV4, 0, 0, 0, 0)); err == nil {
+		t.Fatal("CheckValid accepted a GSO-typed header with gso_size=0")
 	}
 }
 
@@ -502,14 +513,12 @@ func TestFoldComplementMatchesReference(t *testing.T) {
 // arithmetic, which is faster but far less obvious — particularly for the TCP
 // flags byte, which is only half of a 16-bit word. These references exist so
 // that trade is checked rather than asserted.
-func referenceBaseIPv4HdrSum(pkt []byte, ihl int, zeroID bool) uint32 {
+func referenceBaseIPv4HdrSum(pkt []byte, ihl int) uint32 {
 	var ipTmp [ipv4HeaderMaxLen]byte
 	copy(ipTmp[:ihl], pkt[:ihl])
 	ipTmp[ipv4TotalLenOff], ipTmp[ipv4TotalLenOff+1] = 0, 0
 	ipTmp[ipv4ChecksumOff], ipTmp[ipv4ChecksumOff+1] = 0, 0
-	if zeroID {
-		ipTmp[ipv4IDOff], ipTmp[ipv4IDOff+1] = 0, 0
-	}
+	ipTmp[ipv4IDOff], ipTmp[ipv4IDOff+1] = 0, 0
 	return uint32(checksum.Checksum(ipTmp[:ihl], 0))
 }
 
@@ -535,26 +544,24 @@ func TestBaseSumsMatchZeroingReference(t *testing.T) {
 
 	t.Run("ipv4", func(t *testing.T) {
 		for ihl := ipv4HeaderMinLen; ihl <= ipv4HeaderMaxLen; ihl += 4 {
-			for _, zeroID := range []bool{true, false} {
-				for iter := 0; iter < 5000; iter++ {
-					pkt := make([]byte, ihl)
-					for i := range pkt {
-						pkt[i] = randByte(&state)
-					}
-					pkt[0] = byte(0x40 | (ihl / 4))
+			for iter := 0; iter < 5000; iter++ {
+				pkt := make([]byte, ihl)
+				for i := range pkt {
+					pkt[i] = randByte(&state)
+				}
+				pkt[0] = byte(0x40 | (ihl / 4))
 
-					want := referenceBaseIPv4HdrSum(pkt, ihl, zeroID)
-					got, err := baseIPv4HdrSum(pkt, ihl, zeroID)
-					if err != nil {
-						t.Fatalf("ihl=%d: %v", ihl, err)
-					}
-					// Compare the value that reaches the wire: the raw partial
-					// sums may legally differ by one's-complement -0 vs +0.
-					for _, tl := range []uint32{20, 1500, 65535} {
-						for _, id := range []uint32{0, 0x4242, 0xffff} {
-							if a, b := foldComplement(want+tl+id), foldComplement(got+tl+id); a != b {
-								t.Fatalf("ihl=%d zeroID=%v tl=%d id=%d: %#04x != %#04x", ihl, zeroID, tl, id, a, b)
-							}
+				want := referenceBaseIPv4HdrSum(pkt, ihl)
+				got, err := baseIPv4HdrSum(pkt, ihl)
+				if err != nil {
+					t.Fatalf("ihl=%d: %v", ihl, err)
+				}
+				// Compare the value that reaches the wire: the raw partial
+				// sums may legally differ by one's-complement -0 vs +0.
+				for _, tl := range []uint32{20, 1500, 65535} {
+					for _, id := range []uint32{0, 0x4242, 0xffff} {
+						if a, b := foldComplement(want+tl+id), foldComplement(got+tl+id); a != b {
+							t.Fatalf("ihl=%d tl=%d id=%d: %#04x != %#04x", ihl, tl, id, a, b)
 						}
 					}
 				}

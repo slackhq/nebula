@@ -27,6 +27,12 @@ type Capabilities struct {
 // Queue is a readable/writable Poll queue.
 // Concurrency contract: a single read goroutine drives Read; plain Write is safe for concurrent callers;
 // WriteGSO (on Queues that implement GSOWriter) is single-writer per queue.
+//
+// Close on an individual Queue does NOT unblock a Read parked in poll — closing an fd
+// never wakes its pollers. Orderly teardown goes through the owning QueueSet's Close,
+// which first signals a shared shutdown eventfd every reader polls alongside its own fd.
+// That eventfd is a set-wide kill switch: once signaled, every Queue in the set returns
+// os.ErrClosed from Read, so it cannot be used to stop a single Queue.
 type Queue interface {
 	io.Closer
 

@@ -397,11 +397,12 @@ func TestSegmentUDPv4(t *testing.T) {
 		if totalLen != uint16(28+gso) {
 			t.Errorf("seg %d: total_len=%d want %d", i, totalLen, 28+gso)
 		}
-		// kernel UDP-GSO does NOT bump the IPv4 ID across segments; every
-		// segment carries the same ID as the seed.
+		// Software UDP GSO bumps the IPv4 ID per segment exactly like TSO
+		// (inet_gso_segment's fixed-ID case is TCP-only); wireguard-go's
+		// gsoSplit increments unconditionally too.
 		id := binary.BigEndian.Uint16(seg[4:6])
-		if id != 0x4242 {
-			t.Errorf("seg %d: ip id=%#x want %#x", i, id, 0x4242)
+		if id != 0x4242+uint16(i) {
+			t.Errorf("seg %d: ip id=%#x want %#x", i, id, 0x4242+uint16(i))
 		}
 		udpLen := binary.BigEndian.Uint16(seg[24:26])
 		if udpLen != uint16(8+gso) {

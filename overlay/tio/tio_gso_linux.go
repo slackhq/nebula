@@ -51,27 +51,18 @@ var validVnetHdr = [virtio.Size]byte{unix.VIRTIO_NET_HDR_F_DATA_VALID}
 
 // Offload wraps a TUN file descriptor with poll-based reads. The FD provided will be changed to non-blocking.
 // A shared eventfd allows Close to wake all readers blocked in poll.
+//
+// Field order is deliberate: the read-mostly fds and the writer-owned GSO scratch fill
+// the first cache line, and the state the reader mutates per packet (rxOff, pending,
+// readIovs) all sits after it, so per-packet reader stores never invalidate the line
+// concurrent Write callers load fd from.
 type Offload struct {
 	fd         int
 	shutdownFd int
-	closed     atomic.Bool
-	rxBuf      []byte   // backing store for kernel-handed packets read this drain
-	rxOff      int      // cursor into rxBuf for the current Read drain
-	pending    []Packet // packets returned from the most recent Read
-
-	// readVnetScratch holds the 10-byte virtio_net_hdr split off the front of
-	// every TUN read via readv(2). Decoupling the header from the packet body
-	// lets us read the body directly into rxBuf at the current rxOff with
-	// no userspace copy on the GSO_NONE fast path.
-	readVnetScratch [virtio.Size]byte
-	// readIovs is the readv(2) iovec scratch wired once at construction,
-	// iovec[0] points at readVnetScratch
-	// iovec[1].Base/Len is updated per read to address the current rxBuf slot.
-	readIovs [2]unix.Iovec
-
 	// usoEnabled records whether the kernel agreed to TUN_F_USO* on this FD,
 	// so writers can decide whether emitting GSO_UDP_L4 superpackets is safe.
 	usoEnabled bool
+	closed     atomic.Bool
 
 	// gsoHdrBuf is a per-queue 10-byte scratch for the virtio_net_hdr emitted
 	// by WriteGSO. Kept separate from the read-only package-level validVnetHdr
@@ -82,6 +73,20 @@ type Offload struct {
 	// gsoMaxIovs at construction; never grown. WriteGSO returns an error
 	// (and drops the call) if a caller hands it more fragments than fit.
 	gsoIovs []unix.Iovec
+
+	rxBuf   []byte   // backing store for kernel-handed packets read this drain
+	rxOff   int      // cursor into rxBuf for the current Read drain
+	pending []Packet // packets returned from the most recent Read
+
+	// readVnetScratch holds the 10-byte virtio_net_hdr split off the front of
+	// every TUN read via readv(2). Decoupling the header from the packet body
+	// lets us read the body directly into rxBuf at the current rxOff with
+	// no userspace copy on the GSO_NONE fast path.
+	readVnetScratch [virtio.Size]byte
+	// readIovs is the readv(2) iovec scratch wired once at construction,
+	// iovec[0] points at readVnetScratch
+	// iovec[1].Base/Len is updated per read to address the current rxBuf slot.
+	readIovs [2]unix.Iovec
 }
 
 func newOffload(fd int, shutdownFd int, usoEnabled bool) (*Offload, error) {
@@ -129,7 +134,7 @@ func (r *Offload) readPacket(block bool) (int, error) {
 		n, _, errno := syscall.Syscall(unix.SYS_READV, uintptr(r.fd), uintptr(unsafe.Pointer(&r.readIovs[0])), uintptr(len(r.readIovs)))
 		if errno == 0 {
 			if int(n) < virtio.Size {
-				return 0, io.ErrShortWrite
+				return 0, fmt.Errorf("tun read shorter than virtio_net_hdr: %d bytes", n)
 			}
 			return int(n) - virtio.Size, nil
 		}
@@ -378,8 +383,9 @@ func (r *Offload) Close() error {
 	}
 
 	// shutdownFd is owned by the container, so we should not close it
-	// Close the underlying fd but do NOT null r.fd: a reader may still be loading it in readOne, and mutating the field would race that load.
-	// That reader gets EBADF -> os.ErrClosed (or wakes via the shutdown eventfd's ppoll first).
+	// Close the underlying fd but do NOT null r.fd: a reader may still be loading it in readPacket, and mutating the field would race that load.
+	// That reader gets EBADF -> os.ErrClosed on its next syscall. A reader already parked in
+	// poll is NOT woken by this close; only the QueueSet's shutdown eventfd wake does that (see Queue.Close docs).
 	// closed.Swap already guarantees we only close once.
 	return unix.Close(r.fd)
 }

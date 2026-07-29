@@ -83,6 +83,11 @@ func CheckValid(pkt []byte, hdr Hdr) error {
 	ipVersion := pkt[0] >> 4
 
 	gsoType := hdr.GSOType()
+	if gsoType != unix.VIRTIO_NET_HDR_GSO_NONE && hdr.GSOSize == 0 {
+		// A GSO type with no segment size would dodge IsSuperpacket() downstream and
+		// travel as a plain jumbo datagram with an unfinished checksum.
+		return fmt.Errorf("virtio GSO type %#x with zero gso_size", hdr.gsoType)
+	}
 	if hdr.HasECNFlag() && !(gsoType == unix.VIRTIO_NET_HDR_GSO_TCPV4 || gsoType == unix.VIRTIO_NET_HDR_GSO_TCPV6) {
 		return fmt.Errorf("virtio GSO_ECN qualifier on non-TCP GSO type %#x", hdr.gsoType)
 	}
@@ -167,18 +172,16 @@ func basePseudoSum(pkt []byte, isV4 bool, proto uint32) uint32 {
 
 // baseIPv4HdrSum folds the IPv4 header checksum over the fields that stay constant across segments.
 // csumStart is the L3 header length, which bounds a valid IHL.
-func baseIPv4HdrSum(pkt []byte, csumStart int, zeroID bool) (uint32, error) {
+func baseIPv4HdrSum(pkt []byte, csumStart int) (uint32, error) {
 	ihl := int(pkt[0]&0x0f) * 4
 	if ihl < ipv4HeaderMinLen || ihl > csumStart {
 		return 0, fmt.Errorf("bad IPv4 IHL: %d", ihl)
 	}
-	// total_len and the checksum field itself are always excluded, since both are rewritten per segment.
+	// total_len, the ID, and the checksum field itself are excluded: all three are rewritten per segment.
 	sum := uint32(checksum.Checksum(pkt[:ihl], 0))
 	sum += uint32(^binary.BigEndian.Uint16(pkt[ipv4TotalLenOff : ipv4TotalLenOff+2]))
 	sum += uint32(^binary.BigEndian.Uint16(pkt[ipv4ChecksumOff : ipv4ChecksumOff+2]))
-	if zeroID { //only zero the ID if requested
-		sum += uint32(^binary.BigEndian.Uint16(pkt[ipv4IDOff : ipv4IDOff+2]))
-	}
+	sum += uint32(^binary.BigEndian.Uint16(pkt[ipv4IDOff : ipv4IDOff+2]))
 	sum = (sum & 0xffff) + (sum >> 16)
 	sum = (sum & 0xffff) + (sum >> 16)
 	return sum, nil
@@ -235,7 +238,7 @@ func SegmentTCP(pkt []byte, hdrLenU, csumStartU, gsoSizeU uint16, yield func(seg
 		origIPID = binary.BigEndian.Uint16(pkt[ipv4IDOff : ipv4IDOff+2])
 		var err error
 		// TSO bumps the ID per segment, so it stays out of the base sum.
-		baseIPHdrSum, err = baseIPv4HdrSum(pkt, csumStart, true)
+		baseIPHdrSum, err = baseIPv4HdrSum(pkt, csumStart)
 		if err != nil {
 			return err
 		}
@@ -334,11 +337,14 @@ func SegmentUDP(pkt []byte, hdrLenU, csumStartU, gsoSizeU uint16, yield func(seg
 
 	baseProtoSum := basePseudoSum(pkt, isV4, unix.IPPROTO_UDP)
 
+	var origIPID uint16
 	var baseIPHdrSum uint32
 	if isV4 {
+		origIPID = binary.BigEndian.Uint16(pkt[ipv4IDOff : ipv4IDOff+2])
 		var err error
-		// UDP GSO holds the ID constant across the burst, so it stays in the base sum.
-		baseIPHdrSum, err = baseIPv4HdrSum(pkt, csumStart, false)
+		// Software UDP GSO bumps the ID per segment just like TSO
+		// (inet_gso_segment's fixed-ID case is TCP-only), so it stays out of the base sum.
+		baseIPHdrSum, err = baseIPv4HdrSum(pkt, csumStart)
 		if err != nil {
 			return err
 		}
@@ -367,8 +373,10 @@ func SegmentUDP(pkt []byte, hdrLenU, csumStartU, gsoSizeU uint16, yield func(seg
 		udpLen := udpHeaderLen + segPayLen
 
 		if isV4 {
+			segID := origIPID + uint16(i)
 			binary.BigEndian.PutUint16(seg[ipv4TotalLenOff:ipv4TotalLenOff+2], uint16(totalLen))
-			ipSum := baseIPHdrSum + uint32(totalLen)
+			binary.BigEndian.PutUint16(seg[ipv4IDOff:ipv4IDOff+2], segID)
+			ipSum := baseIPHdrSum + uint32(totalLen) + uint32(segID)
 			binary.BigEndian.PutUint16(seg[ipv4ChecksumOff:ipv4ChecksumOff+2], foldComplement(ipSum))
 		} else {
 			binary.BigEndian.PutUint16(seg[ipv6PayloadLenOff:ipv6PayloadLenOff+2], uint16(headerLen-ipv6FixedLen+segPayLen))

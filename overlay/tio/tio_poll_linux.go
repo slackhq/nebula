@@ -105,8 +105,9 @@ func (t *Poll) Close() error {
 	}
 
 	// shutdownFd is owned by the container, so we should not close it
-	// Close the underlying fd but do NOT null r.fd: a reader may still be loading it in readOne, and mutating the field would race that load.
-	// That reader gets EBADF -> os.ErrClosed (or wakes via the shutdown eventfd's ppoll first).
+	// Close the underlying fd but do NOT null t.fd: a reader may still be loading it in readOne, and mutating the field would race that load.
+	// That reader gets EBADF -> os.ErrClosed on its next syscall. A reader already parked in
+	// poll is NOT woken by this close; only the QueueSet's shutdown eventfd wake does that (see Queue.Close docs).
 	// closed.Swap already guarantees we only close once.
 	return unix.Close(t.fd)
 }
