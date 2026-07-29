@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"slices"
 	"syscall"
 	"testing"
 	"time"
@@ -410,13 +411,13 @@ func newRewindTestWriter() *batchWriter {
 	return w
 }
 
-// capturePrepared decodes the first n prepared mmsghdr entries straight
-// from their iovecs -- ground truth, deliberately not the entryEnd
-// bookkeeping the rewind logic itself relies on. Returns one []byte per
+// capturePrepared decodes n prepared mmsghdr entries beginning at start
+// straight from their iovecs -- ground truth, deliberately not the entryEnd
+// bookkeeping the resume logic itself relies on. Returns one []byte per
 // packed packet, in entry order.
-func capturePrepared(w *batchWriter, n int) [][]byte {
+func capturePrepared(w *batchWriter, start, n int) [][]byte {
 	var out [][]byte
-	for e := 0; e < n; e++ {
+	for e := start; e < start+n; e++ {
 		hdr := &w.msgs[e].Hdr
 		iovs := unsafe.Slice(hdr.Iov, int(hdr.Iovlen))
 		for _, iov := range iovs {
@@ -470,13 +471,13 @@ func TestWriteBatchPartialSendRewind(t *testing.T) {
 			w := newRewindTestWriter()
 			var wire [][]byte
 			call := 0
-			w.sendFn = func(n int) (int, error) {
+			w.sendFn = func(start, n int) (int, error) {
 				accept := n
 				if call < len(script) && script[call] < n {
 					accept = script[call]
 				}
 				call++
-				wire = append(wire, capturePrepared(w, accept)...)
+				wire = append(wire, capturePrepared(w, start, accept)...)
 				return accept, nil
 			}
 
@@ -523,13 +524,13 @@ func TestWriteBatchSkipUnroutableRunAccounting(t *testing.T) {
 			w := newRewindTestWriter()
 			var wire [][]byte
 			call := 0
-			w.sendFn = func(n int) (int, error) {
+			w.sendFn = func(start, n int) (int, error) {
 				accept := n
 				if call < len(script) && script[call] < n {
 					accept = script[call]
 				}
 				call++
-				wire = append(wire, capturePrepared(w, accept)...)
+				wire = append(wire, capturePrepared(w, start, accept)...)
 				return accept, nil
 			}
 
@@ -553,11 +554,126 @@ func TestWriteBatchSkipUnroutableRunAccounting(t *testing.T) {
 	}
 }
 
+// TestWriteBatchMidChunkRejectResumes: after a partial success, a zero-sent
+// error on the FIRST REMAINING entry (done > 0) must drop only that entry's
+// run and resume the rest of the chunk in place -- no repacking, no packets
+// lost from entries before or after the rejected one.
+func TestWriteBatchMidChunkRejectResumes(t *testing.T) {
+	dstA := netip.MustParseAddrPort("127.0.0.1:4242")
+	dstB := netip.MustParseAddrPort("127.0.0.2:4242")
+	dstC := netip.MustParseAddrPort("127.0.0.3:4242")
+
+	mk := func(tag byte, n int) []byte {
+		b := make([]byte, n)
+		b[0] = tag
+		return b
+	}
+	// Three entries: a 2-packet GSO run to A, a 2-packet run to B, one to C.
+	bufs := [][]byte{mk(1, 1200), mk(2, 1200), mk(3, 900), mk(4, 900), mk(5, 600)}
+	addrs := []netip.AddrPort{dstA, dstA, dstB, dstB, dstC}
+
+	w := newRewindTestWriter()
+	var wire [][]byte
+	var starts []int
+	call := 0
+	w.sendFn = func(start, n int) (int, error) {
+		starts = append(starts, start)
+		call++
+		switch call {
+		case 1: // accept only entry 0 (the run to A)
+			wire = append(wire, capturePrepared(w, start, 1)...)
+			return 1, nil
+		case 2: // reject entry 1 (the run to B) outright
+			return -1, &net.OpError{Op: "sendmmsg", Err: unix.EPERM}
+		default: // accept the rest
+			wire = append(wire, capturePrepared(w, start, n)...)
+			return n, nil
+		}
+	}
+
+	written, err := w.WriteBatch(bufs, addrs, nil)
+	if err != nil {
+		t.Fatalf("WriteBatch: %v", err)
+	}
+	if written != 3 {
+		t.Errorf("written = %d, want 3 (B's rejected run is the only casualty)", written)
+	}
+	wantTags := []byte{1, 2, 5}
+	if len(wire) != len(wantTags) {
+		t.Fatalf("wire got %d packets, want %d (dup or loss around the mid-chunk reject)", len(wire), len(wantTags))
+	}
+	for i, b := range wire {
+		if b[0] != wantTags[i] {
+			t.Errorf("wire[%d] tag = %d, want %d", i, b[0], wantTags[i])
+		}
+	}
+	// The resume must reuse the prepared entries: same chunk, advancing
+	// start offsets, no repack (which would restart at 0 with fresh entries).
+	if want := []int{0, 1, 2}; !slices.Equal(starts, want) {
+		t.Errorf("sendFn start offsets = %v, want %v", starts, want)
+	}
+}
+
+// TestWriteBatchMidChunkEIODisablesGSOWithoutDup: an EIO on a GSO entry
+// after earlier entries in the chunk already went out must replay ONLY from
+// the failed run (replanned as single-packet entries) -- the already-sent
+// entries must not be duplicated.
+func TestWriteBatchMidChunkEIODisablesGSOWithoutDup(t *testing.T) {
+	dstA := netip.MustParseAddrPort("127.0.0.1:4242")
+	dstB := netip.MustParseAddrPort("127.0.0.2:4242")
+
+	mk := func(tag byte, n int) []byte {
+		b := make([]byte, n)
+		b[0] = tag
+		return b
+	}
+	// Entry 0: single packet to A. Entry 1: 2-packet GSO run to B.
+	bufs := [][]byte{mk(1, 600), mk(2, 1200), mk(3, 1200)}
+	addrs := []netip.AddrPort{dstA, dstB, dstB}
+
+	w := newRewindTestWriter()
+	var wire [][]byte
+	call := 0
+	w.sendFn = func(start, n int) (int, error) {
+		call++
+		switch call {
+		case 1: // accept entry 0 only
+			wire = append(wire, capturePrepared(w, start, 1)...)
+			return 1, nil
+		case 2: // EIO on the GSO run to B
+			return -1, &net.OpError{Op: "sendmmsg", Err: unix.EIO}
+		default: // replanned single-packet replay
+			wire = append(wire, capturePrepared(w, start, n)...)
+			return n, nil
+		}
+	}
+
+	written, err := w.WriteBatch(bufs, addrs, nil)
+	if err != nil {
+		t.Fatalf("WriteBatch: %v", err)
+	}
+	if w.gsoSupported {
+		t.Error("gsoSupported still true after EIO on a GSO entry")
+	}
+	if written != len(bufs) {
+		t.Errorf("written = %d, want %d", written, len(bufs))
+	}
+	wantTags := []byte{1, 2, 3}
+	if len(wire) != len(wantTags) {
+		t.Fatalf("wire got %d packets, want %d (packet 1 duplicated, or B's run lost)", len(wire), len(wantTags))
+	}
+	for i, b := range wire {
+		if b[0] != wantTags[i] {
+			t.Errorf("wire[%d] tag = %d, want %d", i, b[0], wantTags[i])
+		}
+	}
+}
+
 // TestWriteBatchZeroProgress: sent == 0 with no error must abort with an
 // error rather than spin forever replaying the same chunk.
 func TestWriteBatchZeroProgress(t *testing.T) {
 	w := newRewindTestWriter()
-	w.sendFn = func(n int) (int, error) { return 0, nil }
+	w.sendFn = func(start, n int) (int, error) { return 0, nil }
 	bufs := [][]byte{make([]byte, 100)}
 	addrs := []netip.AddrPort{netip.MustParseAddrPort("127.0.0.1:4242")}
 	if _, err := w.WriteBatch(bufs, addrs, nil); err == nil {
@@ -577,7 +693,7 @@ func TestWriteBatchEIODisablesGSOAndReplays(t *testing.T) {
 	w := newRewindTestWriter()
 	var entryCounts []int
 	call := 0
-	w.sendFn = func(n int) (int, error) {
+	w.sendFn = func(start, n int) (int, error) {
 		entryCounts = append(entryCounts, n)
 		call++
 		if call == 1 {
@@ -640,9 +756,9 @@ func TestGSOEngagesOnLoopback(t *testing.T) {
 	// changing what hits the kernel.
 	var entryCounts []int
 	real := sc.bw.sendFn
-	sc.bw.sendFn = func(n int) (int, error) {
+	sc.bw.sendFn = func(start, n int) (int, error) {
 		entryCounts = append(entryCounts, n)
-		return real(n)
+		return real(start, n)
 	}
 
 	const numPkts = 8

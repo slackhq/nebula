@@ -68,16 +68,17 @@ type batchWriter struct {
 	cmsgEcnSpace int
 
 	// entryEnd[e] is the bufs index after the last packet packed into entry
-	// e. Used to rewind i on partial sendmmsg success.
+	// e. entryEnd[e]-entryPkts[e] recovers the bufs index the entry's run
+	// started at, used to rewind i for the GSO-disable replay.
 	entryEnd []int
 
 	// entryPkts[e] is the number of packets packed into entry e. Not
 	// derivable from entryEnd: skipped runs leave holes in the bufs index space.
 	entryPkts []int
 
-	// sendFn sends the first n prepared entries. The real syscall in
-	// production; tests inject partial-success and error scripts.
-	sendFn func(n int) (int, error)
+	// sendFn sends n prepared entries beginning at w.msgs[start]. The real
+	// syscall in production; tests inject partial-success and error scripts.
+	sendFn func(start, n int) (int, error)
 }
 
 func newBatchWriter(fd int, isV4 bool, l *slog.Logger) *batchWriter {
@@ -189,9 +190,10 @@ func parseRelease(r string) (major, minor int) {
 // entries, so one syscall can mix GSO superpackets and plain datagrams.
 // Without GSO support every packet is its own entry.
 //
-// Batches larger than the scratch take one sendmmsg per chunk. A zero-sent
-// error means the kernel rejected entry 0: its packets are dropped and the
-// rest of the chunk is replayed. A partial success replays the remainder.
+// Batches larger than the scratch take one sendmmsg per chunk. A partial
+// success resumes the same prepared entries at the first unsent one — no
+// repacking. A zero-sent error means the kernel rejected the first remaining
+// entry: its packets are dropped and the rest of the chunk resumes in place.
 //
 // Returns the number of packets sent. An error means the call itself
 // failed; a short count means some destinations were undeliverable.
@@ -212,7 +214,6 @@ func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []b
 
 	i := 0
 	for i < len(bufs) {
-		baseI := i
 		entry := 0
 		iovIdx := 0
 		for entry < len(w.msgs) && i < len(bufs) {
@@ -273,25 +274,44 @@ func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []b
 			break
 		}
 
-		sent, serr := w.sendFn(entry)
-		if serr != nil && sent <= 0 {
-			// sent<=0 means entry 0 itself failed. EIO on a superpacket
-			// means the route cannot carry a GSO send even though the
-			// setsockopt probe passed: udp_send_skb() returns EIO when the
+		// Drain the packed entries without repacking: everything the packing
+		// loop wired (iovecs, names, cmsgs) stays intact until the next chunk
+		// overwrites it, so a partial success resumes the same sendmmsg array
+		// at the first unsent entry, and a rejected entry is skipped in place.
+		// Only the GSO-disable path replans, since its entries change shape.
+		done := 0
+		for done < entry {
+			sent, serr := w.sendFn(done, entry-done)
+			if sent > 0 {
+				// Count packets per entry; the bufs index span would
+				// overcount across holes left by skipped runs.
+				for e := done; e < done+sent; e++ {
+					written += w.entryPkts[e]
+				}
+				done += sent
+				continue
+			}
+			if serr == nil {
+				return written, fmt.Errorf("sendmmsg made no progress")
+			}
+			// sent<=0 means the first remaining entry itself failed. EIO on a
+			// superpacket means the route cannot carry a GSO send even though
+			// the setsockopt probe passed: udp_send_skb() returns EIO when the
 			// egress device lacks TX checksum offload (kernels through
 			// 6.10) or when an xfrm policy covers the route. Persistent, so
 			// disable GSO (socket-wide, though the kernel condition is
-			// per-route) and replay the chunk as one-packet entries, still batched.
-			if w.gsoSupported && w.entryPkts[0] >= 2 && errors.Is(serr, unix.EIO) {
+			// per-route) and replay from the failed run as one-packet
+			// entries, still batched.
+			if w.gsoSupported && w.entryPkts[done] >= 2 && errors.Is(serr, unix.EIO) {
 				w.gsoSupported = false
 				w.l.Warn("udp: kernel rejected GSO send, disabling GSO", "error", serr)
 				recordCapability("udp.gso.enabled", false)
-				i = baseI
-				continue
+				i = w.entryEnd[done] - w.entryPkts[done]
+				break
 			}
 			// TODO: a transient zero-sent errno (ENOBUFS under socket-memory
 			// pressure, or a theoretical EINTR) lands here too and drops
-			// entry 0's entire run (up to 63/127 packets). The RX path
+			// the failed entry's run (up to 63/127 packets). The RX path
 			// retries EINTR; consider a bounded retry for those two before
 			// falling through to the per-entry drop.
 			//
@@ -299,27 +319,19 @@ func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []b
 			// an unreachable destination, a firewall EPERM, or a PMTU shrink after a roam
 			// (EINVAL, or EMSGSIZE since kernel 6.14, once gso_size no longer fits the path).
 			// Retrying the packets individually cannot succeed where the entry did not, and
-			// disabling GSO cannot make oversized segments fit, so drop the entry and replay whatever was packed after it.
+			// disabling GSO cannot make oversized segments fit, so skip the entry and resume with the rest.
 			// Small-segment entries still pass, so the tunnel stays up while full-size packets drop.
 			w.l.Debug("sendmmsg rejected entry",
 				"error", serr,
-				"udpAddr", addrs[w.entryEnd[0]-w.entryPkts[0]],
-				"packets", w.entryPkts[0],
+				"udpAddr", addrs[w.entryEnd[done]-w.entryPkts[done]],
+				"packets", w.entryPkts[done],
 				"gso", w.gsoSupported,
 			)
-			i = w.entryEnd[0]
-			continue
+			done++
 		}
-		if sent == 0 {
-			return written, fmt.Errorf("sendmmsg made no progress")
-		}
-		// Rewind i to the end of the last sent entry: a no-op on full
-		// success, a replay of the remainder on partial success. Count
-		// packets per entry; the bufs index span would overcount across holes.
-		for e := 0; e < sent; e++ {
-			written += w.entryPkts[e]
-		}
-		i = w.entryEnd[sent-1]
+		// When the drain finished every entry, i already sits past the whole
+		// chunk (including any trailing skipped runs); the GSO-disable break
+		// above rewound it to the failed run for the replanned retry.
 	}
 	return written, nil
 }
@@ -419,10 +431,10 @@ func (w *batchWriter) writeEntryCmsg(entry, runLen, segSize int, ecn byte, dstIs
 	}
 }
 
-// sendmmsg issues sendmmsg(2) against the first n entries of w.msgs.
-func (w *batchWriter) sendmmsg(n int) (int, error) {
+// sendmmsg issues sendmmsg(2) against n entries of w.msgs starting at start.
+func (w *batchWriter) sendmmsg(start, n int) (int, error) {
 	r1, _, errno := unix.Syscall6(unix.SYS_SENDMMSG, uintptr(w.fd),
-		uintptr(unsafe.Pointer(&w.msgs[0])), uintptr(n),
+		uintptr(unsafe.Pointer(&w.msgs[start])), uintptr(n),
 		0, 0, 0,
 	)
 	sent := int(r1)
