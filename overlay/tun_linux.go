@@ -232,7 +232,7 @@ func newTunGeneric(c *config.C, l *slog.Logger, fd int, vnetHdr bool, offloadFla
 	var qs tio.QueueSet
 	var err error
 	if vnetHdr {
-		qs, err = tio.NewOffloadQueueSet(offloadUSOEnabled(offloadFlags))
+		qs, err = tio.NewOffloadQueueSet(offloadUSOEnabled(offloadFlags), l)
 	} else {
 		qs, err = tio.NewPollQueueSet()
 	}

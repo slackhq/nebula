@@ -4,8 +4,10 @@
 package tio
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"sync/atomic"
 	"syscall"
@@ -87,9 +89,13 @@ type Offload struct {
 	// iovec[0] points at readVnetScratch
 	// iovec[1].Base/Len is updated per read to address the current rxBuf slot.
 	readIovs [2]unix.Iovec
+
+	// l is only consulted on the rare bad-vnet-header drop path; it lives
+	// after the hot state on purpose. May be nil (tests); drops go unlogged then.
+	l *slog.Logger
 }
 
-func newOffload(fd int, shutdownFd int, usoEnabled bool) (*Offload, error) {
+func newOffload(fd int, shutdownFd int, usoEnabled bool, l *slog.Logger) (*Offload, error) {
 	if err := unix.SetNonblock(fd, true); err != nil {
 		return nil, fmt.Errorf("failed to set tun fd non-blocking: %w", err)
 	}
@@ -99,6 +105,7 @@ func newOffload(fd int, shutdownFd int, usoEnabled bool) (*Offload, error) {
 		shutdownFd: shutdownFd,
 		usoEnabled: usoEnabled,
 		closed:     atomic.Bool{},
+		l:          l,
 
 		rxBuf:   make([]byte, tunRxBufCap),
 		gsoIovs: make([]unix.Iovec, 2, gsoMaxIovs),
@@ -178,7 +185,9 @@ func (r *Offload) Read() ([]Packet, error) {
 			return nil, err
 		}
 		if err := r.decodeRead(n); err != nil {
-			// Drop and read again. A bad packet should not kill the reader.
+			// Drop and read again. A bad packet should not kill the reader,
+			// but a systematic decode failure must not be invisible either.
+			r.logDroppedRead(err)
 			continue
 		}
 		break
@@ -200,11 +209,20 @@ func (r *Offload) Read() ([]Packet, error) {
 		if err := r.decodeRead(n); err != nil {
 			// Drop this packet and stop the drain; we'd rather hand off
 			// what we have than keep spinning here.
+			r.logDroppedRead(err)
 			break
 		}
 	}
 
 	return r.pending, nil
+}
+
+// logDroppedRead reports a tun packet dropped for a bad/unsupported virtio
+// header. Debug-gated so the happy path never pays for attribute assembly.
+func (r *Offload) logDroppedRead(err error) {
+	if r.l != nil && r.l.Enabled(context.Background(), slog.LevelDebug) {
+		r.l.Debug("dropping tun packet with bad virtio header", "error", err)
+	}
 }
 
 // decodeRead processes the packet sitting in rxBuf at rxOff (length pktLen).

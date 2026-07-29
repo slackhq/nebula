@@ -5,6 +5,7 @@ package tio
 
 import (
 	"errors"
+	"log/slog"
 	"os"
 	"sync"
 	"testing"
@@ -210,7 +211,7 @@ func TestPollQueueSet_Close_ClosesShutdownFd(t *testing.T) {
 // TestOffloadQueueSet_Close_ClosesShutdownFd mirrors the poll regression test
 // for the GSO/offload queueset.
 func TestOffloadQueueSet_Close_ClosesShutdownFd(t *testing.T) {
-	qs, err := NewOffloadQueueSet(false)
+	qs, err := NewOffloadQueueSet(false, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	c, ok := qs.(*offloadQueueSet)
 	require.True(t, ok)

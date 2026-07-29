@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 
 	"golang.org/x/sys/unix"
@@ -21,11 +22,13 @@ type offloadQueueSet struct {
 	// Queues created by Add inherit this and surface it via Offload.USOSupported so coalescers can gate USO emission.
 	usoEnabled bool
 	closed     atomic.Bool
+	// l is handed to each queue for its bad-vnet-header drop logging.
+	l *slog.Logger
 }
 
 // NewOffloadQueueSet creates a QueueSet that uses virtio_net_hdr to do TSO segmentation.
 // usoEnabled tells downstream queues whether the kernel agreed to deliver/accept GSO_UDP_L4 superpackets.
-func NewOffloadQueueSet(usoEnabled bool) (QueueSet, error) {
+func NewOffloadQueueSet(usoEnabled bool, l *slog.Logger) (QueueSet, error) {
 	shutdownFd, err := unix.Eventfd(0, unix.EFD_NONBLOCK|unix.EFD_CLOEXEC)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create eventfd: %w", err)
@@ -36,6 +39,7 @@ func NewOffloadQueueSet(usoEnabled bool) (QueueSet, error) {
 		pqi:        []Queue{},
 		shutdownFd: shutdownFd,
 		usoEnabled: usoEnabled,
+		l:          l,
 	}
 
 	return out, nil
@@ -46,7 +50,7 @@ func (c *offloadQueueSet) Queues() []Queue {
 }
 
 func (c *offloadQueueSet) Add(fd int) error {
-	x, err := newOffload(fd, c.shutdownFd, c.usoEnabled)
+	x, err := newOffload(fd, c.shutdownFd, c.usoEnabled, c.l)
 	if err != nil {
 		return err
 	}
