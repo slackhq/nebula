@@ -115,7 +115,7 @@ const (
 // (mutable: the L4 checksum field must hold the pseudo-header partial, single-fold not inverted, per virtio NEEDS_CSUM semantics).
 // pays are non-overlapping payload fragments whose concatenation is the full superpacket payload.
 // They are read-only from the writer's perspective and must remain valid until the call returns.
-// Every segment in pays except possibly the last is exactly the same size.
+// Every segment in pays except possibly the last must be exactly the same size.
 // proto picks the L4 protocol so the writer knows which gsoType / CsumOffset to set.
 //
 // Callers should also consult CapsProvider (via SupportsGSO) for the per-protocol negotiated capability:

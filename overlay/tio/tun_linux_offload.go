@@ -25,6 +25,20 @@ func protoFromGSOType(t uint8) (GSOProto, error) {
 	}
 }
 
+// gsoTypeFromProto is the reverse of protoFromGSOType
+func gsoTypeFromProto(proto GSOProto, ipVer uint8) uint8 {
+	switch {
+	case proto == GSOProtoUDP && (ipVer == 4 || ipVer == 6):
+		return unix.VIRTIO_NET_HDR_GSO_UDP_L4
+	case ipVer == 6:
+		return unix.VIRTIO_NET_HDR_GSO_TCPV6
+	case ipVer == 4:
+		return unix.VIRTIO_NET_HDR_GSO_TCPV4
+	default:
+		return unix.VIRTIO_NET_HDR_GSO_NONE
+	}
+}
+
 // SegmentSuperpacket invokes fn once per segment of pkt.
 // For non-GSO pkts fn is called once with pkt.Bytes.
 // For GSO/USO superpackets, fn is called once per segment with a slice of pkt.Bytes holding that segment's plaintext

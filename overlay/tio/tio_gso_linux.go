@@ -327,52 +327,45 @@ func (r *Offload) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, proto
 	r.gsoIovs[2].Base = &transportHdr[0]
 	r.gsoIovs[2].SetLen(len(transportHdr))
 
-	// Fill out the payload iovecs and find the GSO geometry:
-	segSize := 0
+	segSize := len(pays[0])
 	total := len(hdr) + len(transportHdr)
-	n := 3
-	for _, p := range pays {
-		total += len(p)
+	for i, p := range pays {
 		if len(p) == 0 {
-			continue //disregard empty payloads, the kernel will reject them.
-			//callers already funnel zero-length frames via the not-GSO path, so this should never happen.
+			// The coalescers route zero-payload packets down the non-GSO path,
+			// so an empty fragment means the caller's accounting is broken.
+			return fmt.Errorf("tio: WriteGSO empty payload fragment %d of %d", i, len(pays))
+		} else if len(p) > segSize || (len(p) < segSize && i != len(pays)-1) {
+			// all segments must be the same size, except for the last one
+			return fmt.Errorf("tio: WriteGSO fragment %d is %dB, want %dB segments (only the last may be shorter)", i, len(p), segSize)
 		}
-		if n == 3 {
-			segSize = len(p)
-		}
-		r.gsoIovs[n].Base = &p[0]
-		r.gsoIovs[n].SetLen(len(p))
-		n++
+		total += len(p)
+		r.gsoIovs[3+i].Base = &p[0]
+		r.gsoIovs[3+i].SetLen(len(p))
 	}
-	r.gsoIovs = r.gsoIovs[:n]
-	segCount := n - 3
 	// This check keeps `total` in the uint16 range. Anything larger would wrap around and cause trouble.
 	if total > maxSuperpacketLen {
 		return fmt.Errorf("tio: WriteGSO superpacket %dB exceeds %d", total, maxSuperpacketLen)
 	}
-	// gsoType and GSOSize stay zero (GSO_NONE, 0) for single-segment, or an unknown IP version.
+
+	// A single segment ships as a plain checksummed packet (GSO_NONE, size 0).
+	// Multiple segments carry the real GSO type and segSize, which the loop
+	// above verified is the size of every fragment except possibly the last.
+	gsoType := uint8(unix.VIRTIO_NET_HDR_GSO_NONE)
+	if len(pays) > 1 {
+		gsoType = gsoTypeFromProto(proto, hdr[0]>>4)
+	}
+	var gsoSize uint16
+	if gsoType != unix.VIRTIO_NET_HDR_GSO_NONE {
+		gsoSize = uint16(segSize)
+	}
 	vhdr := virtio.NewHeader(
 		unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,   /*flags*/
-		unix.VIRTIO_NET_HDR_GSO_NONE,       /*gsoType*/
+		gsoType,                            /*gsoType*/
 		uint16(len(hdr)+len(transportHdr)), /*hdrLen*/
-		0,                                  /*gsoSize*/
+		gsoSize,                            /*gsoSize*/
 		uint16(len(hdr)),                   /*csumStart*/
 		csumOff,                            /*csumOffset*/
 	)
-	if segCount > 1 {
-		ipVer := hdr[0] >> 4
-		switch {
-		case proto == GSOProtoUDP && (ipVer == 4 || ipVer == 6):
-			vhdr.SetGSOType(unix.VIRTIO_NET_HDR_GSO_UDP_L4)
-		case ipVer == 6:
-			vhdr.SetGSOType(unix.VIRTIO_NET_HDR_GSO_TCPV6)
-		case ipVer == 4:
-			vhdr.SetGSOType(unix.VIRTIO_NET_HDR_GSO_TCPV4)
-		}
-		if vhdr.GSOType() != unix.VIRTIO_NET_HDR_GSO_NONE {
-			vhdr.GSOSize = uint16(segSize)
-		}
-	}
 	vhdr.Encode(r.gsoHdrBuf[:])
 
 	_, err := r.rawWrite(r.gsoIovs)
