@@ -229,6 +229,70 @@ func TestCoalescerSeedThenFlushAlone(t *testing.T) {
 	}
 }
 
+// TestCoalescerPureAckDoesNotSealRun pins the pure-ACK fast path: a bare
+// acknowledgment (zero payload, nothing beyond ACK|PSH|ECE) rides its lane
+// as a passthrough WITHOUT sealing the flow's open slot, so an inbound data
+// run on a bidirectional connection keeps coalescing across the peer ACKs
+// interleaved into it. The ACK is emitted after the superpacket (stale ACKs
+// are ignored by receivers, so the reorder is harmless by design).
+func TestCoalescerPureAckDoesNotSealRun(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	c := newTestTCPCoalescer(t, w)
+	pay := make([]byte, 1200)
+	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
+		t.Fatal(err)
+	}
+	ack := buildTCPv4(2200, tcpAck, nil)
+	if err := c.Commit(ack); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Commit(buildTCPv4(2200, tcpAck, pay)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.gsoWrites) != 1 || len(w.writes) != 1 {
+		t.Fatalf("ACK sealed the run: writes=%d gso=%d, want 1 gso (2 pays) + 1 plain", len(w.writes), len(w.gsoWrites))
+	}
+	if got := len(w.gsoWrites[0].pays); got != 2 {
+		t.Errorf("pay count=%d want 2 (data kept coalescing across the ACK)", got)
+	}
+	if !bytes.Equal(w.writes[0], ack) {
+		t.Errorf("plain write is not the ACK packet: got %d bytes want %d", len(w.writes[0]), len(ack))
+	}
+	if got, want := w.order, []string{"gso", "write"}; !stringSliceEq(got, want) {
+		t.Errorf("flush order=%v want %v (slot order: data run seeded first)", got, want)
+	}
+}
+
+// TestCoalescerFinStillSealsRun is the guard rail for the pure-ACK fast
+// path: control flags (here FIN|ACK, zero payload) must keep sealing the
+// open slot so data never reorders across a flow-state transition.
+func TestCoalescerFinStillSealsRun(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	c := newTestTCPCoalescer(t, w)
+	pay := make([]byte, 1200)
+	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Commit(buildTCPv4(2200, tcpFin|tcpAck, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Commit(buildTCPv4(2200, tcpAck, pay)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	// FIN evicts the open slot; the third packet seeds a fresh one. All
+	// three stay single-segment, so all three emit as plain writes in
+	// arrival order — any gso write would mean data coalesced across FIN.
+	if len(w.writes) != 3 || len(w.gsoWrites) != 0 {
+		t.Fatalf("FIN must seal the run: writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
+	}
+}
+
 func TestCoalescerCoalescesAdjacentACKs(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := newTestTCPCoalescer(t, w)

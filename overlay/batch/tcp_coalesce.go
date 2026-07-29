@@ -171,6 +171,17 @@ func (p parsedTCP) coalesceable() bool {
 	return p.payLen > 0
 }
 
+// pureAck reports whether a parsed segment is a bare acknowledgment: no
+// payload and nothing beyond ACK|PSH|ECE in the flags. These are the only
+// non-coalesceable shape that may safely pass through WITHOUT sealing the
+// flow's open slot — a late-delivered stale ACK is ignored by the receiver,
+// whereas SYN/FIN/RST/CWR mark transitions the flow must observe in order.
+func (p parsedTCP) pureAck() bool {
+	return p.payLen == 0 &&
+		p.flags&tcpFlagAck != 0 &&
+		p.flags&^(tcpFlagAck|tcpFlagPsh|tcpFlagEce) == 0
+}
+
 func (c *TCPCoalescer) Commit(pkt []byte) error {
 	info, ok := parseTCPBase(pkt)
 	if !ok {
@@ -186,11 +197,21 @@ func (c *TCPCoalescer) Commit(pkt []byte) error {
 // after the dispatcher has already done so.
 func (c *TCPCoalescer) commitParsed(pkt []byte, info parsedTCP) error {
 	if !info.coalesceable() {
-		// TCP but not admissible (SYN/FIN/RST/URG/CWR or zero-payload).
-		// Seal this flow's open slot so later in-flow packets don't extend
-		// it and accidentally reorder past this passthrough. The len guard
-		// skips hashing the 38-byte key on ack-dominant queues, where the
-		// map is almost always empty.
+		if info.pureAck() {
+			// A bare window/ack update carries no ordering obligation toward
+			// the flow's data: delivering it after later-arriving data only
+			// makes it a stale ACK, which receivers ignore. Skipping the
+			// evict keeps a bidirectional flow's inbound data run coalescing
+			// across the peer ACKs interleaved into it — kernel GRO likewise
+			// doesn't flush held data on a pure ACK.
+			c.addPassthrough(pkt)
+			return nil
+		}
+		// TCP but not admissible (SYN/FIN/RST/URG/CWR or a shape the flow
+		// must observe in sequence). Seal this flow's open slot so later
+		// in-flow packets don't extend it and accidentally reorder past this
+		// passthrough. The len guard skips hashing the 38-byte key on
+		// ack-dominant queues, where the map is almost always empty.
 		if len(c.openSlots) != 0 {
 			if last := c.lastSlot; last != nil && last.fk == info.fk {
 				c.lastSlot = nil
