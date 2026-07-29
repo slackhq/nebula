@@ -24,7 +24,7 @@ func newKeygenFlags() *keygenFlags {
 	cf.set.Usage = func() {}
 	cf.outPubPath = cf.set.String("out-pub", "", "Required: path to write the public key to")
 	cf.outKeyPath = cf.set.String("out-key", "", "Required: path to write the private key to")
-	cf.curve = cf.set.String("curve", "25519", "ECDH Curve (25519, P256)")
+	cf.curve = cf.set.String("curve", defaultCurve(), "ECDH Curve (25519, P256)")
 	cf.p11url = p11Flag(cf.set)
 	return &cf
 }
