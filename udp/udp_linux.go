@@ -162,6 +162,11 @@ func (u *StdConn) prepareECNRecv() {
 // it is not — dashboards can show degraded state on partially-supported
 // kernels at a glance. Calling repeatedly with the same name updates the
 // existing gauge rather than registering a duplicate.
+//
+// Caveat: the gauge is process-global while the capability state it reports
+// is per-socket. With multiple listen routines the last probe wins, and a
+// runtime downgrade on one socket (e.g. the GSO EIO disable) flips the gauge
+// for all of them. Treat it as "at least one socket looks like this."
 func recordCapability(name string, enabled bool) {
 	g := metrics.GetOrRegisterGauge(name, nil)
 	if enabled {

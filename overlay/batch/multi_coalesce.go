@@ -13,10 +13,21 @@ import (
 //
 // Lanes are processed independently: the TCP coalescer only sees TCP, the
 // UDP coalescer only sees UDP, and the passthrough lane handles everything else.
-// Per-flow delivery order is preserved because a single 5-tuple only
-// ever lands in one lane and each lane preserves its own slot order.
-// Routing follows the flow, not the coalesceability: IPv4 fragments keep
-// their L4 proto visible and IPv6 extension chains are walked to the
+// The ordering contract is per-flow DATA order: a flow's payload-bearing
+// packets are never reordered relative to each other, because a single
+// 5-tuple only ever lands in one lane and each lane emits its slots in
+// creation order. Two shapes are deliberately allowed to be overtaken by
+// later same-flow data:
+//   - pure ACKs, which pass through without sealing the flow's open slot
+//     (a late ACK is just a stale ACK; see TCPCoalescer.commitParsed);
+//   - unparseable in-flow shapes (fragments, IP options), whose lane-level
+//     addPassthrough does not close the flow's open slot either. Closing it
+//     would need a full open-slot barrier (the flow key is unknown when the
+//     parse fails) — an accepted tradeoff: mid-flow fragments are rare and
+//     receivers reassemble regardless of arrival order.
+//
+// Routing still follows the flow, not the coalesceability: IPv4 fragments
+// keep their L4 proto visible and IPv6 extension chains are walked to the
 // terminal proto, so a flow's non-coalesceable shapes ride its lane as
 // in-lane passthroughs rather than falling to the later-flushed pt lane.
 //

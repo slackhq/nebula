@@ -160,7 +160,8 @@ func (c *UDPCoalescer) commitParsed(pkt []byte, info parsedUDP) error {
 			}
 			return nil
 		}
-		// Can't extend. Seal it and fall through to seed a fresh slot.
+		// Can't extend: evict it from openSlots and fall through to seed a
+		// fresh slot. (Eviction only; sealed is never set here.)
 		delete(c.openSlots, info.fk)
 		if c.lastSlot == open {
 			c.lastSlot = nil

@@ -20,7 +20,7 @@ import (
 
 const maxSuperpacketLen = 65535
 
-// tunRxBufSize is the per-Read worst-case footprint inside rxBuf: one kernel-supplied packet body, which is at most ~64 KiB (tunReadBufSize).
+// tunRxBufSize is the per-Read worst-case footprint inside rxBuf: one kernel-supplied packet body, which is at most ~64 KiB.
 // Segmentation happens at encrypt time on a per-routine MTU-sized scratch
 // (see SegmentSuperpacket), so rxBuf only holds raw kernel-supplied bytes.
 // We round up to give margin for the drain headroom check below.
@@ -46,9 +46,12 @@ const tunDrainCap = 64
 const gsoMaxIovs = 256
 
 // validVnetHdr is the 10-byte virtio_net_hdr we prepend to every non-GSO TUN write.
-// Only flag set is VIRTIO_NET_HDR_F_DATA_VALID, which marks the skb CHECKSUM_UNNECESSARY
-// so the receiving network stack skips L4 checksum verification.
-// All packets that reach the plain Write paths already carry a valid L4 checksum, so trusting them is safe.
+// Only flag set is VIRTIO_NET_HDR_F_DATA_VALID. Note the tun write path
+// (__virtio_net_hdr_to_skb) ignores this bit — only the virtio-net driver's RX
+// helper honors it — so packets land CHECKSUM_NONE and the stack verifies the
+// L4 checksum anyway. What matters here is what the header does NOT say:
+// no NEEDS_CSUM, so the kernel is never asked to finish a checksum.
+// All packets that reach the plain Write paths already carry a valid L4 checksum.
 var validVnetHdr = [virtio.Size]byte{unix.VIRTIO_NET_HDR_F_DATA_VALID}
 
 // Offload wraps a TUN file descriptor with poll-based reads. The FD provided will be changed to non-blocking.

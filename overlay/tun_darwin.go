@@ -550,7 +550,9 @@ func (t *tun) Read(to []byte) (int, error) {
 	return n - 4, nil
 }
 
-// Write pushes one IP packet onto the utun device. Only valid for single threaded use.
+// Write pushes one IP packet onto the utun device. Safe for concurrent use:
+// the AF prefix and iovecs are per-call stack state, and the fd write itself
+// serializes on the runtime's fd mutex (see the Queue contract in tio.go).
 func (t *tun) Write(from []byte) (int, error) {
 	if len(from) == 0 {
 		return 0, syscall.EIO
