@@ -18,20 +18,37 @@ import (
 )
 
 // batchWriter owns the sendmmsg(2)/UDP-GSO transmit path for a StdConn: the
-// per-queue scratch WriteBatch packs mmsghdr entries into, plus the GSO
-// capability state probed once at socket creation. Each queue has its own
-// StdConn and therefore its own batchWriter, so no locking is needed.
+// scratch WriteBatch packs mmsghdr entries into, plus the GSO capability
+// state probed at socket creation. Each queue has its own StdConn and
+// batchWriter, so no locking is needed.
+//
+// Terminology, smallest to largest:
+//
+//	packet   one element of bufs: a single UDP datagram. The unit of the
+//	         returned written count.
+//	run      consecutive packets planRun groups into one entry: same
+//	         destination and outer ECN, equal sizes (a shorter packet only
+//	         last), within maxGSOBytes and maxGSOSegments. Without GSO a run
+//	         is always one packet. Runs are atomic: packed whole into one
+//	         entry, or skipped whole if the socket cannot address their
+//	         destination, leaving a hole (bufs indices covered by no entry).
+//	entry    one mmsghdr slot of the sendmmsg array; the kernel's unit of
+//	         success and failure. A multi-packet entry carries a UDP_SEGMENT
+//	         cmsg and is sent as one superpacket the kernel segments into
+//	         gso_size-byte datagrams. Entries never split.
+//	chunk    the entries packed for one sendmmsg call, at most MaxWriteBatch.
+//	batch    the caller's whole bufs/addrs/ecns triple, processed as one or
+//	         more chunks.
 type batchWriter struct {
 	fd   int
 	isV4 bool
 	l    *slog.Logger
 
-	// UDP GSO (sendmsg with UDP_SEGMENT cmsg) support. gsoSupported is
-	// probed once at socket creation, and cleared by WriteBatch if the
-	// kernel later rejects a GSO send outright (the setsockopt probe can't
-	// see per-device limitations). When true, WriteBatch packs same-
-	// destination consecutive packets into a single sendmmsg entry with a
-	// UDP_SEGMENT cmsg; otherwise each packet is its own entry.
+	// UDP GSO (sendmsg with UDP_SEGMENT cmsg) support, probed once at
+	// socket creation and cleared by WriteBatch if the kernel later rejects
+	// a GSO send (the setsockopt probe cannot see per-route limitations).
+	// When true, WriteBatch coalesces runs into UDP_SEGMENT entries;
+	// otherwise each packet is its own entry.
 	gsoSupported   bool
 	maxGSOSegments int
 
@@ -41,24 +58,25 @@ type batchWriter struct {
 	iovs  []iovec
 	names [][]byte
 
-	// Per-entry cmsg scratch. cmsg is one contiguous slab of
-	// MaxWriteBatch * cmsgSpace bytes; each entry holds two cmsg headers
-	// (UDP_SEGMENT then IP_TOS / IPV6_TCLASS) pre-filled once in
-	// prepareWriteMessages. WriteBatch only rewrites the per-call data
-	// payloads and toggles Hdr.Control / Hdr.Controllen to point at
-	// whichever subset of the two cmsgs applies.
+	// Per-entry cmsg scratch: one contiguous slab of
+	// MaxWriteBatch * cmsgSpace bytes holding two cmsg headers per entry
+	// (UDP_SEGMENT, then IP_TOS / IPV6_TCLASS). Layout in
+	// prepareWriteMessages.
 	cmsg         []byte
 	cmsgSpace    int
 	cmsgSegSpace int
 	cmsgEcnSpace int
 
-	// entryEnd[e] is the bufs index *after* the last packet packed into
-	// mmsghdr entry e. Used to rewind `i` on partial sendmmsg success.
+	// entryEnd[e] is the bufs index after the last packet packed into entry
+	// e. Used to rewind i on partial sendmmsg success.
 	entryEnd []int
 
-	// sendFn issues the sendmmsg for the first n prepared entries. Points
-	// at the real syscall in production; tests inject partial-success and
-	// error scripts to exercise the rewind logic without a socket.
+	// entryPkts[e] is the number of packets packed into entry e. Not
+	// derivable from entryEnd: skipped runs leave holes in the bufs index space.
+	entryPkts []int
+
+	// sendFn sends the first n prepared entries. The real syscall in
+	// production; tests inject partial-success and error scripts.
 	sendFn func(n int) (int, error)
 }
 
@@ -70,29 +88,25 @@ func newBatchWriter(fd int, isV4 bool, l *slog.Logger) *batchWriter {
 	return w
 }
 
-// prepareWriteMessages allocates one mmsghdr/iovec/sockaddr/cmsg scratch
-// slot per sendmmsg entry. The iovec slab is sized to n so all entries'
-// iovecs share one allocation; per-entry fan-out is further capped at
-// maxGSOSegments. Hdr.Iov / Hdr.Iovlen / Hdr.Control / Hdr.Controllen are
-// wired per call since each entry can span a variable number of iovecs
-// and may or may not carry a cmsg.
+// prepareWriteMessages allocates the per-entry mmsghdr/iovec/sockaddr/cmsg
+// scratch. Hdr.Iov/Iovlen/Control/Controllen are wired per call, since an
+// entry spans a variable number of iovecs and may or may not carry cmsgs.
 //
-// Per-mmsghdr cmsg layout. Each entry's slot of length cmsgSpace holds
-// up to two cmsg headers placed at fixed offsets:
+// Each entry's cmsg slot holds up to two headers at fixed offsets:
 //
 //	[0 .. cmsgSegSpace)          UDP_SEGMENT (gso_size, uint16)
 //	[cmsgSegSpace .. cmsgSpace)  IP_TOS or IPV6_TCLASS (int32)
 //
-// The UDP_SEGMENT header is pre-filled once here and only its data payload
-// is rewritten per call. The ECN header is written entirely per entry by
-// writeEntryCmsg, since its Level/Type follow the destination's family, not
-// the socket's. Per call we toggle Hdr.Control / Hdr.Controllen to point at
-// whichever subset applies (none / segment-only / ecn-only / both).
+// The UDP_SEGMENT header is pre-filled here; only its payload is rewritten
+// per call. The ECN header is written per entry by writeEntryCmsg because
+// its Level/Type follow the destination's family. Hdr.Control/Controllen
+// select whichever subset applies (none / segment / ecn / both).
 func (w *batchWriter) prepareWriteMessages(n int) {
 	w.msgs = make([]rawMessage, n)
 	w.iovs = make([]iovec, n)
 	w.names = make([][]byte, n)
 	w.entryEnd = make([]int, n)
+	w.entryPkts = make([]int, n)
 
 	w.cmsgSegSpace = unix.CmsgSpace(2)
 	w.cmsgEcnSpace = unix.CmsgSpace(4)
@@ -113,17 +127,15 @@ func (w *batchWriter) prepareWriteMessages(n int) {
 	}
 }
 
-// maxGSOBytes bounds the total payload per sendmsg() when UDP_SEGMENT is
-// set. The kernel stitches all iovecs into a single skb whose length the
-// UDP length field can represent, and also enforces sk_gso_max_size (which
-// on most devices is 65536). We use 65000 to leave headroom under the
-// 65535 UDP-length cap, avoiding EMSGSIZE on large TSO superpackets.
+// maxGSOBytes bounds the total payload of one UDP_SEGMENT send. The kernel
+// builds a single skb, which must fit the 16-bit UDP length field and
+// sk_gso_max_size (65536 on most devices); 65000 leaves headroom for headers.
 const maxGSOBytes = 65000
 
 // prepareGSO probes UDP_SEGMENT support and sets w.gsoSupported on success.
 // Best-effort; failure leaves it false.
 func (w *batchWriter) prepareGSO() {
-	w.maxGSOSegments = 63 //gotta be one less than the max so we can still attach a header
+	w.maxGSOSegments = 63 // pre-6.9 cap; see gsoMaxSegments
 
 	if err := unix.SetsockoptInt(w.fd, unix.IPPROTO_UDP, unix.UDP_SEGMENT, 0); err != nil {
 		w.l.Info("udp: GSO disabled", "reason", "rawconn control failed", "error", err)
@@ -133,25 +145,19 @@ func (w *batchWriter) prepareGSO() {
 
 	var un unix.Utsname
 	if err := unix.Uname(&un); err != nil {
-		w.l.Info("udp: GSO disabled", "reason", "kernel uname probe failed", "error", err)
-		recordCapability("udp.gso.enabled", false)
-		return
+		w.l.Warn("udp: kernel version probe failed, capping GSO at 63 segments", "error", err)
+	} else {
+		w.maxGSOSegments = gsoMaxSegments(string(un.Release[:]))
 	}
-	w.maxGSOSegments = gsoMaxSegments(string(un.Release[:]))
 
 	w.gsoSupported = true
 	w.l.Info("udp: GSO enabled", "maxGSOSegments", w.maxGSOSegments)
 	recordCapability("udp.gso.enabled", true)
 }
 
-// gsoMaxSegments returns the largest number of UDP_SEGMENT segments a single
-// sendmsg may carry on the running kernel, reserving one segment for the
-// header. UDP_MAX_SEGMENTS was 64 until Linux v6.9 (commit 1382e3b6a350,
-// "udp: change maximum number of UDP segments to 128") raised it to 128;
-// nothing about this changed in 5.5. On kernels older than 6.9 packing more
-// than 64 segments gets the sendmsg rejected with EINVAL, so cap at 63 there
-// and only use 127 from 6.9 on. (Maintainer stance: update your kernel if you
-// want to go fast — this is a plain version gate, not a runtime probe.)
+// gsoMaxSegments returns the most segments one UDP_SEGMENT send may carry:
+// the kernel cap (UDP_MAX_SEGMENTS: 64 before 6.9, 128 after) minus one,
+// because the kernel counts the 8-byte UDP header against the gso_size * UDP_MAX_SEGMENTS budget.
 func gsoMaxSegments(release string) int {
 	major, minor := parseRelease(release)
 	if major > 6 || (major == 6 && minor >= 9) {
@@ -179,20 +185,16 @@ func parseRelease(r string) (major, minor int) {
 	return
 }
 
-// WriteBatch sends bufs via sendmmsg(2) using the preallocated scratch on
-// batchWriter. Consecutive packets to the same destination with matching
-// segment sizes (all but possibly the last) are coalesced into a single
-// mmsghdr entry carrying a UDP_SEGMENT cmsg, so one syscall can mix runs of
-// GSO superpackets with plain one-off datagrams. Without GSO support every
-// packet is its own entry, matching the prior behaviour.
+// WriteBatch sends bufs via sendmmsg(2), coalescing runs into UDP_SEGMENT
+// entries, so one syscall can mix GSO superpackets and plain datagrams.
+// Without GSO support every packet is its own entry.
 //
-// Chunks larger than the scratch are processed across multiple syscalls. If
-// sendmmsg returns an error AND zero entries went out we fall back to
-// per-packet sendto for that chunk so the caller still gets best-effort
-// delivery; on a partial-success error we just replay the remainder.
+// Batches larger than the scratch take one sendmmsg per chunk. A zero-sent
+// error means the kernel rejected entry 0: its packets are dropped and the
+// rest of the chunk is replayed. A partial success replays the remainder.
 //
-// Returns the number of packets that reached the wire. An error means the call
-// itself failed; a short count means specific destinations were undeliverable.
+// Returns the number of packets sent. An error means the call itself
+// failed; a short count means some destinations were undeliverable.
 func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []byte) (int, error) {
 	if len(bufs) != len(addrs) {
 		return 0, fmt.Errorf("WriteBatch: len(bufs)=%d != len(addrs)=%d", len(bufs), len(addrs))
@@ -201,17 +203,14 @@ func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []b
 		return 0, fmt.Errorf("WriteBatch: len(ecns)=%d != len(bufs)=%d", len(ecns), len(bufs))
 	}
 
-	// Callers deliver same-destination packets contiguously and in counter
-	// order, so we run the GSO planner directly without a pre-sort. A
-	// sorting pass measurably hurt throughput in microbenchmarks while
-	// providing no observed reordering benefit.
+	// Callers deliver same-destination packets contiguously and in counter order, so we run the GSO planner directly without a pre-sort.
+	// A sorting pass measurably hurt throughput in microbenchmarks while providing no observed reordering benefit.
 
-	// A destination the kernel rejects costs its own packet, never the ones around it. We count what actually made
-	// it out rather than returning an error, since the caller is the only one that knows whether a shortfall matters.
+	// A destination the kernel rejects results in us dropping that entry (one packet, or one same-destination GSO run).
+	// We count what actually made it out rather than returning an error.
 	written := 0
 
 	i := 0
-sendChunks:
 	for i < len(bufs) {
 		baseI := i
 		entry := 0
@@ -239,26 +238,14 @@ sendChunks:
 
 			nlen, err := writeSockaddr(w.names[entry], addrs[i], w.isV4)
 			if err != nil {
-				// One destination in this chunk has an address family the
-				// socket can't send to (e.g. an IPv6 remote on a v4-bound
-				// socket → ErrInvalidIPv6RemoteForSocket). Abandoning the whole
-				// sendmmsg here would drop every packet already packed for this
-				// chunk plus every packet still ahead of us in bufs. Instead
-				// fall back to per-packet sendto for the packets packed so far
-				// in this chunk and the offending one: sendto delivers each
-				// good destination and only errors on the bad one, which we
-				// drop and keep going. One bad destination costs one packet,
-				// never the batch. (Same fallback the zero-sent sendmmsg path
-				// below uses, extended to cover the misaddressed packet.)
-				for k := baseI; k <= i; k++ {
-					if werr := sendto(w.fd, bufs[k], addrs[k], w.isV4); werr == nil {
-						written++
-					} else {
-						w.l.Debug("failed to write packet in batch", "udpAddr", addrs[k], "error", werr)
-					}
+				// The destination's address family does not match the socket
+				// (e.g. an IPv6 remote on a v4-bound socket). The packets are
+				// undeliverable and no entry is committed yet: skip the run.
+				if w.l.Enabled(context.Background(), slog.LevelDebug) {
+					w.l.Debug("skipping unroutable batch destination", "udpAddr", addrs[i], "packets", runLen, "error", err)
 				}
-				i++
-				continue sendChunks
+				i += runLen
+				continue
 			}
 
 			hdr := &w.msgs[entry].Hdr
@@ -270,98 +257,71 @@ sendChunks:
 			if ecns != nil {
 				ecn = ecns[i]
 			}
-			// ECN cmsg family follows the destination, not the socket: a
-			// v4-mapped dst on a dual-stack v6 socket must be stamped via
-			// IP_TOS. addrs[i] is this run's destination (i advances below).
+			// ECN cmsg family follows the destination, not the socket
 			dstIsV4 := addrs[i].Addr().Unmap().Is4()
 			w.writeEntryCmsg(entry, runLen, segSize, ecn, dstIsV4)
 
 			i += runLen
 			iovIdx += runLen
 			w.entryEnd[entry] = i
+			w.entryPkts[entry] = runLen
 			entry++
 		}
 
 		if entry == 0 {
-			return written, fmt.Errorf("sendmmsg: no progress")
+			// Every remaining packet was skipped; i reached len(bufs).
+			break
 		}
 
 		sent, serr := w.sendFn(entry)
 		if serr != nil && sent <= 0 {
-			// sent<=0 means message 0 itself failed. If that entry was a GSO
-			// superpacket and the errno is the kernel's "device can't do this"
-			// signal, the probe lied: UDP_SEGMENT is accepted by setsockopt but
-			// rejected at send time (EIO from udp_send_skb() when the egress
-			// device lacks TX checksum offload, which GSO hard-requires).
-			// This condition is per-device and persistent, so give up on GSO, and
-			// replay the chunk through the planner, which now packs one packet per entry and keeps sendmmsg batching intact.
-			if w.gsoSupported && w.entryEnd[0]-baseI >= 2 && errors.Is(serr, unix.EIO) {
+			// sent<=0 means entry 0 itself failed. EIO on a superpacket
+			// means the route cannot carry a GSO send even though the
+			// setsockopt probe passed: udp_send_skb() returns EIO when the
+			// egress device lacks TX checksum offload (kernels through
+			// 6.10) or when an xfrm policy covers the route. Persistent, so
+			// disable GSO (socket-wide, though the kernel condition is
+			// per-route) and replay the chunk as one-packet entries, still batched.
+			if w.gsoSupported && w.entryPkts[0] >= 2 && errors.Is(serr, unix.EIO) {
 				w.gsoSupported = false
 				w.l.Warn("udp: kernel rejected GSO send, disabling GSO", "error", serr)
 				recordCapability("udp.gso.enabled", false)
 				i = baseI
 				continue
 			}
-			// Nothing went out for this chunk; fall back to sendto for each
-			// packet that was queued this iteration. We only enter this path
-			// when sendmmsg returned an error AND zero entries succeeded —
-			// otherwise the partial-success advance below replays only the
-			// remainder, avoiding duplicates of already-sent packets.
-			//
-			// sent=-1 from sendmmsg means message 0 itself failed (partial
-			// success returns the count instead), so log entry 0's parameters as it's the entry the kernel rejected.
-			hdr0 := &w.msgs[0].Hdr
-			runLen0 := w.entryEnd[0] - baseI
-			seg0 := len(bufs[baseI])
-			ecn0 := byte(0)
-			if ecns != nil {
-				ecn0 = ecns[baseI]
-			}
-			if w.l.Enabled(context.Background(), slog.LevelDebug) {
-				w.l.Debug("sendmmsg had problem",
-					"sent", sent, "err", serr,
-					"entries", entry,
-					"entry0_runLen", runLen0,
-					"entry0_segSize", seg0,
-					"entry0_iovlen", hdr0.Iovlen,
-					"entry0_controllen", hdr0.Controllen,
-					"entry0_namelen", hdr0.Namelen,
-					"entry0_ecn", ecn0,
-					"entry0_dst", addrs[baseI],
-					"isV4", w.isV4,
-					"gso", w.gsoSupported,
-				)
-			}
-			for k := baseI; k < i; k++ {
-				if werr := sendto(w.fd, bufs[k], addrs[k], w.isV4); werr == nil {
-					written++
-				} else {
-					w.l.Debug("failed to write packet in batch", "udpAddr", addrs[k], "error", werr)
-				}
-			}
+			// Any other zero-sent error is a per-entry failure:
+			// an unreachable destination, a firewall EPERM, or a PMTU shrink after a roam
+			// (EINVAL, or EMSGSIZE since kernel 6.14, once gso_size no longer fits the path).
+			// Retrying the packets individually cannot succeed where the entry did not, and
+			// disabling GSO cannot make oversized segments fit, so drop the entry and replay whatever was packed after it.
+			// Small-segment entries still pass, so the tunnel stays up while full-size packets drop.
+			w.l.Debug("sendmmsg rejected entry",
+				"error", serr,
+				"udpAddr", addrs[w.entryEnd[0]-w.entryPkts[0]],
+				"packets", w.entryPkts[0],
+				"gso", w.gsoSupported,
+			)
+			i = w.entryEnd[0]
 			continue
 		}
 		if sent == 0 {
 			return written, fmt.Errorf("sendmmsg made no progress")
 		}
-		// Rewind i to the end of the last successfully sent entry. For a
-		// full-success send this leaves i unchanged; for a partial send it
-		// replays the remainder on the next outer-loop iteration. A single
-		// entry can carry a whole GSO run, so count packets, not entries.
-		written += w.entryEnd[sent-1] - baseI
+		// Rewind i to the end of the last sent entry: a no-op on full
+		// success, a replay of the remainder on partial success. Count
+		// packets per entry; the bufs index span would overcount across holes.
+		for e := 0; e < sent; e++ {
+			written += w.entryPkts[e]
+		}
 		i = w.entryEnd[sent-1]
 	}
 	return written, nil
 }
 
-// planRun groups consecutive packets starting at `start` that can be sent as
-// a single UDP GSO superpacket (one sendmmsg entry with UDP_SEGMENT cmsg).
-// A run of length 1 means the entry carries no UDP_SEGMENT cmsg and the
-// kernel treats it as a plain datagram. Returns the run length and the
-// per-segment size (which equals len(bufs[start])). Without GSO support
-// every call returns runLen=1. Outer ECN (when ecns != nil) is also a run
-// boundary — the kernel stamps one outer codepoint per sendmsg entry, so
-// mixing values inside a run would lose information.
+// planRun returns the length of the run starting at start and its segment
+// size (len(bufs[start])). A run of length 1 carries no UDP_SEGMENT cmsg
+// and is sent as a plain datagram; without GSO support planRun always
+// returns 1. Outer ECN is a run boundary: the kernel stamps one codepoint per entry.
 func (w *batchWriter) planRun(bufs [][]byte, addrs []netip.AddrPort, ecns []byte, start, iovBudget int) (int, int) {
 	if start >= len(bufs) || iovBudget < 1 {
 		return 0, 0
@@ -405,18 +365,14 @@ func (w *batchWriter) planRun(bufs [][]byte, addrs []netip.AddrPort, ecns []byte
 	return runLen, segSize
 }
 
-// writeEntryCmsg sets up the per-mmsghdr Hdr.Control / Hdr.Controllen for one
-// entry. It writes the UDP_SEGMENT payload when runLen >= 2 and the
-// IP_TOS/IPV6_TCLASS payload when ecn != 0, then points hdr.Control at the
-// smallest contiguous span that covers whichever cmsg(s) actually apply.
+// writeEntryCmsg writes one entry's cmsgs: the UDP_SEGMENT payload when
+// runLen >= 2, the IP_TOS/IPV6_TCLASS cmsg when ecn != 0, then points
+// Hdr.Control at the smallest span covering the cmsgs in use.
 //
-// The outer-ECN cmsg family must match the *destination*, not the socket: on
-// the default dual-stack v6 bind, a v4-mapped destination is routed through
-// the kernel's IPv4 path, which parses IP_TOS (IPPROTO_IP) and ignores an
-// IPV6_TCLASS cmsg. The ECN header is written here in full, per entry, from
-// dstIsV4 so v4 peers get IP_TOS and v6 peers get IPV6_TCLASS. The data
-// payload is a 4-byte int for both families, so the pre-computed cmsg space
-// is unchanged.
+// The ECN cmsg family must match the destination, not the socket: on the
+// default dual-stack v6 bind, a v4-mapped destination takes the kernel's
+// IPv4 path, which reads IP_TOS and ignores IPV6_TCLASS. The payload is a
+// 4-byte int for both families, so the cmsg space is the same.
 func (w *batchWriter) writeEntryCmsg(entry, runLen, segSize int, ecn byte, dstIsV4 bool) {
 	hdr := &w.msgs[entry].Hdr
 	useSeg := runLen >= 2

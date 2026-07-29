@@ -237,9 +237,9 @@ func TestWriteBatchOuterTOSToV4Mapped(t *testing.T) {
 	}
 }
 
-// TestWriteBatchUnreachableDestDeliversOthers is the sendmmsg-fallback twin of
+// TestWriteBatchUnreachableDestDeliversOthers is the kernel-rejection twin of
 // TestWriteBatchBadFamilyDeliversOthers. A destination the kernel refuses outright (240.0.0.0/4 is reserved, so
-// sendto returns EINVAL) makes sendmmsg fail for the whole chunk; the per-packet replay must then still deliver
+// the send returns EINVAL) fails its sendmmsg entry; WriteBatch must drop only that entry and still deliver
 // every other packet rather than abandoning the batch at the first failure.
 func TestWriteBatchUnreachableDestDeliversOthers(t *testing.T) {
 	rx, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
@@ -401,7 +401,7 @@ func TestDeliverSegments(t *testing.T) {
 
 // newRewindTestWriter builds a batchWriter with no socket: GSO planning on,
 // sendFn left for the test to script. fd is invalid on purpose -- any path
-// that actually hits the kernel (sendto fallback) fails loudly.
+// that actually hits the kernel fails loudly.
 func newRewindTestWriter() *batchWriter {
 	w := &batchWriter{fd: -1, isV4: true, l: testLogger()}
 	w.prepareWriteMessages(MaxWriteBatch)
@@ -494,6 +494,59 @@ func TestWriteBatchPartialSendRewind(t *testing.T) {
 				if len(b) != len(bufs[i]) || b[0] != bufs[i][0] {
 					t.Errorf("wire[%d] = tag %d len %d, want tag %d len %d (reorder/dup)",
 						i, b[0], len(b), bufs[i][0], len(bufs[i]))
+				}
+			}
+		})
+	}
+}
+
+// TestWriteBatchSkipUnroutableRunAccounting: an unroutable destination mid-
+// batch is skipped without committing an entry, leaving a hole in the bufs
+// index space. The written count must tally packets per sent entry -- the
+// index span would count the hole -- across both full and partial sendmmsg
+// success.
+func TestWriteBatchSkipUnroutableRunAccounting(t *testing.T) {
+	dstA := netip.MustParseAddrPort("127.0.0.1:4242")
+	dstB := netip.MustParseAddrPort("127.0.0.2:4242")
+	bad := netip.MustParseAddrPort("[2001:db8::1]:9999") // v6 dest, v4 writer
+
+	mk := func(tag byte, n int) []byte {
+		b := make([]byte, n)
+		b[0] = tag
+		return b
+	}
+	bufs := [][]byte{mk(1, 1200), mk(2, 1200), mk(3, 500), mk(4, 900), mk(5, 900)}
+	addrs := []netip.AddrPort{dstA, dstA, bad, dstB, dstB}
+
+	for si, script := range [][]int{{99}, {1, 99}} {
+		t.Run(fmt.Sprintf("script_%d", si), func(t *testing.T) {
+			w := newRewindTestWriter()
+			var wire [][]byte
+			call := 0
+			w.sendFn = func(n int) (int, error) {
+				accept := n
+				if call < len(script) && script[call] < n {
+					accept = script[call]
+				}
+				call++
+				wire = append(wire, capturePrepared(w, accept)...)
+				return accept, nil
+			}
+
+			written, err := w.WriteBatch(bufs, addrs, nil)
+			if err != nil {
+				t.Fatalf("WriteBatch: %v", err)
+			}
+			if written != 4 {
+				t.Errorf("written = %d, want 4 (the unroutable run is the only casualty)", written)
+			}
+			wantTags := []byte{1, 2, 4, 5}
+			if len(wire) != len(wantTags) {
+				t.Fatalf("wire got %d packets, want %d (dup or loss around the skip)", len(wire), len(wantTags))
+			}
+			for i, b := range wire {
+				if b[0] != wantTags[i] {
+					t.Errorf("wire[%d] tag = %d, want %d", i, b[0], wantTags[i])
 				}
 			}
 		})
