@@ -35,8 +35,17 @@ const tcpCoalesceHdrCap = 100
 // (we patch total length and pseudo-header partial at flush)
 // payIovs are *borrowed* slices from the caller's plaintext buffers.
 // The caller (listenOut) must keep those buffers alive until Flush.
+
+const (
+	passthroughFalse = iota
+	// passthroughTrue means a sync-point packet, that may not be re-ordered
+	passthroughTrue
+	// passthroughACK packets are "passed through" without coalescing, but traffic "after" them may be pulled forward to facilitate coalescing.
+	passthroughACK
+)
+
 type coalesceSlot struct {
-	passthrough bool
+	passthrough uint8
 	// rawPkt is borrowed: the whole packet for passthrough slots, the seed
 	// packet for coalesce slots. A coalesce slot that never grows past one
 	// segment is emitted from rawPkt so its original (already valid) L4
@@ -52,12 +61,21 @@ type coalesceSlot struct {
 	numSeg   int
 	totalPay int
 	nextSeq  uint32
+	// tsVal is the TCP timestamp of the slot's seed segment (uniform across
+	// the slot: headersMatch requires byte-equal options for every append and
+	// merge). Sort key only, see compareCoalesceSlots.
+	tsVal uint32
+	hasTS bool
 	// sealed marks the chain permanently closed: the last-accepted segment had PSH or was sub-gsoSize,
 	// so no append or flush-time merge may follow.
 	// Distinct from eviction out of openSlots (e.g. on seq mismatch),
 	// which leaves sealed=false so reorderForFlush can still merge the slot.
 	sealed  bool
 	payIovs [][]byte
+}
+
+func (c *coalesceSlot) isPassthrough() bool {
+	return c.passthrough != passthroughFalse
 }
 
 // TCPCoalescer accumulates adjacent in-flow TCP data segments across multiple concurrent flows
@@ -68,7 +86,7 @@ type TCPCoalescer struct {
 	w tio.GSOWriter
 
 	// slots is the ordered event queue. Flush walks it once and emits each
-	// entry as either a WriteGSO (coalesced) or a plainW.Write (passthrough).
+	// entry as either a WriteGSO (coalesced) or a w.Write (passthrough).
 	slots []*coalesceSlot
 	// openSlots maps a flow key to its most recent non-sealed slot, so new
 	// segments can extend an in-progress superpacket in O(1). Slots are
@@ -112,6 +130,7 @@ type parsedTCP struct {
 	payLen    int
 	seq       uint32
 	flags     byte
+	options   []byte
 }
 
 // parseTCPBase extracts the flow key and IP/TCP offsets for any TCP packet,
@@ -140,10 +159,14 @@ func parseTCPBase(pkt []byte) (parsedTCP, bool) {
 	p.tcpHdrLen = tcpOff
 	p.hdrLen = p.ipHdrLen + tcpOff
 	p.payLen = len(pkt) - p.hdrLen
-	p.seq = binary.BigEndian.Uint32(pkt[p.ipHdrLen+4 : p.ipHdrLen+8])
-	p.flags = pkt[p.ipHdrLen+13]
 	p.fk.sport = binary.BigEndian.Uint16(pkt[p.ipHdrLen : p.ipHdrLen+2])
 	p.fk.dport = binary.BigEndian.Uint16(pkt[p.ipHdrLen+2 : p.ipHdrLen+4])
+	p.seq = binary.BigEndian.Uint32(pkt[p.ipHdrLen+4 : p.ipHdrLen+8])
+	p.flags = pkt[p.ipHdrLen+13]
+	//window: 14, 15
+	//csum: 16, 17
+	//urg: 18, 19
+	p.options = pkt[p.ipHdrLen+20 : p.ipHdrLen+p.tcpHdrLen : p.ipHdrLen+p.tcpHdrLen]
 	return p, true
 }
 
@@ -204,7 +227,7 @@ func (c *TCPCoalescer) commitParsed(pkt []byte, info parsedTCP) error {
 			// evict keeps a bidirectional flow's inbound data run coalescing
 			// across the peer ACKs interleaved into it — kernel GRO likewise
 			// doesn't flush held data on a pure ACK.
-			c.addPassthrough(pkt)
+			c.addPassthroughACK(pkt, info)
 			return nil
 		}
 		// TCP but not admissible (SYN/FIN/RST/URG/CWR or a shape the flow
@@ -260,7 +283,7 @@ func (c *TCPCoalescer) Flush() error {
 	var first error
 	for _, s := range c.slots {
 		var err error
-		if s.passthrough || s.numSeg == 1 {
+		if s.isPassthrough() || s.numSeg == 1 {
 			// A slot that never grew (nor absorbed a merge) is byte-identical
 			// to the packet it was seeded from; ship the original so its valid
 			// checksum rides the DATA_VALID path instead of paying a kernel
@@ -285,8 +308,24 @@ func (c *TCPCoalescer) Flush() error {
 
 func (c *TCPCoalescer) addPassthrough(pkt []byte) {
 	s := c.take()
-	s.passthrough = true
+	s.passthrough = passthroughTrue
 	s.rawPkt = pkt
+	c.slots = append(c.slots, s)
+}
+
+// addPassthroughACK commits a pure ACK as a passthrough slot that keeps its
+// flow identity and sort keys. Unlike addPassthrough slots it does not split
+// sort runs, so reorderForFlush may sort same-flow data across it (the
+// contract allows data to overtake a bare ACK). A pure ACK's seq is the
+// sender's snd_nxt, which orders it after all data the peer sent before it,
+// and the TSval-first comparator keeps it behind any older-timestamp data.
+func (c *TCPCoalescer) addPassthroughACK(pkt []byte, info parsedTCP) {
+	s := c.take()
+	s.passthrough = passthroughACK
+	s.rawPkt = pkt
+	s.fk = info.fk
+	s.nextSeq = info.seq // totalPay stays 0, so slotSeedSeq yields info.seq
+	s.tsVal, _, s.hasTS = parseTCPOptions(info.options)
 	c.slots = append(c.slots, s)
 }
 
@@ -297,7 +336,7 @@ func (c *TCPCoalescer) seed(pkt []byte, info parsedTCP) {
 		return
 	}
 	s := c.take()
-	s.passthrough = false
+	s.passthrough = passthroughFalse
 	s.rawPkt = pkt // kept for the numSeg==1 fast path in Flush
 	copy(s.hdrBuf[:], pkt[:info.hdrLen])
 	s.hdrLen = info.hdrLen
@@ -308,6 +347,7 @@ func (c *TCPCoalescer) seed(pkt []byte, info parsedTCP) {
 	s.numSeg = 1
 	s.totalPay = info.payLen
 	s.nextSeq = info.seq + uint32(info.payLen)
+	s.tsVal, _, s.hasTS = parseTCPOptions(info.options)
 	s.sealed = info.flags&tcpFlagPsh != 0
 	s.payIovs = append(s.payIovs[:0], pkt[info.hdrLen:info.hdrLen+info.payLen])
 	c.slots = append(c.slots, s)
@@ -384,7 +424,7 @@ func (c *TCPCoalescer) take() *coalesceSlot {
 }
 
 func (c *TCPCoalescer) release(s *coalesceSlot) {
-	s.passthrough = false
+	s.passthrough = passthroughFalse
 	s.rawPkt = nil
 	clear(s.payIovs)
 	s.payIovs = s.payIovs[:0]
@@ -400,6 +440,8 @@ func (c *TCPCoalescer) release(s *coalesceSlot) {
 	s.isV6 = false
 	s.gsoSize = 0
 	s.nextSeq = 0
+	s.tsVal = 0
+	s.hasTS = false
 	c.pool = append(c.pool, s)
 }
 
@@ -484,7 +526,11 @@ func (c *TCPCoalescer) reorderForFlush() {
 	}
 	runStart := 0
 	for i := 0; i <= len(c.slots); i++ {
-		if i < len(c.slots) && !c.slots[i].passthrough {
+		// Only hard passthroughs (unparseable, SYN/FIN/RST/CWR, oversized)
+		// split sort runs. Pure-ACK passthroughs stay inside the run so
+		// same-flow data separated by an interleaved ACK can still sort
+		// adjacent and merge; their own sort keys keep them ordered.
+		if i < len(c.slots) && c.slots[i].passthrough != passthroughTrue {
 			continue
 		}
 		c.sortRun(c.slots[runStart:i])
@@ -494,13 +540,11 @@ func (c *TCPCoalescer) reorderForFlush() {
 	for _, s := range c.slots {
 		if n := len(out); n > 0 {
 			prev := out[n-1]
-			if !prev.passthrough && !s.passthrough && prev.fk == s.fk {
+			if !prev.isPassthrough() && !s.isPassthrough() && prev.fk == s.fk {
 				// Same-flow neighbors after sort. If they aren't seq-
-				// contiguous it's a real gap — packets the wire reordered
+				// contiguous it's a real gap: packets the wire reordered
 				// across batches, or actual loss before nebula. Log it so
-				// the operator can quantify how often it happens; the data
-				// itself still emits in seq order, kernel TCP handles the
-				// gap via its OOO queue.
+				// the operator can quantify how often it happens
 				if c.l.Enabled(context.Background(), slog.LevelDebug) {
 					if prev.nextSeq != slotSeedSeq(s) {
 						gap := int64(slotSeedSeq(s)) - int64(prev.nextSeq)
@@ -564,6 +608,22 @@ func compareCoalesceSlots(a, b *coalesceSlot) int {
 	if cmp := flowKeyCompare(a.fk, b.fk); cmp != 0 {
 		return cmp
 	}
+	// A retransmit carries a lower seq but a newer TCP timestamp than
+	// in-flight original data. Emitting it first would advance the
+	// receiver's ts_recent past the original's TSval, and PAWS would then
+	// drop the original as an old duplicate. So order by TSval before seq:
+	// TSval order approximates transmission order (which wire reordering
+	// never changed), and slots whose TSvals tie still get seq-repaired below.
+	// Flows without timestamps fall through to pure seq order, where PAWS cannot apply.
+	// tcpSeqLess is reused for the TSval compare: RFC 7323 defines TSval
+	// comparison in the same serial-number arithmetic.
+	if a.hasTS && b.hasTS && a.tsVal != b.tsVal {
+		if tcpSeqLess(a.tsVal, b.tsVal) {
+			return -1
+		}
+		return 1
+	}
+
 	aSeq, bSeq := slotSeedSeq(a), slotSeedSeq(b)
 	if aSeq == bSeq {
 		return 0
@@ -572,6 +632,44 @@ func compareCoalesceSlots(a, b *coalesceSlot) int {
 		return -1
 	}
 	return 1
+}
+
+// parseTCPOptions attempts to locate timestamps. If it finds them, it returns tsval, secr, true. 0,0,false otherwise.
+func parseTCPOptions(opts []byte) (uint32, uint32, bool) {
+	const timeStampOptionSize = 1 + 1 + 4 + 4
+	const timeStampOptionCode = 0x8
+	const nopOptionCode = 0x1
+	const eolOptionCode = 0x0
+	// Inclusive bound: a timestamp ending exactly at len(opts) is the common
+	// case (Linux emits NOP,NOP,TS as the whole option block). It also
+	// guards opts[i+1] in every arm, since timeStampOptionSize >= 2.
+	for i := 0; i+timeStampOptionSize <= len(opts); /* no increment */ {
+		switch opts[i] {
+		case eolOptionCode:
+			// End-of-option-list: everything after is padding.
+			return 0, 0, false
+		case nopOptionCode:
+			i++
+		case timeStampOptionCode:
+			// we found it!
+			length := opts[i+1]
+			if length != timeStampOptionSize {
+				return 0, 0, false //weird, wrong option?
+			}
+			tsval := binary.BigEndian.Uint32(opts[i+2 : i+2+4])
+			secr := binary.BigEndian.Uint32(opts[i+2+4 : i+2+4+4])
+			return tsval, secr, true
+		default:
+			length := int(opts[i+1])
+			if length < 2 {
+				// Malformed: a non-NOP option shorter than its own
+				// kind+length bytes would loop forever.
+				return 0, 0, false
+			}
+			i += length
+		}
+	}
+	return 0, 0, false
 }
 
 // slotSeedSeq returns the TCP seq of the slot's seed (first segment).
@@ -668,10 +766,6 @@ func canMergeSlots(prev, s *coalesceSlot) bool {
 	if (prevFlags^sFlags)&tcpFlagEce != 0 {
 		return false
 	}
-	// Same IPv4 ID rule as canAppend: s becomes segment prev.numSeg of the
-	// merged chain, so its seed ID must continue prev's sequence (or DF must
-	// make the IDs meaningless). s's own interior segments already passed
-	// this check against s's seed when they were appended.
 	if !prev.isV6 && !ipv4CanCoalesceID(prev.hdrBuf[:], s.hdrBuf[:], prev.numSeg) {
 		return false
 	}

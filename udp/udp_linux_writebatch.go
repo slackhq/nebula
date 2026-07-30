@@ -321,12 +321,14 @@ func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []b
 			// Retrying the packets individually cannot succeed where the entry did not, and
 			// disabling GSO cannot make oversized segments fit, so skip the entry and resume with the rest.
 			// Small-segment entries still pass, so the tunnel stays up while full-size packets drop.
-			w.l.Debug("sendmmsg rejected entry",
-				"error", serr,
-				"udpAddr", addrs[w.entryEnd[done]-w.entryPkts[done]],
-				"packets", w.entryPkts[done],
-				"gso", w.gsoSupported,
-			)
+			if w.l.Enabled(context.Background(), slog.LevelDebug) {
+				w.l.Debug("sendmmsg rejected entry",
+					"error", serr,
+					"udpAddr", addrs[w.entryEnd[done]-w.entryPkts[done]],
+					"packets", w.entryPkts[done],
+					"gso", w.gsoSupported,
+				)
+			}
 			done++
 		}
 		// When the drain finished every entry, i already sits past the whole

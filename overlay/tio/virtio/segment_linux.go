@@ -62,6 +62,8 @@ const (
 	udpChecksumOff = 6
 )
 
+var errPacketTooShort = errors.New("packet too short")
+
 // tcpFinPshMask is cleared on every segment except the last of a TSO burst.
 const tcpFinPshMask = 0x09 // FIN(0x01) | PSH(0x08)
 
@@ -78,9 +80,12 @@ func CheckValid(pkt []byte, hdr Hdr) error {
 		return fmt.Errorf("virtio RSC_INFO flag not supported on TUN reads")
 	}
 	if len(pkt) < ipv4HeaderMinLen {
-		return fmt.Errorf("packet too short")
+		return errPacketTooShort
 	}
 	ipVersion := pkt[0] >> 4
+	if ipVersion == 6 && len(pkt) < ipv6FixedLen {
+		return errPacketTooShort
+	}
 
 	gsoType := hdr.GSOType()
 	if gsoType != unix.VIRTIO_NET_HDR_GSO_NONE && hdr.GSOSize == 0 {
