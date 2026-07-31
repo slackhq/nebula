@@ -8,10 +8,9 @@ import (
 type fakeBatchWriter struct {
 	bufs  [][]byte
 	addrs []netip.AddrPort
-	ecns  []byte
 }
 
-func (w *fakeBatchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []byte) (int, error) {
+func (w *fakeBatchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
 	// Snapshot — SendBatch.Flush nils its slot pointers right after WriteBatch
 	// returns, so tests must capture data before that happens.
 	w.bufs = make([][]byte, len(bufs))
@@ -21,7 +20,6 @@ func (w *fakeBatchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns
 		w.bufs[i] = cp
 	}
 	w.addrs = append(w.addrs[:0], addrs...)
-	w.ecns = append(w.ecns[:0], ecns...)
 	return len(bufs), nil
 }
 
@@ -36,7 +34,7 @@ func TestSendBatchReserveCommitFlush(t *testing.T) {
 			t.Fatalf("slot %d: cap=%d want 32", i, cap(slot))
 		}
 		pkt := append(slot[:0], byte(i), byte(i+1), byte(i+2))
-		b.Commit(pkt, ap, 0)
+		b.Commit(pkt, ap)
 	}
 	if _, err := b.Flush(); err != nil {
 		t.Fatalf("Flush: %v", err)
@@ -77,7 +75,7 @@ func TestSendBatchSlotsDoNotOverlap(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		s := b.Reserve(8)
 		pkt := append(s[:0], byte(0xA0+i), byte(0xB0+i))
-		b.Commit(pkt, ap, 0)
+		b.Commit(pkt, ap)
 	}
 	if _, err := b.Flush(); err != nil {
 		t.Fatalf("Flush: %v", err)
@@ -98,11 +96,11 @@ func TestSendBatchGrowPreservesCommitted(t *testing.T) {
 
 	s1 := b.Reserve(4)
 	pkt1 := append(s1[:0], 0x11, 0x22, 0x33, 0x44)
-	b.Commit(pkt1, ap, 0)
+	b.Commit(pkt1, ap)
 
 	s2 := b.Reserve(8) // exceeds remaining cap, triggers grow
 	pkt2 := append(s2[:0], 0xA, 0xB, 0xC, 0xD, 0xE)
-	b.Commit(pkt2, ap, 0)
+	b.Commit(pkt2, ap)
 
 	// pkt1 must still be intact even though backing reallocated.
 	if pkt1[0] != 0x11 || pkt1[3] != 0x44 {

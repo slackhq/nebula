@@ -128,7 +128,7 @@ func runTeardownCase(t *testing.T, batch int, name string, traffic func(send net
 	var received atomic.Int64
 	loopDone := make(chan error, 1)
 	go func() {
-		loopDone <- sc.ListenOut(func(netip.AddrPort, []byte, RxMeta) {
+		loopDone <- sc.ListenOut(func(netip.AddrPort, []byte) {
 			received.Add(1)
 		}, func() {})
 	}()

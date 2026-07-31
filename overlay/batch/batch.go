@@ -19,11 +19,9 @@ type RxBatcher interface {
 type TxBatcher interface {
 	// Reserve creates a pkt to borrow
 	Reserve(sz int) []byte
-	// Commit borrows pkt and records its destination plus the 2-bit
-	// IP-level ECN codepoint to set on the outer (carrier) header. The
-	// caller must keep pkt valid until the next Flush. Pass 0 (Not-ECT)
-	// to leave the outer ECN field unset.
-	Commit(pkt []byte, dst netip.AddrPort, outerECN byte)
+	// Commit borrows pkt and records its destination. The caller must
+	// keep pkt valid until the next Flush.
+	Commit(pkt []byte, dst netip.AddrPort)
 	// Flush emits every queued packet via the underlying batch writer in arrival order and reports how many were
 	// actually written. A short count means some destinations were undeliverable, not that the batch failed.
 	// After Flush returns, borrowed payload slices may be recycled.

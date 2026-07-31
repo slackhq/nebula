@@ -161,7 +161,7 @@ func (u *RIOConn) ListenOut(r EncReader, flush func()) error {
 			continue
 		}
 
-		r(netip.AddrPortFrom(netip.AddrFrom16(rua.Addr).Unmap(), (rua.Port>>8)|((rua.Port&0xff)<<8)), buffer[:n], RxMeta{})
+		r(netip.AddrPortFrom(netip.AddrFrom16(rua.Addr).Unmap(), (rua.Port>>8)|((rua.Port&0xff)<<8)), buffer[:n])
 		flush()
 	}
 }
@@ -254,8 +254,7 @@ retry:
 	return n, ep, nil
 }
 
-// WriteTo ignores outerECN; per-packet ECN marking is not implemented on windows.
-func (u *RIOConn) WriteTo(buf []byte, ip netip.AddrPort, _ byte) error {
+func (u *RIOConn) WriteTo(buf []byte, ip netip.AddrPort) error {
 	if !u.isOpen.Load() {
 		return net.ErrClosed
 	}
@@ -318,11 +317,11 @@ func (u *RIOConn) WriteTo(buf []byte, ip netip.AddrPort, _ byte) error {
 	return winrio.SendEx(u.rq, dataBuffer, 1, nil, addressBuffer, nil, nil, 0, 0)
 }
 
-func (u *RIOConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, _ []byte) (int, error) {
+func (u *RIOConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
 	// An un-sendable destination costs its own packet, never the ones behind it in the batch.
 	written := 0
 	for i, b := range bufs {
-		if err := u.WriteTo(b, addrs[i], 0); err == nil {
+		if err := u.WriteTo(b, addrs[i]); err == nil {
 			written++
 		} else {
 			u.l.Debug("failed to write packet in batch", "udpAddr", addrs[i], "error", err)

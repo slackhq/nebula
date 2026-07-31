@@ -6,7 +6,7 @@ const SendBatchCap = 128
 
 // batchWriter is the minimal subset of udp.Conn needed by SendBatch to flush.
 type batchWriter interface {
-	WriteBatch(bufs [][]byte, addrs []netip.AddrPort, outerECNs []byte) (int, error)
+	WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error)
 }
 
 // SendBatch accumulates encrypted UDP packets and flushes them via WriteBatch.
@@ -16,7 +16,6 @@ type SendBatch struct {
 	out   batchWriter
 	bufs  [][]byte
 	dsts  []netip.AddrPort
-	ecns  []byte
 	arena *Arena
 }
 
@@ -26,7 +25,6 @@ func NewSendBatch(out batchWriter, batchCap, arenaSize int) *SendBatch {
 		out:   out,
 		bufs:  make([][]byte, 0, batchCap),
 		dsts:  make([]netip.AddrPort, 0, batchCap),
-		ecns:  make([]byte, 0, batchCap),
 		arena: NewArena(arenaSize),
 	}
 }
@@ -40,10 +38,9 @@ func (b *SendBatch) Reserve(sz int) []byte {
 // bounding how long the first packet of a large read batch waits.
 func (b *SendBatch) Len() int { return len(b.bufs) }
 
-func (b *SendBatch) Commit(pkt []byte, dst netip.AddrPort, outerECN byte) {
+func (b *SendBatch) Commit(pkt []byte, dst netip.AddrPort) {
 	b.bufs = append(b.bufs, pkt)
 	b.dsts = append(b.dsts, dst)
-	b.ecns = append(b.ecns, outerECN)
 }
 
 // Flush writes every queued packet and reports how many actually went out. A short count means some destinations
@@ -52,12 +49,11 @@ func (b *SendBatch) Flush() (int, error) {
 	var err error
 	written := 0
 	if len(b.bufs) > 0 {
-		written, err = b.out.WriteBatch(b.bufs, b.dsts, b.ecns)
+		written, err = b.out.WriteBatch(b.bufs, b.dsts)
 	}
 	clear(b.bufs)
 	b.bufs = b.bufs[:0]
 	b.dsts = b.dsts[:0]
-	b.ecns = b.ecns[:0]
 	b.arena.Reset()
 	return written, err
 }

@@ -96,12 +96,7 @@ type Interface struct {
 	// pinThreads controls whether listenIn pins each TUN reader OS thread to
 	// a CPU at all (tun.pin_threads, default true). When false, threads are
 	// left free to migrate as on stock nebula.
-	pinThreads bool
-	// ecnEnabled gates RFC 6040 underlay ECN propagation. When true,
-	// inside.go copies the inner ECN onto the outer carrier on encap and
-	// decryptToTun folds outer CE into the inner header on decap. Toggle
-	// via tunnels.ecn (default false; see reloadEcn for why).
-	ecnEnabled   atomic.Bool
+	pinThreads   bool
 	relayManager *relayManager
 
 	tryPromoteEvery atomic.Uint32
@@ -143,7 +138,7 @@ type Interface struct {
 }
 
 type EncWriter interface {
-	SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, nocopy bool, outerECN byte, q int)
+	SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, nocopy bool, q int)
 	SendMessageToVpnAddr(t header.MessageType, st header.MessageSubType, vpnAddr netip.Addr, p, nb, out []byte)
 	SendMessageToHostInfo(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte)
 	Handshake(vpnAddr netip.Addr)
@@ -369,8 +364,8 @@ func (f *Interface) listenOut(i int) {
 	nb := make([]byte, 12, 12)
 	scratch := make([]byte, mtu)
 
-	listener := func(fromUdpAddr netip.AddrPort, payload []byte, meta udp.RxMeta) {
-		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, scratch, payload, h, fwPacket, lhh, nb, i, ctCache.Get(), meta)
+	listener := func(fromUdpAddr netip.AddrPort, payload []byte) {
+		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, scratch, payload, h, fwPacket, lhh, nb, i, ctCache.Get())
 	}
 
 	flusher := func() {
@@ -472,7 +467,6 @@ func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
 	c.RegisterReloadCallback(f.reloadAcceptRecvError)
 	c.RegisterReloadCallback(f.reloadDisconnectInvalid)
 	c.RegisterReloadCallback(f.reloadMisc)
-	c.RegisterReloadCallback(f.reloadEcn)
 
 	for _, udpConn := range f.writers {
 		c.RegisterReloadCallback(udpConn.ReloadConfig)
@@ -602,32 +596,6 @@ func (f *Interface) reloadMisc(c *config.C) {
 		n := c.GetDuration("timers.requery_wait_duration", defaultReQueryWait)
 		f.reQueryWait.Store(int64(n))
 		f.l.Info("timers.requery_wait_duration has changed")
-	}
-}
-
-// reloadEcn syncs Interface.ecnEnabled with the tunnels.ecn config knob.
-//
-// Default is disabled (RFC 6040 compatibility mode). There is no in-band
-// capability negotiation, and RFC 6040 §4.3 forbids marking the outer
-// header ECT unless the ingress knows the egress propagates CE inward: a
-// receiver that cannot read outer ECN (any pre-ECN nebula) silently
-// discards AQM CE marks, so the inner flow is advertised as
-// congestion-responsive but never sees the signal and never backs off.
-// Setting tunnels.ecn=true is the operator's assertion that every peer
-// this host tunnels with runs an ECN-capable nebula with the knob enabled;
-// enable it fleet-wide or not at all. It is also the escape hatch for
-// underlay middleboxes that rewrite or drop ECN bits unpredictably.
-func (f *Interface) reloadEcn(c *config.C) {
-	initial := c.InitialLoad()
-	if initial || c.HasChanged("tunnels.ecn") {
-		v := c.GetBool("tunnels.ecn", true) //todo!!!
-		changed := f.ecnEnabled.Swap(v) != v
-		if !initial {
-			f.l.Info("tunnels.ecn changed", "enabled", v)
-			if changed {
-				f.l.Warn("tunnels.ecn datapath toggled, but route-level ECN negotiation (RTAX_FEATURE_ECN) retains its previous state until nebula is restarted", "enabled", v)
-			}
-		}
 	}
 }
 

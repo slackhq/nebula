@@ -89,8 +89,7 @@ func NewListenConfig(multi bool) net.ListenConfig {
 //go:noescape
 func sendto(s int, buf []byte, flags int, to unsafe.Pointer, addrlen int32) (err error)
 
-// WriteTo ignores outerECN; per-packet ECN marking is not implemented on darwin.
-func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort, _ byte) error {
+func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
 	var sa unsafe.Pointer
 	var addrLen int32
 
@@ -141,14 +140,14 @@ func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort, _ byte) error {
 	}
 }
 
-func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, _ []byte) (int, error) {
+func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
 	// An un-sendable destination costs its own packet, never the ones behind it in the batch.
 	// TODO: WriteTo maps EWOULDBLOCK to an error, so a full send buffer
 	// silently drops the rest of a burst (linux blocks instead). Poll for
 	// writability on EAGAIN before giving up on the remainder.
 	written := 0
 	for i, b := range bufs {
-		if err := u.WriteTo(b, addrs[i], 0); err == nil {
+		if err := u.WriteTo(b, addrs[i]); err == nil {
 			written++
 		} else {
 			u.l.Debug("failed to write packet in batch", "udpAddr", addrs[i], "error", err)
@@ -196,7 +195,7 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 			continue
 		}
 
-		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n], RxMeta{})
+		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n])
 		flush()
 	}
 }

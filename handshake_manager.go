@@ -293,7 +293,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 	var sentTo []netip.AddrPort
 	hostinfo.remotes.ForEach(hm.mainHostMap.GetPreferredRanges(), func(addr netip.AddrPort, _ bool) {
 		hm.messageMetrics.Tx(header.Handshake, hh.machine.Subtype(), 1)
-		err := hm.outside.WriteTo(stage0, addr, 0)
+		err := hm.outside.WriteTo(stage0, addr)
 		if err != nil {
 			// These repeat every attempt, so match the success log below and only shout when the remotes changed
 			level := slog.LevelDebug
@@ -1086,7 +1086,7 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 
 	if !via.IsRelayed {
 		fields := append(logFields, "from", via)
-		err := f.outside.WriteTo(msg, via.UdpAddr, 0)
+		err := f.outside.WriteTo(msg, via.UdpAddr)
 		if err != nil {
 			f.l.Error("Failed to send handshake message", append(fields, "error", err)...)
 		} else {
@@ -1101,7 +1101,7 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 		// We received a valid handshake on this relay, so make sure the relay
 		// state reflects that, in case it had been marked Disestablished.
 		via.relayHI.relayState.UpdateRelayForByIdxState(via.relay.LocalIndex, Established)
-		f.SendVia(via.relayHI, via.relay, msg, make([]byte, 12), make([]byte, mtu), false, 0, 0)
+		f.SendVia(via.relayHI, via.relay, msg, make([]byte, 12), make([]byte, mtu), false, 0)
 		f.l.Info("Handshake message sent", append(logFields, "relay", via.relayHI.vpnAddrs[0])...)
 	}
 }

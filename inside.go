@@ -164,7 +164,6 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 	f.connectionManager.Out(hostinfo)
 
 	remote := hostinfo.GetRemote()
-	ecnEnabled := f.ecnEnabled.Load()
 	if hostinfo.lastRebindCount != f.rebindCount {
 		//NOTE: there is an update hole if a tunnel isn't used and exactly 256 rebinds occur before the tunnel is
 		// finally used again. This tunnel would eventually be torn down and recreated if this action didn't help.
@@ -215,11 +214,7 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 				return nil
 			}
 
-			var ecn byte
-			if ecnEnabled {
-				ecn = innerECN(seg)
-			}
-			sendBatch.Commit(toSend, relayHostInfo.GetRemote(), ecn)
+			sendBatch.Commit(toSend, relayHostInfo.GetRemote())
 			return nil
 		})
 		if err != nil {
@@ -237,11 +232,7 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 			return nil
 		}
 
-		var ecn byte
-		if ecnEnabled {
-			ecn = innerECN(seg)
-		}
-		sendBatch.Commit(out, remote, ecn)
+		sendBatch.Commit(out, remote)
 		return nil
 	})
 	if err != nil {
@@ -249,22 +240,6 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 			"error", err,
 		)
 	}
-}
-
-// innerECN returns the 2-bit IP-level ECN codepoint of an inner IPv4 or IPv6
-// packet, or 0 if pkt is too short or its IP version is unrecognized. Used at
-// encap to copy the inner codepoint onto the outer carrier per RFC 6040.
-func innerECN(pkt []byte) byte {
-	if len(pkt) < 2 {
-		return 0
-	}
-	switch pkt[0] >> 4 {
-	case 4:
-		return pkt[1] & 0x03
-	case 6:
-		return (pkt[1] >> 4) & 0x03
-	}
-	return 0
 }
 
 func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
@@ -535,16 +510,15 @@ func (f *Interface) prepareSendVia(via *HostInfo,
 // ad is the plaintext data to authenticate, but not encrypt
 // nb is a buffer used to store the nonce value, re-used for performance reasons.
 // out is a buffer used to store the result of the Encrypt operation
-// outerECN is the 2-bit codepoint to stamp on the carrier datagram (0 for control traffic).
 // q indicates which writer to use to send the packet.
-func (f *Interface) SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, nocopy bool, outerECN byte, q int) {
+func (f *Interface) SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, nocopy bool, q int) {
 	toSend, err := f.prepareSendVia(via, relay, ad, nb, out, nocopy)
 	if err != nil {
 		// already logged by prepareSendVia
 		return
 	}
 
-	err = f.writers[q].WriteTo(toSend, via.GetRemote(), outerECN)
+	err = f.writers[q].WriteTo(toSend, via.GetRemote())
 	if err != nil {
 		via.logger(f.l).Info("Failed to WriteTo in sendVia", "error", err)
 	}
@@ -612,15 +586,8 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		return
 	}
 
-	// Data packets copy the inner packet's ECN codepoint onto the outer
-	// carrier per RFC 6040; control traffic stays Not-ECT.
-	var outerECN byte
-	if t == header.Message && f.ecnEnabled.Load() {
-		outerECN = innerECN(p)
-	}
-
 	if remote.IsValid() {
-		err = f.writers[q].WriteTo(out, remote, outerECN)
+		err = f.writers[q].WriteTo(out, remote)
 		if err != nil {
 			hostinfo.logger(f.l).Error("Failed to write outgoing packet",
 				"error", err,
@@ -628,7 +595,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 			)
 		}
 	} else if hr := hostinfo.GetRemote(); hr.IsValid() {
-		err = f.writers[q].WriteTo(out, hr, outerECN)
+		err = f.writers[q].WriteTo(out, hr)
 		if err != nil {
 			hostinfo.logger(f.l).Error("Failed to write outgoing packet",
 				"error", err,
@@ -647,7 +614,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 				)
 				continue
 			}
-			f.SendVia(relayHostInfo, relay, out, nb, fullOut[:header.Len+len(out)], true, outerECN, q)
+			f.SendVia(relayHostInfo, relay, out, nb, fullOut[:header.Len+len(out)], true, q)
 			break
 		}
 	}

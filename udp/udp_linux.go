@@ -8,10 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"net"
 	"net/netip"
-	"strconv"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
@@ -39,19 +37,6 @@ type StdConn struct {
 	// consecutive same-flow datagrams into a single recvmmsg entry; the
 	// delivered cmsg carries the gso_size used to split them back apart.
 	groSupported bool
-
-	// ecnRecvSupported is true when IP_RECVTOS / IPV6_RECVTCLASS was
-	// successfully enabled — the kernel will deliver the outer IP-ECN of
-	// each arriving datagram as a per-slot cmsg, and ListenOut passes
-	// the parsed value to the EncReader callback for RFC 6040 combine.
-	ecnRecvSupported bool
-
-	// ecnMarkThreshold holds tunnels.ecn_mark_threshold as float64 bits: the
-	// fraction of the socket receive buffer above which listenOutBatch flags
-	// the batch QueueCongested (decap then CE-marks ECT inner packets). Zero
-	// disables sampling entirely. Atomic because ReloadConfig may update it
-	// while the reader runs.
-	ecnMarkThreshold atomic.Uint64
 }
 
 func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
@@ -102,11 +87,6 @@ func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int)
 	if batch > 1 {
 		out.prepareGRO()
 	}
-	// Best-effort: ask the kernel to deliver outer IP-ECN as ancillary data
-	// on every recvmmsg slot so the decap side can apply RFC 6040 combine.
-	// On older kernels these may not exist; failing here just means we get
-	// 0 (Not-ECT) on every slot, which is the same as ecn_mode=disable.
-	out.prepareECNRecv()
 
 	return out, nil
 }
@@ -136,34 +116,6 @@ func (u *StdConn) prepareGRO() {
 	u.groSupported = true
 	u.l.Info("udp: GRO enabled")
 	recordCapability("udp.gro.enabled", true)
-}
-
-// prepareECNRecv turns on IP_RECVTOS / IPV6_RECVTCLASS so the outer IP-ECN
-// field of each arriving datagram is delivered as ancillary data alongside
-// the payload. ListenOut reads it via parseRecvCmsg and passes the codepoint
-// through the EncReader for RFC 6040 combine on the decap side. Best-effort:
-// we keep going on failure, and each family degrades independently — a peer
-// whose family's probe failed just delivers no cmsg and lands as Not-ECT.
-// Only a failure of every family the socket speaks turns the parsing off.
-func (u *StdConn) prepareECNRecv() {
-	v4err := unix.SetsockoptInt(u.sysFd, unix.IPPROTO_IP, unix.IP_RECVTOS, 1)
-	var v6err error
-	if !u.isV4 {
-		v6err = unix.SetsockoptInt(u.sysFd, unix.IPPROTO_IPV6, unix.IPV6_RECVTCLASS, 1)
-	}
-	switch {
-	case v4err != nil && (u.isV4 || v6err != nil):
-		u.l.Info("udp: outer-ECN RX disabled", "reason", "kernel rejected probe", "error", errors.Join(v4err, v6err))
-		recordCapability("udp.ecn_rx.enabled", false)
-		return
-	case v4err != nil:
-		u.l.Debug("udp: outer-ECN RX degraded", "reason", "kernel rejected probe on IPv4", "error", v4err)
-	case v6err != nil:
-		u.l.Debug("udp: outer-ECN RX degraded", "reason", "kernel rejected probe on IPv6", "error", v6err)
-	}
-	u.ecnRecvSupported = true
-	u.l.Info("udp: outer-ECN RX enabled")
-	recordCapability("udp.ecn_rx.enabled", true)
 }
 
 // recordCapability registers (or updates) a boolean gauge for one of the
@@ -312,12 +264,6 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 		bufSize = udpGROBufferSize
 		cmsgSpace = unix.CmsgSpace(udpGROCmsgPayload)
 	}
-	if u.ecnRecvSupported {
-		// IP_TOS arrives as 1 byte; IPV6_TCLASS arrives as a 4-byte int.
-		// Reserve enough for the wider of the two so the same buffer fits
-		// either family alongside any UDP_GRO cmsg.
-		cmsgSpace += unix.CmsgSpace(4)
-	}
 	msgs, buffers, names, _ := prepareRawMessages(u.batch, bufSize, cmsgSpace)
 
 	for {
@@ -327,23 +273,6 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 			// save ~(batch-n) stores per wakeup on trickle traffic.
 			for i := range msgs {
 				setMsgControllen(&msgs[i].Hdr, cmsgSpace)
-			}
-		}
-
-		// AQM sample: one getsockopt per recvmmsg batch (skipped entirely at
-		// threshold 0). Sampled BEFORE the read: a single recvmmsg can drain
-		// more than the whole receive buffer (64 GRO superpackets ≈ 4MB), so
-		// post-read residue is ~always zero; the pre-read depth is the
-		// backlog that accumulated while the previous batch was processed —
-		// the actual standing-queue signal. Depth beyond the configured
-		// fraction of the receive buffer flags every packet in the batch so
-		// decap CE-marks ECT inner packets: the ECN substitute for the
-		// tail-drop this queue otherwise regulates with.
-		congested := false
-		if frac := math.Float64frombits(u.ecnMarkThreshold.Load()); frac > 0 {
-			var mi [unix.SK_MEMINFO_VARS]uint32
-			if err := u.getMemInfo(&mi); err == nil {
-				congested = float64(mi[unix.SK_MEMINFO_RMEM_ALLOC]) >= frac*float64(mi[unix.SK_MEMINFO_RCVBUF])
 			}
 		}
 
@@ -362,12 +291,11 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 			payload := buffers[i][:msgs[i].Len]
 
 			segSize := 0
-			outerECN := byte(0)
 			if cmsgSpace > 0 {
-				segSize, outerECN = parseRecvCmsg(&msgs[i].Hdr, u.groSupported, u.ecnRecvSupported)
+				segSize = parseRecvCmsg(&msgs[i].Hdr)
 			}
 
-			deliverSegments(r, from, payload, segSize, RxMeta{OuterECN: outerECN, QueueCongested: congested})
+			deliverSegments(r, from, payload, segSize)
 		}
 
 		flush()
@@ -375,9 +303,9 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 }
 
 // deliverSegments hands a received superdatagram to r, splitting it back into pre-coalesce packets
-func deliverSegments(r EncReader, from netip.AddrPort, payload []byte, segSize int, meta RxMeta) {
+func deliverSegments(r EncReader, from netip.AddrPort, payload []byte, segSize int) {
 	if segSize <= 0 || segSize >= len(payload) { //avoid bogus values
-		r(from, payload, meta)
+		r(from, payload)
 		return
 	}
 	for off := 0; off < len(payload); off += segSize {
@@ -385,25 +313,16 @@ func deliverSegments(r EncReader, from netip.AddrPort, payload []byte, segSize i
 		if end > len(payload) {
 			end = len(payload)
 		}
-		r(from, payload[off:end], meta)
+		r(from, payload[off:end])
 	}
 }
 
-// parseRecvCmsg walks the per-slot ancillary buffer once and extracts up to
-// two values of interest in a single pass: the UDP_GRO gso_size (when
-// wantGRO is true) and the outer IP-level ECN codepoint stamped on the
-// carrier (when wantECN is true). Returns zeros for whichever field is not
-// requested or not present.
-//
-// The outer ECN is accepted from EITHER an IP_TOS (IPPROTO_IP, 1-byte) or an
-// IPV6_TCLASS (IPPROTO_IPV6, 4-byte int) cmsg, regardless of the socket's
-// family: a dual-stack v6 socket (isV4 == false) delivers IPv4 peers' outer
-// ECN as an IP_TOS cmsg — gating on socket family here dropped v4-underlay
-// ECN entirely. Whichever cmsg the kernel delivered carries the value.
-func parseRecvCmsg(hdr *msghdr, wantGRO, wantECN bool) (gso int, ecn byte) {
+// parseRecvCmsg walks the per-slot ancillary buffer and extracts the UDP_GRO
+// gso_size, or 0 when no UDP_GRO cmsg is present.
+func parseRecvCmsg(hdr *msghdr) (gso int) {
 	controllen := int(hdr.Controllen)
 	if controllen < unix.SizeofCmsghdr || hdr.Control == nil {
-		return 0, 0
+		return 0
 	}
 	ctrl := unsafe.Slice(hdr.Control, controllen)
 	off := 0
@@ -412,37 +331,25 @@ func parseRecvCmsg(hdr *msghdr, wantGRO, wantECN bool) (gso int, ecn byte) {
 		clen := int(ch.Len)
 		// Compare against the remaining bytes rather than off+clen
 		if clen < unix.SizeofCmsghdr || clen > len(ctrl)-off {
-			return gso, ecn
+			return gso
 		}
 		dataOff := off + unix.CmsgLen(0)
-		switch {
-		case wantGRO && ch.Level == unix.SOL_UDP && ch.Type == unix.UDP_GRO:
+		if ch.Level == unix.SOL_UDP && ch.Type == unix.UDP_GRO {
 			if dataOff+udpGROCmsgPayload <= len(ctrl) {
 				gso = int(int32(binary.NativeEndian.Uint32(ctrl[dataOff : dataOff+udpGROCmsgPayload])))
-			}
-		case wantECN && ch.Level == unix.IPPROTO_IP && ch.Type == unix.IP_TOS:
-			// IP_TOS arrives as a single byte; only the low 2 bits are ECN.
-			// A dual-stack v6 socket carries v4 peers' outer ECN here.
-			if dataOff+1 <= len(ctrl) {
-				ecn = ctrl[dataOff] & 0x03
-			}
-		case wantECN && ch.Level == unix.IPPROTO_IPV6 && ch.Type == unix.IPV6_TCLASS:
-			// IPV6_TCLASS arrives as a 4-byte int; ECN is the low 2 bits.
-			if dataOff+4 <= len(ctrl) {
-				ecn = byte(binary.NativeEndian.Uint32(ctrl[dataOff:dataOff+4])) & 0x03
 			}
 		}
 		// Advance by the aligned cmsg space.
 		off += unix.CmsgSpace(clen - unix.CmsgLen(0))
 	}
-	return gso, ecn
+	return gso
 }
 
-func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort, ecn byte) error {
-	return sendmsg(u.sysFd, b, ip, u.isV4, ecn)
+func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort) error {
+	return sendto(u.sysFd, b, ip, u.isV4)
 }
 
-func sendmsg(fd int, b []byte, addr netip.AddrPort, isV4 bool, ecn byte) error {
+func sendto(fd int, b []byte, addr netip.AddrPort, isV4 bool) error {
 	var rsa [unix.SizeofSockaddrInet6]byte
 	nlen, err := writeSockaddr(rsa[:], addr, isV4)
 	if err != nil {
@@ -452,43 +359,25 @@ func sendmsg(fd int, b []byte, addr netip.AddrPort, isV4 bool, ecn byte) error {
 	if len(b) > 0 {
 		base = &b[0]
 	}
-
-	var iov iovec
-	iov.Base = base
-	setIovLen(&iov, len(b))
-
-	var hdr msghdr
-	hdr.Name = &rsa[0]
-	hdr.Namelen = uint32(nlen)
-	hdr.Iov = &iov
-	setMsgIovlen(&hdr, 1)
-
-	// Stack scratch for the ECN cmsg, typed as uint64s so its base is cmsg-aligned on every arch.
-	// CmsgSpace(4) needs 24 bytes on 64-bit linux, 16 on 32-bit.
-	var ctrl [3]uint64
-	if ecn != 0 {
-		buf := (*[24]byte)(unsafe.Pointer(&ctrl[0]))[:]
-		writeECNCmsg(buf, addr.Addr().Unmap().Is4(), ecn)
-		hdr.Control = &buf[0]
-		setMsgControllen(&hdr, unix.CmsgSpace(4))
-	}
-
 	_, _, errno := unix.Syscall6(
-		unix.SYS_SENDMSG,
+		unix.SYS_SENDTO,
 		uintptr(fd),
-		uintptr(unsafe.Pointer(&hdr)),
-		0, 0, 0, 0,
+		uintptr(unsafe.Pointer(base)),
+		uintptr(len(b)),
+		0,
+		uintptr(unsafe.Pointer(&rsa[0])),
+		uintptr(nlen),
 	)
 	if errno != 0 {
-		return &net.OpError{Op: "sendmsg", Err: errno}
+		return &net.OpError{Op: "sendto", Err: errno}
 	}
 	return nil
 }
 
 // WriteBatch sends bufs via sendmmsg(2), coalescing same-destination runs into UDP-GSO superpackets when supported.
 // See batchWriter in udp_linux_writebatch.go for the mechanics.
-func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []byte) (int, error) {
-	return u.bw.WriteBatch(bufs, addrs, ecns)
+func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
+	return u.bw.WriteBatch(bufs, addrs)
 }
 
 // writeSockaddr encodes addr into buf (which must be at least SizeofSockaddrInet6 bytes).
@@ -522,8 +411,6 @@ func writeSockaddr(buf []byte, addr netip.AddrPort, isV4 bool) (int, error) {
 }
 
 func (u *StdConn) ReloadConfig(c *config.C) {
-	u.reloadECNMarkThreshold(c)
-
 	b := c.GetInt("listen.read_buffer", 0)
 	if b > 0 {
 		if err := u.SetRecvBuffer(b); err == nil {
@@ -562,37 +449,6 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 		} else {
 			u.l.Error("Failed to set listen.so_mark", "error", err)
 		}
-	}
-}
-
-// reloadECNMarkThreshold parses tunnels.ecn_mark_threshold: the fraction
-// (0..1] of the receive buffer above which decap CE-marks ECT inner packets.
-// 0 (the default) disables the AQM sampling. Reloadable.
-func (u *StdConn) reloadECNMarkThreshold(c *config.C) {
-	var frac float64
-	switch v := c.Get("tunnels.ecn_mark_threshold").(type) {
-	case nil:
-	case float64:
-		frac = v
-	case int:
-		frac = float64(v)
-	case string:
-		f, err := strconv.ParseFloat(v, 64)
-		if err != nil {
-			u.l.Warn("tunnels.ecn_mark_threshold is not a number; disabling", "value", v)
-		} else {
-			frac = f
-		}
-	default:
-		u.l.Warn("tunnels.ecn_mark_threshold is not a number; disabling", "value", v)
-	}
-	if frac < 0 || frac > 1 {
-		u.l.Warn("tunnels.ecn_mark_threshold must be within [0, 1]; disabling", "value", frac)
-		frac = 0
-	}
-	old := math.Float64frombits(u.ecnMarkThreshold.Swap(math.Float64bits(frac)))
-	if old != frac {
-		u.l.Info("tunnels.ecn_mark_threshold set", "fraction", frac)
 	}
 }
 

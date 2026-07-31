@@ -39,13 +39,12 @@ func NewGenericListener(l *slog.Logger, ip netip.Addr, port int, multi bool, bat
 	return nil, fmt.Errorf("Unexpected PacketConn: %T %#v", pc, pc)
 }
 
-// WriteTo ignores outerECN; the stdlib UDPConn offers no per-packet TOS control.
-func (u *GenericConn) WriteTo(b []byte, addr netip.AddrPort, _ byte) error {
+func (u *GenericConn) WriteTo(b []byte, addr netip.AddrPort) error {
 	_, err := u.UDPConn.WriteToUDPAddrPort(b, addr)
 	return err
 }
 
-func (u *GenericConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, _ []byte) (int, error) {
+func (u *GenericConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
 	// An un-sendable destination costs its own packet, never the ones behind it in the batch.
 	written := 0
 	for i, b := range bufs {
@@ -107,7 +106,7 @@ func (u *GenericConn) ListenOut(r EncReader, flush func()) error {
 			continue
 		}
 
-		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n], RxMeta{})
+		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n])
 		flush()
 	}
 }

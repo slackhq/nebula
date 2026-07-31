@@ -27,17 +27,17 @@ import (
 //	packet   one element of bufs: a single UDP datagram. The unit of the
 //	         returned written count.
 //	run      consecutive packets planRun groups into one entry: same
-//	         destination and outer ECN, equal sizes (a shorter packet only
-//	         last), within maxGSOBytes and maxGSOSegments. Without GSO a run
-//	         is always one packet. Runs are atomic: packed whole into one
-//	         entry, or skipped whole if the socket cannot address their
-//	         destination, leaving a hole (bufs indices covered by no entry).
+//	         destination, equal sizes (a shorter packet only last), within
+//	         maxGSOBytes and maxGSOSegments. Without GSO a run is always one
+//	         packet. Runs are atomic: packed whole into one entry, or
+//	         skipped whole if the socket cannot address their destination,
+//	         leaving a hole (bufs indices covered by no entry).
 //	entry    one mmsghdr slot of the sendmmsg array; the kernel's unit of
 //	         success and failure. A multi-packet entry carries a UDP_SEGMENT
 //	         cmsg and is sent as one superpacket the kernel segments into
 //	         gso_size-byte datagrams. Entries never split.
 //	chunk    the entries packed for one sendmmsg call, at most MaxWriteBatch.
-//	batch    the caller's whole bufs/addrs/ecns triple, processed as one or
+//	batch    the caller's whole bufs/addrs pair, processed as one or
 //	         more chunks.
 type batchWriter struct {
 	fd   int
@@ -59,13 +59,10 @@ type batchWriter struct {
 	names [][]byte
 
 	// Per-entry cmsg scratch: one contiguous slab of
-	// MaxWriteBatch * cmsgSpace bytes holding two cmsg headers per entry
-	// (UDP_SEGMENT, then IP_TOS / IPV6_TCLASS). Layout in
-	// prepareWriteMessages.
-	cmsg         []byte
-	cmsgSpace    int
-	cmsgSegSpace int
-	cmsgEcnSpace int
+	// MaxWriteBatch * cmsgSpace bytes holding one UDP_SEGMENT cmsg per
+	// entry. Layout in prepareWriteMessages.
+	cmsg      []byte
+	cmsgSpace int
 
 	// entryEnd[e] is the bufs index after the last packet packed into entry
 	// e. entryEnd[e]-entryPkts[e] recovers the bufs index the entry's run
@@ -91,17 +88,11 @@ func newBatchWriter(fd int, isV4 bool, l *slog.Logger) *batchWriter {
 
 // prepareWriteMessages allocates the per-entry mmsghdr/iovec/sockaddr/cmsg
 // scratch. Hdr.Iov/Iovlen/Control/Controllen are wired per call, since an
-// entry spans a variable number of iovecs and may or may not carry cmsgs.
+// entry spans a variable number of iovecs and may or may not carry a cmsg.
 //
-// Each entry's cmsg slot holds up to two headers at fixed offsets:
-//
-//	[0 .. cmsgSegSpace)          UDP_SEGMENT (gso_size, uint16)
-//	[cmsgSegSpace .. cmsgSpace)  IP_TOS or IPV6_TCLASS (int32)
-//
-// The UDP_SEGMENT header is pre-filled here; only its payload is rewritten
-// per call. The ECN header is written per entry by writeEntryCmsg because
-// its Level/Type follow the destination's family. Hdr.Control/Controllen
-// select whichever subset applies (none / segment / ecn / both).
+// Each entry's cmsg slot holds one UDP_SEGMENT (gso_size, uint16) header,
+// pre-filled here; only its payload is rewritten per call.
+// Hdr.Control/Controllen select whether it applies (none / segment).
 func (w *batchWriter) prepareWriteMessages(n int) {
 	w.msgs = make([]rawMessage, n)
 	w.iovs = make([]iovec, n)
@@ -109,9 +100,7 @@ func (w *batchWriter) prepareWriteMessages(n int) {
 	w.entryEnd = make([]int, n)
 	w.entryPkts = make([]int, n)
 
-	w.cmsgSegSpace = unix.CmsgSpace(2)
-	w.cmsgEcnSpace = unix.CmsgSpace(4)
-	w.cmsgSpace = w.cmsgSegSpace + w.cmsgEcnSpace
+	w.cmsgSpace = unix.CmsgSpace(2)
 	w.cmsg = make([]byte, n*w.cmsgSpace)
 
 	for k := 0; k < n; k++ {
@@ -197,12 +186,9 @@ func parseRelease(r string) (major, minor int) {
 //
 // Returns the number of packets sent. An error means the call itself
 // failed; a short count means some destinations were undeliverable.
-func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []byte) (int, error) {
+func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
 	if len(bufs) != len(addrs) {
 		return 0, fmt.Errorf("WriteBatch: len(bufs)=%d != len(addrs)=%d", len(bufs), len(addrs))
-	}
-	if ecns != nil && len(ecns) != len(bufs) {
-		return 0, fmt.Errorf("WriteBatch: len(ecns)=%d != len(bufs)=%d", len(ecns), len(bufs))
 	}
 
 	// Callers deliver same-destination packets contiguously and in counter order, so we run the GSO planner directly without a pre-sort.
@@ -221,7 +207,7 @@ func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []b
 			if iovBudget < 1 {
 				break
 			}
-			runLen, segSize := w.planRun(bufs, addrs, ecns, i, iovBudget)
+			runLen, segSize := w.planRun(bufs, addrs, i, iovBudget)
 			if runLen == 0 {
 				break
 			}
@@ -254,13 +240,7 @@ func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []b
 			setMsgIovlen(hdr, runLen)
 			hdr.Namelen = uint32(nlen)
 
-			var ecn byte
-			if ecns != nil {
-				ecn = ecns[i]
-			}
-			// ECN cmsg family follows the destination, not the socket
-			dstIsV4 := addrs[i].Addr().Unmap().Is4()
-			w.writeEntryCmsg(entry, runLen, segSize, ecn, dstIsV4)
+			w.writeEntryCmsg(entry, runLen, segSize)
 
 			i += runLen
 			iovIdx += runLen
@@ -340,9 +320,8 @@ func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []b
 
 // planRun returns the length of the run starting at start and its segment
 // size (len(bufs[start])). A run of length 1 carries no UDP_SEGMENT cmsg
-// and is sent as a plain datagram; without GSO support planRun always
-// returns 1. Outer ECN is a run boundary: the kernel stamps one codepoint per entry.
-func (w *batchWriter) planRun(bufs [][]byte, addrs []netip.AddrPort, ecns []byte, start, iovBudget int) (int, int) {
+// and is sent as a plain datagram; without GSO support planRun always returns 1.
+func (w *batchWriter) planRun(bufs [][]byte, addrs []netip.AddrPort, start, iovBudget int) (int, int) {
 	if start >= len(bufs) || iovBudget < 1 {
 		return 0, 0
 	}
@@ -351,10 +330,6 @@ func (w *batchWriter) planRun(bufs [][]byte, addrs []netip.AddrPort, ecns []byte
 		return 1, segSize
 	}
 	dst := addrs[start]
-	var ecn byte
-	if ecns != nil {
-		ecn = ecns[start]
-	}
 	maxLen := w.maxGSOSegments
 	if iovBudget < maxLen {
 		maxLen = iovBudget
@@ -367,9 +342,6 @@ func (w *batchWriter) planRun(bufs [][]byte, addrs []netip.AddrPort, ecns []byte
 			break
 		}
 		if addrs[start+runLen] != dst {
-			break
-		}
-		if ecns != nil && ecns[start+runLen] != ecn {
 			break
 		}
 		if total+nextLen > maxGSOBytes {
@@ -385,55 +357,18 @@ func (w *batchWriter) planRun(bufs [][]byte, addrs []netip.AddrPort, ecns []byte
 	return runLen, segSize
 }
 
-// writeECNCmsg fills the start of buf with one IP_TOS / IPV6_TCLASS cmsg
-// carrying the 2-bit ECN codepoint. buf must be cmsg-aligned (the batch
-// writer's heap slab is runtime-aligned; sendmsg passes uint64-backed stack
-// scratch) and at least CmsgSpace(4) bytes. The cmsg family must match the
-// socket: on the default dual-stack v6 bind, a v4-mapped destination takes
-// the kernel's IPv4 path, which reads IP_TOS and ignores IPV6_TCLASS. The
-// payload is a 4-byte int for both families, so the cmsg space is the same.
-func writeECNCmsg(buf []byte, dstIsV4 bool, ecn byte) {
-	h := (*unix.Cmsghdr)(unsafe.Pointer(&buf[0]))
-	if dstIsV4 {
-		h.Level = int32(unix.IPPROTO_IP)
-		h.Type = int32(unix.IP_TOS)
-	} else {
-		h.Level = int32(unix.IPPROTO_IPV6)
-		h.Type = int32(unix.IPV6_TCLASS)
-	}
-	setCmsgLen(h, unix.CmsgLen(4))
-	dataOff := unix.CmsgLen(0)
-	binary.NativeEndian.PutUint32(buf[dataOff:dataOff+4], uint32(ecn))
-}
-
-// writeEntryCmsg writes one entry's cmsgs: the UDP_SEGMENT payload when
-// runLen >= 2, the IP_TOS/IPV6_TCLASS cmsg when ecn != 0, then points
-// Hdr.Control at the smallest span covering the cmsgs in use.
-func (w *batchWriter) writeEntryCmsg(entry, runLen, segSize int, ecn byte, dstIsV4 bool) {
+// writeEntryCmsg writes one entry's UDP_SEGMENT payload when runLen >= 2 and
+// points Hdr.Control at it; a single-packet entry carries no cmsg.
+func (w *batchWriter) writeEntryCmsg(entry, runLen, segSize int) {
 	hdr := &w.msgs[entry].Hdr
-	useSeg := runLen >= 2
-	useEcn := ecn != 0
 	base := entry * w.cmsgSpace
 
-	if useSeg {
+	if runLen >= 2 {
 		dataOff := base + unix.CmsgLen(0)
 		binary.NativeEndian.PutUint16(w.cmsg[dataOff:dataOff+2], uint16(segSize))
-	}
-	if useEcn {
-		writeECNCmsg(w.cmsg[base+w.cmsgSegSpace:], dstIsV4, ecn)
-	}
-
-	switch {
-	case useSeg && useEcn:
 		hdr.Control = &w.cmsg[base]
 		setMsgControllen(hdr, w.cmsgSpace)
-	case useSeg:
-		hdr.Control = &w.cmsg[base]
-		setMsgControllen(hdr, w.cmsgSegSpace)
-	case useEcn:
-		hdr.Control = &w.cmsg[base+w.cmsgSegSpace]
-		setMsgControllen(hdr, w.cmsgEcnSpace)
-	default:
+	} else {
 		hdr.Control = nil
 		setMsgControllen(hdr, 0)
 	}

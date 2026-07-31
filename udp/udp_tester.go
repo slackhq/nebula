@@ -153,8 +153,7 @@ func (u *TesterConn) Get(block bool) *Packet {
 // Below this is boilerplate implementation to make nebula actually work
 //********************************************************************************************************************//
 
-// WriteTo ignores outerECN; the in-memory tester carries no IP headers.
-func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort, _ byte) error {
+func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
 	p := acquirePacket()
 	if cap(p.Data) < len(b) {
 		p.Data = make([]byte, len(b))
@@ -172,10 +171,10 @@ func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort, _ byte) error {
 		return nil
 	}
 }
-func (u *TesterConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, _ []byte) (int, error) {
+func (u *TesterConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
 	written := 0
 	for i, b := range bufs {
-		if err := u.WriteTo(b, addrs[i], 0); err == nil {
+		if err := u.WriteTo(b, addrs[i]); err == nil {
 			written++
 		} else {
 			u.l.Debug("failed to write packet in batch", "udpAddr", addrs[i], "error", err)
@@ -190,7 +189,7 @@ func (u *TesterConn) ListenOut(r EncReader, flush func()) error {
 		case <-u.done:
 			return os.ErrClosed
 		case p := <-u.RxPackets:
-			r(p.From, p.Data, RxMeta{})
+			r(p.From, p.Data)
 			// The batcher borrows plaintext decrypted in place inside p.Data
 			// until Flush, so the packet must stay alive across flush()
 			flush()
