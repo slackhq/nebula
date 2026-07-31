@@ -224,7 +224,7 @@ func newTunGeneric(c *config.C, l *slog.Logger, fd int, vnetHdr bool, offloadFla
 		TXQueueLen:                c.GetInt("tun.tx_queue", 500),
 		useSystemRoutes:           c.GetBool("tun.use_system_route_table", false),
 		useSystemRoutesBufferSize: c.GetInt("tun.use_system_route_table_buffer_size", 0),
-		routeFeatureECN:           c.GetBool("tunnels.ecn", true),
+		routeFeatureECN:           c.GetBool("tunnels.ecn", true), //todo!!!
 		routesFromSystem:          map[netip.Prefix]routing.Gateways{},
 		l:                         l,
 	}

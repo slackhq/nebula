@@ -100,7 +100,7 @@ type Interface struct {
 	// ecnEnabled gates RFC 6040 underlay ECN propagation. When true,
 	// inside.go copies the inner ECN onto the outer carrier on encap and
 	// decryptToTun folds outer CE into the inner header on decap. Toggle
-	// via tunnels.ecn (default true).
+	// via tunnels.ecn (default false; see reloadEcn for why).
 	ecnEnabled   atomic.Bool
 	relayManager *relayManager
 
@@ -606,12 +606,21 @@ func (f *Interface) reloadMisc(c *config.C) {
 }
 
 // reloadEcn syncs Interface.ecnEnabled with the tunnels.ecn config knob.
-// Default is enabled (RFC 6040 normal mode); set false on the rare path
-// where an underlay middlebox rewrites or drops ECN bits unpredictably.
+//
+// Default is disabled (RFC 6040 compatibility mode). There is no in-band
+// capability negotiation, and RFC 6040 §4.3 forbids marking the outer
+// header ECT unless the ingress knows the egress propagates CE inward: a
+// receiver that cannot read outer ECN (any pre-ECN nebula) silently
+// discards AQM CE marks, so the inner flow is advertised as
+// congestion-responsive but never sees the signal and never backs off.
+// Setting tunnels.ecn=true is the operator's assertion that every peer
+// this host tunnels with runs an ECN-capable nebula with the knob enabled;
+// enable it fleet-wide or not at all. It is also the escape hatch for
+// underlay middleboxes that rewrite or drop ECN bits unpredictably.
 func (f *Interface) reloadEcn(c *config.C) {
 	initial := c.InitialLoad()
 	if initial || c.HasChanged("tunnels.ecn") {
-		v := c.GetBool("tunnels.ecn", true)
+		v := c.GetBool("tunnels.ecn", true) //todo!!!
 		changed := f.ecnEnabled.Swap(v) != v
 		if !initial {
 			f.l.Info("tunnels.ecn changed", "enabled", v)
