@@ -40,6 +40,9 @@ func (c *pollQueueSet) Queues() []Queue {
 }
 
 func (c *pollQueueSet) Add(fd int) error {
+	if c.closed.Load() {
+		return errors.New("queue set already closed")
+	}
 	x, err := newPoll(fd, c.shutdownFd)
 	if err != nil {
 		return err

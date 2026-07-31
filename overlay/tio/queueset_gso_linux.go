@@ -50,6 +50,9 @@ func (c *offloadQueueSet) Queues() []Queue {
 }
 
 func (c *offloadQueueSet) Add(fd int) error {
+	if c.closed.Load() {
+		return errors.New("queue set already closed")
+	}
 	x, err := newOffload(fd, c.shutdownFd, c.usoEnabled, c.l)
 	if err != nil {
 		return err
