@@ -210,8 +210,10 @@ func TestParseRecvCmsgCorruptLenNoPanic(t *testing.T) {
 // error here shreds encrypted packets and every decrypt downstream fails.
 func TestDeliverSegments(t *testing.T) {
 	from := netip.MustParseAddrPort("192.0.2.1:4242")
+	// Spare backing capacity mimics the recvmmsg row a real payload sits in;
+	// the cap checks below prove none of it leaks to a delivered segment.
 	pay := func(n int) []byte {
-		b := make([]byte, n)
+		b := make([]byte, n, n+512)
 		for i := range b {
 			b[i] = byte(i)
 		}
@@ -261,6 +263,11 @@ func TestDeliverSegments(t *testing.T) {
 			for i, seg := range got {
 				if len(seg) != wantLens[i] {
 					t.Fatalf("segment %d len=%d want %d", i, len(seg), wantLens[i])
+				}
+				if cap(seg) != len(seg) {
+					// EncReader contract: an append into spare capacity would
+					// scribble into the next segment of the shared row.
+					t.Errorf("segment %d cap=%d, want %d (capacity must not reach into the row)", i, cap(seg), len(seg))
 				}
 				if len(seg) > 0 && &seg[0] != &c.payload[off] {
 					t.Errorf("segment %d does not alias payload at offset %d", i, off)

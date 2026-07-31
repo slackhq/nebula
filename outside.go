@@ -232,7 +232,7 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 			case ForwardingType:
 				// Forward this packet through the relay tunnel, rebuilding it in place.
 				// Encode overwrites the old outer header, and the new AEAD tag lands where the old one was
-				fwdBuf := packet[:0:len(packet)] // Cap to len(packet) to protect memory from a larger parent buffer
+				fwdBuf := packet[:0]
 				//todo it would potentially be nice to batch these
 				f.SendVia(targetHI, targetRelay, signedPayload, nb, fwdBuf, true, q)
 			case TerminalType:

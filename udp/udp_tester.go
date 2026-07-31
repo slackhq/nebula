@@ -189,7 +189,7 @@ func (u *TesterConn) ListenOut(r EncReader, flush func()) error {
 		case <-u.done:
 			return os.ErrClosed
 		case p := <-u.RxPackets:
-			r(p.From, p.Data)
+			r(p.From, p.Data[:len(p.Data):len(p.Data)])
 			// The batcher borrows plaintext decrypted in place inside p.Data
 			// until Flush, so the packet must stay alive across flush()
 			flush()

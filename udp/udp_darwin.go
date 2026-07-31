@@ -195,7 +195,7 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 			continue
 		}
 
-		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n])
+		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n:n])
 		flush()
 	}
 }

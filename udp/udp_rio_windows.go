@@ -161,7 +161,7 @@ func (u *RIOConn) ListenOut(r EncReader, flush func()) error {
 			continue
 		}
 
-		r(netip.AddrPortFrom(netip.AddrFrom16(rua.Addr).Unmap(), (rua.Port>>8)|((rua.Port&0xff)<<8)), buffer[:n])
+		r(netip.AddrPortFrom(netip.AddrFrom16(rua.Addr).Unmap(), (rua.Port>>8)|((rua.Port&0xff)<<8)), buffer[:n:n])
 		flush()
 	}
 }

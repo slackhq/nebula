@@ -305,7 +305,7 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 // deliverSegments hands a received superdatagram to r, splitting it back into pre-coalesce packets
 func deliverSegments(r EncReader, from netip.AddrPort, payload []byte, segSize int) {
 	if segSize <= 0 || segSize >= len(payload) { //avoid bogus values
-		r(from, payload)
+		r(from, payload[:len(payload):len(payload)])
 		return
 	}
 	for off := 0; off < len(payload); off += segSize {
@@ -313,7 +313,7 @@ func deliverSegments(r EncReader, from netip.AddrPort, payload []byte, segSize i
 		if end > len(payload) {
 			end = len(payload)
 		}
-		r(from, payload[off:end])
+		r(from, payload[off:end:end])
 	}
 }
 
