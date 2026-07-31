@@ -24,8 +24,8 @@ const udpCoalesceHdrCap = 64
 
 // udpSlot is one entry in the UDPCoalescer's ordered event queue.
 type udpSlot struct {
-	passthrough bool
-	// rawPkt is borrowed: the whole packet for passthrough slots, the seed
+	verbatim bool
+	// rawPkt is borrowed: the whole packet for verbatim slots, the seed
 	// packet for coalesce slots. A coalesce slot that never grows past one
 	// segment is emitted from rawPkt so its original (already valid) L4
 	// checksum ships DATA_VALID instead of making the kernel recompute it.
@@ -119,7 +119,7 @@ func parseUDP(pkt []byte) (parsedUDP, bool) {
 func (c *UDPCoalescer) Commit(pkt []byte) error {
 	info, ok := parseUDP(pkt)
 	if !ok {
-		c.addPassthrough(pkt)
+		c.addVerbatim(pkt)
 		return nil
 	}
 	return c.commitParsed(pkt, info)
@@ -139,7 +139,7 @@ func (c *UDPCoalescer) commitParsed(pkt []byte, info parsedUDP) error {
 			}
 			delete(c.openSlots, info.fk)
 		}
-		c.addPassthrough(pkt)
+		c.addVerbatim(pkt)
 		return nil
 	}
 	// Cached-slot fast path; see the TCPCoalescer equivalent.
@@ -175,7 +175,7 @@ func (c *UDPCoalescer) Flush() error {
 	var first error
 	for _, s := range c.slots {
 		var err error
-		if s.passthrough || s.numSeg == 1 {
+		if s.verbatim || s.numSeg == 1 {
 			// A slot that never grew is byte-identical to the packet it was
 			// seeded from; ship the original so its valid checksum rides the
 			// DATA_VALID path instead of paying a kernel software csum.
@@ -195,20 +195,20 @@ func (c *UDPCoalescer) Flush() error {
 	return first
 }
 
-func (c *UDPCoalescer) addPassthrough(pkt []byte) {
+func (c *UDPCoalescer) addVerbatim(pkt []byte) {
 	s := c.take()
-	s.passthrough = true
+	s.verbatim = true
 	s.rawPkt = pkt
 	c.slots = append(c.slots, s)
 }
 
 func (c *UDPCoalescer) seed(pkt []byte, info parsedUDP) {
 	if info.hdrLen > udpCoalesceHdrCap || info.hdrLen+info.payLen > udpCoalesceBufSize {
-		c.addPassthrough(pkt)
+		c.addVerbatim(pkt)
 		return
 	}
 	s := c.take()
-	s.passthrough = false
+	s.verbatim = false
 	s.rawPkt = pkt // kept for the numSeg==1 fast path in Flush
 	copy(s.hdrBuf[:], pkt[:info.hdrLen])
 	s.hdrLen = info.hdrLen
@@ -274,7 +274,7 @@ func (c *UDPCoalescer) take() *udpSlot {
 }
 
 func (c *UDPCoalescer) release(s *udpSlot) {
-	s.passthrough = false
+	s.verbatim = false
 	s.rawPkt = nil
 	clear(s.payIovs)
 	s.payIovs = s.payIovs[:0]

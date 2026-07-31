@@ -67,7 +67,7 @@ func TestMultiCoalescerRoutesByProto(t *testing.T) {
 
 // TestMultiCoalescerNoUSOFallsThrough verifies that on a queue without USO
 // (older kernel: TSO but no GSO_UDP_L4) the UDP lane never comes up and UDP
-// packets still reach the kernel via passthrough rather than being lost.
+// packets still reach the kernel via verbatim rather than being lost.
 func TestMultiCoalescerNoUSOFallsThrough(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true, noUSO: true}
 	m := newTestMultiCoalescer(t, w)
@@ -94,7 +94,7 @@ func TestMultiCoalescerNoUSOFallsThrough(t *testing.T) {
 
 // TestMultiCoalescerNoOffloadsIsPassthrough covers a queue that can't offload
 // anything. Both lane constructors refuse, so there's nothing left to
-// dispatch between and NewMultiCoalescer hands back the passthrough lane
+// dispatch between and NewMultiCoalescer hands back the verbatim lane
 // itself — no wrapper, no per-packet protocol demux, and every packet reaches
 // the kernel in arrival order. This is the case Interface.activate used to
 // special-case with a bare Passthrough.
@@ -167,8 +167,8 @@ func buildUDPv6Fragment(sport, dport uint16, payload []byte) []byte {
 
 // TestMultiCoalescerIPv6FragmentStaysInLane locks in extension-header
 // routing: a fragment whose chain terminates in UDP must ride the UDP lane
-// as an in-lane passthrough — emitted ahead of later same-flow datagrams —
-// not the passthrough lane, which flushes after every coalescer lane and
+// as an in-lane verbatim — emitted ahead of later same-flow datagrams —
+// not the verbatim lane, which flushes after every coalescer lane and
 // would reorder it behind data that arrived after it.
 func TestMultiCoalescerIPv6FragmentStaysInLane(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
@@ -194,7 +194,7 @@ func TestMultiCoalescerIPv6FragmentStaysInLane(t *testing.T) {
 	}
 	// Arrival order was fragment-then-data; same-lane routing must keep it.
 	if w.order[0] != "write" {
-		t.Fatalf("fragment must be emitted before later data (in-lane passthrough), order=%v", w.order)
+		t.Fatalf("fragment must be emitted before later data (in-lane verbatim), order=%v", w.order)
 	}
 }
 

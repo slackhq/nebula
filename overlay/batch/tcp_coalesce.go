@@ -28,25 +28,25 @@ const tcpCoalesceMaxSegs = 64
 const tcpCoalesceHdrCap = 100
 
 // coalesceSlot is one entry in the coalescer's ordered event queue.
-// When passthrough is true the slot holds a single borrowed packet that must be
+// When verbatim is true the slot holds a single borrowed packet that must be
 // emitted verbatim (non-TCP, non-admissible TCP, or oversize seed).
-// When passthrough is false the slot is an in-progress coalesced superpacket.
+// When verbatim is false the slot is an in-progress coalesced superpacket.
 // hdrBuf is a mutable copy of the seed's IP+TCP header
 // (we patch total length and pseudo-header partial at flush)
 // payIovs are *borrowed* slices from the caller's plaintext buffers.
 // The caller (listenOut) must keep those buffers alive until Flush.
 
 const (
-	passthroughFalse = iota
-	// passthroughTrue means a sync-point packet, that may not be re-ordered
-	passthroughTrue
-	// passthroughACK packets are "passed through" without coalescing, but traffic "after" them may be pulled forward to facilitate coalescing.
-	passthroughACK
+	verbatimFalse = iota
+	// verbatimTrue means a sync-point packet, that may not be re-ordered
+	verbatimTrue
+	// verbatimACK packets are "passed through" without coalescing, but traffic "after" them may be pulled forward to facilitate coalescing.
+	verbatimACK
 )
 
 type coalesceSlot struct {
-	passthrough uint8
-	// rawPkt is borrowed: the whole packet for passthrough slots, the seed
+	verbatim uint8
+	// rawPkt is borrowed: the whole packet for verbatim slots, the seed
 	// packet for coalesce slots. A coalesce slot that never grows past one
 	// segment is emitted from rawPkt so its original (already valid) L4
 	// checksum ships DATA_VALID instead of making the kernel recompute it.
@@ -74,8 +74,8 @@ type coalesceSlot struct {
 	payIovs [][]byte
 }
 
-func (c *coalesceSlot) isPassthrough() bool {
-	return c.passthrough != passthroughFalse
+func (c *coalesceSlot) isVerbatim() bool {
+	return c.verbatim != verbatimFalse
 }
 
 // TCPCoalescer accumulates adjacent in-flow TCP data segments across multiple concurrent flows
@@ -86,7 +86,7 @@ type TCPCoalescer struct {
 	w tio.GSOWriter
 
 	// slots is the ordered event queue. Flush walks it once and emits each
-	// entry as either a WriteGSO (coalesced) or a w.Write (passthrough).
+	// entry as either a WriteGSO (coalesced) or a w.Write (verbatim).
 	slots []*coalesceSlot
 	// openSlots maps a flow key to its most recent non-sealed slot, so new
 	// segments can extend an in-progress superpacket in O(1). Slots are
@@ -208,7 +208,7 @@ func (p parsedTCP) pureAck() bool {
 func (c *TCPCoalescer) Commit(pkt []byte) error {
 	info, ok := parseTCPBase(pkt)
 	if !ok {
-		c.addPassthrough(pkt)
+		c.addVerbatim(pkt)
 		return nil
 	}
 	return c.commitParsed(pkt, info)
@@ -227,13 +227,13 @@ func (c *TCPCoalescer) commitParsed(pkt []byte, info parsedTCP) error {
 			// evict keeps a bidirectional flow's inbound data run coalescing
 			// across the peer ACKs interleaved into it — kernel GRO likewise
 			// doesn't flush held data on a pure ACK.
-			c.addPassthroughACK(pkt, info)
+			c.addVerbatimACK(pkt, info)
 			return nil
 		}
 		// TCP but not admissible (SYN/FIN/RST/URG/CWR or a shape the flow
 		// must observe in sequence). Seal this flow's open slot so later
 		// in-flow packets don't extend it and accidentally reorder past this
-		// passthrough. The len guard skips hashing the 38-byte key on
+		// verbatim. The len guard skips hashing the 38-byte key on
 		// ack-dominant queues, where the map is almost always empty.
 		if len(c.openSlots) != 0 {
 			if last := c.lastSlot; last != nil && last.fk == info.fk {
@@ -241,7 +241,7 @@ func (c *TCPCoalescer) commitParsed(pkt []byte, info parsedTCP) error {
 			}
 			delete(c.openSlots, info.fk)
 		}
-		c.addPassthrough(pkt)
+		c.addVerbatim(pkt)
 		return nil
 	}
 
@@ -283,7 +283,7 @@ func (c *TCPCoalescer) Flush() error {
 	var first error
 	for _, s := range c.slots {
 		var err error
-		if s.isPassthrough() || s.numSeg == 1 {
+		if s.isVerbatim() || s.numSeg == 1 {
 			// A slot that never grew (nor absorbed a merge) is byte-identical
 			// to the packet it was seeded from; ship the original so its valid
 			// checksum rides the DATA_VALID path instead of paying a kernel
@@ -306,22 +306,22 @@ func (c *TCPCoalescer) Flush() error {
 	return first
 }
 
-func (c *TCPCoalescer) addPassthrough(pkt []byte) {
+func (c *TCPCoalescer) addVerbatim(pkt []byte) {
 	s := c.take()
-	s.passthrough = passthroughTrue
+	s.verbatim = verbatimTrue
 	s.rawPkt = pkt
 	c.slots = append(c.slots, s)
 }
 
-// addPassthroughACK commits a pure ACK as a passthrough slot that keeps its
-// flow identity and sort keys. Unlike addPassthrough slots it does not split
+// addVerbatimACK commits a pure ACK as a verbatim slot that keeps its
+// flow identity and sort keys. Unlike addVerbatim slots it does not split
 // sort runs, so reorderForFlush may sort same-flow data across it (the
 // contract allows data to overtake a bare ACK). A pure ACK's seq is the
 // sender's snd_nxt, which orders it after all data the peer sent before it,
 // and the TSval-first comparator keeps it behind any older-timestamp data.
-func (c *TCPCoalescer) addPassthroughACK(pkt []byte, info parsedTCP) {
+func (c *TCPCoalescer) addVerbatimACK(pkt []byte, info parsedTCP) {
 	s := c.take()
-	s.passthrough = passthroughACK
+	s.verbatim = verbatimACK
 	s.rawPkt = pkt
 	s.fk = info.fk
 	s.nextSeq = info.seq // totalPay stays 0, so slotSeedSeq yields info.seq
@@ -332,11 +332,11 @@ func (c *TCPCoalescer) addPassthroughACK(pkt []byte, info parsedTCP) {
 func (c *TCPCoalescer) seed(pkt []byte, info parsedTCP) {
 	if info.hdrLen > tcpCoalesceHdrCap || info.hdrLen+info.payLen > tcpCoalesceBufSize {
 		// Pathological shape. Can't fit our scratch, emit as-is.
-		c.addPassthrough(pkt)
+		c.addVerbatim(pkt)
 		return
 	}
 	s := c.take()
-	s.passthrough = passthroughFalse
+	s.verbatim = verbatimFalse
 	s.rawPkt = pkt // kept for the numSeg==1 fast path in Flush
 	copy(s.hdrBuf[:], pkt[:info.hdrLen])
 	s.hdrLen = info.hdrLen
@@ -357,7 +357,7 @@ func (c *TCPCoalescer) seed(pkt []byte, info parsedTCP) {
 	} else if last := c.lastSlot; last != nil && last.fk == info.fk {
 		// PSH-on-seed seals the slot immediately. Any prior cached open
 		// slot for this flow has just been sealed-and-replaced by this
-		// passthrough-shaped seed, so drop the cache too.
+		// verbatim-shaped seed, so drop the cache too.
 		c.lastSlot = nil
 	}
 }
@@ -424,15 +424,15 @@ func (c *TCPCoalescer) take() *coalesceSlot {
 }
 
 func (c *TCPCoalescer) release(s *coalesceSlot) {
-	s.passthrough = passthroughFalse
+	s.verbatim = verbatimFalse
 	s.rawPkt = nil
 	clear(s.payIovs)
 	s.payIovs = s.payIovs[:0]
 	s.numSeg = 0
 	s.totalPay = 0
 	s.sealed = false
-	// Zero the identity fields too: addPassthrough doesn't set them, so a
-	// pooled slot reused as a passthrough must not carry a stale flow key
+	// Zero the identity fields too: addVerbatim doesn't set them, so a
+	// pooled slot reused as a verbatim must not carry a stale flow key
 	// that a future refactor could mistake for real.
 	s.fk = flowKey{}
 	s.hdrLen = 0
@@ -508,7 +508,7 @@ func headersMatch(a, b []byte, isV6 bool, ipHdrLen int) bool {
 // receiver as a much larger reorder than the wire actually had.
 //
 // Two phases:
-//  1. Sort each passthrough-bounded segment of c.slots by (flow, seq).
+//  1. Sort each verbatim-bounded segment of c.slots by (flow, seq).
 //     Cross-flow ordering inside a segment isn't preserved (it never was
 //     and doesn't matter for any single flow's TCP correctness).
 //  2. Sweep once and merge adjacent same-flow slots whose ranges are now
@@ -517,7 +517,7 @@ func headersMatch(a, b []byte, isV6 bool, ipHdrLen int) bool {
 //     start of the merged payload. A short segment in the middle would
 //     desynchronize every later segment.
 //
-// Passthrough slots act as barriers: the merge check skips them on either
+// Verbatim slots act as barriers: the merge check skips them on either
 // side, so a SYN/FIN/RST/CWR is never reordered relative to its flow's
 // data.
 func (c *TCPCoalescer) reorderForFlush() {
@@ -526,11 +526,11 @@ func (c *TCPCoalescer) reorderForFlush() {
 	}
 	runStart := 0
 	for i := 0; i <= len(c.slots); i++ {
-		// Only hard passthroughs (unparseable, SYN/FIN/RST/CWR, oversized)
-		// split sort runs. Pure-ACK passthroughs stay inside the run so
+		// Only hard verbatims (unparseable, SYN/FIN/RST/CWR, oversized)
+		// split sort runs. Pure-ACK verbatims stay inside the run so
 		// same-flow data separated by an interleaved ACK can still sort
 		// adjacent and merge; their own sort keys keep them ordered.
-		if i < len(c.slots) && c.slots[i].passthrough != passthroughTrue {
+		if i < len(c.slots) && c.slots[i].verbatim != verbatimTrue {
 			continue
 		}
 		c.sortRun(c.slots[runStart:i])
@@ -540,7 +540,7 @@ func (c *TCPCoalescer) reorderForFlush() {
 	for _, s := range c.slots {
 		if n := len(out); n > 0 {
 			prev := out[n-1]
-			if !prev.isPassthrough() && !s.isPassthrough() && prev.fk == s.fk {
+			if !prev.isVerbatim() && !s.isVerbatim() && prev.fk == s.fk {
 				// Same-flow neighbors after sort. If they aren't seq-
 				// contiguous it's a real gap: packets the wire reordered
 				// across batches, or actual loss before nebula. Log it so

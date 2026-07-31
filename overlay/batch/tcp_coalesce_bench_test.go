@@ -79,7 +79,7 @@ func buildTCPv4RunInterleaved(nFlows, perFlow, runLen, payloadLen int) [][]byte 
 	return pkts
 }
 
-// buildICMPv4 returns a minimal non-TCP packet that takes the passthrough
+// buildICMPv4 returns a minimal non-TCP packet that takes the verbatim
 // branch in Commit.
 func buildICMPv4() []byte {
 	pkt := make([]byte, 28)
@@ -146,7 +146,7 @@ func BenchmarkCommitRunInterleaved4(b *testing.B) {
 }
 
 // BenchmarkCommitPassthrough exercises the non-TCP branch: parseTCPBase
-// bails early and addPassthrough is the only work.
+// bails early and addVerbatim is the only work.
 func BenchmarkCommitPassthrough(b *testing.B) {
 	pkt := buildICMPv4()
 	pkts := make([][]byte, 64)
@@ -158,7 +158,7 @@ func BenchmarkCommitPassthrough(b *testing.B) {
 
 // BenchmarkCommitNonCoalesceableTCP sends SYN|ACK packets on one flow.
 // Each packet takes the "TCP but not admissible" branch which does a
-// map delete + passthrough. Measures the seal-without-slot cost.
+// map delete + verbatim. Measures the seal-without-slot cost.
 func BenchmarkCommitNonCoalesceableTCP(b *testing.B) {
 	pay := make([]byte, 0)
 	pkts := make([][]byte, 64)

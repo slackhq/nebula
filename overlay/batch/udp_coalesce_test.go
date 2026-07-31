@@ -411,7 +411,7 @@ func TestUDPCoalescerZeroLengthPayloadPassesThrough(t *testing.T) {
 	}
 }
 
-// IPv6 zero-length UDP datagram: same passthrough contract as v4.
+// IPv6 zero-length UDP datagram: same verbatim contract as v4.
 func TestUDPCoalescerZeroLengthPayloadIPv6PassesThrough(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := newTestUDPCoalescer(t, w)
@@ -451,7 +451,7 @@ func TestUDPCoalescerZeroLengthMidFlowSealsAndPreservesOrder(t *testing.T) {
 	}
 	// The empty datagram sealed the first slot, so the trailing full packet
 	// can't join it. All three emit as plain writes (the two full datagrams
-	// stayed single-segment; the empty one is passthrough) in per-flow
+	// stayed single-segment; the empty one is verbatim) in per-flow
 	// arrival order: full, empty, full.
 	if len(w.writes) != 3 || len(w.gsoWrites) != 0 {
 		t.Fatalf("want 3 plain writes, got gso=%d plain=%d", len(w.gsoWrites), len(w.writes))

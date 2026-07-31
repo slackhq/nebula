@@ -12,7 +12,7 @@ import (
 // on the IP/L4 protocol of the packet.
 //
 // Lanes are processed independently: the TCP coalescer only sees TCP, the
-// UDP coalescer only sees UDP, and the passthrough lane handles everything else.
+// UDP coalescer only sees UDP, and the verbatim lane handles everything else.
 // The ordering contract is per-flow DATA order: a flow's payload-bearing
 // packets are never reordered relative to each other, because a single
 // 5-tuple only ever lands in one lane and each lane emits its slots in
@@ -21,7 +21,7 @@ import (
 //   - pure ACKs, which pass through without sealing the flow's open slot
 //     (a late ACK is just a stale ACK; see TCPCoalescer.commitParsed);
 //   - unparseable in-flow shapes (fragments, IP options), whose lane-level
-//     addPassthrough does not close the flow's open slot either. Closing it
+//     addVerbatim does not close the flow's open slot either. Closing it
 //     would need a full open-slot barrier (the flow key is unknown when the
 //     parse fails) — an accepted tradeoff: mid-flow fragments are rare and
 //     receivers reassemble regardless of arrival order.
@@ -31,7 +31,7 @@ import (
 // terminal proto, so a flow's non-coalesceable shapes ride its lane as
 // in-lane passthroughs rather than falling to the later-flushed pt lane.
 //
-// Cross-lane order is intentionally NOT preserved across the TCP/UDP/passthrough split.
+// Cross-lane order is intentionally NOT preserved across the TCP/UDP/verbatim split.
 type MultiCoalescer struct {
 	tcp *TCPCoalescer
 	udp *UDPCoalescer
@@ -46,7 +46,7 @@ func NewMultiCoalescer(w io.Writer, l *slog.Logger) RxBatcher {
 	m.tcp = NewTCPCoalescer(w, l)
 	m.udp = NewUDPCoalescer(w)
 	if m.tcp == nil && m.udp == nil {
-		return m.pt //no offloads? Use passthrough directly.
+		return m.pt //no offloads? Use verbatim directly.
 	}
 	return m
 }
@@ -91,19 +91,8 @@ func (m *MultiCoalescer) Commit(pkt []byte) error {
 		}
 		proto = pkt[6]
 		if isIPv6ExtHeader(proto) {
-			// Walk to the terminal protocol so the packet routes to its
-			// flow's lane. It stays non-coalesceable — the lane's parser
-			// rejects the ext-header shape and emits it as an in-lane
-			// passthrough — but landing in the right lane preserves
-			// per-flow order, exactly like IPv4 fragments (whose header
-			// keeps the L4 proto visible) already do. Fragments are the
-			// case that matters: every fragment names the flow's L4, so a
-			// fragmented datagram travels with its flow's unfragmented
-			// siblings instead of the passthrough lane, which flushes
-			// after every coalescer lane and would emit it behind data
-			// that arrived later. An unresolved walk (truncated or crafted
-			// over-long chain) yields a non-transport number and falls to
-			// the pt lane below.
+			// Walk to the terminal protocol so the packet routes to its flow's protocol lane.
+			// This protects flow ordering.
 			proto, _, _ = iputil.IPv6FindUpperProtocol(pkt)
 		}
 	default:
@@ -115,8 +104,8 @@ func (m *MultiCoalescer) Commit(pkt []byte) error {
 			info, ok := parseTCPBase(pkt)
 			if !ok {
 				// Malformed/unsupported TCP shape (IP options, fragments, ...).
-				// Handle this via passthrough support in the TCP coalescer, to attempt to preserve flow order.
-				m.tcp.addPassthrough(pkt)
+				// Handle this via verbatim support in the TCP coalescer, to attempt to preserve flow order.
+				m.tcp.addVerbatim(pkt)
 				return nil
 			}
 			return m.tcp.commitParsed(pkt, info)
@@ -125,7 +114,7 @@ func (m *MultiCoalescer) Commit(pkt []byte) error {
 		if m.udp != nil {
 			info, ok := parseUDP(pkt)
 			if !ok {
-				m.udp.addPassthrough(pkt)
+				m.udp.addVerbatim(pkt)
 				return nil
 			}
 			return m.udp.commitParsed(pkt, info)

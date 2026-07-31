@@ -164,7 +164,7 @@ func newTestTCPCoalescer(tb testing.TB, w io.Writer) *TCPCoalescer {
 
 // TestNewTCPCoalescerRefusesWhenGSOUnavailable pins the constructor
 // precondition: no TSO, no coalescer. There's no degraded mode — the caller
-// (MultiCoalescer) sends TCP down the passthrough lane instead.
+// (MultiCoalescer) sends TCP down the verbatim lane instead.
 func TestNewTCPCoalescerRefusesWhenGSOUnavailable(t *testing.T) {
 	if c := NewTCPCoalescer(&fakeTunWriter{gsoEnabled: false}, test.NewLogger()); c != nil {
 		t.Fatalf("want nil for a non-TSO writer, got %v", c)
@@ -231,7 +231,7 @@ func TestCoalescerSeedThenFlushAlone(t *testing.T) {
 
 // TestCoalescerPureAckDoesNotSealRun pins the pure-ACK fast path: a bare
 // acknowledgment (zero payload, nothing beyond ACK|PSH|ECE) rides its lane
-// as a passthrough WITHOUT sealing the flow's open slot, so an inbound data
+// as a verbatim WITHOUT sealing the flow's open slot, so an inbound data
 // run on a bidirectional connection keeps coalescing across the peer ACKs
 // interleaved into it. The ACK is emitted after the superpacket (stale ACKs
 // are ignored by receivers, so the reorder is harmless by design).
@@ -388,9 +388,9 @@ func TestCoalescerRejectsFIN(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	// FIN isn't admissible — passthrough as plain, no slot, no gso.
+	// FIN isn't admissible — verbatim as plain, no slot, no gso.
 	if len(w.writes) != 1 || len(w.gsoWrites) != 0 {
-		t.Fatalf("FIN should be passthrough, got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
+		t.Fatalf("FIN should be verbatim, got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
 	}
 }
 
@@ -529,9 +529,9 @@ func TestCoalescerRejectsIPOptions(t *testing.T) {
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	// Non-admissible parse → passthrough as plain.
+	// Non-admissible parse → verbatim as plain.
 	if len(w.writes) != 1 || len(w.gsoWrites) != 0 {
-		t.Fatalf("IP options should passthrough, got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
+		t.Fatalf("IP options should verbatim, got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
 	}
 }
 
@@ -613,13 +613,13 @@ func TestCoalescerMultipleFlowsInSameBatch(t *testing.T) {
 	}
 }
 
-// TestCoalescerPreservesArrivalOrder confirms that with passthrough and
+// TestCoalescerPreservesArrivalOrder confirms that with verbatim and
 // coalesced events both queued, Flush emits them in Add order rather than
-// writing passthrough packets synchronously.
+// writing verbatim packets synchronously.
 func TestCoalescerPreservesArrivalOrder(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := newTestTCPCoalescer(t, w)
-	// Sequence: coalesceable TCP, ICMP (passthrough), coalesceable TCP on
+	// Sequence: coalesceable TCP, ICMP (verbatim), coalesceable TCP on
 	// a different flow. Both TCP slots stay single-segment, so all three
 	// emit as plain writes; the packet order (X, ICMP, Y) is asserted by
 	// byte content since the kinds no longer distinguish them.
@@ -775,7 +775,7 @@ func buildTCPv6(tcLow byte, seq uint32, flags byte, payload []byte) []byte {
 
 // TestCoalescerCoalescesEceFlow confirms that ECN-Echo-marked ACKs (an
 // ECN-aware flow under congestion) keep getting coalesced into a TSO
-// superpacket instead of falling out to passthrough, and that the seed
+// superpacket instead of falling out to verbatim, and that the seed
 // retains ECE on the wire.
 func TestCoalescerCoalescesEceFlow(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
@@ -804,7 +804,7 @@ func TestCoalescerCoalescesEceFlow(t *testing.T) {
 }
 
 // TestCoalescerCwrSealsFlow confirms that a CWR-bearing segment in the
-// middle of a flow goes to passthrough and seals the open slot, so a later
+// middle of a flow goes to verbatim and seals the open slot, so a later
 // in-flow segment seeds a new slot rather than extending the prior burst.
 func TestCoalescerCwrSealsFlow(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
@@ -824,12 +824,12 @@ func TestCoalescerCwrSealsFlow(t *testing.T) {
 	}
 	// All three emissions are plain writes: the seed before CWR and the
 	// fresh seed after both stay single-segment, and the CWR packet itself
-	// is passthrough. Order: seed, CWR, reseed.
+	// is verbatim. Order: seed, CWR, reseed.
 	if len(w.writes) != 3 || len(w.gsoWrites) != 0 {
 		t.Fatalf("want 3 plain writes (seed, CWR, reseed), got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
 	}
 	if flags := w.writes[1][20+13]; flags&tcpCwr == 0 {
-		t.Errorf("middle write flags=0x%02x want CWR (passthrough in arrival order)", flags)
+		t.Errorf("middle write flags=0x%02x want CWR (verbatim in arrival order)", flags)
 	}
 }
 
@@ -1115,9 +1115,9 @@ func TestCoalescerSortKeepsPSHBoundary(t *testing.T) {
 	}
 }
 
-// TestCoalescerSortKeepsPassthroughBarrier confirms a passthrough slot in
+// TestCoalescerSortKeepsPassthroughBarrier confirms a verbatim slot in
 // the middle of the queue prevents the post-sort merge from folding
-// across it. Reordered same-flow data on either side of the passthrough
+// across it. Reordered same-flow data on either side of the verbatim
 // is sorted/merged independently.
 func TestCoalescerSortKeepsPassthroughBarrier(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
@@ -1131,7 +1131,7 @@ func TestCoalescerSortKeepsPassthroughBarrier(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Non-coalesceable packet (SYN+ACK) flushes S1's openSlots entry and
-	// becomes a passthrough barrier in c.slots.
+	// becomes a verbatim barrier in c.slots.
 	if err := c.Commit(buildTCPv4(9999, tcpSyn|tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
@@ -1144,7 +1144,7 @@ func TestCoalescerSortKeepsPassthroughBarrier(t *testing.T) {
 	}
 	// All four packets emit as plain writes: 1000 and 3400 are separate
 	// single-segment slots (not contiguous, so the post-sort merge can't
-	// fold them), the SYN is passthrough, and the post-barrier 2200 stays
+	// fold them), the SYN is verbatim, and the post-barrier 2200 stays
 	// a single-segment slot after the SYN. The pre-barrier sort must land
 	// 1000 before 3400, and 2200 must never move before the SYN.
 	if len(w.writes) != 4 || len(w.gsoWrites) != 0 {
