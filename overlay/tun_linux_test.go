@@ -39,14 +39,14 @@ func TestTunAdvMSS(t *testing.T) {
 // capability: it is derived from the negotiated offload mask, so the mask
 // stored on the tun and the capability reported to coalescers cannot drift.
 func TestOffloadUSOEnabled(t *testing.T) {
-	// usoOffloadFlags must be a strict superset of tsoOffloadFlags. Otherwise
+	// usoAndTSOOffloadFlags must be a strict superset of tsoOffloadFlags. Otherwise
 	// the TSO-only fallback (and the historic hardcoded-mask bug in
 	// addQueue) would not actually be a downgrade.
-	if usoOffloadFlags&tsoOffloadFlags != tsoOffloadFlags {
-		t.Fatalf("usoOffloadFlags (%#x) is not a superset of tsoOffloadFlags (%#x)", usoOffloadFlags, tsoOffloadFlags)
+	if usoAndTSOOffloadFlags&tsoOffloadFlags != tsoOffloadFlags {
+		t.Fatalf("usoAndTSOOffloadFlags (%#x) is not a superset of tsoOffloadFlags (%#x)", usoAndTSOOffloadFlags, tsoOffloadFlags)
 	}
-	if usoOffloadFlags == tsoOffloadFlags {
-		t.Fatal("usoOffloadFlags must add bits beyond tsoOffloadFlags")
+	if usoAndTSOOffloadFlags == tsoOffloadFlags {
+		t.Fatal("usoAndTSOOffloadFlags must add bits beyond tsoOffloadFlags")
 	}
 
 	cases := []struct {
@@ -54,7 +54,7 @@ func TestOffloadUSOEnabled(t *testing.T) {
 		offloadFlags uint
 		wantUSO      bool
 	}{
-		{"uso-negotiated", usoOffloadFlags, true},
+		{"uso-negotiated", usoAndTSOOffloadFlags, true},
 		{"tso-fallback", tsoOffloadFlags, false},
 		{"no-vnet-hdr", 0, false},
 	}
@@ -78,12 +78,12 @@ func TestOffloadUSOEnabled(t *testing.T) {
 // TUNSETOFFLOAD argument is read from.
 func TestAddQueueReplaysNegotiatedMask(t *testing.T) {
 	t.Run("uso-negotiated", func(t *testing.T) {
-		tn := &tun{vnetHdr: true, offloadFlags: usoOffloadFlags}
+		tn := &tun{vnetHdr: true, offloadFlags: usoAndTSOOffloadFlags}
 		// The ioctl argument in addQueue is uintptr(t.offloadFlags);
 		// it must equal the negotiated USO mask, and must NOT be the TSO-only
 		// mask (the original bug).
-		if tn.offloadFlags != usoOffloadFlags {
-			t.Fatalf("offloadFlags = %#x, want %#x", tn.offloadFlags, usoOffloadFlags)
+		if tn.offloadFlags != usoAndTSOOffloadFlags {
+			t.Fatalf("offloadFlags = %#x, want %#x", tn.offloadFlags, usoAndTSOOffloadFlags)
 		}
 		if tn.offloadFlags == tsoOffloadFlags {
 			t.Fatal("added queue would downgrade USO: offloadFlags must not be the TSO-only mask when USO was negotiated")

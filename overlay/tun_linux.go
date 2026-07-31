@@ -26,31 +26,17 @@ import (
 )
 
 type tun struct {
-	readers     tio.QueueSet
-	closeLock   sync.Mutex
-	Device      string
-	vpnNetworks []netip.Prefix
-	MaxMTU      int
-	DefaultMTU  int
-	TXQueueLen  int
-	deviceIndex int
-	ioctlFd     uintptr
-	vnetHdr     bool
-	// offloadFlags is the exact TUN_F_* offload mask newTun negotiated with
-	// the kernel: usoOffloadFlags when USO was accepted, tsoOffloadFlags on
-	// the TSO-only fallback, or 0 when vnetHdr is off. TUNSETOFFLOAD is
-	// device-wide (drivers/net/tun.c set_offload updates tun->set_features
-	// for the whole netdev), so addQueue must replay this exact
-	// mask on every added queue — issuing a narrower mask there would
-	// silently downgrade offloads (e.g. disable USO) for all queues while
-	// they still advertise the stale capability.
-	offloadFlags uint
-	// routeFeatureECN, when true, sets RTAX_FEATURE_ECN on every route we
-	// install for the tun. The kernel then actively negotiates ECN for
-	// connections destined to those prefixes (equivalent to `ip route
-	// change ... features ecn`) regardless of net.ipv4.tcp_ecn, so flows
-	// across the nebula mesh use ECN even when the host default is the
-	// passive setting (=2). Disable via tunnels.ecn=false.
+	readers         tio.QueueSet
+	closeLock       sync.Mutex
+	Device          string
+	vpnNetworks     []netip.Prefix
+	MaxMTU          int
+	DefaultMTU      int
+	TXQueueLen      int
+	deviceIndex     int
+	ioctlFd         uintptr
+	vnetHdr         bool
+	offloadFlags    uint
 	routeFeatureECN bool
 
 	Routes                    atomic.Pointer[[]Route]
@@ -92,14 +78,7 @@ type ifreqQLEN struct {
 func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
 	// We don't know what flags the caller opened this fd with and can't turn
 	// on IFF_VNET_HDR after TUNSETIFF, so skip offload on inherited fds.
-	t, err := newTunGeneric(c, l, deviceFd, false, 0, vpnNetworks)
-	if err != nil {
-		return nil, err
-	}
-
-	t.Device = "tun0"
-
-	return t, nil
+	return newTunGeneric(c, l, deviceFd, false, 0, vpnNetworks, "tun0")
 }
 
 // openTunDev opens /dev/net/tun, creating the device node first if it's
@@ -125,8 +104,7 @@ func openTunDev() (int, error) {
 	return fd, nil
 }
 
-// tunSetIff runs TUNSETIFF with the given flags and returns the kernel-chosen
-// device name on success.
+// tunSetIff runs TUNSETIFF with the given flags and returns the kernel-chosen device name on success.
 func tunSetIff(fd int, name string, flags uint16) (string, error) {
 	var req ifReq
 	req.Flags = flags
@@ -137,22 +115,13 @@ func tunSetIff(fd int, name string, flags uint16) (string, error) {
 	return strings.Trim(string(req.Name[:]), "\x00"), nil
 }
 
-// tsoOffloadFlags are the TUN_F_* bits we ask the kernel to enable when a
-// TSO-capable TUN is available. CSUM is required as a prerequisite for TSO.
-// TSO_ECN tells the kernel we propagate ECN correctly through coalesce and
-// segmentation, so it can deliver superpackets whose seed has CWR/ECE set
-// or whose IP-level codepoint is CE.
+// tsoOffloadFlags are the TUN_F_* bits we ask the kernel to enable when a TSO-capable TUN is available.
 const tsoOffloadFlags = unix.TUN_F_CSUM | unix.TUN_F_TSO4 | unix.TUN_F_TSO6 | unix.TUN_F_TSO_ECN
 
-// usoOffloadFlags adds UDP Segmentation Offload to tsoOffloadFlags. Requires
-// Linux ≥ 6.2; older kernels reject it and we fall back to TCP-only TSO via
-// tsoOffloadFlags.
-const usoOffloadFlags = tsoOffloadFlags | unix.TUN_F_USO4 | unix.TUN_F_USO6
+// usoAndTSOOffloadFlags adds UDP Segmentation Offload to tsoOffloadFlags.
+// Requires Linux >= 6.2; older kernels reject it and we fall back to TCP-only TSO
+const usoAndTSOOffloadFlags = tsoOffloadFlags | unix.TUN_F_USO4 | unix.TUN_F_USO6
 
-// offloadUSOEnabled reports whether the negotiated offload mask includes UDP
-// Segmentation Offload. It is the single source of truth for the usoEnabled
-// capability surfaced by each queue, so the mask stored on the tun and the USO
-// bit reported to coalescers can never drift apart.
 func offloadUSOEnabled(offloadFlags uint) bool {
 	return offloadFlags&(unix.TUN_F_USO4|unix.TUN_F_USO6) != 0
 }
@@ -165,30 +134,26 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue 
 	}
 	nameStr := c.GetString("tun.dev", "")
 
-	// First try to enable IFF_VNET_HDR via TUNSETIFF and negotiate TUN_F_*
-	// offloads via TUNSETOFFLOAD so we can receive TSO/USO superpackets.
-	// We try TSO+USO first, fall back to TSO-only on kernels without USO
-	// (Linux < 6.2), and finally give up on virtio headers entirely and
-	// reopen as a plain TUN if neither offload mask is accepted.
 	fd, err := openTunDev()
 	if err != nil {
 		return nil, err
 	}
 	vnetHdr := true
-	// offloadFlags is the exact TUN_F_* mask the kernel accepted. We remember
-	// it (rather than a plain bool) so addQueue can replay the
-	// identical device-wide mask on added queues instead of downgrading them.
+
+	// First try to enable IFF_VNET_HDR via TUNSETIFF and negotiate TUN_F_* offloads
+	// We try TSO+USO first, fall back to TSO-only on kernels without USO (Linux < 6.2),
+	// and finally give up on virtio headers entirely and reopen as a plain TUN if neither offload mask is accepted.
+
+	// offloadFlags is the exact TUN_F_* mask the kernel accepted.
+	// We save it so addQueue can replay the identical device-wide mask on added queues
 	var offloadFlags uint
 	name, err := tunSetIff(fd, nameStr, baseFlags|unix.IFF_VNET_HDR)
 	if err != nil {
 		_ = unix.Close(fd)
 		vnetHdr = false
 	} else {
-		// Try TSO+USO first. On kernels without USO support (Linux < 6.2)
-		// the ioctl returns EINVAL; fall back to the TCP-only mask before
-		// giving up on VNET_HDR entirely.
-		if err = ioctl(uintptr(fd), unix.TUNSETOFFLOAD, uintptr(usoOffloadFlags)); err == nil {
-			offloadFlags = usoOffloadFlags
+		if err = ioctl(uintptr(fd), unix.TUNSETOFFLOAD, uintptr(usoAndTSOOffloadFlags)); err == nil {
+			offloadFlags = usoAndTSOOffloadFlags
 		} else if err = ioctl(uintptr(fd), unix.TUNSETOFFLOAD, uintptr(tsoOffloadFlags)); err == nil {
 			offloadFlags = tsoOffloadFlags
 		} else {
@@ -214,7 +179,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue 
 		l.Info("TUN offload enabled", "tso", true, "uso", offloadUSOEnabled(offloadFlags))
 	}
 
-	t, err := newTunGeneric(c, l, fd, vnetHdr, offloadFlags, vpnNetworks)
+	t, err := newTunGeneric(c, l, fd, vnetHdr, offloadFlags, vpnNetworks, name)
 	if err != nil {
 		return nil, err
 	}
@@ -224,12 +189,10 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue 
 	return t, nil
 }
 
-// newTunGeneric does all the stuff common to different tun initialization
-// paths. It will close your files on error. offloadFlags is the TUN_F_* mask
-// newTun negotiated (0 when vnetHdr is off); the queues' USO capability is
-// derived from it so it can never disagree with the mask we replay on added
-// multiqueue readers.
-func newTunGeneric(c *config.C, l *slog.Logger, fd int, vnetHdr bool, offloadFlags uint, vpnNetworks []netip.Prefix) (*tun, error) {
+// newTunGeneric does all the stuff common to different tun initialization paths.
+// It will close your files on error.
+// offloadFlags is the TUN_F_* mask newTun negotiated (ignored when vnetHdr is false)
+func newTunGeneric(c *config.C, l *slog.Logger, fd int, vnetHdr bool, offloadFlags uint, vpnNetworks []netip.Prefix, name string) (*tun, error) {
 	var qs tio.QueueSet
 	var err error
 	if vnetHdr {
@@ -252,6 +215,7 @@ func newTunGeneric(c *config.C, l *slog.Logger, fd int, vnetHdr bool, offloadFla
 	}
 
 	t := &tun{
+		Device:                    name,
 		readers:                   qs,
 		closeLock:                 sync.Mutex{},
 		vnetHdr:                   vnetHdr,
@@ -354,9 +318,7 @@ func (t *tun) reload(c *config.C, initial bool) error {
 	return nil
 }
 
-// Queues opens additional kernel multiqueue fds until the device has n
-// queues, then returns them all. The first queue was opened by newTun; each
-// extra fd replays the negotiated offload state (see addQueue).
+// Queues opens additional kernel multiqueue fds until the device has n queues, then returns them all.
 func (t *tun) Queues(n int) ([]tio.Queue, error) {
 	for len(t.readers.Queues()) < n {
 		if err := t.addQueue(); err != nil {
@@ -366,8 +328,7 @@ func (t *tun) Queues(n int) ([]tio.Queue, error) {
 	return t.readers.Queues(), nil
 }
 
-// addQueue opens one more IFF_MULTI_QUEUE fd on the device and adds it to
-// the queue set.
+// addQueue opens one more IFF_MULTI_QUEUE fd on the device and adds it to the queue set.
 func (t *tun) addQueue() error {
 	t.closeLock.Lock()
 	defer t.closeLock.Unlock()
@@ -387,10 +348,6 @@ func (t *tun) addQueue() error {
 	}
 
 	if t.vnetHdr {
-		// Replay the exact mask newTun negotiated. TUNSETOFFLOAD is
-		// device-wide, so issuing the TSO-only mask here would disable USO
-		// for every queue (including queue 0) on kernels where newTun
-		// successfully enabled it, while the queues keep advertising USO.
 		if err = ioctl(uintptr(fd), unix.TUNSETOFFLOAD, uintptr(t.offloadFlags)); err != nil {
 			_ = unix.Close(fd)
 			return fmt.Errorf("failed to enable offload on multiqueue tun fd: %w", err)
@@ -580,12 +537,10 @@ func (t *tun) setDefaultRoute(cidr netip.Prefix) error {
 		Table:     unix.RT_TABLE_MAIN,
 		Type:      unix.RTN_UNICAST,
 	}
-	// Match the metric the kernel uses for its auto-installed connected
-	// route, so RouteReplace overwrites it in place instead of adding a
-	// second route at a worse metric. IPv6 connected routes are installed
-	// at metric 256 (IP6_RT_PRIO_KERN); IPv4 uses 0. Without this, the
-	// kernel route wins lookups and our MTU / AdvMSS / Features never
-	// apply on v6.
+	// Match the metric the kernel uses for its auto-installed connected route,
+	// so RouteReplace overwrites it in place instead of adding a second route at a worse metric.
+	// IPv6 connected routes are installed at metric 256 (IP6_RT_PRIO_KERN); IPv4 uses 0.
+	// Without this, the kernel route wins lookups and our MTU / AdvMSS / Features never apply on v6.
 	if cidr.Addr().Is6() {
 		nr.Priority = 256
 	}
