@@ -43,8 +43,8 @@ type Queue interface {
 	// Single-reader only: not safe for concurrent Reads (it reuses per-queue rx scratch each call).
 	Read() ([]Packet, error)
 
-	// Write emits a single packet on the plaintext (outside→inside)
-	// delivery path. Safe for concurrent use.
+	// Write emits a single packet on the plaintext (outside→inside) delivery path.
+	// Safe for concurrent use.
 	Write(p []byte) (int, error)
 }
 
@@ -61,17 +61,13 @@ type Packet struct {
 // The zero value means Bytes is one regular IP datagram and no segmentation is required.
 type GSOInfo struct {
 	// Size is the GSO segment size: max payload bytes per segment
-	// (== TCP MSS for TSO, == UDP payload chunk for USO). Zero means
-	// not a superpacket.
+	// (== TCP MSS for TSO, == UDP payload chunk for USO). Zero means not a superpacket.
 	Size uint16
-	// HdrLen is the total L3+L4 header length within Bytes (already
-	// corrected via correctHdrLen, so safe to slice on).
+	// HdrLen is the total L3+L4 header length within Bytes (already corrected via correctHdrLen, so safe to slice on).
 	HdrLen uint16
-	// CsumStart is the L4 header offset inside Bytes (== L3 header
-	// length).
+	// CsumStart is the L4 header offset inside Bytes (== L3 header length).
 	CsumStart uint16
-	// Proto picks the L4 protocol (TCP or UDP) so the segmenter knows
-	// which checksum/header layout to apply.
+	// Proto picks the L4 protocol (TCP or UDP) so the segmenter knows which checksum/header layout to apply.
 	Proto GSOProto
 }
 
