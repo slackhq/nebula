@@ -380,9 +380,8 @@ func (r *Offload) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, proto
 	if len(pays) > 1 {
 		gsoType = gsoTypeFromProto(proto, hdr[0]>>4)
 		if gsoType == unix.VIRTIO_NET_HDR_GSO_NONE {
-			// gsoTypeFromProto only yields GSO_NONE for a bogus IP version
-			// nibble. A multi-segment superpacket must carry a real GSO type,
-			// or the kernel would deliver it as a single jumbo packet.
+			// gsoTypeFromProto only yields GSO_NONE for a bogus IP version nibble.
+			// A multi-segment superpacket must carry a real GSO type, or the kernel would deliver it as a single jumbo packet.
 			return fmt.Errorf("tio: WriteGSO IP version %d is not GSO-capable", hdr[0]>>4)
 		}
 	}
