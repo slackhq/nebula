@@ -175,7 +175,13 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 
 		for i := 0; i < routines; i++ {
 			l.Info("listening", "addr", netip.AddrPortFrom(listenHost, uint16(port)))
-			udpServer, err := udp.NewListener(l, listenHost, port, routines > 1, c.GetInt("listen.batch", 64))
+			batchSize := c.GetInt("listen.batch", 64)
+			if batchSize < 1 {
+				oldBatch := batchSize
+				batchSize = 1
+				l.Warn("listen.batch size is invalid", "provided", oldBatch, "overridden to", batchSize)
+			}
+			udpServer, err := udp.NewListener(l, listenHost, port, routines > 1, batchSize)
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
