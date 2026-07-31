@@ -415,23 +415,6 @@ logging:
   # This setting is reloadable
   #inactivity_timeout: 10m
 
-  # ecn (default true) propagates ECN (Explicit Congestion Notification) across the tunnel per RFC 6040: the inner
-  # packet's ECN codepoint is copied onto the outer carrier header on encapsulation, and an outer CE ("congestion
-  # experienced") mark is folded back into the inner header on decapsulation. On linux it additionally stamps
-  # RTAX_FEATURE_ECN on the routes nebula installs, so the kernel actively negotiates ECN for connections to mesh
-  # prefixes. Disable this only when an underlay middlebox mangles or clears ECN bits unpredictably.
-  # This setting is reloadable, BUT flipping it at runtime only updates the datapath (the inner<->outer copy/combine).
-  # The RTAX_FEATURE_ECN flag on already-installed routes is NOT revisited on reload, so nebula must be restarted for
-  # the route half of this setting to take effect.
-  #ecn: true
-
-  # EXPERIMENTAL, Linux only. ecn_mark_threshold turns nebula into the AQM for its own receive queue — the one
-  # congested hop on a tunnel path that no kernel AQM can see. When the UDP receive queue's depth exceeds this
-  # fraction of the receive buffer (see listen.read_buffer), decapsulated ECT packets are CE-marked so ECN-capable
-  # senders back off before the queue overflows and regulates by tail-drop (loss) instead. 0 disables (default).
-  # Requires `ecn: true` end to end. Sampled once per receive batch. Reloadable.
-  #ecn_mark_threshold: 0.05
-
 # Nebula security group configuration
 firewall:
   # Action to take when a packet is not allowed by the firewall rules.
