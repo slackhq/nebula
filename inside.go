@@ -15,7 +15,7 @@ import (
 	"github.com/slackhq/nebula/routing"
 )
 
-func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packet, nb []byte, sendBatch batch.TxBatcher, rejectBuf []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packet, nb []byte, sendBatch *batch.SendBatch, rejectBuf []byte, q int, localCache firewall.ConntrackCache) {
 	// borrowed: pkt.Bytes is owned by the originating tio.Queue and is
 	// only valid until the next Read on that queue. Every consumer below
 	// (parse, self-forward, handshake cache, sendInsideMessage) reads it
@@ -107,7 +107,7 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packe
 
 	dropReason := f.firewall.Drop(*fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason == nil {
-		f.sendInsideMessage(hostinfo, pkt, nb, sendBatch, rejectBuf, q)
+		f.sendInsideMessage(hostinfo, pkt, nb, sendBatch)
 	} else {
 		f.rejectInside(packet, rejectBuf, q)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
@@ -137,8 +137,7 @@ func (f *Interface) sendInsideEncrypt(hostinfo *HostInfo, ci *ConnectionState, s
 			"udpAddr", hostinfo.GetRemote(),
 			"counter", c,
 		)
-		// Skip this segment; the rest of the superpacket can still
-		// go out — TCP will retransmit anything we drop here.
+		// Skip this segment; the rest of the superpacket can still go out. TCP will retransmit anything we drop here.
 		return nil
 	}
 
@@ -150,9 +149,8 @@ func (f *Interface) sendInsideEncrypt(hostinfo *HostInfo, ci *ConnectionState, s
 // later sendmmsg flush. Segmentation is fused with encryption here so the
 // kernel-supplied superpacket bytes never get written into a separate
 // scratch arena: SegmentSuperpacket builds each segment's plaintext in
-// segScratch[:segLen] in turn, and we encrypt directly into a fresh
-// SendBatch slot.
-func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []byte, sendBatch batch.TxBatcher, rejectBuf []byte, q int) {
+// segScratch[:segLen] in turn, and we encrypt directly into a fresh SendBatch slot.
+func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []byte, sendBatch *batch.SendBatch) {
 	ci := hostinfo.ConnectionState
 	if ci.eKey == nil {
 		return
@@ -236,9 +234,7 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 		return nil
 	})
 	if err != nil {
-		hostinfo.logger(f.l).Error("Failed to segment superpacket for send",
-			"error", err,
-		)
+		hostinfo.logger(f.l).Error("Failed to segment superpacket for send", "error", err)
 	}
 }
 
