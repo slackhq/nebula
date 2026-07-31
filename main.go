@@ -270,7 +270,6 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		ifce.reloadDisconnectInvalid(c)
 		ifce.reloadSendRecvError(c)
 		ifce.reloadAcceptRecvError(c)
-		ifce.reloadEcn(c)
 
 		handshakeManager.f = ifce
 		go handshakeManager.Run(ctx)

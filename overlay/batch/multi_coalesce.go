@@ -125,7 +125,7 @@ func (m *MultiCoalescer) Commit(pkt []byte) error {
 		if m.udp != nil {
 			info, ok := parseUDP(pkt)
 			if !ok {
-				m.udp.addPassthrough(pkt) //we could also m.pt.Commit() here I guess?
+				m.udp.addPassthrough(pkt)
 				return nil
 			}
 			return m.udp.commitParsed(pkt, info)
