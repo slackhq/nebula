@@ -7,7 +7,9 @@ import (
 	"bytes"
 	"encoding/pem"
 	"errors"
+	"math/bits"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +24,18 @@ func Test_caSummary(t *testing.T) {
 }
 
 func Test_caHelp(t *testing.T) {
+	var (
+		defaultArgonMemory     string
+		defaultArgonIterations string
+	)
+	if bits.UintSize == 32 {
+		defaultArgonMemory = strconv.Itoa(64 * 1024)
+		defaultArgonIterations = strconv.Itoa(3)
+	} else {
+		defaultArgonMemory = strconv.Itoa(2 * 1024 * 1024)
+		defaultArgonIterations = strconv.Itoa(1)
+	}
+
 	ob := &bytes.Buffer{}
 	caHelp(ob)
 	assert.Equal(
@@ -29,9 +43,9 @@ func Test_caHelp(t *testing.T) {
 		"Usage of "+os.Args[0]+" ca <flags>: create a self signed certificate authority\n"+
 			"  Pass \"-\" to any path flag to read from stdin or write to stdout.\n"+
 			"  -argon-iterations uint\n"+
-			"    \tOptional: Argon2 iterations parameter used for encrypted private key passphrase (default 1)\n"+
+			"    \tOptional: Argon2 iterations parameter used for encrypted private key passphrase (default "+defaultArgonIterations+")\n"+
 			"  -argon-memory uint\n"+
-			"    \tOptional: Argon2 memory parameter (in KiB) used for encrypted private key passphrase (default 2097152)\n"+
+			"    \tOptional: Argon2 memory parameter (in KiB) used for encrypted private key passphrase (default "+defaultArgonMemory+")\n"+
 			"  -argon-parallelism uint\n"+
 			"    \tOptional: Argon2 parallelism parameter used for encrypted private key passphrase (default 4)\n"+
 			"  -curve string\n"+
@@ -188,10 +202,16 @@ func Test_ca(t *testing.T) {
 	k, _ := pem.Decode(rb)
 	ned, err := cert.UnmarshalNebulaEncryptedData(k.Bytes)
 	require.NoError(t, err)
-	// we won't know salt in advance, so just check start of string
-	assert.Equal(t, uint32(2*1024*1024), ned.EncryptionMetadata.Argon2Parameters.Memory)
+
+	if bits.UintSize == 32 {
+		assert.Equal(t, uint32(64*1024), ned.EncryptionMetadata.Argon2Parameters.Memory)
+		assert.Equal(t, uint32(3), ned.EncryptionMetadata.Argon2Parameters.Iterations)
+	} else {
+		assert.Equal(t, uint32(2*1024*1024), ned.EncryptionMetadata.Argon2Parameters.Memory)
+		assert.Equal(t, uint32(1), ned.EncryptionMetadata.Argon2Parameters.Iterations)
+	}
+
 	assert.Equal(t, uint8(4), ned.EncryptionMetadata.Argon2Parameters.Parallelism)
-	assert.Equal(t, uint32(1), ned.EncryptionMetadata.Argon2Parameters.Iterations)
 
 	// verify the key is valid and decrypt-able
 	var curve cert.Curve
