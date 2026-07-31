@@ -385,14 +385,30 @@ func (w *batchWriter) planRun(bufs [][]byte, addrs []netip.AddrPort, ecns []byte
 	return runLen, segSize
 }
 
+// writeECNCmsg fills the start of buf with one IP_TOS / IPV6_TCLASS cmsg
+// carrying the 2-bit ECN codepoint. buf must be cmsg-aligned (the batch
+// writer's heap slab is runtime-aligned; sendmsg passes uint64-backed stack
+// scratch) and at least CmsgSpace(4) bytes. The cmsg family must match the
+// socket: on the default dual-stack v6 bind, a v4-mapped destination takes
+// the kernel's IPv4 path, which reads IP_TOS and ignores IPV6_TCLASS. The
+// payload is a 4-byte int for both families, so the cmsg space is the same.
+func writeECNCmsg(buf []byte, dstIsV4 bool, ecn byte) {
+	h := (*unix.Cmsghdr)(unsafe.Pointer(&buf[0]))
+	if dstIsV4 {
+		h.Level = int32(unix.IPPROTO_IP)
+		h.Type = int32(unix.IP_TOS)
+	} else {
+		h.Level = int32(unix.IPPROTO_IPV6)
+		h.Type = int32(unix.IPV6_TCLASS)
+	}
+	setCmsgLen(h, unix.CmsgLen(4))
+	dataOff := unix.CmsgLen(0)
+	binary.NativeEndian.PutUint32(buf[dataOff:dataOff+4], uint32(ecn))
+}
+
 // writeEntryCmsg writes one entry's cmsgs: the UDP_SEGMENT payload when
 // runLen >= 2, the IP_TOS/IPV6_TCLASS cmsg when ecn != 0, then points
 // Hdr.Control at the smallest span covering the cmsgs in use.
-//
-// The ECN cmsg family must match the destination, not the socket: on the
-// default dual-stack v6 bind, a v4-mapped destination takes the kernel's
-// IPv4 path, which reads IP_TOS and ignores IPV6_TCLASS. The payload is a
-// 4-byte int for both families, so the cmsg space is the same.
 func (w *batchWriter) writeEntryCmsg(entry, runLen, segSize int, ecn byte, dstIsV4 bool) {
 	hdr := &w.msgs[entry].Hdr
 	useSeg := runLen >= 2
@@ -404,17 +420,7 @@ func (w *batchWriter) writeEntryCmsg(entry, runLen, segSize int, ecn byte, dstIs
 		binary.NativeEndian.PutUint16(w.cmsg[dataOff:dataOff+2], uint16(segSize))
 	}
 	if useEcn {
-		ecnHdr := (*unix.Cmsghdr)(unsafe.Pointer(&w.cmsg[base+w.cmsgSegSpace]))
-		if dstIsV4 {
-			ecnHdr.Level = int32(unix.IPPROTO_IP)
-			ecnHdr.Type = int32(unix.IP_TOS)
-		} else {
-			ecnHdr.Level = int32(unix.IPPROTO_IPV6)
-			ecnHdr.Type = int32(unix.IPV6_TCLASS)
-		}
-		setCmsgLen(ecnHdr, unix.CmsgLen(4))
-		dataOff := base + w.cmsgSegSpace + unix.CmsgLen(0)
-		binary.NativeEndian.PutUint32(w.cmsg[dataOff:dataOff+4], uint32(ecn))
+		writeECNCmsg(w.cmsg[base+w.cmsgSegSpace:], dstIsV4, ecn)
 	}
 
 	switch {

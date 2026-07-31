@@ -39,7 +39,8 @@ func NewGenericListener(l *slog.Logger, ip netip.Addr, port int, multi bool, bat
 	return nil, fmt.Errorf("Unexpected PacketConn: %T %#v", pc, pc)
 }
 
-func (u *GenericConn) WriteTo(b []byte, addr netip.AddrPort) error {
+// WriteTo ignores outerECN; the stdlib UDPConn offers no per-packet TOS control.
+func (u *GenericConn) WriteTo(b []byte, addr netip.AddrPort, _ byte) error {
 	_, err := u.UDPConn.WriteToUDPAddrPort(b, addr)
 	return err
 }

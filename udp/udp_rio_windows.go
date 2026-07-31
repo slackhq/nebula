@@ -254,7 +254,8 @@ retry:
 	return n, ep, nil
 }
 
-func (u *RIOConn) WriteTo(buf []byte, ip netip.AddrPort) error {
+// WriteTo ignores outerECN; per-packet ECN marking is not implemented on windows.
+func (u *RIOConn) WriteTo(buf []byte, ip netip.AddrPort, _ byte) error {
 	if !u.isOpen.Load() {
 		return net.ErrClosed
 	}
@@ -321,7 +322,7 @@ func (u *RIOConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, _ []byte) (i
 	// An un-sendable destination costs its own packet, never the ones behind it in the batch.
 	written := 0
 	for i, b := range bufs {
-		if err := u.WriteTo(b, addrs[i]); err == nil {
+		if err := u.WriteTo(b, addrs[i], 0); err == nil {
 			written++
 		} else {
 			u.l.Debug("failed to write packet in batch", "udpAddr", addrs[i], "error", err)

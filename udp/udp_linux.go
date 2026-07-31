@@ -411,11 +411,11 @@ func parseRecvCmsg(hdr *msghdr, wantGRO, wantECN bool) (gso int, ecn byte) {
 	return gso, ecn
 }
 
-func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort) error {
-	return sendto(u.sysFd, b, ip, u.isV4)
+func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort, ecn byte) error {
+	return sendmsg(u.sysFd, b, ip, u.isV4, ecn)
 }
 
-func sendto(fd int, b []byte, addr netip.AddrPort, isV4 bool) error {
+func sendmsg(fd int, b []byte, addr netip.AddrPort, isV4 bool, ecn byte) error {
 	var rsa [unix.SizeofSockaddrInet6]byte
 	nlen, err := writeSockaddr(rsa[:], addr, isV4)
 	if err != nil {
@@ -425,31 +425,48 @@ func sendto(fd int, b []byte, addr netip.AddrPort, isV4 bool) error {
 	if len(b) > 0 {
 		base = &b[0]
 	}
+
+	var iov iovec
+	iov.Base = base
+	setIovLen(&iov, len(b))
+
+	var hdr msghdr
+	hdr.Name = &rsa[0]
+	hdr.Namelen = uint32(nlen)
+	hdr.Iov = &iov
+	setMsgIovlen(&hdr, 1)
+
+	// Stack scratch for the ECN cmsg, typed as uint64s so its base is cmsg-aligned on every arch.
+	// CmsgSpace(4) needs 24 bytes on 64-bit linux, 16 on 32-bit.
+	var ctrl [3]uint64
+	if ecn != 0 {
+		buf := (*[24]byte)(unsafe.Pointer(&ctrl[0]))[:]
+		writeECNCmsg(buf, addr.Addr().Unmap().Is4(), ecn)
+		hdr.Control = &buf[0]
+		setMsgControllen(&hdr, unix.CmsgSpace(4))
+	}
+
 	_, _, errno := unix.Syscall6(
-		unix.SYS_SENDTO,
+		unix.SYS_SENDMSG,
 		uintptr(fd),
-		uintptr(unsafe.Pointer(base)),
-		uintptr(len(b)),
-		0,
-		uintptr(unsafe.Pointer(&rsa[0])),
-		uintptr(nlen),
+		uintptr(unsafe.Pointer(&hdr)),
+		0, 0, 0, 0,
 	)
 	if errno != 0 {
-		return &net.OpError{Op: "sendto", Err: errno}
+		return &net.OpError{Op: "sendmsg", Err: errno}
 	}
 	return nil
 }
 
-// WriteBatch sends bufs via sendmmsg(2), coalescing same-destination runs
-// into UDP-GSO superpackets when supported. See batchWriter in
-// udp_linux_writebatch.go for the mechanics.
+// WriteBatch sends bufs via sendmmsg(2), coalescing same-destination runs into UDP-GSO superpackets when supported.
+// See batchWriter in udp_linux_writebatch.go for the mechanics.
 func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []byte) (int, error) {
 	return u.bw.WriteBatch(bufs, addrs, ecns)
 }
 
-// writeSockaddr encodes addr into buf (which must be at least
-// SizeofSockaddrInet6 bytes). Returns the number of bytes used. If isV4 is
-// true and addr is not a v4 (or v4-in-v6) address, returns an error.
+// writeSockaddr encodes addr into buf (which must be at least SizeofSockaddrInet6 bytes).
+// Returns the number of bytes used.
+// If isV4 is true and addr is not a v4 (or v4-in-v6) address, returns an error.
 func writeSockaddr(buf []byte, addr netip.AddrPort, isV4 bool) (int, error) {
 	ap := addr.Addr().Unmap()
 	if isV4 {

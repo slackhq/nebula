@@ -498,7 +498,7 @@ type testEncWriter struct {
 	protocolVersion cert.Version
 }
 
-func (tw *testEncWriter) SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, nocopy bool) {
+func (tw *testEncWriter) SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, nocopy bool, outerECN byte, q int) {
 }
 func (tw *testEncWriter) Handshake(vpnIp netip.Addr) {
 }

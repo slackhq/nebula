@@ -35,13 +35,16 @@ type EncReader func(
 type Conn interface {
 	Rebind() error
 	LocalAddr() (netip.AddrPort, error)
-	// ListenOut invokes r for each received packet. On batch-capable
-	// backends (recvmmsg), flush is called after each batch is fully
-	// delivered — callers use it to flush per-batch accumulators such as
-	// TUN write coalescers. Single-packet backends call flush after each
-	// packet. flush must not be nil.
+	// ListenOut invokes r for each received packet.
+	// On batch-capable backends (recvmmsg), flush is called after each batch is fully delivered.
+	// Callers use it to flush per-batch accumulators such as TUN write coalescers.
+	// Single-packet backends call flush after each packet. flush must not be nil.
 	ListenOut(r EncReader, flush func()) error
-	WriteTo(b []byte, addr netip.AddrPort) error
+	// WriteTo sends a single packet to addr.
+	// outerECN is the 2-bit IP-level ECN codepoint to stamp on the packet's outer IP header.
+	// 0 (Not-ECT) is the pass-through value.
+	// Linux attaches it as an IP_TOS / IPV6_TCLASS cmsg. Backends without per-packet ECN support ignore it.
+	WriteTo(b []byte, addr netip.AddrPort, outerECN byte) error
 	// WriteBatch sends a contiguous batch of packets, each with its own
 	// destination. bufs and addrs must have the same length. outerECNs may
 	// be nil (treated as all-zero / Not-ECT); when non-nil it must have the
@@ -73,7 +76,7 @@ func (NoopConn) ListenOut(_ EncReader, _ func()) error {
 func (NoopConn) SupportsMultipleReaders() bool {
 	return false
 }
-func (NoopConn) WriteTo(_ []byte, _ netip.AddrPort) error {
+func (NoopConn) WriteTo(_ []byte, _ netip.AddrPort, _ byte) error {
 	return nil
 }
 func (NoopConn) WriteBatch(bufs [][]byte, _ []netip.AddrPort, _ []byte) (int, error) {

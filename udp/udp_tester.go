@@ -153,7 +153,8 @@ func (u *TesterConn) Get(block bool) *Packet {
 // Below this is boilerplate implementation to make nebula actually work
 //********************************************************************************************************************//
 
-func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
+// WriteTo ignores outerECN; the in-memory tester carries no IP headers.
+func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort, _ byte) error {
 	p := acquirePacket()
 	if cap(p.Data) < len(b) {
 		p.Data = make([]byte, len(b))
@@ -174,7 +175,7 @@ func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
 func (u *TesterConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, _ []byte) (int, error) {
 	written := 0
 	for i, b := range bufs {
-		if err := u.WriteTo(b, addrs[i]); err == nil {
+		if err := u.WriteTo(b, addrs[i], 0); err == nil {
 			written++
 		} else {
 			u.l.Debug("failed to write packet in batch", "udpAddr", addrs[i], "error", err)

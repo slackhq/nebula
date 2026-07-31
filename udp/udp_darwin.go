@@ -89,7 +89,8 @@ func NewListenConfig(multi bool) net.ListenConfig {
 //go:noescape
 func sendto(s int, buf []byte, flags int, to unsafe.Pointer, addrlen int32) (err error)
 
-func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
+// WriteTo ignores outerECN; per-packet ECN marking is not implemented on darwin.
+func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort, _ byte) error {
 	var sa unsafe.Pointer
 	var addrLen int32
 
@@ -147,7 +148,7 @@ func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, _ []byte) (i
 	// writability on EAGAIN before giving up on the remainder.
 	written := 0
 	for i, b := range bufs {
-		if err := u.WriteTo(b, addrs[i]); err == nil {
+		if err := u.WriteTo(b, addrs[i], 0); err == nil {
 			written++
 		} else {
 			u.l.Debug("failed to write packet in batch", "udpAddr", addrs[i], "error", err)

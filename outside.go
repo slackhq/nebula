@@ -234,8 +234,12 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 				// Forward this packet through the relay tunnel, rebuilding it in place.
 				// Encode overwrites the old outer header, and the new AEAD tag lands where the old one was
 				fwdBuf := packet[:0:len(packet)] // Cap to len(packet) to protect memory from a larger parent buffer
+				var fwdECN byte
+				if f.ecnEnabled.Load() {
+					fwdECN = meta.OuterECN
+				}
 				//todo it would potentially be nice to batch these
-				f.SendVia(targetHI, targetRelay, signedPayload, nb, fwdBuf, true)
+				f.SendVia(targetHI, targetRelay, signedPayload, nb, fwdBuf, true, fwdECN, q)
 			case TerminalType:
 				hostinfo.logger(f.l).Error("Unexpected Relay Type of Terminal")
 				return
@@ -567,7 +571,7 @@ func (f *Interface) sendRecvError(endpoint netip.AddrPort, index uint32) {
 	f.messageMetrics.Tx(header.RecvError, 0, 1)
 
 	b := header.Encode(make([]byte, header.Len), header.Version, header.RecvError, 0, index, 0)
-	_ = f.outside.WriteTo(b, endpoint)
+	_ = f.outside.WriteTo(b, endpoint, 0)
 	if f.l.Enabled(context.Background(), slog.LevelDebug) {
 		f.l.Debug("Recv error sent",
 			"index", index,

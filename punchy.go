@@ -176,7 +176,7 @@ func (p *Punchy) SendPunch(hostinfo *HostInfo) {
 		p.sendPunchToAllRemotes(hostinfo)
 	} else if hr := hostinfo.GetRemote(); hr.IsValid() {
 		p.metricPunchyTx.Inc(1)
-		p.punchConn.WriteTo([]byte{1}, hr)
+		p.punchConn.WriteTo([]byte{1}, hr, 0)
 	}
 }
 
@@ -200,7 +200,7 @@ func (p *Punchy) SendPunchToAll(hostinfo *HostInfo) {
 func (p *Punchy) sendPunchToAllRemotes(hostinfo *HostInfo) {
 	hostinfo.remotes.ForEach(p.hm.GetPreferredRanges(), func(addr netip.AddrPort, preferred bool) {
 		p.metricPunchyTx.Inc(1)
-		p.punchConn.WriteTo([]byte{1}, addr)
+		p.punchConn.WriteTo([]byte{1}, addr, 0)
 	})
 }
 
@@ -222,7 +222,7 @@ func (p *Punchy) Start(ctx context.Context, ifce EncWriter, hm *HostMap, lh ligh
 				p.l.Debug("Punching", "target", job.target, "vpnAddr", job.vpnAddr)
 			}
 			p.metricHolepunchTx.Inc(1)
-			p.punchConn.WriteTo(empty, job.target)
+			p.punchConn.WriteTo(empty, job.target, 0)
 		case job.vpnAddr.IsValid():
 			// A nebula test packet to the host trying to contact us.
 			// In the case of a double nat or other difficult scenario, this may help establish a tunnel.

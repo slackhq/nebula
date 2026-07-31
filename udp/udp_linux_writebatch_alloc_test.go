@@ -99,3 +99,46 @@ func TestWriteBatchNoAllocs(t *testing.T) {
 		})
 	}
 }
+
+// TestWriteToNoAllocs verifies the single-packet WriteTo path performs no
+// heap allocations on the happy path, both without ancillary data and with
+// an ECN cmsg (which is built in stack scratch, not a per-call slab).
+func TestWriteToNoAllocs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		addr string
+	}{
+		{"v4", "127.0.0.1"},
+		{"v6", "::1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ip := netip.MustParseAddr(tc.addr)
+			newConn := func() Conn {
+				c, err := NewListener(testLogger(), ip, 0, false, 8)
+				if err != nil {
+					t.Fatalf("NewListener: %v", err)
+				}
+				t.Cleanup(func() { _ = c.Close() })
+				return c
+			}
+			tx := newConn()
+			rx := newConn()
+			dst, err := rx.LocalAddr()
+			if err != nil {
+				t.Fatalf("LocalAddr: %v", err)
+			}
+
+			payload := make([]byte, 512)
+			for _, ecn := range []byte{0, 0x03} {
+				allocs := testing.AllocsPerRun(100, func() {
+					if werr := tx.WriteTo(payload, dst, ecn); werr != nil {
+						t.Fatalf("WriteTo(ecn=%#02x): %v", ecn, werr)
+					}
+				})
+				if allocs != 0 {
+					t.Errorf("ecn=%#02x: %v allocs per WriteTo, want 0", ecn, allocs)
+				}
+			}
+		})
+	}
+}

@@ -143,13 +143,7 @@ type Interface struct {
 }
 
 type EncWriter interface {
-	SendVia(via *HostInfo,
-		relay *Relay,
-		ad,
-		nb,
-		out []byte,
-		nocopy bool,
-	)
+	SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, nocopy bool, outerECN byte, q int)
 	SendMessageToVpnAddr(t header.MessageType, st header.MessageSubType, vpnAddr netip.Addr, p, nb, out []byte)
 	SendMessageToHostInfo(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte)
 	Handshake(vpnAddr netip.Addr)
