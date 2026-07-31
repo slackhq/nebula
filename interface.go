@@ -202,6 +202,10 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		return nil, errors.New("no connection manager")
 	}
 
+	if c.routines <= 1 {
+		c.PinThreads = false //pinning is not useful unless there's more than one tun reader
+	}
+
 	cs := c.pki.getCertState()
 	ifce := &Interface{
 		ctx:                   ctx,
@@ -388,26 +392,30 @@ func (f *Interface) listenOut(i int) {
 	f.l.Debug("underlay reader is done", "reader", i)
 }
 
+func (f *Interface) pinThisThread(i int) {
+	var cpu int
+	if n := len(f.cpuAffinity); n > 0 {
+		// Explicit tun.cpu_affinity list wins; parseCpuAffinity already
+		// validated the entries against the allowed CPU set.
+		cpu = f.cpuAffinity[i%n]
+	} else if allowed, err := util.AllowedCPUs(); err == nil && len(allowed) > 0 {
+		// Default: spread queues across the CPUs we're actually allowed to
+		// run on. Under a cpuset/taskset mask these aren't 0..NumCPU-1, so
+		// i % NumCPU would pick unrunnable IDs and every pin would fail.
+		cpu = allowed[i%len(allowed)]
+	} else {
+		cpu = i % runtime.NumCPU()
+	}
+	if err := util.PinThreadToCPU(cpu); err != nil {
+		f.l.Warn("failed to pin tun reader to CPU", "queue", i, "cpu", cpu, "err", err)
+	}
+}
+
 func (f *Interface) listenIn(queue tio.Queue, i int) {
 	// Pinning this thread (and goroutine) to a single CPU keeps every sendmmsg from this goroutine going through the
 	// same TX ring on the nic, so the wire sees per-flow order. Skip entirely when tun.pin_threads is false.
 	if f.pinThreads {
-		var cpu int
-		if n := len(f.cpuAffinity); n > 0 {
-			// Explicit tun.cpu_affinity list wins; parseCpuAffinity already
-			// validated the entries against the allowed CPU set.
-			cpu = f.cpuAffinity[i%n]
-		} else if allowed, err := util.AllowedCPUs(); err == nil && len(allowed) > 0 {
-			// Default: spread queues across the CPUs we're actually allowed to
-			// run on. Under a cpuset/taskset mask these aren't 0..NumCPU-1, so
-			// i % NumCPU would pick unrunnable IDs and every pin would fail.
-			cpu = allowed[i%len(allowed)]
-		} else {
-			cpu = i % runtime.NumCPU()
-		}
-		if err := util.PinThreadToCPU(cpu); err != nil {
-			f.l.Warn("failed to pin tun reader to CPU", "queue", i, "cpu", cpu, "err", err)
-		}
+		f.pinThisThread(i)
 	}
 
 	rejectBuf := make([]byte, mtu)

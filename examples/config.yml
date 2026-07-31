@@ -267,7 +267,7 @@ tun:
 
   # Linux only. pin_threads pins each tun reader/encrypt OS thread to a single CPU. This keeps every goroutine's
   # batched sends flowing through one XPS-selected NIC TX ring, so packets within a flow stay ordered on the wire
-  # instead of being sprayed across multiple TX rings and reordered. Not reloadable.
+  # instead of being sprayed across multiple TX rings and reordered. Not reloadable. Coerced to false if routines <= 1.
   #pin_threads: true
 
   # Linux only. cpu_affinity overrides which CPUs the tun reader threads pin to: a list of CPU IDs, one per routine
