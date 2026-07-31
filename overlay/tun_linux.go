@@ -158,7 +158,8 @@ func offloadUSOEnabled(offloadFlags uint) bool {
 }
 
 func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue bool) (*tun, error) {
-	baseFlags := uint16(unix.IFF_TUN | unix.IFF_NO_PI)
+	// IFF_TUN_EXCL prevents us from attaching to an already-running tun
+	baseFlags := uint16(unix.IFF_TUN | unix.IFF_NO_PI | unix.IFF_TUN_EXCL)
 	if multiqueue {
 		baseFlags |= unix.IFF_MULTI_QUEUE
 	}
