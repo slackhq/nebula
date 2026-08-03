@@ -22,9 +22,12 @@ type m = map[string]any
 
 func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, deviceFactory overlay.DeviceFactory) (retcon *Control, reterr error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	// Automatically cancel the context if Main returns an error, to signal all created goroutines to quit.
+	// The goroutines started below stop only when this context does, and only a caller holding the
+	// Control can arrange that. Cancel whenever we are not handing one back, which covers an error
+	// and a config test alike: a config test used to leave the lighthouse query worker, and a
+	// hostname resolver per dns named static host, running for the life of the process.
 	defer func() {
-		if reterr != nil {
+		if retcon == nil {
 			cancel()
 		}
 	}()
