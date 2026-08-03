@@ -30,8 +30,9 @@ const tcpCoalesceHdrCap = 100
 // When verbatim is true the slot holds a single borrowed packet that is
 // emitted as-is (pure ACK, non-admissible TCP, unparseable, or oversize seed).
 // When verbatim is false the slot is an in-progress coalesced superpacket.
-// hdrBuf is a mutable copy of the seed's IP+TCP header
-// (we patch total length and pseudo-header partial at flush)
+// hdrBuf is a mutable copy of the seed's IP+TCP header, populated on the
+// first append (we patch total length and pseudo-header partial at flush;
+// a slot that never grows flushes from rawPkt and never touches hdrBuf)
 // payIovs are *borrowed* slices from the caller's plaintext buffers.
 // The caller (listenOut) must keep those buffers alive until Flush.
 type coalesceSlot struct {
@@ -51,12 +52,7 @@ type coalesceSlot struct {
 	numSeg   int
 	totalPay int
 	nextSeq  uint32
-	// sealed marks the chain permanently closed: the last-accepted segment
-	// had PSH or was sub-gsoSize, so no append may follow. Belt-and-
-	// suspenders with removal from openSlots, which is what actually stops
-	// the append paths from finding the slot.
-	sealed  bool
-	payIovs [][]byte
+	payIovs  [][]byte
 }
 
 // TCPCoalescer accumulates adjacent in-flow TCP data segments across multiple concurrent flows
@@ -72,10 +68,11 @@ type TCPCoalescer struct {
 	// slots is the ordered event queue. Flush walks it once and emits each
 	// entry as either a WriteGSO (coalesced) or a w.Write (verbatim).
 	slots []*coalesceSlot
-	// openSlots maps a flow key to its most recent non-sealed slot, so new
-	// segments can extend an in-progress superpacket in O(1). Slots are
-	// removed from this map when they close (PSH or short-last-segment),
-	// when a non-admissible packet for that flow arrives, or in Flush.
+	// openSlots maps a flow key to its still-open slot, so new segments can
+	// extend an in-progress superpacket in O(1). Membership here is what
+	// keeps a chain extendable: slots are removed when they close (PSH or
+	// short-last-segment), when a non-admissible packet for that flow
+	// arrives, or in Flush.
 	openSlots map[flowKey]*coalesceSlot
 	// lastSlot caches the most recently touched open slot. Bulk traffic
 	// arrives in same-flow runs (single-flow steady state, or GRO bursts
@@ -83,7 +80,7 @@ type TCPCoalescer struct {
 	// slot's own fk lets the hot path skip the map lookup (and the aeshash
 	// of a 38-byte key) for the length of each run.
 	// Kept in lockstep with openSlots: nil whenever the slot it pointed
-	// at is removed/sealed.
+	// at is removed.
 	lastSlot *coalesceSlot
 	pool     []*coalesceSlot // free list for reuse
 	l        *slog.Logger
@@ -251,8 +248,8 @@ func (c *TCPCoalescer) commitParsed(pkt []byte, info parsedTCP) error {
 	}
 	if open != nil {
 		if c.canAppend(open, pkt, info) {
-			c.appendPayload(open, pkt, info)
-			if open.sealed {
+			if c.appendPayload(open, pkt, info) {
+				// Chain closed (PSH or short segment): stop extending it.
 				delete(c.openSlots, info.fk)
 				c.lastSlot = nil
 			} else {
@@ -316,8 +313,9 @@ func (c *TCPCoalescer) seed(pkt []byte, info parsedTCP) {
 	}
 	s := c.take()
 	s.verbatim = false
-	s.rawPkt = pkt // kept for the numSeg==1 fast path in Flush
-	copy(s.hdrBuf[:], pkt[:info.hdrLen])
+	// rawPkt serves the numSeg==1 fast path in Flush and is the header
+	// source for canAppend until the first append copies it into hdrBuf.
+	s.rawPkt = pkt
 	s.hdrLen = info.hdrLen
 	s.ipHdrLen = info.ipHdrLen
 	s.isV6 = info.fk.isV6
@@ -326,26 +324,28 @@ func (c *TCPCoalescer) seed(pkt []byte, info parsedTCP) {
 	s.numSeg = 1
 	s.totalPay = info.payLen
 	s.nextSeq = info.seq + uint32(info.payLen)
-	s.sealed = info.flags&tcpFlagPsh != 0
 	s.payIovs = append(s.payIovs[:0], pkt[info.hdrLen:info.hdrLen+info.payLen])
 	c.slots = append(c.slots, s)
-	if !s.sealed {
+	if info.flags&tcpFlagPsh == 0 {
 		c.openSlots[info.fk] = s
 		c.lastSlot = s
 	} else if last := c.lastSlot; last != nil && last.fk == info.fk {
-		// PSH-on-seed seals the slot immediately. Any prior cached open
-		// slot for this flow has just been sealed-and-replaced by this
-		// verbatim-shaped seed, so drop the cache too.
+		// PSH-on-seed closes the chain immediately: never registered as
+		// open. Any prior cached open slot for this flow has just been
+		// closed-and-replaced by this seed, so drop the cache too.
 		c.lastSlot = nil
 	}
 }
 
 // canAppend reports whether info's packet extends the slot's seed: same
-// header shape and stable contents, adjacent seq, not oversized, chain not closed.
+// header shape and stable contents, adjacent seq, not oversized. A closed
+// chain never reaches here — closing removes the slot from openSlots, and
+// openSlots/lastSlot are the only paths in.
+// Header reads go through rawPkt, not hdrBuf: hdrBuf is populated lazily on
+// the first append, and every field consulted here is one the pre-flush
+// patches never touch (headersMatch skips the flags byte, and PSH is the
+// only bit patched before flush).
 func (c *TCPCoalescer) canAppend(s *coalesceSlot, pkt []byte, info parsedTCP) bool {
-	if s.sealed {
-		return false
-	}
 	if info.hdrLen != s.hdrLen {
 		return false
 	}
@@ -363,20 +363,29 @@ func (c *TCPCoalescer) canAppend(s *coalesceSlot, pkt []byte, info parsedTCP) bo
 	}
 	// ECE state must be stable across a burst.
 	// Receivers expect the flag set on every segment of a CE-echoing window or none.
-	seedFlags := s.hdrBuf[s.ipHdrLen+13]
+	seedFlags := s.rawPkt[s.ipHdrLen+13]
 	if (seedFlags^info.flags)&tcpFlagEce != 0 {
 		return false
 	}
-	if !s.isV6 && !ipv4CanCoalesceID(s.hdrBuf[:], pkt, s.numSeg) {
+	if !s.isV6 && !ipv4CanCoalesceID(s.rawPkt, pkt, s.numSeg) {
 		return false
 	}
-	if !headersMatch(s.hdrBuf[:s.hdrLen], pkt[:info.hdrLen], s.isV6, s.ipHdrLen) {
+	if !headersMatch(s.rawPkt[:s.hdrLen], pkt[:info.hdrLen], s.isV6, s.ipHdrLen) {
 		return false
 	}
 	return true
 }
 
-func (c *TCPCoalescer) appendPayload(s *coalesceSlot, pkt []byte, info parsedTCP) {
+// appendPayload folds info's packet into s and reports whether the chain is
+// now closed: the segment was sub-gsoSize (kernel TSO allows only the final
+// segment to be short) or carried PSH (a semantic delimiter). The caller
+// must deregister a closed slot from openSlots.
+func (c *TCPCoalescer) appendPayload(s *coalesceSlot, pkt []byte, info parsedTCP) bool {
+	if s.numSeg == 1 {
+		// First append: populate hdrBuf from the seed packet. Deferred out
+		// of seed so solo slots, which flush from rawPkt, never pay the copy.
+		copy(s.hdrBuf[:s.hdrLen], s.rawPkt[:s.hdrLen])
+	}
 	s.payIovs = append(s.payIovs, pkt[info.hdrLen:info.hdrLen+info.payLen])
 	s.numSeg++
 	s.totalPay += info.payLen
@@ -386,9 +395,7 @@ func (c *TCPCoalescer) appendPayload(s *coalesceSlot, pkt []byte, info parsedTCP
 		// last segment. Without this the sender's push signal is dropped.
 		s.hdrBuf[s.ipHdrLen+13] |= tcpFlagPsh
 	}
-	if info.payLen < s.gsoSize || info.flags&tcpFlagPsh != 0 {
-		s.sealed = true
-	}
+	return info.payLen < s.gsoSize || info.flags&tcpFlagPsh != 0
 }
 
 func (c *TCPCoalescer) take() *coalesceSlot {
@@ -408,7 +415,6 @@ func (c *TCPCoalescer) release(s *coalesceSlot) {
 	s.payIovs = s.payIovs[:0]
 	s.numSeg = 0
 	s.totalPay = 0
-	s.sealed = false
 	// Zero the identity fields too: addVerbatim doesn't set them, so a
 	// pooled slot reused as a verbatim must not carry a stale flow key
 	// that a future refactor could mistake for real.

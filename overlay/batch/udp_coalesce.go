@@ -39,11 +39,7 @@ type udpSlot struct {
 	gsoSize  int // per-segment UDP payload length
 	numSeg   int
 	totalPay int
-	// sealed closes the chain: set when a sub-gsoSize segment is appended
-	// (kernel UDP-GSO requires every segment but the last to be exactly gsoSize)
-	// or when limits are hit. No further appends after.
-	sealed  bool
-	payIovs [][]byte
+	payIovs  [][]byte
 }
 
 // UDPCoalescer accumulates adjacent in-flow UDP datagrams across multiple
@@ -60,7 +56,7 @@ type UDPCoalescer struct {
 	// dominant USO workload, and multi-flow arrival comes in GRO runs, so
 	// the fk compare beats the map's 38-byte key hash on most packets.
 	// Kept in lockstep with openSlots: nil whenever the slot it pointed at
-	// is removed/sealed.
+	// is removed.
 	lastSlot *udpSlot
 	pool     []*udpSlot
 }
@@ -151,8 +147,8 @@ func (c *UDPCoalescer) commitParsed(pkt []byte, info parsedUDP) error {
 	}
 	if open != nil {
 		if c.canAppend(open, pkt, info) {
-			c.appendPayload(open, pkt, info)
-			if open.sealed {
+			if c.appendPayload(open, pkt, info) {
+				// Chain closed (short segment): stop extending it.
 				delete(c.openSlots, info.fk)
 				c.lastSlot = nil
 			} else {
@@ -161,7 +157,7 @@ func (c *UDPCoalescer) commitParsed(pkt []byte, info parsedUDP) error {
 			return nil
 		}
 		// Can't extend: evict it from openSlots and fall through to seed a
-		// fresh slot. (Eviction only; sealed is never set here.)
+		// fresh slot.
 		delete(c.openSlots, info.fk)
 		if c.lastSlot == open {
 			c.lastSlot = nil
@@ -218,8 +214,9 @@ func (c *UDPCoalescer) seed(pkt []byte, info parsedUDP) {
 	}
 	s := c.take()
 	s.verbatim = false
-	s.rawPkt = pkt // kept for the numSeg==1 fast path in Flush
-	copy(s.hdrBuf[:], pkt[:info.hdrLen])
+	// rawPkt serves the numSeg==1 fast path in Flush and is the header
+	// source for canAppend until the first append copies it into hdrBuf.
+	s.rawPkt = pkt
 	s.hdrLen = info.hdrLen
 	s.ipHdrLen = info.ipHdrLen
 	s.isV6 = info.fk.isV6
@@ -227,7 +224,6 @@ func (c *UDPCoalescer) seed(pkt []byte, info parsedUDP) {
 	s.gsoSize = info.payLen
 	s.numSeg = 1
 	s.totalPay = info.payLen
-	s.sealed = false
 	s.payIovs = append(s.payIovs[:0], pkt[info.hdrLen:info.hdrLen+info.payLen])
 	c.slots = append(c.slots, s)
 	c.openSlots[info.fk] = s
@@ -238,9 +234,6 @@ func (c *UDPCoalescer) seed(pkt []byte, info parsedUDP) {
 // Kernel UDP-GSO requires every segment except possibly the last to be
 // exactly gsoSize, and the last may be shorter (≤ gsoSize).
 func (c *UDPCoalescer) canAppend(s *udpSlot, pkt []byte, info parsedUDP) bool {
-	if s.sealed {
-		return false
-	}
 	if info.hdrLen != s.hdrLen {
 		return false
 	}
@@ -253,23 +246,33 @@ func (c *UDPCoalescer) canAppend(s *udpSlot, pkt []byte, info parsedUDP) bool {
 	if s.hdrLen+s.totalPay+info.payLen > udpCoalesceBufSize {
 		return false
 	}
-	if !s.isV6 && !ipv4CanCoalesceID(s.hdrBuf[:], pkt, s.numSeg) {
+	// Header reads go through rawPkt: hdrBuf is populated lazily on the
+	// first append, and the fields consulted here are never patched before
+	// flush. A closed chain never reaches here — closing removes the slot
+	// from openSlots, the only path in.
+	if !s.isV6 && !ipv4CanCoalesceID(s.rawPkt, pkt, s.numSeg) {
 		return false
 	}
-	if !udpHeadersMatch(s.hdrBuf[:s.hdrLen], pkt[:info.hdrLen], s.isV6, s.ipHdrLen) {
+	if !udpHeadersMatch(s.rawPkt[:s.hdrLen], pkt[:info.hdrLen], s.isV6, s.ipHdrLen) {
 		return false
 	}
 	return true
 }
 
-func (c *UDPCoalescer) appendPayload(s *udpSlot, pkt []byte, info parsedUDP) {
+// appendPayload folds info's packet into s and reports whether the chain is
+// now closed: kernel UDP-GSO requires every segment but the last to be
+// exactly gsoSize, so a short segment must be the final one. The caller
+// must deregister a closed slot from openSlots.
+func (c *UDPCoalescer) appendPayload(s *udpSlot, pkt []byte, info parsedUDP) bool {
+	if s.numSeg == 1 {
+		// First append: populate hdrBuf from the seed packet. Deferred out
+		// of seed so solo slots, which flush from rawPkt, never pay the copy.
+		copy(s.hdrBuf[:s.hdrLen], s.rawPkt[:s.hdrLen])
+	}
 	s.payIovs = append(s.payIovs, pkt[info.hdrLen:info.hdrLen+info.payLen])
 	s.numSeg++
 	s.totalPay += info.payLen
-	if info.payLen < s.gsoSize {
-		// Last-segment-can-be-shorter: this seals the chain.
-		s.sealed = true
-	}
+	return info.payLen < s.gsoSize
 }
 
 func (c *UDPCoalescer) take() *udpSlot {
@@ -289,7 +292,6 @@ func (c *UDPCoalescer) release(s *udpSlot) {
 	s.payIovs = s.payIovs[:0]
 	s.numSeg = 0
 	s.totalPay = 0
-	s.sealed = false
 	// Zero the identity fields too; see TCPCoalescer.release.
 	s.fk = flowKey{}
 	s.hdrLen = 0
