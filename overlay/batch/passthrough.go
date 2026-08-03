@@ -2,6 +2,8 @@ package batch
 
 import (
 	"io"
+
+	"github.com/slackhq/nebula/firewall"
 )
 
 // Passthrough is a RxBatcher that doesn't batch anything, it just accumulates and then sends packets.
@@ -17,9 +19,7 @@ func NewPassthrough(w io.Writer) *Passthrough {
 	}
 }
 
-// Commit ignores the sort key: a bare Passthrough (no MultiCoalescer in
-// front) emits in arrival order, exactly as before keys existed.
-func (p *Passthrough) Commit(pkt []byte, _ SortKey) error {
+func (p *Passthrough) Commit(pkt []byte, _ SortKey, _ *firewall.ParsedPacket) error {
 	return p.enqueue(pkt)
 }
 

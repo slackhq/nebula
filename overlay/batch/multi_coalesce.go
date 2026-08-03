@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"slices"
 
-	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/firewall"
 )
 
 // MultiCoalescer stages plaintext packets with their (epoch, counter) sort
@@ -47,9 +47,15 @@ type MultiCoalescer struct {
 	staged []stagedPacket
 }
 
+// stagedPacket also carries the scalars dispatch needs from the firewall's
+// ParsedPacket: pp itself is reused by the caller per packet and must not be
+// retained past Commit, so the relevant fields are copied by value here.
 type stagedPacket struct {
-	pkt []byte
-	key SortKey
+	pkt      []byte
+	key      SortKey
+	proto    byte
+	fragAny  bool
+	ipHdrLen uint16
 }
 
 // NewMultiCoalescer builds a multi-lane batcher over w, based on available
@@ -65,32 +71,18 @@ func NewMultiCoalescer(w io.Writer, l *slog.Logger) RxBatcher {
 	return m
 }
 
-// IANA protocol numbers for the IPv6 extension headers
-// iputil.IPv6FindUpperProtocol can step over. The set here must match what
-// that walker walks: it is the hot path's cheap pre-guard, so the walk is
-// only paid when it can actually make progress.
-const (
-	ipProtoHopByHop = 0
-	ipProtoRouting  = 43
-	ipProtoFragment = 44
-	ipProtoAH       = 51
-	ipProtoDestOpts = 60
-)
-
-// isIPv6ExtHeader reports whether nh is an extension header the terminal-
-// protocol walk knows how to step over.
-func isIPv6ExtHeader(nh byte) bool {
-	switch nh {
-	case ipProtoHopByHop, ipProtoRouting, ipProtoFragment, ipProtoAH, ipProtoDestOpts:
-		return true
-	}
-	return false
-}
-
-// Commit stages pkt for the next Flush. All parsing and lane dispatch is
-// deferred to Flush so it runs on packets already in transmission order.
-func (m *MultiCoalescer) Commit(pkt []byte, key SortKey) error {
-	m.staged = append(m.staged, stagedPacket{pkt: pkt, key: key})
+// Commit stages pkt for the next Flush. All lane dispatch is deferred to
+// Flush so it runs on packets already in transmission order. pp is the
+// firewall's parse of pkt — the single source of truth for the packet's
+// protocol and L4 offset — and is only borrowed for this call.
+func (m *MultiCoalescer) Commit(pkt []byte, key SortKey, pp *firewall.ParsedPacket) error {
+	m.staged = append(m.staged, stagedPacket{
+		pkt:      pkt,
+		key:      key,
+		proto:    pp.Protocol,
+		fragAny:  pp.FragAny,
+		ipHdrLen: uint16(pp.IPHdrLen),
+	})
 	return nil
 }
 
@@ -114,59 +106,43 @@ func compareStaged(a, b stagedPacket) int {
 	return 1
 }
 
-// dispatch routes one packet to the appropriate lane based on IP version +
-// L4 proto. On the success path the IP/TCP-or-UDP parse happens here once
-// and the parsed struct is handed to the lane via commitParsed so the lane
-// doesn't re-walk the header.
-func (m *MultiCoalescer) dispatch(pkt []byte) error {
-	if len(pkt) < 20 {
-		return m.pt.enqueue(pkt)
-	}
-	v := pkt[0] >> 4
-	var proto byte
-	switch v {
-	case 4:
-		proto = pkt[9]
-	case 6:
-		if len(pkt) < 40 {
-			return m.pt.enqueue(pkt)
-		}
-		proto = pkt[6]
-		if isIPv6ExtHeader(proto) {
-			// Walk to the terminal protocol so the packet routes to its flow's protocol lane.
-			// This protects flow ordering.
-			proto, _, _ = iputil.IPv6FindUpperProtocol(pkt)
-		}
-	default:
-		return m.pt.enqueue(pkt)
-	}
-	switch proto {
+// dispatch routes one staged packet to its lane.
+// The protocol and L4 offset come from the firewall's parse of the same packet.
+// Any shape a lane can't coalesce seals every open chain in its lane
+func (m *MultiCoalescer) dispatch(sp stagedPacket) error {
+	switch sp.proto {
 	case ipProtoTCP:
 		if m.tcp != nil {
-			info, ok := parseTCPBase(pkt)
-			if !ok {
-				// Unsupported TCP shape (IP options, fragments, ...). Its flow
-				// key is unknowable, so seal every open chain: dispatch runs in
-				// transmission order, and sealing is what keeps later data from
-				// extending a chain that would emit ahead of this packet.
+			if sp.fragAny {
 				m.tcp.sealAllOpen()
-				m.tcp.addVerbatim(pkt)
+				m.tcp.addVerbatim(sp.pkt)
 				return nil
 			}
-			return m.tcp.commitParsed(pkt, info)
+			info, ok := parseTCPAt(sp.pkt, int(sp.ipHdrLen))
+			if !ok {
+				m.tcp.sealAllOpen()
+				m.tcp.addVerbatim(sp.pkt)
+				return nil
+			}
+			return m.tcp.commitParsed(sp.pkt, info)
 		}
 	case ipProtoUDP:
 		if m.udp != nil {
-			info, ok := parseUDP(pkt)
-			if !ok {
+			if sp.fragAny {
 				m.udp.sealAllOpen()
-				m.udp.addVerbatim(pkt)
+				m.udp.addVerbatim(sp.pkt)
 				return nil
 			}
-			return m.udp.commitParsed(pkt, info)
+			info, ok := parseUDPAt(sp.pkt, int(sp.ipHdrLen))
+			if !ok {
+				m.udp.sealAllOpen()
+				m.udp.addVerbatim(sp.pkt)
+				return nil
+			}
+			return m.udp.commitParsed(sp.pkt, info)
 		}
 	}
-	return m.pt.enqueue(pkt)
+	return m.pt.enqueue(sp.pkt)
 }
 
 // Flush sorts the staged batch into transmission order, replays it into the
@@ -178,7 +154,7 @@ func (m *MultiCoalescer) Flush() error {
 
 	var errs []error
 	for _, sp := range m.staged {
-		if err := m.dispatch(sp.pkt); err != nil {
+		if err := m.dispatch(sp); err != nil {
 			errs = append(errs, err)
 		}
 	}

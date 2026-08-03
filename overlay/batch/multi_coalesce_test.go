@@ -6,6 +6,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/test"
 )
 
@@ -48,19 +49,19 @@ func TestMultiCoalescerRoutesByProto(t *testing.T) {
 	icmp[3] = 28
 	icmp[9] = 1
 
-	if err := m.Commit(buildTCPv4(1000, tcpAck, tcpPay), k.next()); err != nil {
+	if err := m.Commit(buildTCPv4(1000, tcpAck, tcpPay), k.next(), testPP(buildTCPv4(1000, tcpAck, tcpPay))); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildTCPv4(2200, tcpAck, tcpPay), k.next()); err != nil {
+	if err := m.Commit(buildTCPv4(2200, tcpAck, tcpPay), k.next(), testPP(buildTCPv4(2200, tcpAck, tcpPay))); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildUDPv4(2000, 53, udpPay), k.next()); err != nil {
+	if err := m.Commit(buildUDPv4(2000, 53, udpPay), k.next(), testPP(buildUDPv4(2000, 53, udpPay))); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildUDPv4(2000, 53, udpPay), k.next()); err != nil {
+	if err := m.Commit(buildUDPv4(2000, 53, udpPay), k.next(), testPP(buildUDPv4(2000, 53, udpPay))); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(icmp, k.next()); err != nil {
+	if err := m.Commit(icmp, k.next(), testPP(icmp)); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Flush(); err != nil {
@@ -89,13 +90,13 @@ func TestMultiCoalescerRestoresTransmissionOrder(t *testing.T) {
 
 	// Transmission order: seq 1000 (c1), 2200 (c2), 3400 (c3).
 	// Arrival order: 3400, 1000, 2200.
-	if err := m.Commit(buildTCPv4(3400, tcpAck, pay), SortKey{Epoch: 1, Counter: 3}); err != nil {
+	if err := m.Commit(buildTCPv4(3400, tcpAck, pay), SortKey{Epoch: 1, Counter: 3}, testPP(buildTCPv4(3400, tcpAck, pay))); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildTCPv4(1000, tcpAck, pay), SortKey{Epoch: 1, Counter: 1}); err != nil {
+	if err := m.Commit(buildTCPv4(1000, tcpAck, pay), SortKey{Epoch: 1, Counter: 1}, testPP(buildTCPv4(1000, tcpAck, pay))); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildTCPv4(2200, tcpAck, pay), SortKey{Epoch: 1, Counter: 2}); err != nil {
+	if err := m.Commit(buildTCPv4(2200, tcpAck, pay), SortKey{Epoch: 1, Counter: 2}, testPP(buildTCPv4(2200, tcpAck, pay))); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Flush(); err != nil {
@@ -115,10 +116,10 @@ func TestMultiCoalescerRestoresTransmissionOrder(t *testing.T) {
 
 	// Retransmit: seq 1000 again but counter 4 — sorts after seq 4600 (c3).
 	w.writes, w.gsoWrites, w.order = nil, nil, nil
-	if err := m.Commit(buildTCPv4(1000, tcpAck, pay), SortKey{Epoch: 1, Counter: 4}); err != nil {
+	if err := m.Commit(buildTCPv4(1000, tcpAck, pay), SortKey{Epoch: 1, Counter: 4}, testPP(buildTCPv4(1000, tcpAck, pay))); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildTCPv4(4600, tcpAck, pay), SortKey{Epoch: 1, Counter: 3}); err != nil {
+	if err := m.Commit(buildTCPv4(4600, tcpAck, pay), SortKey{Epoch: 1, Counter: 3}, testPP(buildTCPv4(4600, tcpAck, pay))); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Flush(); err != nil {
@@ -144,16 +145,16 @@ func TestMultiCoalescerRestoresOrderAcrossFlows(t *testing.T) {
 
 	// Transmission: A.100 (c1), B.500 (c2), A.1300 (c3), B.1700 (c4).
 	// Arrival: A.1300, B.1700, A.100, B.500.
-	if err := m.Commit(buildTCPv4Ports(1000, 2000, 1300, tcpAck, pay), SortKey{Epoch: 1, Counter: 3}); err != nil {
+	if err := m.Commit(buildTCPv4Ports(1000, 2000, 1300, tcpAck, pay), SortKey{Epoch: 1, Counter: 3}, testPP(buildTCPv4Ports(1000, 2000, 1300, tcpAck, pay))); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildTCPv4Ports(3000, 2000, 1700, tcpAck, pay), SortKey{Epoch: 1, Counter: 4}); err != nil {
+	if err := m.Commit(buildTCPv4Ports(3000, 2000, 1700, tcpAck, pay), SortKey{Epoch: 1, Counter: 4}, testPP(buildTCPv4Ports(3000, 2000, 1700, tcpAck, pay))); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildTCPv4Ports(1000, 2000, 100, tcpAck, pay), SortKey{Epoch: 1, Counter: 1}); err != nil {
+	if err := m.Commit(buildTCPv4Ports(1000, 2000, 100, tcpAck, pay), SortKey{Epoch: 1, Counter: 1}, testPP(buildTCPv4Ports(1000, 2000, 100, tcpAck, pay))); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildTCPv4Ports(3000, 2000, 500, tcpAck, pay), SortKey{Epoch: 1, Counter: 2}); err != nil {
+	if err := m.Commit(buildTCPv4Ports(3000, 2000, 500, tcpAck, pay), SortKey{Epoch: 1, Counter: 2}, testPP(buildTCPv4Ports(3000, 2000, 500, tcpAck, pay))); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Flush(); err != nil {
@@ -195,10 +196,10 @@ func TestMultiCoalescerEpochOrdersAcrossRehandshake(t *testing.T) {
 	pay := make([]byte, 1200)
 
 	// New session's first data arrives before the old session's last data.
-	if err := m.Commit(buildTCPv4(2200, tcpAck, pay), SortKey{Epoch: 8, Counter: 1}); err != nil {
+	if err := m.Commit(buildTCPv4(2200, tcpAck, pay), SortKey{Epoch: 8, Counter: 1}, testPP(buildTCPv4(2200, tcpAck, pay))); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildTCPv4(1000, tcpAck, pay), SortKey{Epoch: 7, Counter: 9_000_000}); err != nil {
+	if err := m.Commit(buildTCPv4(1000, tcpAck, pay), SortKey{Epoch: 7, Counter: 9_000_000}, testPP(buildTCPv4(1000, tcpAck, pay))); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Flush(); err != nil {
@@ -227,10 +228,10 @@ func TestMultiCoalescerNoUSOFallsThrough(t *testing.T) {
 		t.Fatal("UDP lane must not come up without USO")
 	}
 
-	if err := m.Commit(buildUDPv4(1000, 53, make([]byte, 800)), k.next()); err != nil {
+	if err := m.Commit(buildUDPv4(1000, 53, make([]byte, 800)), k.next(), testPP(buildUDPv4(1000, 53, make([]byte, 800)))); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildUDPv4(1000, 53, make([]byte, 800)), k.next()); err != nil {
+	if err := m.Commit(buildUDPv4(1000, 53, make([]byte, 800)), k.next(), testPP(buildUDPv4(1000, 53, make([]byte, 800)))); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Flush(); err != nil {
@@ -261,7 +262,7 @@ func TestMultiCoalescerNoOffloadsStillSorts(t *testing.T) {
 	}
 	// Committed in reverse transmission order; keys carry the truth.
 	for i := len(pkts) - 1; i >= 0; i-- {
-		if err := m.Commit(pkts[i], SortKey{Epoch: 1, Counter: uint64(i + 1)}); err != nil {
+		if err := m.Commit(pkts[i], SortKey{Epoch: 1, Counter: uint64(i + 1)}, testPP(pkts[i])); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -325,13 +326,13 @@ func TestMultiCoalescerIPv6FragmentStaysInLane(t *testing.T) {
 	m := newTestMultiCoalescer(t, w)
 	k := &keySeq{epoch: 1}
 
-	if err := m.Commit(buildUDPv6Fragment(2000, 53, make([]byte, 512)), k.next()); err != nil {
+	if err := m.Commit(buildUDPv6Fragment(2000, 53, make([]byte, 512)), k.next(), testPP(buildUDPv6Fragment(2000, 53, make([]byte, 512)))); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800)), k.next()); err != nil {
+	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800)), k.next(), testPP(buildUDPv6(2000, 53, make([]byte, 800)))); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800)), k.next()); err != nil {
+	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800)), k.next(), testPP(buildUDPv6(2000, 53, make([]byte, 800)))); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Flush(); err != nil {
@@ -358,19 +359,19 @@ func TestMultiCoalescerFragmentSealsUDPChains(t *testing.T) {
 	m := newTestMultiCoalescer(t, w)
 	k := &keySeq{epoch: 1}
 
-	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800)), k.next()); err != nil {
+	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800)), k.next(), testPP(buildUDPv6(2000, 53, make([]byte, 800)))); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800)), k.next()); err != nil {
+	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800)), k.next(), testPP(buildUDPv6(2000, 53, make([]byte, 800)))); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildUDPv6Fragment(2000, 53, make([]byte, 512)), k.next()); err != nil {
+	if err := m.Commit(buildUDPv6Fragment(2000, 53, make([]byte, 512)), k.next(), testPP(buildUDPv6Fragment(2000, 53, make([]byte, 512)))); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800)), k.next()); err != nil {
+	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800)), k.next(), testPP(buildUDPv6(2000, 53, make([]byte, 800)))); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800)), k.next()); err != nil {
+	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800)), k.next(), testPP(buildUDPv6(2000, 53, make([]byte, 800)))); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Flush(); err != nil {
@@ -398,10 +399,10 @@ func TestMultiCoalescerNoTSOFallsThrough(t *testing.T) {
 	}
 
 	pay := make([]byte, 1200)
-	if err := m.Commit(buildTCPv4(1000, tcpAck, pay), k.next()); err != nil {
+	if err := m.Commit(buildTCPv4(1000, tcpAck, pay), k.next(), testPP(buildTCPv4(1000, tcpAck, pay))); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildTCPv4(2200, tcpAck, pay), k.next()); err != nil {
+	if err := m.Commit(buildTCPv4(2200, tcpAck, pay), k.next(), testPP(buildTCPv4(2200, tcpAck, pay))); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Flush(); err != nil {
@@ -413,4 +414,30 @@ func TestMultiCoalescerNoTSOFallsThrough(t *testing.T) {
 	if len(w.writes) != 2 {
 		t.Errorf("TCP must pass through as 2 plain writes, got %d", len(w.writes))
 	}
+}
+
+// testPP derives the ParsedPacket newPacket would produce for the packet
+// shapes the tests build: plain v4/v6, v4 with options or fragment bits set,
+// and the single-fragment-header v6 shape from buildUDPv6Fragment. Anything
+// unrecognizable stays zero (proto 0 routes to the passthrough lane).
+func testPP(pkt []byte) *firewall.ParsedPacket {
+	pp := &firewall.ParsedPacket{}
+	if len(pkt) < 20 {
+		return pp
+	}
+	switch pkt[0] >> 4 {
+	case 4:
+		pp.Protocol = pkt[9]
+		pp.IPHdrLen = int(pkt[0]&0x0f) * 4
+		pp.FragAny = binary.BigEndian.Uint16(pkt[6:8])&0x3fff != 0
+	case 6:
+		pp.Protocol = pkt[6]
+		pp.IPHdrLen = 40
+		if pp.Protocol == 44 { // fragment extension header
+			pp.Protocol = pkt[40]
+			pp.IPHdrLen = 48
+			pp.FragAny = true
+		}
+	}
+	return pp
 }

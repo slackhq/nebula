@@ -15,7 +15,7 @@ import (
 	"github.com/slackhq/nebula/routing"
 )
 
-func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packet, nb []byte, sendBatch *batch.SendBatch, rejectBuf []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.ParsedPacket, nb []byte, sendBatch *batch.SendBatch, rejectBuf []byte, q int, localCache firewall.ConntrackCache) {
 	// borrowed: pkt.Bytes is owned by the originating tio.Queue and is
 	// only valid until the next Read on that queue. Every consumer below
 	// (parse, self-forward, handshake cache, sendInsideMessage) reads it
@@ -74,7 +74,7 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packe
 		return
 	}
 
-	hostinfo, ready := f.getOrHandshakeConsiderRouting(fwPacket, func(hh *HandshakeHostInfo) {
+	hostinfo, ready := f.getOrHandshakeConsiderRouting(&fwPacket.Packet, func(hh *HandshakeHostInfo) {
 		// borrowed: SegmentSuperpacket builds each segment in the kernel-supplied pkt
 		// bytes underneath. cachePacket explicitly copies its argument (handshake_manager.go cachePacket),
 		// so retaining segments past the loop is safe.
@@ -105,7 +105,7 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packe
 		return
 	}
 
-	dropReason := f.firewall.Drop(*fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
+	dropReason := f.firewall.Drop(fwPacket.Packet, false, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason == nil {
 		f.sendInsideMessage(hostinfo, pkt, nb, sendBatch)
 	} else {
@@ -371,7 +371,7 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 }
 
 func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte) {
-	fp := &firewall.Packet{}
+	fp := &firewall.ParsedPacket{}
 	err := newPacket(p, false, fp)
 	if err != nil {
 		f.l.Warn("error while parsing outgoing packet for firewall check", "error", err)
@@ -379,7 +379,7 @@ func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubTyp
 	}
 
 	// check if packet is in outbound fw rules
-	dropReason := f.firewall.Drop(*fp, false, hostinfo, f.pki.GetCAPool(), nil)
+	dropReason := f.firewall.Drop(fp.Packet, false, hostinfo, f.pki.GetCAPool(), nil)
 	if dropReason != nil {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			f.l.Debug("dropping cached packet",

@@ -65,3 +65,12 @@ func (fp Packet) MarshalJSON() ([]byte, error) {
 		"Fragment":   fp.Fragment,
 	})
 }
+
+// ParsedPacket is a Packet plus the parse byproducts the RX path reuses
+type ParsedPacket struct {
+	Packet
+	IPHdrLen int
+	// FragAny reports any fragmentation at all: MF flag or nonzero offset for IPv4, a fragment extension header for IPv6.
+	// Distinct from Packet.Fragment, which is true only for NON-FIRST fragments
+	FragAny bool
+}

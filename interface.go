@@ -360,7 +360,7 @@ func (f *Interface) listenOut(i int) {
 	ctCache := firewall.NewConntrackCacheTicker(f.ctx, f.l, f.conntrackCacheTimeout)
 	lhh := f.lightHouse.NewRequestHandler()
 	h := &header.H{}
-	fwPacket := &firewall.Packet{}
+	fwPacket := &firewall.ParsedPacket{}
 	nb := make([]byte, 12, 12)
 	scratch := make([]byte, mtu)
 
@@ -416,7 +416,7 @@ func (f *Interface) listenIn(queue tio.Queue, i int) {
 	rejectBuf := make([]byte, mtu)
 	arenaSize := batch.SendBatchCap * (udp.MTU + 32)
 	sb := batch.NewSendBatch(f.writers[i], batch.SendBatchCap, arenaSize)
-	fwPacket := &firewall.Packet{}
+	fwPacket := &firewall.ParsedPacket{}
 	nb := make([]byte, 12, 12)
 
 	conntrackCache := firewall.NewConntrackCacheTicker(f.ctx, f.l, f.conntrackCacheTimeout)

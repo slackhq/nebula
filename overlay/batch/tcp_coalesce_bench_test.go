@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/test"
 )
@@ -169,16 +170,22 @@ func BenchmarkCommitNonCoalesceableTCP(b *testing.B) {
 
 // runMultiCommitBench drives MultiCoalescer.Commit with in-order keys, so
 // it includes the staging sort's already-sorted fast path plus the
-// dispatch-time parse — the full steady-state cost of the batcher.
+// dispatch-time parse — the full steady-state cost of the batcher. The
+// ParsedPackets are precomputed: in production they fall out of the
+// firewall's newPacket, which this bench does not model.
 func runMultiCommitBench(b *testing.B, pkts [][]byte, batchSize int) {
 	b.Helper()
 	m := NewMultiCoalescer(nopTunWriter{}, test.NewLogger())
+	pps := make([]*firewall.ParsedPacket, len(pkts))
+	for i, p := range pkts {
+		pps[i] = testPP(p)
+	}
 	b.ReportAllocs()
 	b.SetBytes(int64(len(pkts[0])))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		pkt := pkts[i%len(pkts)]
-		if err := m.Commit(pkt, SortKey{Epoch: 1, Counter: uint64(i + 1)}); err != nil {
+		j := i % len(pkts)
+		if err := m.Commit(pkts[j], SortKey{Epoch: 1, Counter: uint64(i + 1)}, pps[j]); err != nil {
 			b.Fatal(err)
 		}
 		if (i+1)%batchSize == 0 {

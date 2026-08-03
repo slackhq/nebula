@@ -87,12 +87,27 @@ type parsedUDP struct {
 // Returns ok=false for non-UDP, malformed, or unsupported header shapes
 // (IPv4 with options/fragmentation, IPv6 with extension headers).
 func parseUDP(pkt []byte) (parsedUDP, bool) {
-	var p parsedUDP
 	ip, ok := parseIPPrologue(pkt, ipProtoUDP)
 	if !ok {
-		return p, false
+		return parsedUDP{}, false
 	}
-	pkt = ip.pkt
+	return parseUDPTail(ip)
+}
+
+// parseUDPAt is parseUDP for the dispatcher path: the packet is already
+// known to be UDP and ipHdrLen is the upstream-resolved L4 offset (see parseIPAt).
+func parseUDPAt(pkt []byte, ipHdrLen int) (parsedUDP, bool) {
+	ip, ok := parseIPAt(pkt, ipHdrLen)
+	if !ok {
+		return parsedUDP{}, false
+	}
+	return parseUDPTail(ip)
+}
+
+// parseUDPTail layers the UDP-header parse on a validated IP prologue.
+func parseUDPTail(ip parsedIP) (parsedUDP, bool) {
+	var p parsedUDP
+	pkt := ip.pkt
 	p.fk = ip.fk
 	p.ipHdrLen = ip.ipHdrLen
 

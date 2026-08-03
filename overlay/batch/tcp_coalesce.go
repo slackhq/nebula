@@ -117,12 +117,27 @@ type parsedTCP struct {
 // regardless of whether it's admissible for coalescing. Returns ok=false for non-TCP or malformed input.
 // Accepts IPv4 (no options or fragmentation) and IPv6 (no extension headers).
 func parseTCPBase(pkt []byte) (parsedTCP, bool) {
-	var p parsedTCP
 	ip, ok := parseIPPrologue(pkt, ipProtoTCP)
 	if !ok {
-		return p, false
+		return parsedTCP{}, false
 	}
-	pkt = ip.pkt
+	return parseTCPTail(ip)
+}
+
+// parseTCPAt is parseTCPBase for the dispatcher path: the packet is already
+// known to be TCP and ipHdrLen is the upstream-resolved L4 offset (see parseIPAt).
+func parseTCPAt(pkt []byte, ipHdrLen int) (parsedTCP, bool) {
+	ip, ok := parseIPAt(pkt, ipHdrLen)
+	if !ok {
+		return parsedTCP{}, false
+	}
+	return parseTCPTail(ip)
+}
+
+// parseTCPTail layers the TCP-header parse on a validated IP prologue.
+func parseTCPTail(ip parsedIP) (parsedTCP, bool) {
+	var p parsedTCP
+	pkt := ip.pkt
 	p.fk = ip.fk
 	p.ipHdrLen = ip.ipHdrLen
 

@@ -1,5 +1,7 @@
 package batch
 
+import "github.com/slackhq/nebula/firewall"
+
 // SortKey identifies a packet's position in its sender's transmission order.
 // Epoch is a receiver-local ordinal for the tunnel (ConnectionState) that
 // decrypted the packet. A re-handshake replaces the tunnel outright — new
@@ -15,9 +17,12 @@ type SortKey struct {
 
 type RxBatcher interface {
 	// Commit stages pkt to be flushed by the batch. key must carry the
-	// packet's session epoch and message counter. The caller must keep pkt
-	// valid until the next Flush, and not re-use it.
-	Commit(pkt []byte, key SortKey) error
+	// packet's session epoch and message counter; pp must be the firewall's
+	// parse of this same packet. The caller must keep pkt valid until the
+	// next Flush, and not re-use it. pp, by contrast, is borrowed only for
+	// the duration of the call — the caller reuses one ParsedPacket per
+	// receive loop — so implementations must copy what they need from it.
+	Commit(pkt []byte, key SortKey, pp *firewall.ParsedPacket) error
 	// Flush emits every staged packet. Packets are first sorted by key, so
 	// within each protocol lane emission follows the sender's transmission
 	// order regardless of arrival order. One shape may legally be overtaken

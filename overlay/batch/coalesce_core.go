@@ -40,34 +40,19 @@ type parsedIP struct {
 // On success, p.pkt is len-trimmed to the IP-declared length so callers
 // don't have to repeat the trim. wantProto is the IANA protocol number to
 // require (6 for TCP, 17 for UDP); ok=false for any other value.
+// This is the standalone-lane-Commit entry; the dispatcher path uses
+// parseIPAt, where the protocol was already resolved upstream.
 func parseIPPrologue(pkt []byte, wantProto byte) (parsedIP, bool) {
 	var p parsedIP
 	if len(pkt) < 20 {
 		return p, false
 	}
-	v := pkt[0] >> 4
-	switch v {
+	switch pkt[0] >> 4 {
 	case 4:
-		ihl := int(pkt[0]&0x0f) * 4
-		if ihl != 20 {
-			return p, false
-		}
 		if pkt[9] != wantProto {
 			return p, false
 		}
-		// Reject actual fragmentation (MF or non-zero frag offset).
-		if binary.BigEndian.Uint16(pkt[6:8])&0x3fff != 0 {
-			return p, false
-		}
-		totalLen := int(binary.BigEndian.Uint16(pkt[2:4]))
-		if totalLen > len(pkt) || totalLen < ihl {
-			return p, false
-		}
-		p.ipHdrLen = 20
-		p.fk.isV6 = false
-		copy(p.fk.src[:4], pkt[12:16])
-		copy(p.fk.dst[:4], pkt[16:20])
-		p.pkt = pkt[:totalLen]
+		return parseIPv4Prologue(pkt)
 	case 6:
 		if len(pkt) < 40 {
 			return p, false
@@ -75,18 +60,77 @@ func parseIPPrologue(pkt []byte, wantProto byte) (parsedIP, bool) {
 		if pkt[6] != wantProto {
 			return p, false
 		}
-		payloadLen := int(binary.BigEndian.Uint16(pkt[4:6]))
-		if 40+payloadLen > len(pkt) {
-			return p, false
-		}
-		p.ipHdrLen = 40
-		p.fk.isV6 = true
-		copy(p.fk.src[:], pkt[8:24])
-		copy(p.fk.dst[:], pkt[24:40])
-		p.pkt = pkt[:40+payloadLen]
-	default:
+		return parseIPv6Prologue(pkt)
+	}
+	return p, false
+}
+
+// parseIPAt is the dispatcher-path prologue: newPacket already resolved the
+// L4 protocol and header offset once for the firewall, so the proto sniff is
+// replaced by a cross-check of the caller's ipHdrLen. A plain header (v4:
+// IHL 20, v6: exactly 40 — no options, no extension headers) is the only
+// coalesceable shape, which is the same rule parseIPPrologue enforces
+// through its own reads.
+func parseIPAt(pkt []byte, ipHdrLen int) (parsedIP, bool) {
+	var p parsedIP
+	if len(pkt) < 20 {
 		return p, false
 	}
+	switch pkt[0] >> 4 {
+	case 4:
+		if ipHdrLen != 20 {
+			return p, false
+		}
+		return parseIPv4Prologue(pkt)
+	case 6:
+		if ipHdrLen != 40 || len(pkt) < 40 {
+			return p, false
+		}
+		return parseIPv6Prologue(pkt)
+	}
+	return p, false
+}
+
+// parseIPv4Prologue is the shared IPv4 tail of the two prologue entries.
+// The caller has verified len(pkt) >= 20 and either the protocol
+// (parseIPPrologue) or the upstream-resolved header length (parseIPAt).
+func parseIPv4Prologue(pkt []byte) (parsedIP, bool) {
+	var p parsedIP
+	ihl := int(pkt[0]&0x0f) * 4
+	if ihl != 20 {
+		return p, false
+	}
+	// Reject actual fragmentation (MF or non-zero frag offset). On the
+	// dispatcher path FragAny was already gated; kept as defense in depth —
+	// a fragment folded into a superpacket would corrupt reassembly.
+	if binary.BigEndian.Uint16(pkt[6:8])&0x3fff != 0 {
+		return p, false
+	}
+	totalLen := int(binary.BigEndian.Uint16(pkt[2:4]))
+	if totalLen > len(pkt) || totalLen < ihl {
+		return p, false
+	}
+	p.ipHdrLen = 20
+	p.fk.isV6 = false
+	copy(p.fk.src[:4], pkt[12:16])
+	copy(p.fk.dst[:4], pkt[16:20])
+	p.pkt = pkt[:totalLen]
+	return p, true
+}
+
+// parseIPv6Prologue is the shared IPv6 tail; caller has verified
+// len(pkt) >= 40 and version/proto-or-offset.
+func parseIPv6Prologue(pkt []byte) (parsedIP, bool) {
+	var p parsedIP
+	payloadLen := int(binary.BigEndian.Uint16(pkt[4:6]))
+	if 40+payloadLen > len(pkt) {
+		return p, false
+	}
+	p.ipHdrLen = 40
+	p.fk.isV6 = true
+	copy(p.fk.src[:], pkt[8:24])
+	copy(p.fk.dst[:], pkt[24:40])
+	p.pkt = pkt[:40+payloadLen]
 	return p, true
 }
 
