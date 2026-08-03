@@ -275,6 +275,11 @@ tun:
   # entries are ignored. IDs must be within the process's allowed CPU set, so this respects taskset / cgroup cpusets;
   # a non-integer or not-allowed entry disables the override and falls back to spreading queues across the allowed
   # CPUs. Only meaningful while pin_threads is true. Not reloadable.
+  # When unset, the default spread prefers performance cores on heterogeneous CPUs (ARM big.LITTLE, Intel P/E
+  # hybrids, AMD compact cores), keeps all readers on one NUMA node and on distinct physical cores when the
+  # topology allows (SMT siblings last), leaves CPU 0's physical core as a last resort, and rotates its starting
+  # point per instance (keyed by the bound UDP port) so co-located nebulas don't stack their readers onto the
+  # same cores.
   #cpu_affinity:
   #  - 2
   #  - 4
