@@ -6,12 +6,14 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"os"
 	"runtime/debug"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/cpupick"
 	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/sshd"
@@ -230,6 +232,21 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		l.Warn("Failed to start DNS responder", "error", err)
 	}
 
+	pinThreads := c.GetBool("tun.pin_threads", true)
+	cpuAffinity := parseCpuAffinity(c, l, routines)
+	if pinThreads && routines > 1 && len(cpuAffinity) == 0 && !configTest {
+		// The operator didn't choose pin CPUs, so pick a default set that
+		// prefers performance cores and doesn't stack co-located instances
+		// onto allowed[0]. The bound UDP port keys the per-instance spread:
+		// distinct across instances sharing a box, stable across restarts.
+		// A nil result keeps listenIn's stock allowed[i] fallback.
+		key := uint64(os.Getpid())
+		if ap, err := udpConns[0].LocalAddr(); err == nil && ap.Port() != 0 {
+			key = uint64(ap.Port())
+		}
+		cpuAffinity = cpupick.Default(routines, key, l)
+	}
+
 	ifConfig := &InterfaceConfig{
 		HostMap:               hostMap,
 		Inside:                tun,
@@ -251,8 +268,8 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		relayManager:          NewRelayManager(ctx, l, hostMap, c),
 		punchy:                punchy,
 		ConntrackCacheTimeout: conntrackCacheTimeout,
-		CpuAffinity:           parseCpuAffinity(c, l, routines),
-		PinThreads:            c.GetBool("tun.pin_threads", true),
+		CpuAffinity:           cpuAffinity,
+		PinThreads:            pinThreads,
 		l:                     l,
 	}
 
