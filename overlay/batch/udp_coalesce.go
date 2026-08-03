@@ -195,6 +195,15 @@ func (c *UDPCoalescer) Flush() error {
 	return first
 }
 
+// sealAllOpen closes every open coalesce chain: nothing committed after this
+// call can extend a slot created before it. Called when an unparseable packet
+// arrives — its flow is unknown, so any open chain might be the one whose
+// later data would otherwise leapfrog it.
+func (c *UDPCoalescer) sealAllOpen() {
+	clear(c.openSlots)
+	c.lastSlot = nil
+}
+
 func (c *UDPCoalescer) addVerbatim(pkt []byte) {
 	s := c.take()
 	s.verbatim = true

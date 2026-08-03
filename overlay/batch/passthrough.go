@@ -17,7 +17,15 @@ func NewPassthrough(w io.Writer) *Passthrough {
 	}
 }
 
-func (p *Passthrough) Commit(pkt []byte) error {
+// Commit ignores the sort key: a bare Passthrough (no MultiCoalescer in
+// front) emits in arrival order, exactly as before keys existed.
+func (p *Passthrough) Commit(pkt []byte, _ SortKey) error {
+	return p.enqueue(pkt)
+}
+
+// enqueue is the lane-facing half of Commit: MultiCoalescer.dispatch hands
+// packets here already sorted into transmission order.
+func (p *Passthrough) enqueue(pkt []byte) error {
 	p.slots = append(p.slots, pkt)
 	return nil
 }

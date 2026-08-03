@@ -9,10 +9,19 @@ import (
 	"github.com/slackhq/nebula/test"
 )
 
-// newTestMultiCoalescer builds a batcher over w and asserts it really is
-// multi-lane. NewMultiCoalescer collapses to a bare Passthrough when w can
-// offload neither protocol, and a test that meant to exercise a lane would
-// otherwise pass vacuously.
+// keySeq hands out SortKeys with ascending counters in a fixed epoch, for
+// tests where commit order IS transmission order.
+type keySeq struct {
+	epoch, counter uint64
+}
+
+func (k *keySeq) next() SortKey {
+	k.counter++
+	return SortKey{Epoch: k.epoch, Counter: k.counter}
+}
+
+// newTestMultiCoalescer builds a batcher over w and asserts the concrete
+// type so tests can reach into the lanes.
 func newTestMultiCoalescer(tb testing.TB, w io.Writer) *MultiCoalescer {
 	tb.Helper()
 	b := NewMultiCoalescer(w, test.NewLogger())
@@ -29,6 +38,7 @@ func newTestMultiCoalescer(tb testing.TB, w io.Writer) *MultiCoalescer {
 func TestMultiCoalescerRoutesByProto(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	m := newTestMultiCoalescer(t, w)
+	k := &keySeq{epoch: 1}
 
 	tcpPay := make([]byte, 1200)
 	udpPay := make([]byte, 1200)
@@ -38,19 +48,19 @@ func TestMultiCoalescerRoutesByProto(t *testing.T) {
 	icmp[3] = 28
 	icmp[9] = 1
 
-	if err := m.Commit(buildTCPv4(1000, tcpAck, tcpPay)); err != nil {
+	if err := m.Commit(buildTCPv4(1000, tcpAck, tcpPay), k.next()); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildTCPv4(2200, tcpAck, tcpPay)); err != nil {
+	if err := m.Commit(buildTCPv4(2200, tcpAck, tcpPay), k.next()); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildUDPv4(2000, 53, udpPay)); err != nil {
+	if err := m.Commit(buildUDPv4(2000, 53, udpPay), k.next()); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildUDPv4(2000, 53, udpPay)); err != nil {
+	if err := m.Commit(buildUDPv4(2000, 53, udpPay), k.next()); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(icmp); err != nil {
+	if err := m.Commit(icmp, k.next()); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Flush(); err != nil {
@@ -65,20 +75,162 @@ func TestMultiCoalescerRoutesByProto(t *testing.T) {
 	}
 }
 
+// TestMultiCoalescerRestoresTransmissionOrder is the core staging-sort
+// property: packets committed out of counter order (wire reorder inside one
+// flush batch) are replayed into the lanes in transmission order, so the
+// reorder never fragments the coalesce chain — one superpacket, in seq
+// order, exactly as if the wire had never reordered. The retransmit shape
+// falls out of the same key: a retransmit carries a lower seq but a HIGHER
+// counter (it was encrypted later), so it emits after the data it trails.
+func TestMultiCoalescerRestoresTransmissionOrder(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	m := newTestMultiCoalescer(t, w)
+	pay := make([]byte, 1200)
+
+	// Transmission order: seq 1000 (c1), 2200 (c2), 3400 (c3).
+	// Arrival order: 3400, 1000, 2200.
+	if err := m.Commit(buildTCPv4(3400, tcpAck, pay), SortKey{Epoch: 1, Counter: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Commit(buildTCPv4(1000, tcpAck, pay), SortKey{Epoch: 1, Counter: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Commit(buildTCPv4(2200, tcpAck, pay), SortKey{Epoch: 1, Counter: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.gsoWrites) != 1 || len(w.writes) != 0 {
+		t.Fatalf("want 1 gso write (unfragmented chain), got gso=%d plain=%d", len(w.gsoWrites), len(w.writes))
+	}
+	g := w.gsoWrites[0]
+	if len(g.pays) != 3 {
+		t.Fatalf("segs=%d want 3", len(g.pays))
+	}
+	const ipHdrLen = 20
+	if seedSeq := binary.BigEndian.Uint32(g.hdr[ipHdrLen+4 : ipHdrLen+8]); seedSeq != 1000 {
+		t.Errorf("seed seq=%d want 1000", seedSeq)
+	}
+
+	// Retransmit: seq 1000 again but counter 4 — sorts after seq 4600 (c3).
+	w.writes, w.gsoWrites, w.order = nil, nil, nil
+	if err := m.Commit(buildTCPv4(1000, tcpAck, pay), SortKey{Epoch: 1, Counter: 4}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Commit(buildTCPv4(4600, tcpAck, pay), SortKey{Epoch: 1, Counter: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.writes) != 2 {
+		t.Fatalf("want 2 plain writes, got %d (gso=%d)", len(w.writes), len(w.gsoWrites))
+	}
+	first := binary.BigEndian.Uint32(w.writes[0][24:28])
+	second := binary.BigEndian.Uint32(w.writes[1][24:28])
+	if first != 4600 || second != 1000 {
+		t.Fatalf("emission (%d, %d), want (4600, 1000): retransmit must not overtake in-flight data", first, second)
+	}
+}
+
+// TestMultiCoalescerRestoresOrderAcrossFlows scrambles two interleaved flows;
+// the staging sort must repair each flow into one superpacket without any
+// cross-flow contamination.
+func TestMultiCoalescerRestoresOrderAcrossFlows(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	m := newTestMultiCoalescer(t, w)
+	pay := make([]byte, 1200)
+
+	// Transmission: A.100 (c1), B.500 (c2), A.1300 (c3), B.1700 (c4).
+	// Arrival: A.1300, B.1700, A.100, B.500.
+	if err := m.Commit(buildTCPv4Ports(1000, 2000, 1300, tcpAck, pay), SortKey{Epoch: 1, Counter: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Commit(buildTCPv4Ports(3000, 2000, 1700, tcpAck, pay), SortKey{Epoch: 1, Counter: 4}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Commit(buildTCPv4Ports(1000, 2000, 100, tcpAck, pay), SortKey{Epoch: 1, Counter: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Commit(buildTCPv4Ports(3000, 2000, 500, tcpAck, pay), SortKey{Epoch: 1, Counter: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.gsoWrites) != 2 {
+		t.Fatalf("want 2 gso writes (one per flow), got %d (plain=%d)", len(w.gsoWrites), len(w.writes))
+	}
+	for i, g := range w.gsoWrites {
+		if len(g.pays) != 2 {
+			t.Errorf("gso[%d] segs=%d want 2", i, len(g.pays))
+		}
+		const ipHdrLen = 20
+		seedSeq := binary.BigEndian.Uint32(g.hdr[ipHdrLen+4 : ipHdrLen+8])
+		sport := binary.BigEndian.Uint16(g.hdr[ipHdrLen : ipHdrLen+2])
+		switch sport {
+		case 1000:
+			if seedSeq != 100 {
+				t.Errorf("flow A seed seq=%d want 100", seedSeq)
+			}
+		case 3000:
+			if seedSeq != 500 {
+				t.Errorf("flow B seed seq=%d want 500", seedSeq)
+			}
+		default:
+			t.Errorf("unexpected sport %d", sport)
+		}
+	}
+}
+
+// TestMultiCoalescerEpochOrdersAcrossRehandshake: a re-handshake replaces
+// the tunnel, and the replacement's counter space starts near zero — raw
+// counter order would emit the new tunnel's packets first while the old
+// tunnel's backlog is still arriving. The epoch key must dominate:
+// everything from the old tunnel emits before anything from the new one.
+func TestMultiCoalescerEpochOrdersAcrossRehandshake(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	m := newTestMultiCoalescer(t, w)
+	pay := make([]byte, 1200)
+
+	// New session's first data arrives before the old session's last data.
+	if err := m.Commit(buildTCPv4(2200, tcpAck, pay), SortKey{Epoch: 8, Counter: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Commit(buildTCPv4(1000, tcpAck, pay), SortKey{Epoch: 7, Counter: 9_000_000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	// Same flow, contiguous seq, identical headers: after the epoch sort the
+	// two segments append into one superpacket seeded by the OLD session's
+	// packet.
+	if len(w.gsoWrites) != 1 {
+		t.Fatalf("want 1 gso write, got %d (plain=%d)", len(w.gsoWrites), len(w.writes))
+	}
+	const ipHdrLen = 20
+	if seedSeq := binary.BigEndian.Uint32(w.gsoWrites[0].hdr[ipHdrLen+4 : ipHdrLen+8]); seedSeq != 1000 {
+		t.Errorf("seed seq=%d want 1000 (old session first)", seedSeq)
+	}
+}
+
 // TestMultiCoalescerNoUSOFallsThrough verifies that on a queue without USO
 // (older kernel: TSO but no GSO_UDP_L4) the UDP lane never comes up and UDP
 // packets still reach the kernel via verbatim rather than being lost.
 func TestMultiCoalescerNoUSOFallsThrough(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true, noUSO: true}
 	m := newTestMultiCoalescer(t, w)
+	k := &keySeq{epoch: 1}
 	if m.udp != nil {
 		t.Fatal("UDP lane must not come up without USO")
 	}
 
-	if err := m.Commit(buildUDPv4(1000, 53, make([]byte, 800))); err != nil {
+	if err := m.Commit(buildUDPv4(1000, 53, make([]byte, 800)), k.next()); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildUDPv4(1000, 53, make([]byte, 800))); err != nil {
+	if err := m.Commit(buildUDPv4(1000, 53, make([]byte, 800)), k.next()); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Flush(); err != nil {
@@ -92,26 +244,24 @@ func TestMultiCoalescerNoUSOFallsThrough(t *testing.T) {
 	}
 }
 
-// TestMultiCoalescerNoOffloadsIsPassthrough covers a queue that can't offload
-// anything. Both lane constructors refuse, so there's nothing left to
-// dispatch between and NewMultiCoalescer hands back the verbatim lane
-// itself — no wrapper, no per-packet protocol demux, and every packet reaches
-// the kernel in arrival order. This is the case Interface.activate used to
-// special-case with a bare Passthrough.
-func TestMultiCoalescerNoOffloadsIsPassthrough(t *testing.T) {
+// TestMultiCoalescerNoOffloadsStillSorts covers a queue that can't offload
+// anything. Both lane constructors refuse, so every packet rides the
+// verbatim lane — but the staging sort still applies, so emission follows
+// transmission order even without GSO.
+func TestMultiCoalescerNoOffloadsStillSorts(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: false}
-	m := NewMultiCoalescer(w, test.NewLogger())
-
-	if _, ok := m.(*Passthrough); !ok {
-		t.Fatalf("want a bare *Passthrough when neither offload is available, got %T", m)
+	m := newTestMultiCoalescer(t, w)
+	if m.tcp != nil || m.udp != nil {
+		t.Fatal("no lane may come up without offloads")
 	}
 	pkts := [][]byte{
 		buildTCPv4(1000, tcpAck, make([]byte, 1200)),
 		buildUDPv4(1000, 53, make([]byte, 800)),
 		buildTCPv4(2200, tcpAck, make([]byte, 1200)),
 	}
-	for _, p := range pkts {
-		if err := m.Commit(p); err != nil {
+	// Committed in reverse transmission order; keys carry the truth.
+	for i := len(pkts) - 1; i >= 0; i-- {
+		if err := m.Commit(pkts[i], SortKey{Epoch: 1, Counter: uint64(i + 1)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -124,7 +274,7 @@ func TestMultiCoalescerNoOffloadsIsPassthrough(t *testing.T) {
 	if len(w.writes) != len(pkts) {
 		t.Fatalf("want %d plain writes, got %d", len(pkts), len(w.writes))
 	}
-	// One lane for everything means arrival order survives end to end.
+	// One lane for everything means the sorted order survives end to end.
 	for i, want := range pkts {
 		if !bytes.Equal(w.writes[i], want) {
 			t.Errorf("write %d out of order or corrupt", i)
@@ -173,14 +323,15 @@ func buildUDPv6Fragment(sport, dport uint16, payload []byte) []byte {
 func TestMultiCoalescerIPv6FragmentStaysInLane(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	m := newTestMultiCoalescer(t, w)
+	k := &keySeq{epoch: 1}
 
-	if err := m.Commit(buildUDPv6Fragment(2000, 53, make([]byte, 512))); err != nil {
+	if err := m.Commit(buildUDPv6Fragment(2000, 53, make([]byte, 512)), k.next()); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800))); err != nil {
+	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800)), k.next()); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800))); err != nil {
+	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800)), k.next()); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Flush(); err != nil {
@@ -192,9 +343,48 @@ func TestMultiCoalescerIPv6FragmentStaysInLane(t *testing.T) {
 	if len(w.gsoWrites) != 1 {
 		t.Fatalf("want the two whole datagrams coalesced into 1 gso write, got %d", len(w.gsoWrites))
 	}
-	// Arrival order was fragment-then-data; same-lane routing must keep it.
+	// Transmission order was fragment-then-data; same-lane routing must keep it.
 	if w.order[0] != "write" {
 		t.Fatalf("fragment must be emitted before later data (in-lane verbatim), order=%v", w.order)
+	}
+}
+
+// TestMultiCoalescerFragmentSealsUDPChains: an unparseable datagram
+// (fragment) seals every open UDP chain, so datagrams from before and after
+// it land in separate superpackets and the fragment holds its transmission-
+// order position between them.
+func TestMultiCoalescerFragmentSealsUDPChains(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	m := newTestMultiCoalescer(t, w)
+	k := &keySeq{epoch: 1}
+
+	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800)), k.next()); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800)), k.next()); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Commit(buildUDPv6Fragment(2000, 53, make([]byte, 512)), k.next()); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800)), k.next()); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Commit(buildUDPv6(2000, 53, make([]byte, 800)), k.next()); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.gsoWrites) != 2 {
+		t.Fatalf("want 2 gso writes (chains sealed around the fragment), got %d", len(w.gsoWrites))
+	}
+	if len(w.writes) != 1 {
+		t.Fatalf("want the fragment as 1 plain write, got %d", len(w.writes))
+	}
+	want := []string{"gso", "write", "gso"}
+	if len(w.order) != 3 || w.order[0] != want[0] || w.order[1] != want[1] || w.order[2] != want[2] {
+		t.Fatalf("emission order = %v, want %v", w.order, want)
 	}
 }
 
@@ -202,15 +392,16 @@ func TestMultiCoalescerIPv6FragmentStaysInLane(t *testing.T) {
 func TestMultiCoalescerNoTSOFallsThrough(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true, noTSO: true}
 	m := newTestMultiCoalescer(t, w)
+	k := &keySeq{epoch: 1}
 	if m.tcp != nil {
 		t.Fatal("TCP lane must not come up without TSO")
 	}
 
 	pay := make([]byte, 1200)
-	if err := m.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
+	if err := m.Commit(buildTCPv4(1000, tcpAck, pay), k.next()); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Commit(buildTCPv4(2200, tcpAck, pay)); err != nil {
+	if err := m.Commit(buildTCPv4(2200, tcpAck, pay), k.next()); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Flush(); err != nil {

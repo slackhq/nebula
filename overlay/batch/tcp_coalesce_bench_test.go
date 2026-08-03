@@ -168,9 +168,9 @@ func BenchmarkCommitNonCoalesceableTCP(b *testing.B) {
 	runCommitBench(b, pkts, 64)
 }
 
-// runMultiCommitBench drives MultiCoalescer.Commit. The dispatcher does
-// the IP/L4 parse once and passes the parsed struct to the lane, so this
-// is the bench that shows the savings of skipping the lane's re-parse.
+// runMultiCommitBench drives MultiCoalescer.Commit with in-order keys, so
+// it includes the staging sort's already-sorted fast path plus the
+// dispatch-time parse — the full steady-state cost of the batcher.
 func runMultiCommitBench(b *testing.B, pkts [][]byte, batchSize int) {
 	b.Helper()
 	m := NewMultiCoalescer(nopTunWriter{}, test.NewLogger())
@@ -179,7 +179,7 @@ func runMultiCommitBench(b *testing.B, pkts [][]byte, batchSize int) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		pkt := pkts[i%len(pkts)]
-		if err := m.Commit(pkt); err != nil {
+		if err := m.Commit(pkt, SortKey{Epoch: 1, Counter: uint64(i + 1)}); err != nil {
 			b.Fatal(err)
 		}
 		if (i+1)%batchSize == 0 {

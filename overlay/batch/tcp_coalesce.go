@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/netip"
-	"slices"
 
 	"github.com/slackhq/nebula/overlay/tio"
 )
@@ -28,24 +27,15 @@ const tcpCoalesceMaxSegs = 64
 const tcpCoalesceHdrCap = 100
 
 // coalesceSlot is one entry in the coalescer's ordered event queue.
-// When verbatim is true the slot holds a single borrowed packet that must be
-// emitted verbatim (non-TCP, non-admissible TCP, or oversize seed).
+// When verbatim is true the slot holds a single borrowed packet that is
+// emitted as-is (pure ACK, non-admissible TCP, unparseable, or oversize seed).
 // When verbatim is false the slot is an in-progress coalesced superpacket.
 // hdrBuf is a mutable copy of the seed's IP+TCP header
 // (we patch total length and pseudo-header partial at flush)
 // payIovs are *borrowed* slices from the caller's plaintext buffers.
 // The caller (listenOut) must keep those buffers alive until Flush.
-
-const (
-	verbatimFalse = iota
-	// verbatimTrue means a sync-point packet, that may not be re-ordered
-	verbatimTrue
-	// verbatimACK packets are "passed through" without coalescing, but traffic "after" them may be pulled forward to facilitate coalescing.
-	verbatimACK
-)
-
 type coalesceSlot struct {
-	verbatim uint8
+	verbatim bool
 	// rawPkt is borrowed: the whole packet for verbatim slots, the seed
 	// packet for coalesce slots. A coalesce slot that never grows past one
 	// segment is emitted from rawPkt so its original (already valid) L4
@@ -61,26 +51,20 @@ type coalesceSlot struct {
 	numSeg   int
 	totalPay int
 	nextSeq  uint32
-	// tsVal is the TCP timestamp of the slot's seed segment (uniform across
-	// the slot: headersMatch requires byte-equal options for every append and
-	// merge). Sort key only, see compareCoalesceSlots.
-	tsVal uint32
-	hasTS bool
-	// sealed marks the chain permanently closed: the last-accepted segment had PSH or was sub-gsoSize,
-	// so no append or flush-time merge may follow.
-	// Distinct from eviction out of openSlots (e.g. on seq mismatch),
-	// which leaves sealed=false so reorderForFlush can still merge the slot.
+	// sealed marks the chain permanently closed: the last-accepted segment
+	// had PSH or was sub-gsoSize, so no append may follow. Belt-and-
+	// suspenders with removal from openSlots, which is what actually stops
+	// the append paths from finding the slot.
 	sealed  bool
 	payIovs [][]byte
 }
 
-func (c *coalesceSlot) isVerbatim() bool {
-	return c.verbatim != verbatimFalse
-}
-
 // TCPCoalescer accumulates adjacent in-flow TCP data segments across multiple concurrent flows
 // and emits each flow's run as a single TSO superpacket via tio.GSOWriter.
-// All output, coalesced or not, is deferred until Flush so arrival order is preserved on the wire.
+// It expects its input in sender-transmission order (MultiCoalescer sorts the
+// staged batch by (epoch, counter) before dispatching here) and emits slots in
+// creation order, which therefore reproduces transmission order — modulo the
+// pure-ACK allowance in commitParsed.
 // Owns no locks; one coalescer per TUN write queue.
 type TCPCoalescer struct {
 	w tio.GSOWriter
@@ -130,7 +114,6 @@ type parsedTCP struct {
 	payLen    int
 	seq       uint32
 	flags     byte
-	options   []byte
 }
 
 // parseTCPBase extracts the flow key and IP/TCP offsets for any TCP packet,
@@ -163,10 +146,6 @@ func parseTCPBase(pkt []byte) (parsedTCP, bool) {
 	p.fk.dport = binary.BigEndian.Uint16(pkt[p.ipHdrLen+2 : p.ipHdrLen+4])
 	p.seq = binary.BigEndian.Uint32(pkt[p.ipHdrLen+4 : p.ipHdrLen+8])
 	p.flags = pkt[p.ipHdrLen+13]
-	//window: 14, 15
-	//csum: 16, 17
-	//urg: 18, 19
-	p.options = pkt[p.ipHdrLen+20 : p.ipHdrLen+p.tcpHdrLen : p.ipHdrLen+p.tcpHdrLen]
 	return p, true
 }
 
@@ -208,10 +187,22 @@ func (p parsedTCP) pureAck() bool {
 func (c *TCPCoalescer) Commit(pkt []byte) error {
 	info, ok := parseTCPBase(pkt)
 	if !ok {
+		// Unparseable shape: flow key unknowable, so seal every open chain to
+		// keep later data from extending a chain that would emit ahead of it.
+		c.sealAllOpen()
 		c.addVerbatim(pkt)
 		return nil
 	}
 	return c.commitParsed(pkt, info)
+}
+
+// sealAllOpen closes every open coalesce chain: nothing committed after this
+// call can extend a slot created before it. Called when an unparseable packet
+// arrives — its flow is unknown, so any open chain might be the one whose
+// later data would otherwise leapfrog it.
+func (c *TCPCoalescer) sealAllOpen() {
+	clear(c.openSlots)
+	c.lastSlot = nil
 }
 
 // commitParsed is the post-parse half of Commit. The caller must have
@@ -222,18 +213,20 @@ func (c *TCPCoalescer) commitParsed(pkt []byte, info parsedTCP) error {
 	if !info.coalesceable() {
 		if info.pureAck() {
 			// A bare window/ack update carries no ordering obligation toward
-			// the flow's data: delivering it after later-arriving data only
+			// the flow's data: delivering it after later-transmitted data only
 			// makes it a stale ACK, which receivers ignore. Skipping the
 			// evict keeps a bidirectional flow's inbound data run coalescing
 			// across the peer ACKs interleaved into it — kernel GRO likewise
-			// doesn't flush held data on a pure ACK.
-			c.addVerbatimACK(pkt, info)
+			// doesn't flush held data on a pure ACK. This is the one place
+			// emission can deviate from transmission order.
+			c.addVerbatim(pkt)
 			return nil
 		}
 		// TCP but not admissible (SYN/FIN/RST/URG/CWR or a shape the flow
 		// must observe in sequence). Seal this flow's open slot so later
-		// in-flow packets don't extend it and accidentally reorder past this
-		// verbatim. The len guard skips hashing the 38-byte key on
+		// in-flow packets don't extend it and emit ahead of this verbatim;
+		// with input in transmission order that pins the verbatim's exact
+		// in-flow position. The len guard skips hashing the 38-byte key on
 		// ack-dominant queues, where the map is almost always empty.
 		if len(c.openSlots) != 0 {
 			if last := c.lastSlot; last != nil && last.fk == info.fk {
@@ -267,8 +260,8 @@ func (c *TCPCoalescer) commitParsed(pkt []byte, info parsedTCP) error {
 			}
 			return nil
 		}
-		// Can't extend: evict it from openSlots and fall through to seed a fresh slot.
-		// The slot stays unsealed so reorderForFlush may still merge it.
+		// Can't extend (seq gap from upstream loss, header change, or a full
+		// chain): evict it from openSlots and fall through to seed a fresh slot.
 		delete(c.openSlots, info.fk)
 		if c.lastSlot == open {
 			c.lastSlot = nil
@@ -279,16 +272,18 @@ func (c *TCPCoalescer) commitParsed(pkt []byte, info parsedTCP) error {
 }
 
 func (c *TCPCoalescer) Flush() error {
-	c.reorderForFlush()
+	if c.l.Enabled(context.Background(), slog.LevelDebug) {
+		c.logSeqGaps()
+	}
 	var first error
 	for _, s := range c.slots {
 		var err error
-		if s.isVerbatim() || s.numSeg == 1 {
+		if s.verbatim || s.numSeg == 1 {
 			// A slot that never grew (nor absorbed a merge) is byte-identical
 			// to the packet it was seeded from; ship the original so its valid
 			// checksum rides the DATA_VALID path instead of paying a kernel
-			// software csum. appendPayload and mergeSlots only touch hdrBuf
-			// once numSeg >= 2, so rawPkt is still pristine here.
+			// software csum. appendPayload only touches hdrBuf once
+			// numSeg >= 2, so rawPkt is still pristine here.
 			_, err = c.w.Write(s.rawPkt)
 		} else {
 			err = c.flushSlot(s)
@@ -308,24 +303,8 @@ func (c *TCPCoalescer) Flush() error {
 
 func (c *TCPCoalescer) addVerbatim(pkt []byte) {
 	s := c.take()
-	s.verbatim = verbatimTrue
+	s.verbatim = true
 	s.rawPkt = pkt
-	c.slots = append(c.slots, s)
-}
-
-// addVerbatimACK commits a pure ACK as a verbatim slot that keeps its
-// flow identity and sort keys. Unlike addVerbatim slots it does not split
-// sort runs, so reorderForFlush may sort same-flow data across it (the
-// contract allows data to overtake a bare ACK). A pure ACK's seq is the
-// sender's snd_nxt, which orders it after all data the peer sent before it,
-// and the TSval-first comparator keeps it behind any older-timestamp data.
-func (c *TCPCoalescer) addVerbatimACK(pkt []byte, info parsedTCP) {
-	s := c.take()
-	s.verbatim = verbatimACK
-	s.rawPkt = pkt
-	s.fk = info.fk
-	s.nextSeq = info.seq // totalPay stays 0, so slotSeedSeq yields info.seq
-	s.tsVal, _, s.hasTS = parseTCPOptions(info.options)
 	c.slots = append(c.slots, s)
 }
 
@@ -336,7 +315,7 @@ func (c *TCPCoalescer) seed(pkt []byte, info parsedTCP) {
 		return
 	}
 	s := c.take()
-	s.verbatim = verbatimFalse
+	s.verbatim = false
 	s.rawPkt = pkt // kept for the numSeg==1 fast path in Flush
 	copy(s.hdrBuf[:], pkt[:info.hdrLen])
 	s.hdrLen = info.hdrLen
@@ -347,7 +326,6 @@ func (c *TCPCoalescer) seed(pkt []byte, info parsedTCP) {
 	s.numSeg = 1
 	s.totalPay = info.payLen
 	s.nextSeq = info.seq + uint32(info.payLen)
-	s.tsVal, _, s.hasTS = parseTCPOptions(info.options)
 	s.sealed = info.flags&tcpFlagPsh != 0
 	s.payIovs = append(s.payIovs[:0], pkt[info.hdrLen:info.hdrLen+info.payLen])
 	c.slots = append(c.slots, s)
@@ -424,7 +402,7 @@ func (c *TCPCoalescer) take() *coalesceSlot {
 }
 
 func (c *TCPCoalescer) release(s *coalesceSlot) {
-	s.verbatim = verbatimFalse
+	s.verbatim = false
 	s.rawPkt = nil
 	clear(s.payIovs)
 	s.payIovs = s.payIovs[:0]
@@ -440,8 +418,6 @@ func (c *TCPCoalescer) release(s *coalesceSlot) {
 	s.isV6 = false
 	s.gsoSize = 0
 	s.nextSeq = 0
-	s.tsVal = 0
-	s.hasTS = false
 	c.pool = append(c.pool, s)
 }
 
@@ -500,79 +476,36 @@ func headersMatch(a, b []byte, isV6 bool, ipHdrLen int) bool {
 	return true
 }
 
-// reorderForFlush neutralizes wire-side reorder that the rxOrder buffer
-// couldn't catch (anything crossing a recvmmsg batch boundary).
-// Without this pass a small wire reorder, counter 250 arriving in batch K when
-// 200..249 are coming in batch K+1, would seed an out-of-seq slot first
-// and emit it ahead of the lower-seq slot, manifesting at the inner TCP
-// receiver as a much larger reorder than the wire actually had.
-//
-// Two phases:
-//  1. Sort each verbatim-bounded segment of c.slots by (flow, seq).
-//     Cross-flow ordering inside a segment isn't preserved (it never was
-//     and doesn't matter for any single flow's TCP correctness).
-//  2. Sweep once and merge adjacent same-flow slots whose ranges are now
-//     contiguous AND whose tail is gsoSize-aligned. The tail constraint
-//     matters because the kernel TSO splitter chops at gsoSize from the
-//     start of the merged payload. A short segment in the middle would
-//     desynchronize every later segment.
-//
-// Verbatim slots act as barriers: the merge check skips them on either
-// side, so a SYN/FIN/RST/CWR is never reordered relative to its flow's
-// data.
-func (c *TCPCoalescer) reorderForFlush() {
-	if len(c.slots) <= 1 {
-		return
-	}
-	runStart := 0
-	for i := 0; i <= len(c.slots); i++ {
-		// Only hard verbatims (unparseable, SYN/FIN/RST/CWR, oversized)
-		// split sort runs. Pure-ACK verbatims stay inside the run so
-		// same-flow data separated by an interleaved ACK can still sort
-		// adjacent and merge; their own sort keys keep them ordered.
-		if i < len(c.slots) && c.slots[i].verbatim != verbatimTrue {
+// logSeqGaps reports same-flow seq discontinuities between consecutively
+// created data slots. Input arrives in transmission order (MultiCoalescer
+// sorts by (epoch, counter) before dispatch), so a gap here is traffic this
+// batch never contained: loss upstream of nebula, a reorder spanning a flush
+// boundary (which no intra-batch mechanism can repair), or a retransmit
+// (negative gap). Logged so the operator can quantify how often that happens.
+// The caller gates on debug level, so the map only allocates when asked for.
+func (c *TCPCoalescer) logSeqGaps() {
+	prevByFlow := make(map[flowKey]*coalesceSlot, len(c.slots))
+	for _, s := range c.slots {
+		if s.verbatim {
 			continue
 		}
-		c.sortRun(c.slots[runStart:i])
-		runStart = i + 1
-	}
-	out := c.slots[:0]
-	for _, s := range c.slots {
-		if n := len(out); n > 0 {
-			prev := out[n-1]
-			if !prev.isVerbatim() && !s.isVerbatim() && prev.fk == s.fk {
-				// Same-flow neighbors after sort. If they aren't seq-
-				// contiguous it's a real gap: packets the wire reordered
-				// across batches, or actual loss before nebula. Log it so
-				// the operator can quantify how often it happens
-				if c.l.Enabled(context.Background(), slog.LevelDebug) {
-					if prev.nextSeq != slotSeedSeq(s) {
-						gap := int64(slotSeedSeq(s)) - int64(prev.nextSeq)
-						c.l.Debug("tcp coalesce: cross-slot seq gap",
-							"src", flowKeyAddr(s.fk, false),
-							"dst", flowKeyAddr(s.fk, true),
-							"sport", s.fk.sport,
-							"dport", s.fk.dport,
-							"prev_seed_seq", slotSeedSeq(prev),
-							"prev_next_seq", prev.nextSeq,
-							"this_seed_seq", slotSeedSeq(s),
-							"gap_bytes", gap,
-							"prev_seg_count", prev.numSeg,
-							"prev_total_pay", prev.totalPay,
-						)
-					}
-				}
-
-				if canMergeSlots(prev, s) {
-					mergeSlots(prev, s)
-					c.release(s)
-					continue
-				}
-			}
+		if prev, ok := prevByFlow[s.fk]; ok && prev.nextSeq != slotSeedSeq(s) {
+			gap := int64(slotSeedSeq(s)) - int64(prev.nextSeq)
+			c.l.Debug("tcp coalesce: cross-slot seq gap",
+				"src", flowKeyAddr(s.fk, false),
+				"dst", flowKeyAddr(s.fk, true),
+				"sport", s.fk.sport,
+				"dport", s.fk.dport,
+				"prev_seed_seq", slotSeedSeq(prev),
+				"prev_next_seq", prev.nextSeq,
+				"this_seed_seq", slotSeedSeq(s),
+				"gap_bytes", gap,
+				"prev_seg_count", prev.numSeg,
+				"prev_total_pay", prev.totalPay,
+			)
 		}
-		out = append(out, s)
+		prevByFlow[s.fk] = s
 	}
-	c.slots = out
 }
 
 // flowKeyAddr returns the src or dst address from fk as a netip.Addr for
@@ -591,201 +524,12 @@ func flowKeyAddr(fk flowKey, dst bool) netip.Addr {
 	return netip.AddrFrom4(v4)
 }
 
-// sortRun stable-sorts run by (flowKey, seedSeq) so each flow's slots
-// cluster together in seq order, ready for the merge sweep. Stable so
-// equal-key slots keep their original relative position (defensive — a
-// duplicate seedSeq would already mean something's wrong upstream).
-func (c *TCPCoalescer) sortRun(run []*coalesceSlot) {
-	if len(run) <= 1 {
-		return
-	}
-	// slices.SortStableFunc with a free, non-capturing comparator avoids the
-	// reflection + closure-escape allocations that sort.SliceStable forces.
-	slices.SortStableFunc(run, compareCoalesceSlots)
-}
-
-func compareCoalesceSlots(a, b *coalesceSlot) int {
-	if cmp := flowKeyCompare(a.fk, b.fk); cmp != 0 {
-		return cmp
-	}
-	// A retransmit carries a lower seq but a newer TCP timestamp than
-	// in-flight original data. Emitting it first would advance the
-	// receiver's ts_recent past the original's TSval, and PAWS would then
-	// drop the original as an old duplicate. So order by TSval before seq:
-	// TSval order approximates transmission order (which wire reordering
-	// never changed), and slots whose TSvals tie still get seq-repaired below.
-	// Flows without timestamps fall through to pure seq order, where PAWS cannot apply.
-	// tcpSeqLess is reused for the TSval compare: RFC 7323 defines TSval
-	// comparison in the same serial-number arithmetic.
-	if a.hasTS && b.hasTS && a.tsVal != b.tsVal {
-		if tcpSeqLess(a.tsVal, b.tsVal) {
-			return -1
-		}
-		return 1
-	}
-
-	aSeq, bSeq := slotSeedSeq(a), slotSeedSeq(b)
-	if aSeq == bSeq {
-		return 0
-	}
-	if tcpSeqLess(aSeq, bSeq) {
-		return -1
-	}
-	return 1
-}
-
-// parseTCPOptions attempts to locate timestamps. If it finds them, it returns tsval, secr, true. 0,0,false otherwise.
-func parseTCPOptions(opts []byte) (uint32, uint32, bool) {
-	const timeStampOptionSize = 1 + 1 + 4 + 4
-	const timeStampOptionCode = 0x8
-	const nopOptionCode = 0x1
-	const eolOptionCode = 0x0
-	// Inclusive bound: a timestamp ending exactly at len(opts) is the common
-	// case (Linux emits NOP,NOP,TS as the whole option block). It also
-	// guards opts[i+1] in every arm, since timeStampOptionSize >= 2.
-	for i := 0; i+timeStampOptionSize <= len(opts); /* no increment */ {
-		switch opts[i] {
-		case eolOptionCode:
-			// End-of-option-list: everything after is padding.
-			return 0, 0, false
-		case nopOptionCode:
-			i++
-		case timeStampOptionCode:
-			// we found it!
-			length := opts[i+1]
-			if length != timeStampOptionSize {
-				return 0, 0, false //weird, wrong option?
-			}
-			tsval := binary.BigEndian.Uint32(opts[i+2 : i+2+4])
-			secr := binary.BigEndian.Uint32(opts[i+2+4 : i+2+4+4])
-			return tsval, secr, true
-		default:
-			length := int(opts[i+1])
-			if length < 2 {
-				// Malformed: a non-NOP option shorter than its own
-				// kind+length bytes would loop forever.
-				return 0, 0, false
-			}
-			i += length
-		}
-	}
-	return 0, 0, false
-}
-
 // slotSeedSeq returns the TCP seq of the slot's seed (first segment).
 // nextSeq tracks the seq just past the last appended byte; subtracting
 // totalPay walks back to the seed. uint32 wraparound is the right TCP
 // arithmetic so no special-casing is needed.
 func slotSeedSeq(s *coalesceSlot) uint32 {
 	return s.nextSeq - uint32(s.totalPay)
-}
-
-// tcpSeqLess reports whether a precedes b in TCP serial-number arithmetic
-// (RFC 1323 §2.3). The signed int32 cast turns the modular subtraction
-// into the right comparison even across the 2^32 wrap.
-func tcpSeqLess(a, b uint32) bool {
-	return int32(a-b) < 0
-}
-
-// flowKeyCompare orders flowKeys deterministically. The exact ordering
-// is irrelevant — only that same-flow slots cluster together so the
-// post-sort sweep can merge contiguous pairs.
-func flowKeyCompare(a, b flowKey) int {
-	// Cheap scalar fields first so most non-matching keys short-circuit
-	// without ever calling bytes.Compare. sport is the ephemeral port on
-	// egress flows and discriminates fastest. For matching keys (same
-	// flow), array equality on src/dst inlines to word-sized compares,
-	// so we only pay bytes.Compare when the arrays actually differ.
-	if a.sport != b.sport {
-		if a.sport < b.sport {
-			return -1
-		}
-		return 1
-	}
-	if a.dport != b.dport {
-		if a.dport < b.dport {
-			return -1
-		}
-		return 1
-	}
-	if a.dst != b.dst {
-		return bytes.Compare(a.dst[:], b.dst[:])
-	}
-	if a.src != b.src {
-		return bytes.Compare(a.src[:], b.src[:])
-	}
-	if a.isV6 != b.isV6 {
-		if !a.isV6 {
-			return -1
-		}
-		return 1
-	}
-	return 0
-}
-
-// canMergeSlots reports whether s can fold into prev as one merged TSO
-// superpacket. Same flow, contiguous TCP byte range, equal gsoSize, and
-// fits within the kernel TSO limits. The tail-of-prev check rejects any
-// merge whose first slot ended on a sub-gsoSize segment — kernel TSO
-// would split the merged skb at gsoSize boundaries from the start, so a
-// short segment in the middle would corrupt every later segment. PSH and
-// ECE state must agree across both slots: PSH is a semantic delimiter
-// (preserving the sender's push boundary) and ECE state must be uniform
-// across a window (the same rule canAppend enforces for in-flow appends).
-// The IP-level ECN codepoint must also match: this check calls headersMatch
-// → ipHeadersMatch, which compares the full DSCP/ECN byte, so two slots with
-// differing ECN marks stay separate superpackets, each keeping its own mark.
-//
-// Note: a slot evicted on reorder (canAppend returned false on seq mismatch)
-// stays sealed=false, so this restriction does not block the reorder-fix merge,
-// only chains ended by PSH or a short tail.
-func canMergeSlots(prev, s *coalesceSlot) bool {
-	if prev.sealed {
-		return false
-	}
-	if prev.fk != s.fk {
-		return false
-	}
-	if prev.gsoSize != s.gsoSize {
-		return false
-	}
-	if prev.nextSeq != slotSeedSeq(s) {
-		return false
-	}
-	if prev.numSeg+s.numSeg > tcpCoalesceMaxSegs {
-		return false
-	}
-	if prev.hdrLen+prev.totalPay+s.totalPay > tcpCoalesceBufSize {
-		return false
-	}
-	if len(prev.payIovs[len(prev.payIovs)-1]) != prev.gsoSize {
-		return false
-	}
-	prevFlags := prev.hdrBuf[prev.ipHdrLen+13]
-	sFlags := s.hdrBuf[s.ipHdrLen+13]
-	if (prevFlags^sFlags)&tcpFlagEce != 0 {
-		return false
-	}
-	if !prev.isV6 && !ipv4CanCoalesceID(prev.hdrBuf[:], s.hdrBuf[:], prev.numSeg) {
-		return false
-	}
-	if !headersMatch(prev.hdrBuf[:prev.hdrLen], s.hdrBuf[:s.hdrLen], prev.isV6, prev.ipHdrLen) {
-		return false
-	}
-	return true
-}
-
-// mergeSlots folds src into dst in place: payIovs concatenated, counters
-// and totals updated. The seed header's seq, gsoSize, and fk are unchanged.
-// The caller must release src (it's no longer in c.slots after this call).
-func mergeSlots(dst, src *coalesceSlot) {
-	dst.payIovs = append(dst.payIovs, src.payIovs...)
-	dst.numSeg += src.numSeg
-	dst.totalPay += src.totalPay
-	dst.nextSeq = src.nextSeq
-	dst.sealed = src.sealed // dst is open — canMergeSlots rejects a sealed prev
-	// carry PSH through
-	dst.hdrBuf[dst.ipHdrLen+13] |= src.hdrBuf[src.ipHdrLen+13] & tcpFlagPsh
 }
 
 // ipv4HdrChecksum computes the IPv4 header checksum over hdr (which must

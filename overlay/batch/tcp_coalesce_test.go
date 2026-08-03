@@ -994,108 +994,17 @@ func TestCoalescerIPv6CoalescesEceFlow(t *testing.T) {
 	}
 }
 
-// TestCoalescerSortsReorderedSeedsAndMerges feeds three same-flow MSS
-// segments out of TCP-seq order (mimicking a wire reorder that escaped
-// the rxOrder per-batch sort). Without the reorderForFlush sort+merge,
-// each out-of-seq arrival would seed its own slot and the slots would
-// emit in arrival order, producing a kernel-visible TCP reorder. With
-// the sort+merge, the three slots are sorted by seq and folded back into
-// one in-order TSO superpacket — same shape the receiver TCP would have
-// seen had the wire never reordered.
-func TestCoalescerSortsReorderedSeedsAndMerges(t *testing.T) {
-	w := &fakeTunWriter{gsoEnabled: true}
-	c := newTestTCPCoalescer(t, w)
-	pay := make([]byte, 1200)
-	// Arrival order: seq 1000, 3400, 2200. The 3400 seeds a separate slot
-	// because 3400 != nextSeq=2200, then 2200 fails to extend the 3400 slot
-	// and seeds its own. Three slots end up in c.slots; reorderForFlush
-	// should sort them into [1000,2200,3400] and merge them back into one.
-	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Commit(buildTCPv4(3400, tcpAck, pay)); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Commit(buildTCPv4(2200, tcpAck, pay)); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Flush(); err != nil {
-		t.Fatal(err)
-	}
-	if len(w.gsoWrites) != 1 {
-		t.Fatalf("want 1 merged gso write got %d", len(w.gsoWrites))
-	}
-	g := w.gsoWrites[0]
-	if len(g.pays) != 3 {
-		t.Fatalf("merged segs=%d want 3", len(g.pays))
-	}
-	const ipHdrLen = 20
-	if seedSeq := binary.BigEndian.Uint32(g.hdr[ipHdrLen+4 : ipHdrLen+8]); seedSeq != 1000 {
-		t.Errorf("merged seed seq=%d want 1000 (lowest)", seedSeq)
-	}
-}
-
-// TestCoalescerSortAcrossFlowsMergesEachIndependently checks that two
-// flows interleaved with reorder are each sorted-and-merged in isolation
-// without any cross-flow contamination.
-func TestCoalescerSortAcrossFlowsMergesEachIndependently(t *testing.T) {
-	w := &fakeTunWriter{gsoEnabled: true}
-	c := newTestTCPCoalescer(t, w)
-	pay := make([]byte, 1200)
-	// Flow A (sport 1000) seq 100, 1300; flow B (sport 3000) seq 500, 1700.
-	// Arrival: A.1300, B.1700, A.100, B.500 — every flow reordered.
-	if err := c.Commit(buildTCPv4Ports(1000, 2000, 1300, tcpAck, pay)); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Commit(buildTCPv4Ports(3000, 2000, 1700, tcpAck, pay)); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Commit(buildTCPv4Ports(1000, 2000, 100, tcpAck, pay)); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Commit(buildTCPv4Ports(3000, 2000, 500, tcpAck, pay)); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Flush(); err != nil {
-		t.Fatal(err)
-	}
-	if len(w.gsoWrites) != 2 {
-		t.Fatalf("want 2 gso writes (one per flow merged), got %d", len(w.gsoWrites))
-	}
-	for i, g := range w.gsoWrites {
-		if len(g.pays) != 2 {
-			t.Errorf("gso[%d] segs=%d want 2", i, len(g.pays))
-		}
-		const ipHdrLen = 20
-		seedSeq := binary.BigEndian.Uint32(g.hdr[ipHdrLen+4 : ipHdrLen+8])
-		sport := binary.BigEndian.Uint16(g.hdr[ipHdrLen : ipHdrLen+2])
-		// Each flow's merged seed should be the LOWER of its two seqs.
-		switch sport {
-		case 1000:
-			if seedSeq != 100 {
-				t.Errorf("flow A seed seq=%d want 100", seedSeq)
-			}
-		case 3000:
-			if seedSeq != 500 {
-				t.Errorf("flow B seed seq=%d want 500", seedSeq)
-			}
-		default:
-			t.Errorf("unexpected sport %d", sport)
-		}
-	}
-}
-
-// TestCoalescerSortKeepsPSHBoundary verifies that a PSH-sealed slot is
-// not folded into a later seq-contiguous slot — PSH placement is part of
-// the wire signal and merging across it would shift the receiver's push
-// boundary by an arbitrary number of segments.
-func TestCoalescerSortKeepsPSHBoundary(t *testing.T) {
+// TestCoalescerPSHKeepsChainBoundary verifies that a PSH-sealed chain is
+// not extended by a later seq-contiguous segment — PSH placement is part of
+// the wire signal and growing the superpacket past it would shift the
+// receiver's push boundary by an arbitrary number of segments.
+func TestCoalescerPSHKeepsChainBoundary(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := newTestTCPCoalescer(t, w)
 	pay := make([]byte, 1200)
 	// Seq 1000 (no PSH) + 2200 (PSH) → seal one slot with PSH set.
-	// Seq 3400 (no PSH) is contiguous to 3400 from seq 2200+1200; without
-	// the PSH check it would merge in.
+	// Seq 3400 is contiguous to the sealed chain's nextSeq; without the
+	// seal check it would append in.
 	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
@@ -1115,38 +1024,36 @@ func TestCoalescerSortKeepsPSHBoundary(t *testing.T) {
 	}
 }
 
-// TestCoalescerSortKeepsPassthroughBarrier confirms a verbatim slot in
-// the middle of the queue prevents the post-sort merge from folding
-// across it. Reordered same-flow data on either side of the verbatim
-// is sorted/merged independently.
-func TestCoalescerSortKeepsPassthroughBarrier(t *testing.T) {
+// TestCoalescerSynSealsFlowChain confirms a non-admissible in-flow packet
+// (SYN+ACK here) seals its flow's open chain and holds its emission
+// position: data committed after it seeds a fresh slot and emits after it,
+// never extending a chain created before it.
+func TestCoalescerSynSealsFlowChain(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := newTestTCPCoalescer(t, w)
 	pay := make([]byte, 1200)
-	// First two segments seed S1 (then a 3400 reorder seeds S2).
 	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
+	// Discontiguous seq: evicts the 1000 slot and seeds its own.
 	if err := c.Commit(buildTCPv4(3400, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
-	// Non-coalesceable packet (SYN+ACK) flushes S1's openSlots entry and
-	// becomes a verbatim barrier in c.slots.
+	// Non-coalesceable packet (SYN+ACK) seals the flow's open slot and
+	// becomes a verbatim slot in c.slots.
 	if err := c.Commit(buildTCPv4(9999, tcpSyn|tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
-	// Post-barrier same-flow data: should never end up before the SYN.
+	// Post-SYN data: must emit after the SYN, in its own slot.
 	if err := c.Commit(buildTCPv4(2200, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	// All four packets emit as plain writes: 1000 and 3400 are separate
-	// single-segment slots (not contiguous, so the post-sort merge can't
-	// fold them), the SYN is verbatim, and the post-barrier 2200 stays
-	// a single-segment slot after the SYN. The pre-barrier sort must land
-	// 1000 before 3400, and 2200 must never move before the SYN.
+	// All four packets emit as plain writes in creation order: 1000 and
+	// 3400 are separate single-segment slots, the SYN is verbatim, and the
+	// post-SYN 2200 is a fresh single-segment slot after it.
 	if len(w.writes) != 4 || len(w.gsoWrites) != 0 {
 		t.Fatalf("want 4 plain writes, got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
 	}
@@ -1201,150 +1108,6 @@ func TestCoalescerIPv6DifferingECNReseeds(t *testing.T) {
 		if got := (w.writes[i][1] >> 4) & 0x03; got != wnt {
 			t.Errorf("plain %d v6 ECN=0x%02x want 0x%02x", i, got, wnt)
 		}
-	}
-}
-
-func TestSortRunZeroAllocs(t *testing.T) {
-	c := &TCPCoalescer{}
-	mk := func(srcByte byte, seq uint32, pay int) *coalesceSlot {
-		s := &coalesceSlot{nextSeq: seq + uint32(pay), totalPay: pay}
-		s.fk.src[0] = srcByte
-		return s
-	}
-	run := []*coalesceSlot{
-		mk(3, 5000, 100),
-		mk(1, 1000, 50),
-		mk(2, 2000, 75),
-		mk(1, 900, 50),
-		mk(3, 4900, 100),
-		mk(2, 1925, 75),
-		mk(1, 1050, 50),
-		mk(3, 5100, 100),
-	}
-
-	allocs := testing.AllocsPerRun(100, func() {
-		// Re-shuffle so each run actually does sorting work.
-		run[0], run[1], run[2], run[3] = run[3], run[2], run[1], run[0]
-		c.sortRun(run)
-	})
-	if allocs != 0 {
-		t.Fatalf("sortRun allocates %v times per run; want 0", allocs)
-	}
-}
-
-// TestCoalescerMergeShortTailDoesNotFabricatePSH: a slot sealed by a
-// sub-gsoSize tail segment has psh=true in the chain-closed sense but no
-// PSH flag on any of its packets. When reorderForFlush folds it into the
-// preceding slot, the merged header must not grow a PSH the sender never
-// sent — mergeSlots must copy the wire flag from the source header, not
-// synthesize it from the seal bool.
-func TestCoalescerMergeShortTailDoesNotFabricatePSH(t *testing.T) {
-	w := &fakeTunWriter{gsoEnabled: true}
-	c := newTestTCPCoalescer(t, w)
-	pay := make([]byte, 1200)
-	short := make([]byte, 600)
-	// Arrival: seq 3400 (full), 4600 (short, seals the slot), then the
-	// reordered front of the window: 1000, 2200. Flush sorts the two slots
-	// into [1000..3400) + [3400..5200) and merges them.
-	if err := c.Commit(buildTCPv4(3400, tcpAck, pay)); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Commit(buildTCPv4(4600, tcpAck, short)); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Commit(buildTCPv4(2200, tcpAck, pay)); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Flush(); err != nil {
-		t.Fatal(err)
-	}
-	if len(w.gsoWrites) != 1 {
-		t.Fatalf("want 1 merged gso write got %d (plain=%d)", len(w.gsoWrites), len(w.writes))
-	}
-	g := w.gsoWrites[0]
-	if len(g.pays) != 4 {
-		t.Fatalf("merged segs=%d want 4", len(g.pays))
-	}
-	const ipHdrLen = 20
-	if flags := g.hdr[ipHdrLen+13]; flags&tcpPsh != 0 {
-		t.Errorf("merged header flags=%#x: PSH fabricated by short-tail merge", flags)
-	}
-}
-
-// TestCoalescerMergePreservesRealPSH is the positive companion: when the
-// source slot's tail really carried PSH, the merged header must keep it.
-func TestCoalescerMergePreservesRealPSH(t *testing.T) {
-	w := &fakeTunWriter{gsoEnabled: true}
-	c := newTestTCPCoalescer(t, w)
-	pay := make([]byte, 1200)
-	short := make([]byte, 600)
-	if err := c.Commit(buildTCPv4(3400, tcpAck, pay)); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Commit(buildTCPv4(4600, tcpAckPsh, short)); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Commit(buildTCPv4(2200, tcpAck, pay)); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Flush(); err != nil {
-		t.Fatal(err)
-	}
-	if len(w.gsoWrites) != 1 {
-		t.Fatalf("want 1 merged gso write got %d (plain=%d)", len(w.gsoWrites), len(w.writes))
-	}
-	g := w.gsoWrites[0]
-	if len(g.pays) != 4 {
-		t.Fatalf("merged segs=%d want 4", len(g.pays))
-	}
-	const ipHdrLen = 20
-	if flags := g.hdr[ipHdrLen+13]; flags&tcpPsh == 0 {
-		t.Errorf("merged header flags=%#x: real PSH lost in merge", flags)
-	}
-}
-
-// TestCoalescerSeqWrapAroundSortsAndMerges pins the serial-number
-// arithmetic through the sort-and-merge path: a chain that crosses the
-// 2^32 seq wrap must still sort pre-wrap before post-wrap and merge into
-// one superpacket when contiguous.
-func TestCoalescerSeqWrapAroundSortsAndMerges(t *testing.T) {
-	w := &fakeTunWriter{gsoEnabled: true}
-	c := newTestTCPCoalescer(t, w)
-
-	payA := bytes.Repeat([]byte{'A'}, 32)
-	payB := bytes.Repeat([]byte{'B'}, 32)
-	seqA := uint32(0xffffffe0) // 32 before the wrap: nextSeq lands exactly on 0
-
-	// The post-wrap segment arrives first — wire reorder across a batch
-	// boundary, the case reorderForFlush exists for.
-	if err := c.Commit(buildTCPv4(0, tcpAck, payB)); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Commit(buildTCPv4(seqA, tcpAck, payA)); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Flush(); err != nil {
-		t.Fatal(err)
-	}
-	if len(w.gsoWrites) != 1 {
-		t.Fatalf("want 1 merged gso write across the wrap, got %d (plain=%d)", len(w.gsoWrites), len(w.writes))
-	}
-	g := w.gsoWrites[0]
-	const ipHdrLen = 20
-	if seedSeq := binary.BigEndian.Uint32(g.hdr[ipHdrLen+4 : ipHdrLen+8]); seedSeq != seqA {
-		t.Errorf("merged seed seq=%#x want %#x (pre-wrap segment first)", seedSeq, seqA)
-	}
-	if len(g.pays) != 2 {
-		t.Fatalf("merged segs=%d want 2", len(g.pays))
-	}
-	if !bytes.Equal(g.pays[0], payA) || !bytes.Equal(g.pays[1], payB) {
-		t.Errorf("payload order wrong across the wrap: got %q then %q", g.pays[0][:1], g.pays[1][:1])
 	}
 }
 
@@ -1438,178 +1201,87 @@ func TestCoalescerAtomicRandomIDsCoalesce(t *testing.T) {
 	}
 }
 
-// buildTCPv4TS is buildTCPv4 with a TCP timestamp option in the standard
-// Linux layout (NOP,NOP,TS — a 32-byte TCP header).
-func buildTCPv4TS(seq uint32, flags byte, tsVal, tsEcr uint32, payload []byte) []byte {
-	const ipHdrLen = 20
-	const tcpHdrLen = 32
-	total := ipHdrLen + tcpHdrLen + len(payload)
-	pkt := make([]byte, total)
-
-	pkt[0] = 0x45
-	pkt[1] = 0x00
-	binary.BigEndian.PutUint16(pkt[2:4], uint16(total))
-	binary.BigEndian.PutUint16(pkt[4:6], 0)
-	binary.BigEndian.PutUint16(pkt[6:8], 0x4000)
-	pkt[8] = 64
-	pkt[9] = ipProtoTCP
-	copy(pkt[12:16], []byte{10, 0, 0, 1})
-	copy(pkt[16:20], []byte{10, 0, 0, 2})
-
-	binary.BigEndian.PutUint16(pkt[20:22], 1000)
-	binary.BigEndian.PutUint16(pkt[22:24], 2000)
-	binary.BigEndian.PutUint32(pkt[24:28], seq)
-	binary.BigEndian.PutUint32(pkt[28:32], 12345)
-	pkt[32] = 0x80 // doff=8: 32-byte TCP header
-	pkt[33] = flags
-	binary.BigEndian.PutUint16(pkt[34:36], 0xffff)
-	pkt[40] = 0x01 // NOP
-	pkt[41] = 0x01 // NOP
-	pkt[42] = 0x08 // TS kind
-	pkt[43] = 10   // TS length
-	binary.BigEndian.PutUint32(pkt[44:48], tsVal)
-	binary.BigEndian.PutUint32(pkt[48:52], tsEcr)
-
-	copy(pkt[52:], payload)
-	return pkt
-}
-
-func TestParseTCPOptions(t *testing.T) {
-	ts := func(val, ecr uint32) []byte {
-		b := make([]byte, 10)
-		b[0], b[1] = 0x08, 10
-		binary.BigEndian.PutUint32(b[2:6], val)
-		binary.BigEndian.PutUint32(b[6:10], ecr)
-		return b
-	}
-	cases := []struct {
-		name    string
-		opts    []byte
-		wantVal uint32
-		wantEcr uint32
-		wantOK  bool
-	}{
-		{"empty", nil, 0, 0, false},
-		{"bare TS filling the block exactly", ts(100, 200), 100, 200, true},
-		{"standard linux NOP,NOP,TS", append([]byte{1, 1}, ts(7, 9)...), 7, 9, true},
-		{"unknown option then TS", append([]byte{254, 4, 0, 0}, ts(3, 4)...), 3, 4, true},
-		{"EOL terminates before garbage", append([]byte{0, 0}, ts(1, 2)...), 0, 0, false},
-		{"zero-length option must not hang", []byte{254, 0, 8, 10, 0, 0, 0, 1, 0, 0, 0, 2}, 0, 0, false},
-		{"TS with wrong length", []byte{8, 4, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1}, 0, 0, false},
-		{"truncated TS", append([]byte{1, 1, 1}, ts(5, 6)[:9]...), 0, 0, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			val, ecr, ok := parseTCPOptions(tc.opts)
-			if val != tc.wantVal || ecr != tc.wantEcr || ok != tc.wantOK {
-				t.Fatalf("parseTCPOptions(%v) = (%d, %d, %v), want (%d, %d, %v)",
-					tc.opts, val, ecr, ok, tc.wantVal, tc.wantEcr, tc.wantOK)
-			}
-		})
-	}
-}
-
-// TestCompareCoalesceSlotsAntisymmetric pins the comparator contract for the
-// retransmit shape: a lower seq with a newer TSval (retransmit) versus a
-// higher seq with an older TSval (delayed original). The TSval must win in
-// BOTH directions — an asymmetric comparator gives SortStableFunc an
-// inconsistent order and unspecified output.
-func TestCompareCoalesceSlotsAntisymmetric(t *testing.T) {
-	mk := func(seq, tsVal uint32, hasTS bool) *coalesceSlot {
-		return &coalesceSlot{nextSeq: seq, tsVal: tsVal, hasTS: hasTS}
-	}
-	original := mk(5000, 100, true)   // sent first, delayed in flight
-	retransmit := mk(1000, 105, true) // sent later, lower seq
-
-	if got := compareCoalesceSlots(original, retransmit); got != -1 {
-		t.Fatalf("compare(original, retransmit) = %d, want -1 (older TSval first)", got)
-	}
-	if got := compareCoalesceSlots(retransmit, original); got != 1 {
-		t.Fatalf("compare(retransmit, original) = %d, want 1", got)
-	}
-
-	// Equal TSvals (a burst within one tick) fall back to seq order,
-	// still antisymmetrically.
-	a, b := mk(1000, 50, true), mk(2000, 50, true)
-	if compareCoalesceSlots(a, b) != -1 || compareCoalesceSlots(b, a) != 1 {
-		t.Fatal("equal-TSval slots must order by seq in both directions")
-	}
-
-	// Timestamp-less flows keep pure seq order.
-	c, d := mk(2000, 0, false), mk(1000, 99, true)
-	if compareCoalesceSlots(c, d) != 1 || compareCoalesceSlots(d, c) != -1 {
-		t.Fatal("mixed/absent timestamps must fall back to seq in both directions")
-	}
-}
-
-// TestCoalescerRetransmitEmitsAfterDelayedOriginal: a retransmit (lower seq,
-// newer TSval) and a delayed original (higher seq, older TSval) land in one
-// flush window. Seq-only sorting would emit the retransmit first; the
-// receiver would advance ts_recent past the original's TSval and PAWS would
-// drop the original. TSval-first ordering must emit the original first.
-func TestCoalescerRetransmitEmitsAfterDelayedOriginal(t *testing.T) {
+// TestCoalescerSeqWrapAroundAppends pins the serial-number arithmetic on the
+// append path: a chain crossing the 2^32 seq wrap must keep extending when
+// contiguous.
+func TestCoalescerSeqWrapAroundAppends(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := newTestTCPCoalescer(t, w)
-	pay := make([]byte, 100)
 
-	original := buildTCPv4TS(5000, tcpAck, 100, 1, pay)
-	retransmit := buildTCPv4TS(1000, tcpAck, 105, 1, pay)
+	payA := bytes.Repeat([]byte{'A'}, 32)
+	payB := bytes.Repeat([]byte{'B'}, 32)
+	seqA := uint32(0xffffffe0) // 32 before the wrap: nextSeq lands exactly on 0
 
-	if err := c.Commit(original); err != nil {
+	if err := c.Commit(buildTCPv4(seqA, tcpAck, payA)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Commit(retransmit); err != nil {
+	if err := c.Commit(buildTCPv4(0, tcpAck, payB)); err != nil {
 		t.Fatal(err)
-	}
-	if err := c.Flush(); err != nil {
-		t.Fatal(err)
-	}
-	if len(w.writes) != 2 {
-		t.Fatalf("want 2 plain writes (non-contiguous single-segment slots), got %d writes, %d gso", len(w.writes), len(w.gsoWrites))
-	}
-	firstSeq := binary.BigEndian.Uint32(w.writes[0][24:28])
-	secondSeq := binary.BigEndian.Uint32(w.writes[1][24:28])
-	if firstSeq != 5000 || secondSeq != 1000 {
-		t.Fatalf("emission order (%d, %d), want (5000, 1000): retransmit must not overtake the older-TSval original", firstSeq, secondSeq)
-	}
-}
-
-// TestCoalescerACKDoesNotSplitSortRun: an interleaved pure ACK must not stop
-// wire-reordered same-flow data on either side of it from sorting adjacent
-// and merging — the contract explicitly allows data to overtake a bare ACK.
-// Arrival is D2, ACK, D1; the two data slots must still merge into one
-// superpacket, with the ACK emitted after (its seq is the peer's snd_nxt,
-// which orders it behind the data it followed).
-func TestCoalescerACKDoesNotSplitSortRun(t *testing.T) {
-	w := &fakeTunWriter{gsoEnabled: true}
-	c := newTestTCPCoalescer(t, w)
-	pay := make([]byte, 1200)
-
-	d2 := buildTCPv4(2200, tcpAck, pay)
-	ack := buildTCPv4(3400, tcpAck, nil)
-	d1 := buildTCPv4(1000, tcpAck, pay)
-
-	for _, pkt := range [][]byte{d2, ack, d1} {
-		if err := c.Commit(pkt); err != nil {
-			t.Fatal(err)
-		}
 	}
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
 	if len(w.gsoWrites) != 1 {
-		t.Fatalf("want the two data slots merged into 1 gso write across the ACK, got %d gso + %d plain", len(w.gsoWrites), len(w.writes))
+		t.Fatalf("want 1 gso write across the wrap, got %d (plain=%d)", len(w.gsoWrites), len(w.writes))
 	}
-	if got := w.gsoWrites[0].payLen(); got != 2400 {
-		t.Fatalf("merged payload = %d, want 2400", got)
+	g := w.gsoWrites[0]
+	const ipHdrLen = 20
+	if seedSeq := binary.BigEndian.Uint32(g.hdr[ipHdrLen+4 : ipHdrLen+8]); seedSeq != seqA {
+		t.Errorf("seed seq=%#x want %#x", seedSeq, seqA)
 	}
-	if len(w.writes) != 1 {
-		t.Fatalf("want the ACK as 1 plain write, got %d", len(w.writes))
+	if len(g.pays) != 2 {
+		t.Fatalf("segs=%d want 2", len(g.pays))
 	}
-	if got := binary.BigEndian.Uint32(w.writes[0][24:28]); got != 3400 {
-		t.Fatalf("plain write seq = %d, want the ACK (3400)", got)
+	if !bytes.Equal(g.pays[0], payA) || !bytes.Equal(g.pays[1], payB) {
+		t.Errorf("payload order wrong across the wrap: got %q then %q", g.pays[0][:1], g.pays[1][:1])
 	}
-	if len(w.order) != 2 || w.order[0] != "gso" || w.order[1] != "write" {
-		t.Fatalf("emission order = %v, want [gso write]", w.order)
+}
+
+// TestCoalescerUnparseableSealsAllChains: an unparseable packet's flow is
+// unknowable, so it must close every open chain. Later data — even data
+// seq-contiguous with a pre-existing chain — seeds a fresh slot and emits
+// after the unparseable packet, exactly as transmitted.
+func TestCoalescerUnparseableSealsAllChains(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	c := newTestTCPCoalescer(t, w)
+	pay := make([]byte, 1200)
+
+	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Commit(buildTCPv4(2200, tcpAck, pay)); err != nil {
+		t.Fatal(err)
+	}
+	// IHL=6 fakes IP options: parseTCPBase bails, flow key unknown.
+	opts := buildTCPv4(5000, tcpAck, make([]byte, 500))
+	opts[0] = 0x46
+	if err := c.Commit(opts); err != nil {
+		t.Fatal(err)
+	}
+	// Contiguous with the first chain (nextSeq 3400), but that chain is
+	// sealed now: must not append, must not emit before the unparseable.
+	if err := c.Commit(buildTCPv4(3400, tcpAck, pay)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.gsoWrites) != 1 {
+		t.Fatalf("want 1 gso write (pre-fragment pair), got %d", len(w.gsoWrites))
+	}
+	if len(w.gsoWrites[0].pays) != 2 {
+		t.Fatalf("pre-fragment chain segs=%d want 2", len(w.gsoWrites[0].pays))
+	}
+	if len(w.writes) != 2 {
+		t.Fatalf("want 2 plain writes (unparseable + post-fragment seed), got %d", len(w.writes))
+	}
+	if w.writes[0][0] != 0x46 {
+		t.Errorf("first plain write must be the unparseable packet")
+	}
+	if seq := binary.BigEndian.Uint32(w.writes[1][24:28]); seq != 3400 {
+		t.Errorf("post-fragment data seq=%d want 3400", seq)
+	}
+	if len(w.order) != 3 || w.order[0] != "gso" || w.order[1] != "write" || w.order[2] != "write" {
+		t.Fatalf("emission order = %v, want [gso write write]", w.order)
 	}
 }
