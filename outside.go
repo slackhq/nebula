@@ -316,8 +316,8 @@ var (
 
 // newPacket validates and parses the interesting bits for the firewall out of the ip and sub protocol headers
 func newPacket(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
-	// fp is reused across packets; reset the parse byproducts here so a
-	// parser's early-error return can't leak the previous packet's offsets.
+	// fp is reused across packets; reset the parse byproducts so an early-error return cannot
+	// leak the previous packet's offsets.
 	fp.IPHdrLen = 0
 	fp.FragAny = false
 	if len(data) < 1 {
@@ -422,8 +422,8 @@ func parseV4(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 	// Check if this is the second or further fragment of a fragmented packet.
 	flagsfrags := binary.BigEndian.Uint16(data[6:8])
 	fp.Fragment = (flagsfrags & 0x1FFF) != 0
-	// Any fragmentation at all (MF or offset): first fragments have readable
-	// ports for the firewall but must never be coalesced.
+	// Any fragmentation at all (MF or offset): first fragments have readable ports for the
+	// firewall but must never be coalesced.
 	fp.FragAny = (flagsfrags & 0x3fff) != 0
 	fp.IPHdrLen = ihl
 

@@ -21,16 +21,10 @@ func (k *keySeq) next() SortKey {
 	return SortKey{Epoch: k.epoch, Counter: k.counter}
 }
 
-// newTestMultiCoalescer builds a batcher over w and asserts the concrete
-// type so tests can reach into the lanes.
+// newTestMultiCoalescer builds a batcher over w.
 func newTestMultiCoalescer(tb testing.TB, w io.Writer) *MultiCoalescer {
 	tb.Helper()
-	b := NewMultiCoalescer(w, test.NewLogger())
-	m, ok := b.(*MultiCoalescer)
-	if !ok {
-		tb.Fatalf("want a *MultiCoalescer, got %T", b)
-	}
-	return m
+	return NewMultiCoalescer(w, test.NewLogger())
 }
 
 // TestMultiCoalescerRoutesByProto confirms TCP/UDP/other land in the right

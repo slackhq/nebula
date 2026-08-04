@@ -20,7 +20,7 @@ type flowKey struct {
 // so this matches a typical carrier-side recvmmsg batch on the UDP socket.
 const initialSlots = 64
 
-// parsedIP is the IP-level result of parseIPPrologue.
+// parsedIP is the IP-level result of the prologue parsers.
 // The caller layers L4-specific parsing (TCP / UDP) on top.
 type parsedIP struct {
 	fk       flowKey
@@ -31,46 +31,11 @@ type parsedIP struct {
 	pkt []byte
 }
 
-// parseIPPrologue extracts the IP-level fields the coalescers care about:
-// IHL/payload length, version, src/dst addresses, and the L4 protocol byte.
-// Returns ok=false for malformed input, IPv4 with options or fragmentation,
-// or IPv6 with extension headers (all rejected by both coalescers in
-// identical ways before this refactor).
-//
-// On success, p.pkt is len-trimmed to the IP-declared length so callers
-// don't have to repeat the trim. wantProto is the IANA protocol number to
-// require (6 for TCP, 17 for UDP); ok=false for any other value.
-// This is the standalone-lane-Commit entry; the dispatcher path uses
-// parseIPAt, where the protocol was already resolved upstream.
-func parseIPPrologue(pkt []byte, wantProto byte) (parsedIP, bool) {
-	var p parsedIP
-	if len(pkt) < 20 {
-		return p, false
-	}
-	switch pkt[0] >> 4 {
-	case 4:
-		if pkt[9] != wantProto {
-			return p, false
-		}
-		return parseIPv4Prologue(pkt)
-	case 6:
-		if len(pkt) < 40 {
-			return p, false
-		}
-		if pkt[6] != wantProto {
-			return p, false
-		}
-		return parseIPv6Prologue(pkt)
-	}
-	return p, false
-}
-
-// parseIPAt is the dispatcher-path prologue: newPacket already resolved the
-// L4 protocol and header offset once for the firewall, so the proto sniff is
-// replaced by a cross-check of the caller's ipHdrLen. A plain header (v4:
-// IHL 20, v6: exactly 40 — no options, no extension headers) is the only
-// coalesceable shape, which is the same rule parseIPPrologue enforces
-// through its own reads.
+// parseIPAt validates the IP header for lane parsing. newPacket already resolved the L4 protocol
+// and offset for the firewall, so there is no proto sniff here; the caller's ipHdrLen is
+// cross-checked instead. A plain header (v4 IHL 20, v6 exactly 40) is the only coalesceable
+// shape. The v6 check is load-bearing: it rejects extension-header packets whose L4 is not at
+// byte 40. On success p.pkt is trimmed to the IP-declared length.
 func parseIPAt(pkt []byte, ipHdrLen int) (parsedIP, bool) {
 	var p parsedIP
 	if len(pkt) < 20 {
@@ -91,18 +56,16 @@ func parseIPAt(pkt []byte, ipHdrLen int) (parsedIP, bool) {
 	return p, false
 }
 
-// parseIPv4Prologue is the shared IPv4 tail of the two prologue entries.
-// The caller has verified len(pkt) >= 20 and either the protocol
-// (parseIPPrologue) or the upstream-resolved header length (parseIPAt).
+// parseIPv4Prologue is the shared IPv4 tail of the prologue entries; the
+// caller has verified len(pkt) >= 20 and the version.
 func parseIPv4Prologue(pkt []byte) (parsedIP, bool) {
 	var p parsedIP
 	ihl := int(pkt[0]&0x0f) * 4
 	if ihl != 20 {
 		return p, false
 	}
-	// Reject actual fragmentation (MF or non-zero frag offset). On the
-	// dispatcher path FragAny was already gated; kept as defense in depth —
-	// a fragment folded into a superpacket would corrupt reassembly.
+	// Reject any fragmentation (MF or nonzero offset). The dispatcher already gated FragAny; kept
+	// as defense in depth, since a fragment folded into a superpacket would corrupt reassembly.
 	if binary.BigEndian.Uint16(pkt[6:8])&0x3fff != 0 {
 		return p, false
 	}
@@ -118,8 +81,8 @@ func parseIPv4Prologue(pkt []byte) (parsedIP, bool) {
 	return p, true
 }
 
-// parseIPv6Prologue is the shared IPv6 tail; caller has verified
-// len(pkt) >= 40 and version/proto-or-offset.
+// parseIPv6Prologue is the shared IPv6 tail; the caller has verified
+// len(pkt) >= 40, the version, and that the L4 header sits at byte 40.
 func parseIPv6Prologue(pkt []byte) (parsedIP, bool) {
 	var p parsedIP
 	payloadLen := int(binary.BigEndian.Uint16(pkt[4:6]))

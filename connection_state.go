@@ -26,14 +26,12 @@ const (
 // RehandshakeAfterMessages must stay below RejectAfterMessages so tunnels roll before the hard send stop.
 const _ = RejectAfterMessages - RehandshakeAfterMessages
 
-// sessionEpoch hands out a receiver-local ordinal to every ConnectionState as
-// it is created. The RX staging sort (overlay/batch) orders packets by
-// (epoch, message counter). A re-handshake never rekeys an existing tunnel; it
-// brings up a whole new hostinfo (and ConnectionState) with its own counter
-// space starting near zero, while the old tunnel keeps decrypting in-flight
-// packets until it is torn down. During that cutover one flush batch can hold
-// packets from both tunnels, and the epoch is what keeps the old tunnel's
-// packets sorted ahead of the new tunnel's.
+// sessionEpoch hands out a receiver-local ordinal to every ConnectionState at creation. The RX
+// staging sort (overlay/batch) orders packets by (epoch, message counter). A re-handshake never
+// rekeys an existing tunnel; it brings up a new hostinfo and ConnectionState with a counter space
+// starting near zero, while the old tunnel keeps decrypting until torn down. During that cutover
+// one flush batch can hold packets from both tunnels, and the epoch keeps the old tunnel's
+// packets sorted first.
 var sessionEpoch atomic.Uint64
 
 type ConnectionState struct {

@@ -116,11 +116,11 @@ type Interface struct {
 	writers []udp.Conn
 	queues  []tio.Queue
 	// batchers is one per tun queue, wrapping queues[i]. readOutsidePackets
-	// commits plaintext into the batch.RxBatcher; the plaintext is decrypted
+	// commits plaintext into the batcher; the plaintext is decrypted
 	// in place inside the UDP receive buffers, so listenOut must call Flush
 	// at the end of each UDP recvmmsg batch, before those buffers are
 	// reused (every udp.Conn ListenOut guarantees that ordering).
-	batchers []batch.RxBatcher
+	batchers []*batch.MultiCoalescer
 	wg       sync.WaitGroup
 
 	// fatalErr holds the first unexpected reader error that caused shutdown.
@@ -218,7 +218,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		routines:              c.routines,
 		version:               c.version,
 		writers:               make([]udp.Conn, c.routines),
-		batchers:              make([]batch.RxBatcher, c.routines),
+		batchers:              make([]*batch.MultiCoalescer, c.routines),
 		myVpnNetworks:         cs.myVpnNetworks,
 		myVpnNetworksTable:    cs.myVpnNetworksTable,
 		myVpnAddrs:            cs.myVpnAddrs,

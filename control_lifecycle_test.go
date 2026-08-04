@@ -78,7 +78,7 @@ func newReadyControl(t *testing.T) (*Control, *fakeDevice, *fakeConn) {
 		inside:     dev,
 		outside:    conn,
 		writers:    []udp.Conn{conn},
-		batchers:   make([]batch.RxBatcher, 1),
+		batchers:   make([]*batch.MultiCoalescer, 1),
 		routines:   1,
 		hostMap:    newHostMap(l),
 		lightHouse: lh,
@@ -177,7 +177,7 @@ func TestControl_StartMultiqueueFailureReleases(t *testing.T) {
 		inside:   dev,
 		outside:  conn,
 		writers:  []udp.Conn{conn},
-		batchers: make([]batch.RxBatcher, 2),
+		batchers: make([]*batch.MultiCoalescer, 2),
 		routines: 2,
 		l:        test.NewLogger(),
 	}

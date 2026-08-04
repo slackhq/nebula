@@ -2,11 +2,10 @@ package batch
 
 import (
 	"io"
-
-	"github.com/slackhq/nebula/firewall"
 )
 
-// Passthrough is a RxBatcher that doesn't batch anything, it just accumulates and then sends packets.
+// Passthrough is MultiCoalescer's verbatim lane: no batching, packets are written at Flush in the
+// order enqueued.
 type Passthrough struct {
 	out   io.Writer
 	slots [][]byte
@@ -19,12 +18,7 @@ func NewPassthrough(w io.Writer) *Passthrough {
 	}
 }
 
-func (p *Passthrough) Commit(pkt []byte, _ SortKey, _ *firewall.ParsedPacket) error {
-	return p.enqueue(pkt)
-}
-
-// enqueue is the lane-facing half of Commit: MultiCoalescer.dispatch hands
-// packets here already sorted into transmission order.
+// enqueue accepts one packet, already sorted into transmission order by dispatch.
 func (p *Passthrough) enqueue(pkt []byte) error {
 	p.slots = append(p.slots, pkt)
 	return nil

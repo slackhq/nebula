@@ -1,6 +1,7 @@
 package batch
 
 import (
+	"cmp"
 	"errors"
 	"io"
 	"log/slog"
@@ -9,47 +10,34 @@ import (
 	"github.com/slackhq/nebula/firewall"
 )
 
-// MultiCoalescer stages plaintext packets with their (epoch, counter) sort
-// keys, and at Flush replays them in sender-transmission order into
-// lane-specific batchers selected by the IP/L4 protocol of the packet.
+// MultiCoalescer stages plaintext packets with their (epoch, counter) sort keys and, at Flush,
+// replays them in sender-transmission order into lane-specific batchers selected by L4 protocol.
 //
-// Sorting *before* the lanes see anything is what makes the ordering story
-// simple: each lane consumes packets in transmission order, builds its slots
-// in that order, and emits them in creation order. Wire reorder inside a
-// flush batch is repaired here, before it can fragment a lane's coalesce
-// chains, so the lanes carry no reorder-repair machinery of their own.
+// Sorting before dispatch keeps the ordering story simple: each lane consumes packets in
+// transmission order, builds slots in that order, and emits them in creation order. Wire reorder
+// inside a flush batch is repaired here, before it can fragment a lane's coalesce chains, so the
+// lanes carry no reorder-repair machinery.
 //
-// The ordering contract is per-tunnel transmission order within each lane:
-// a sender's packets are emitted in the order it encrypted them. Two
-// qualifications:
-//   - a pure TCP ACK may be overtaken by later same-flow data, because it
-//     does not close the flow's open coalesce chain (a late ACK is just a
-//     stale ACK; see TCPCoalescer.commitParsed);
-//   - an unparseable shape (fragment, IP options) seals every open chain in
-//     its lane — its flow is unknowable, so this is the only way to keep
-//     later data from extending a chain that would emit ahead of it. The
-//     packet then rides its lane as an in-lane passthrough, still in
-//     transmission order.
+// The contract is per-tunnel transmission order within each lane, with two exceptions: a pure TCP
+// ACK may be overtaken by later same-flow data (it does not close the flow's open chain; a late
+// ACK is just a stale ACK), and an unparseable shape seals every open chain in its lane (its flow
+// is unknown) and rides the lane as an in-lane verbatim, still in transmission order. Routing
+// follows the flow: a flow's non-coalesceable shapes ride its protocol lane rather than falling
+// to the later-flushed pt lane.
 //
-// Routing follows the flow, not the coalesceability: IPv4 fragments keep
-// their L4 proto visible and IPv6 extension chains are walked to the
-// terminal proto, so a flow's non-coalesceable shapes ride its lane rather
-// than falling to the later-flushed pt lane.
-//
-// Cross-lane order is intentionally NOT preserved across the TCP/UDP/verbatim split.
+// Cross-lane order (TCP vs UDP vs everything else) is not preserved.
 type MultiCoalescer struct {
 	tcp *TCPCoalescer
 	udp *UDPCoalescer
 	pt  *Passthrough
 
-	// staged holds this batch's packets and sort keys until Flush. Borrowed:
-	// the caller keeps each pkt alive until Flush returns.
+	// staged holds this batch's packets and sort keys until Flush. Borrowed: the caller keeps
+	// each pkt alive until Flush returns.
 	staged []stagedPacket
 }
 
-// stagedPacket also carries the scalars dispatch needs from the firewall's
-// ParsedPacket: pp itself is reused by the caller per packet and must not be
-// retained past Commit, so the relevant fields are copied by value here.
+// stagedPacket carries the scalars dispatch needs from the firewall's ParsedPacket, copied by
+// value: pp is reused by the caller per packet and must not be retained past Commit.
 type stagedPacket struct {
 	pkt      []byte
 	key      SortKey
@@ -58,10 +46,10 @@ type stagedPacket struct {
 	ipHdrLen uint16
 }
 
-// NewMultiCoalescer builds a multi-lane batcher over w, based on available
-// protocol support. The staging sort applies even when no GSO lane is
-// available: passthrough-only platforms still get transmission-order repair.
-func NewMultiCoalescer(w io.Writer, l *slog.Logger) RxBatcher {
+// NewMultiCoalescer builds a multi-lane batcher over w, based on available protocol support. The
+// staging sort applies even when no GSO lane is available: passthrough-only platforms still get
+// transmission-order repair.
+func NewMultiCoalescer(w io.Writer, l *slog.Logger) *MultiCoalescer {
 	m := &MultiCoalescer{
 		pt:     NewPassthrough(w),
 		staged: make([]stagedPacket, 0, initialSlots),
@@ -71,10 +59,10 @@ func NewMultiCoalescer(w io.Writer, l *slog.Logger) RxBatcher {
 	return m
 }
 
-// Commit stages pkt for the next Flush. All lane dispatch is deferred to
-// Flush so it runs on packets already in transmission order. pp is the
-// firewall's parse of pkt — the single source of truth for the packet's
-// protocol and L4 offset — and is only borrowed for this call.
+// Commit stages pkt for the next Flush; dispatch is deferred so it runs on packets already in
+// transmission order. key carries the packet's tunnel epoch and message counter. pkt is borrowed:
+// the caller must keep it valid until the next Flush and not re-use it. pp is the firewall's
+// parse of pkt and is borrowed only for this call, so the fields dispatch needs are copied here.
 func (m *MultiCoalescer) Commit(pkt []byte, key SortKey, pp *firewall.ParsedPacket) error {
 	m.staged = append(m.staged, stagedPacket{
 		pkt:      pkt,
@@ -86,24 +74,12 @@ func (m *MultiCoalescer) Commit(pkt []byte, key SortKey, pp *firewall.ParsedPack
 	return nil
 }
 
-// compareStaged orders staged packets by (epoch, counter): sender
-// transmission order within a tunnel, tunnel-creation order across a
-// re-handshake cutover. Keys are unique (see SortKey), so this is a total
-// order and sort stability doesn't matter.
+// compareStaged orders staged packets by (epoch, counter)
 func compareStaged(a, b stagedPacket) int {
-	if a.key.Epoch != b.key.Epoch {
-		if a.key.Epoch < b.key.Epoch {
-			return -1
-		}
-		return 1
+	if c := cmp.Compare(a.key.Epoch, b.key.Epoch); c != 0 {
+		return c
 	}
-	if a.key.Counter == b.key.Counter {
-		return 0
-	}
-	if a.key.Counter < b.key.Counter {
-		return -1
-	}
-	return 1
+	return cmp.Compare(a.key.Counter, b.key.Counter)
 }
 
 // dispatch routes one staged packet to its lane.
@@ -145,11 +121,12 @@ func (m *MultiCoalescer) dispatch(sp stagedPacket) error {
 	return m.pt.enqueue(sp.pkt)
 }
 
-// Flush sorts the staged batch into transmission order, replays it into the
-// lanes, then flushes each lane.
+// Flush sorts the staged batch into transmission order, replays it into the lanes, then flushes each lane.
+// Drains everything and returns the joined errors; one bad packet does not hold up the rest.
+// After Flush returns, committed payload slices may be recycled.
 func (m *MultiCoalescer) Flush() error {
-	// Arrival order is already almost sorted (reorder is the exception, not
-	// the rule), which pdqsort detects and handles in near-linear time.
+	// Arrival order is already almost sorted (reorder is the exception), which pdqsort detects
+	// and handles in near-linear time.
 	slices.SortFunc(m.staged, compareStaged)
 
 	var errs []error

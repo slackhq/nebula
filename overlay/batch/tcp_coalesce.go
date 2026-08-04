@@ -26,24 +26,21 @@ const tcpCoalesceMaxSegs = 64
 // into. IPv6 (40) + TCP with full options (60) = 100 bytes.
 const tcpCoalesceHdrCap = 100
 
-// coalesceSlot is one entry in the coalescer's ordered event queue.
-// When verbatim is true the slot holds a single borrowed packet that is
-// emitted as-is (pure ACK, non-admissible TCP, unparseable, or oversize seed).
-// When verbatim is false the slot is an in-progress coalesced superpacket.
-// hdrBuf is a mutable copy of the seed's IP+TCP header, populated on the
-// first append (we patch total length and pseudo-header partial at flush;
-// a slot that never grows flushes from rawPkt and never touches hdrBuf)
-// payIovs are *borrowed* slices from the caller's plaintext buffers.
-// The caller (listenOut) must keep those buffers alive until Flush.
+// coalesceSlot is one entry in the coalescer's ordered event queue. A verbatim slot holds a single
+// borrowed packet emitted as-is (pure ACK, non-admissible TCP, unparseable, or oversize seed); a
+// non-verbatim slot is an in-progress coalesced superpacket. payIovs are borrowed slices of the
+// caller's plaintext buffers; the caller must keep them alive until Flush.
 type coalesceSlot struct {
 	verbatim bool
-	// rawPkt is borrowed: the whole packet for verbatim slots, the seed
-	// packet for coalesce slots. A coalesce slot that never grows past one
-	// segment is emitted from rawPkt so its original (already valid) L4
-	// checksum ships DATA_VALID instead of making the kernel recompute it.
+	// rawPkt is borrowed: the whole packet for verbatim slots, the seed packet for coalesce
+	// slots. A slot that never grows past one segment is emitted from rawPkt so its original
+	// (already valid) L4 checksum ships DATA_VALID instead of making the kernel recompute it.
 	rawPkt []byte
 
-	fk       flowKey
+	fk flowKey
+	// hdrBuf is a mutable copy of the seed's IP+TCP header, populated on the first append. Total
+	// length and the pseudo-header checksum partial are patched at flush. A slot that never grows
+	// flushes from rawPkt and never touches hdrBuf.
 	hdrBuf   [tcpCoalesceHdrCap]byte
 	hdrLen   int
 	ipHdrLen int
@@ -55,24 +52,20 @@ type coalesceSlot struct {
 	payIovs  [][]byte
 }
 
-// TCPCoalescer accumulates adjacent in-flow TCP data segments across multiple concurrent flows
-// and emits each flow's run as a single TSO superpacket via tio.GSOWriter.
-// It expects its input in sender-transmission order (MultiCoalescer sorts the
-// staged batch by (epoch, counter) before dispatching here) and emits slots in
-// creation order, which therefore reproduces transmission order — modulo the
-// pure-ACK allowance in commitParsed.
-// Owns no locks; one coalescer per TUN write queue.
+// TCPCoalescer accumulates adjacent in-flow TCP data segments across multiple concurrent flows and
+// emits each flow's run as a single TSO superpacket via tio.GSOWriter. Input must be in sender
+// transmission order (MultiCoalescer sorts by (epoch, counter) before dispatch); slots are emitted
+// in creation order, so emission reproduces transmission order except for the pure-ACK case in
+// commitParsed. Owns no locks; one coalescer per TUN write queue.
 type TCPCoalescer struct {
 	w tio.GSOWriter
 
 	// slots is the ordered event queue. Flush walks it once and emits each
 	// entry as either a WriteGSO (coalesced) or a w.Write (verbatim).
 	slots []*coalesceSlot
-	// openSlots maps a flow key to its still-open slot, so new segments can
-	// extend an in-progress superpacket in O(1). Membership here is what
-	// keeps a chain extendable: slots are removed when they close (PSH or
-	// short-last-segment), when a non-admissible packet for that flow
-	// arrives, or in Flush.
+	// openSlots maps a flow key to its open slot so new segments can extend an in-progress
+	// superpacket in O(1). Removal is what closes a chain: on PSH or a short last segment, on a
+	// non-admissible packet for the flow, or in Flush.
 	openSlots map[flowKey]*coalesceSlot
 	// lastSlot caches the most recently touched open slot. Bulk traffic
 	// arrives in same-flow runs (single-flow steady state, or GRO bursts
@@ -104,28 +97,17 @@ func NewTCPCoalescer(w io.Writer, l *slog.Logger) *TCPCoalescer {
 // parsedTCP holds the fields extracted from a single parse so later steps
 // (admission, slot lookup, canAppend) don't re-walk the header.
 type parsedTCP struct {
-	fk        flowKey
-	ipHdrLen  int
-	tcpHdrLen int
-	hdrLen    int
-	payLen    int
-	seq       uint32
-	flags     byte
+	fk       flowKey
+	ipHdrLen int
+	hdrLen   int
+	payLen   int
+	seq      uint32
+	flags    byte
 }
 
-// parseTCPBase extracts the flow key and IP/TCP offsets for any TCP packet,
-// regardless of whether it's admissible for coalescing. Returns ok=false for non-TCP or malformed input.
-// Accepts IPv4 (no options or fragmentation) and IPv6 (no extension headers).
-func parseTCPBase(pkt []byte) (parsedTCP, bool) {
-	ip, ok := parseIPPrologue(pkt, ipProtoTCP)
-	if !ok {
-		return parsedTCP{}, false
-	}
-	return parseTCPTail(ip)
-}
-
-// parseTCPAt is parseTCPBase for the dispatcher path: the packet is already
-// known to be TCP and ipHdrLen is the upstream-resolved L4 offset (see parseIPAt).
+// parseTCPAt extracts the flow key and IP/TCP offsets for a packet the dispatcher already knows is
+// TCP; ipHdrLen is the upstream-resolved L4 offset (see parseIPAt). Returns ok=false for malformed
+// input or any shape that must not coalesce (IPv4 options/fragmentation, IPv6 extension headers).
 func parseTCPAt(pkt []byte, ipHdrLen int) (parsedTCP, bool) {
 	ip, ok := parseIPAt(pkt, ipHdrLen)
 	if !ok {
@@ -151,7 +133,6 @@ func parseTCPTail(ip parsedIP) (parsedTCP, bool) {
 	if len(pkt) < p.ipHdrLen+tcpOff {
 		return p, false
 	}
-	p.tcpHdrLen = tcpOff
 	p.hdrLen = p.ipHdrLen + tcpOff
 	p.payLen = len(pkt) - p.hdrLen
 	p.fk.sport = binary.BigEndian.Uint16(pkt[p.ipHdrLen : p.ipHdrLen+2])
@@ -161,91 +142,45 @@ func parseTCPTail(ip parsedIP) (parsedTCP, bool) {
 	return p, true
 }
 
-// TCP flag bits (byte 13 of the TCP header). Only the bits actually consulted
-// by the coalescer are named; FIN/SYN/RST/URG/CWR are rejected via the
-// negative mask in coalesceable, not by name.
+// TCP flag bits (byte 13 of the TCP header). Only the bits the coalescer consults are named;
+// FIN/SYN/RST/URG/CWR are rejected by the negative mask in commitParsed.
 const (
 	tcpFlagPsh = 0x08
 	tcpFlagAck = 0x10
 	tcpFlagEce = 0x40
 )
 
-// coalesceable reports whether a parsed TCP segment is eligible for
-// coalescing. Accepts ACK, ACK|PSH, ACK|ECE, ACK|PSH|ECE with a
-// non-empty payload. CWR is excluded because it marks a one-shot
-// congestion-window-reduced transition the receiver must observe at a
-// segment boundary.
-func (p parsedTCP) coalesceable() bool {
-	if p.flags&tcpFlagAck == 0 {
-		return false
-	}
-	if p.flags&^(tcpFlagAck|tcpFlagPsh|tcpFlagEce) != 0 {
-		return false
-	}
-	return p.payLen > 0
-}
-
-// pureAck reports whether a parsed segment is a bare acknowledgment: no
-// payload and nothing beyond ACK|PSH|ECE in the flags. These are the only
-// non-coalesceable shape that may safely pass through WITHOUT sealing the
-// flow's open slot — a late-delivered stale ACK is ignored by the receiver,
-// whereas SYN/FIN/RST/CWR mark transitions the flow must observe in order.
-func (p parsedTCP) pureAck() bool {
-	return p.payLen == 0 &&
-		p.flags&tcpFlagAck != 0 &&
-		p.flags&^(tcpFlagAck|tcpFlagPsh|tcpFlagEce) == 0
-}
-
-func (c *TCPCoalescer) Commit(pkt []byte) error {
-	info, ok := parseTCPBase(pkt)
-	if !ok {
-		// Unparseable shape: flow key unknowable, so seal every open chain to
-		// keep later data from extending a chain that would emit ahead of it.
-		c.sealAllOpen()
-		c.addVerbatim(pkt)
-		return nil
-	}
-	return c.commitParsed(pkt, info)
-}
-
-// sealAllOpen closes every open coalesce chain: nothing committed after this
-// call can extend a slot created before it. Called when an unparseable packet
-// arrives — its flow is unknown, so any open chain might be the one whose
-// later data would otherwise leapfrog it.
+// sealAllOpen closes every open coalesce chain. Called for unparseable packets: the flow key is
+// unknown, so any open chain could otherwise absorb later data and emit it ahead of this packet.
 func (c *TCPCoalescer) sealAllOpen() {
 	clear(c.openSlots)
 	c.lastSlot = nil
 }
 
-// commitParsed is the post-parse half of Commit. The caller must have
-// already verified parseTCPBase succeeded (info is a valid TCP parse).
-// Used by MultiCoalescer.Commit to avoid re-walking the IP/TCP header
-// after the dispatcher has already done so.
+// commitParsed commits one parsed TCP packet. The caller (dispatch, via parseTCPAt) supplies a
+// valid parse so the header is not re-walked here.
 func (c *TCPCoalescer) commitParsed(pkt []byte, info parsedTCP) error {
-	if !info.coalesceable() {
-		if info.pureAck() {
-			// A bare window/ack update carries no ordering obligation toward
-			// the flow's data: delivering it after later-transmitted data only
-			// makes it a stale ACK, which receivers ignore. Skipping the
-			// evict keeps a bidirectional flow's inbound data run coalescing
-			// across the peer ACKs interleaved into it — kernel GRO likewise
-			// doesn't flush held data on a pure ACK. This is the one place
-			// emission can deviate from transmission order.
-			c.addVerbatim(pkt)
-			return nil
-		}
-		// TCP but not admissible (SYN/FIN/RST/URG/CWR or a shape the flow
-		// must observe in sequence). Seal this flow's open slot so later
-		// in-flow packets don't extend it and emit ahead of this verbatim;
-		// with input in transmission order that pins the verbatim's exact
-		// in-flow position. The len guard skips hashing the 38-byte key on
-		// ack-dominant queues, where the map is almost always empty.
+	// Admission: only ACK, ACK|PSH, ACK|ECE, ACK|PSH|ECE may ride a coalesce chain. CWR marks a
+	// one-shot congestion transition the receiver must observe at a segment boundary. NB: AccECN
+	// reuses CWR as ACE counter bits; revisit this check if inner hosts adopt AccECN.
+	if info.flags&tcpFlagAck == 0 || info.flags&^(tcpFlagAck|tcpFlagPsh|tcpFlagEce) != 0 {
+		// SYN/FIN/RST/URG/CWR must be observed in sequence. Seal the flow's open slot so later
+		// in-flow packets cannot extend it and emit ahead of this verbatim. The len guard skips
+		// hashing the 38-byte key on ack-dominant queues, where the map is almost always empty.
 		if len(c.openSlots) != 0 {
 			if last := c.lastSlot; last != nil && last.fk == info.fk {
 				c.lastSlot = nil
 			}
 			delete(c.openSlots, info.fk)
 		}
+		c.addVerbatim(pkt)
+		return nil
+	}
+	if info.payLen == 0 {
+		// Pure ACK: no ordering obligation toward the flow's data. Delivering it after
+		// later-transmitted data only makes it a stale ACK, which receivers ignore. Not sealing
+		// keeps a bidirectional flow's data run coalescing across interleaved peer ACKs, matching
+		// kernel GRO. This is the only place emission deviates from transmission order.
 		c.addVerbatim(pkt)
 		return nil
 	}
@@ -291,11 +226,9 @@ func (c *TCPCoalescer) Flush() error {
 	for _, s := range c.slots {
 		var err error
 		if s.verbatim || s.numSeg == 1 {
-			// A slot that never grew (nor absorbed a merge) is byte-identical
-			// to the packet it was seeded from; ship the original so its valid
-			// checksum rides the DATA_VALID path instead of paying a kernel
-			// software csum. appendPayload only touches hdrBuf once
-			// numSeg >= 2, so rawPkt is still pristine here.
+			// A slot that never grew is byte-identical to its seed packet; ship the original so
+			// its valid checksum rides the DATA_VALID path instead of a kernel software csum.
+			// appendPayload only touches hdrBuf once numSeg >= 2, so rawPkt is pristine here.
 			_, err = c.w.Write(s.rawPkt)
 		} else {
 			err = c.flushSlot(s)
@@ -328,8 +261,8 @@ func (c *TCPCoalescer) seed(pkt []byte, info parsedTCP) {
 	}
 	s := c.take()
 	s.verbatim = false
-	// rawPkt serves the numSeg==1 fast path in Flush and is the header
-	// source for canAppend until the first append copies it into hdrBuf.
+	// rawPkt serves the numSeg==1 fast path in Flush and is the header source for canAppend until
+	// the first append copies it into hdrBuf.
 	s.rawPkt = pkt
 	s.hdrLen = info.hdrLen
 	s.ipHdrLen = info.ipHdrLen
@@ -345,21 +278,16 @@ func (c *TCPCoalescer) seed(pkt []byte, info parsedTCP) {
 		c.openSlots[info.fk] = s
 		c.lastSlot = s
 	} else if last := c.lastSlot; last != nil && last.fk == info.fk {
-		// PSH-on-seed closes the chain immediately: never registered as
-		// open. Any prior cached open slot for this flow has just been
-		// closed-and-replaced by this seed, so drop the cache too.
+		// PSH on the seed closes the chain immediately; it is never registered as open. Drop any
+		// stale cache entry for this flow too.
 		c.lastSlot = nil
 	}
 }
 
-// canAppend reports whether info's packet extends the slot's seed: same
-// header shape and stable contents, adjacent seq, not oversized. A closed
-// chain never reaches here — closing removes the slot from openSlots, and
-// openSlots/lastSlot are the only paths in.
-// Header reads go through rawPkt, not hdrBuf: hdrBuf is populated lazily on
-// the first append, and every field consulted here is one the pre-flush
-// patches never touch (headersMatch skips the flags byte, and PSH is the
-// only bit patched before flush).
+// canAppend reports whether info's packet extends the slot's seed: same header shape and stable
+// contents, adjacent seq, not oversized. A closed chain never reaches here; closing removes the
+// slot from openSlots, the only path in. Header reads use rawPkt because hdrBuf is populated
+// lazily on the first append; every field consulted here is one the pre-flush patches never touch.
 func (c *TCPCoalescer) canAppend(s *coalesceSlot, pkt []byte, info parsedTCP) bool {
 	if info.hdrLen != s.hdrLen {
 		return false
@@ -391,14 +319,13 @@ func (c *TCPCoalescer) canAppend(s *coalesceSlot, pkt []byte, info parsedTCP) bo
 	return true
 }
 
-// appendPayload folds info's packet into s and reports whether the chain is
-// now closed: the segment was sub-gsoSize (kernel TSO allows only the final
-// segment to be short) or carried PSH (a semantic delimiter). The caller
-// must deregister a closed slot from openSlots.
+// appendPayload folds info's packet into s and reports whether the chain is now closed: the
+// segment was sub-gsoSize (kernel TSO allows only the final segment to be short) or carried PSH.
+// The caller must deregister a closed slot from openSlots.
 func (c *TCPCoalescer) appendPayload(s *coalesceSlot, pkt []byte, info parsedTCP) bool {
 	if s.numSeg == 1 {
-		// First append: populate hdrBuf from the seed packet. Deferred out
-		// of seed so solo slots, which flush from rawPkt, never pay the copy.
+		// First append: populate hdrBuf from the seed. Deferred out of seed so solo slots, which
+		// flush from rawPkt, never pay the copy.
 		copy(s.hdrBuf[:s.hdrLen], s.rawPkt[:s.hdrLen])
 	}
 	s.payIovs = append(s.payIovs, pkt[info.hdrLen:info.hdrLen+info.payLen])
@@ -406,8 +333,7 @@ func (c *TCPCoalescer) appendPayload(s *coalesceSlot, pkt []byte, info parsedTCP
 	s.totalPay += info.payLen
 	s.nextSeq = info.seq + uint32(info.payLen)
 	if info.flags&tcpFlagPsh != 0 {
-		// Propagate PSH into the seed header so kernel TSO sets it on the
-		// last segment. Without this the sender's push signal is dropped.
+		// Propagate PSH into the seed header so kernel TSO sets it on the last segment.
 		s.hdrBuf[s.ipHdrLen+13] |= tcpFlagPsh
 	}
 	return info.payLen < s.gsoSize || info.flags&tcpFlagPsh != 0
@@ -497,13 +423,10 @@ func headersMatch(a, b []byte, isV6 bool, ipHdrLen int) bool {
 	return true
 }
 
-// logSeqGaps reports same-flow seq discontinuities between consecutively
-// created data slots. Input arrives in transmission order (MultiCoalescer
-// sorts by (epoch, counter) before dispatch), so a gap here is traffic this
-// batch never contained: loss upstream of nebula, a reorder spanning a flush
-// boundary (which no intra-batch mechanism can repair), or a retransmit
-// (negative gap). Logged so the operator can quantify how often that happens.
-// The caller gates on debug level, so the map only allocates when asked for.
+// logSeqGaps reports same-flow seq discontinuities between consecutively created data slots. Input
+// is in transmission order, so a gap is traffic this batch never contained: loss upstream of
+// nebula, reorder across a flush boundary, or a retransmit (negative gap). The caller gates on
+// debug level, so the map only allocates when enabled.
 func (c *TCPCoalescer) logSeqGaps() {
 	prevByFlow := make(map[flowKey]*coalesceSlot, len(c.slots))
 	for _, s := range c.slots {

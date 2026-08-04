@@ -83,19 +83,9 @@ type parsedUDP struct {
 	payLen   int
 }
 
-// parseUDP extracts the flow key and IP/UDP offsets for a UDP packet.
-// Returns ok=false for non-UDP, malformed, or unsupported header shapes
-// (IPv4 with options/fragmentation, IPv6 with extension headers).
-func parseUDP(pkt []byte) (parsedUDP, bool) {
-	ip, ok := parseIPPrologue(pkt, ipProtoUDP)
-	if !ok {
-		return parsedUDP{}, false
-	}
-	return parseUDPTail(ip)
-}
-
-// parseUDPAt is parseUDP for the dispatcher path: the packet is already
-// known to be UDP and ipHdrLen is the upstream-resolved L4 offset (see parseIPAt).
+// parseUDPAt extracts the flow key and IP/UDP offsets for a packet the dispatcher already knows is
+// UDP; ipHdrLen is the upstream-resolved L4 offset (see parseIPAt). Returns ok=false for malformed
+// input or any shape that must not coalesce (IPv4 options/fragmentation, IPv6 extension headers).
 func parseUDPAt(pkt []byte, ipHdrLen int) (parsedUDP, bool) {
 	ip, ok := parseIPAt(pkt, ipHdrLen)
 	if !ok {
@@ -126,23 +116,11 @@ func parseUDPTail(ip parsedIP) (parsedUDP, bool) {
 	return p, true
 }
 
-// Commit borrows pkt. The caller must keep pkt valid until the next Flush.
-func (c *UDPCoalescer) Commit(pkt []byte) error {
-	info, ok := parseUDP(pkt)
-	if !ok {
-		c.addVerbatim(pkt)
-		return nil
-	}
-	return c.commitParsed(pkt, info)
-}
-
-// commitParsed is the post-parse half of Commit. The caller must have
-// already verified parseUDP succeeded. Used by MultiCoalescer.Commit to
-// avoid re-walking the IP/UDP header.
+// commitParsed commits one parsed UDP packet. The caller (dispatch, via parseUDPAt) supplies a
+// valid parse so the header is not re-walked here.
 func (c *UDPCoalescer) commitParsed(pkt []byte, info parsedUDP) error {
-	// A zero-length UDP datagram (UDP `length` == 8) is legal and must still
-	// reach the TUN, but it can't be coalesced. The len guard skips hashing
-	// the key when no flow is open.
+	// A zero-length UDP datagram (length == 8) is legal and must reach the TUN, but cannot be
+	// coalesced. The len guard skips hashing the key when no flow is open.
 	if info.payLen == 0 {
 		if len(c.openSlots) != 0 {
 			if last := c.lastSlot; last != nil && last.fk == info.fk {
@@ -206,10 +184,8 @@ func (c *UDPCoalescer) Flush() error {
 	return first
 }
 
-// sealAllOpen closes every open coalesce chain: nothing committed after this
-// call can extend a slot created before it. Called when an unparseable packet
-// arrives — its flow is unknown, so any open chain might be the one whose
-// later data would otherwise leapfrog it.
+// sealAllOpen closes every open coalesce chain. Called for unparseable packets: the flow key is
+// unknown, so any open chain could otherwise absorb later data and emit it ahead of this packet.
 func (c *UDPCoalescer) sealAllOpen() {
 	clear(c.openSlots)
 	c.lastSlot = nil
@@ -229,8 +205,8 @@ func (c *UDPCoalescer) seed(pkt []byte, info parsedUDP) {
 	}
 	s := c.take()
 	s.verbatim = false
-	// rawPkt serves the numSeg==1 fast path in Flush and is the header
-	// source for canAppend until the first append copies it into hdrBuf.
+	// rawPkt serves the numSeg==1 fast path in Flush and is the header source for canAppend until
+	// the first append copies it into hdrBuf.
 	s.rawPkt = pkt
 	s.hdrLen = info.hdrLen
 	s.ipHdrLen = info.ipHdrLen
@@ -261,10 +237,9 @@ func (c *UDPCoalescer) canAppend(s *udpSlot, pkt []byte, info parsedUDP) bool {
 	if s.hdrLen+s.totalPay+info.payLen > udpCoalesceBufSize {
 		return false
 	}
-	// Header reads go through rawPkt: hdrBuf is populated lazily on the
-	// first append, and the fields consulted here are never patched before
-	// flush. A closed chain never reaches here — closing removes the slot
-	// from openSlots, the only path in.
+	// Header reads use rawPkt because hdrBuf is populated lazily on the first append; the fields
+	// consulted here are never patched before flush. A closed chain never reaches here; closing
+	// removes the slot from openSlots, the only path in.
 	if !s.isV6 && !ipv4CanCoalesceID(s.rawPkt, pkt, s.numSeg) {
 		return false
 	}
@@ -274,14 +249,13 @@ func (c *UDPCoalescer) canAppend(s *udpSlot, pkt []byte, info parsedUDP) bool {
 	return true
 }
 
-// appendPayload folds info's packet into s and reports whether the chain is
-// now closed: kernel UDP-GSO requires every segment but the last to be
-// exactly gsoSize, so a short segment must be the final one. The caller
-// must deregister a closed slot from openSlots.
+// appendPayload folds info's packet into s and reports whether the chain is now closed: kernel
+// UDP-GSO requires every segment but the last to be exactly gsoSize, so a short segment must be
+// the final one. The caller must deregister a closed slot from openSlots.
 func (c *UDPCoalescer) appendPayload(s *udpSlot, pkt []byte, info parsedUDP) bool {
 	if s.numSeg == 1 {
-		// First append: populate hdrBuf from the seed packet. Deferred out
-		// of seed so solo slots, which flush from rawPkt, never pay the copy.
+		// First append: populate hdrBuf from the seed. Deferred out of seed so solo slots, which
+		// flush from rawPkt, never pay the copy.
 		copy(s.hdrBuf[:s.hdrLen], s.rawPkt[:s.hdrLen])
 	}
 	s.payIovs = append(s.payIovs, pkt[info.hdrLen:info.hdrLen+info.payLen])
