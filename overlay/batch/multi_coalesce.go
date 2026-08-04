@@ -61,8 +61,9 @@ func NewMultiCoalescer(w io.Writer, l *slog.Logger) *MultiCoalescer {
 
 // Commit stages pkt for the next Flush; dispatch is deferred so it runs on packets already in
 // transmission order. key carries the packet's tunnel epoch and message counter. pkt is borrowed:
-// the caller must keep it valid until the next Flush and not re-use it. pp is the firewall's
-// parse of pkt and is borrowed only for this call, so the fields dispatch needs are copied here.
+// the caller must keep it valid until the next Flush and not re-use it, and Flush may patch a
+// coalesced packet's headers in place. pp is the firewall's parse of pkt and is borrowed only
+// for this call, so the fields dispatch needs are copied here.
 func (m *MultiCoalescer) Commit(pkt []byte, key SortKey, pp *firewall.ParsedPacket) error {
 	m.staged = append(m.staged, stagedPacket{
 		pkt:      pkt,
@@ -82,40 +83,17 @@ func compareStaged(a, b stagedPacket) int {
 	return cmp.Compare(a.key.Counter, b.key.Counter)
 }
 
-// dispatch routes one staged packet to its lane.
-// The protocol and L4 offset come from the firewall's parse of the same packet.
-// Any shape a lane can't coalesce seals every open chain in its lane
+// dispatch routes one staged packet to its protocol lane (see commitStaged), or to the verbatim
+// passthrough when the lane has no GSO support.
 func (m *MultiCoalescer) dispatch(sp stagedPacket) error {
 	switch sp.proto {
 	case ipProtoTCP:
 		if m.tcp != nil {
-			if sp.fragAny {
-				m.tcp.sealAllOpen()
-				m.tcp.addVerbatim(sp.pkt)
-				return nil
-			}
-			var info parsedTCP
-			if !info.parseAt(sp.pkt, int(sp.ipHdrLen)) {
-				m.tcp.sealAllOpen()
-				m.tcp.addVerbatim(sp.pkt)
-				return nil
-			}
-			return m.tcp.commitParsed(sp.pkt, &info)
+			return m.tcp.commitStaged(sp)
 		}
 	case ipProtoUDP:
 		if m.udp != nil {
-			if sp.fragAny {
-				m.udp.sealAllOpen()
-				m.udp.addVerbatim(sp.pkt)
-				return nil
-			}
-			var info parsedUDP
-			if !info.parseAt(sp.pkt, int(sp.ipHdrLen)) {
-				m.udp.sealAllOpen()
-				m.udp.addVerbatim(sp.pkt)
-				return nil
-			}
-			return m.udp.commitParsed(sp.pkt, &info)
+			return m.udp.commitStaged(sp)
 		}
 	}
 	return m.pt.enqueue(sp.pkt)

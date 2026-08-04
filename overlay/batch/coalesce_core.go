@@ -95,40 +95,14 @@ func (fk *flowKey) parseIPv6Prologue(pkt []byte) ([]byte, bool) {
 // The transport (L4) portion of the header is checked separately by the per-protocol matcher.
 func ipHeadersMatch(a, b []byte, isV6 bool) bool {
 	if isV6 {
-		// IPv6: byte 0 = version/TC[7:4], byte 1 = TC[3:0]/flow[19:16],
-		// bytes [2:4] = flow[15:0], [6:8] = next_hdr/hop, [8:40] = src+dst.
-		// Compare byte 1 fully so ECN (TC[1:0]) must match. Skip [4:6] payload_len.
-		if a[0] != b[0] {
-			return false
-		}
-		if a[1] != b[1] {
-			return false
-		}
-		if !bytes.Equal(a[2:4], b[2:4]) {
-			return false
-		}
-		if !bytes.Equal(a[6:40], b[6:40]) {
-			return false
-		}
-		return true
+		// IPv6: [0:4] = version/TC/flow label (TC[1:0] is ECN, so the full TC byte must match),
+		// [6:40] = next_hdr/hop + src + dst. Skip [4:6] payload_len.
+		return bytes.Equal(a[:4], b[:4]) && bytes.Equal(a[6:40], b[6:40])
 	}
-	// IPv4: byte 0 = version/IHL, byte 1 = DSCP(6)|ECN(2),
-	// [6:10] flags/fragoff/TTL/proto, [12:20] src+dst.
-	// Compare byte 1 fully so ECN must match.
+	// IPv4: [0:2] = version/IHL + DSCP|ECN (full ECN byte must match),
+	// [6:10] = flags/fragoff/TTL/proto, [12:20] = src+dst.
 	// Skip [2:4] total len, [4:6] id, [10:12] csum.
-	if a[0] != b[0] {
-		return false
-	}
-	if a[1] != b[1] {
-		return false
-	}
-	if !bytes.Equal(a[6:10], b[6:10]) {
-		return false
-	}
-	if !bytes.Equal(a[12:20], b[12:20]) {
-		return false
-	}
-	return true
+	return bytes.Equal(a[:2], b[:2]) && bytes.Equal(a[6:10], b[6:10]) && bytes.Equal(a[12:20], b[12:20])
 }
 
 // ipv4FlagDF is the Don't Fragment bit in the IPv4 flags byte (header byte 6).

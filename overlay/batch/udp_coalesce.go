@@ -1,6 +1,7 @@
 package batch
 
 import (
+	"bytes"
 	"encoding/binary"
 	"io"
 
@@ -18,10 +19,6 @@ const udpCoalesceBufSize = 65535
 // accepts up to 64 segments per skb (UDP_MAX_SEGMENTS); stay under that.
 const udpCoalesceMaxSegs = 64
 
-// udpCoalesceHdrCap is the scratch space we copy a seed's IP+UDP header
-// into. IPv6 (40) + UDP (8) = 48; round up for safety.
-const udpCoalesceHdrCap = 64
-
 // udpSlot is one entry in the UDPCoalescer's ordered event queue.
 type udpSlot struct {
 	verbatim bool
@@ -29,10 +26,10 @@ type udpSlot struct {
 	// packet for coalesce slots. A coalesce slot that never grows past one
 	// segment is emitted from rawPkt so its original (already valid) L4
 	// checksum ships DATA_VALID instead of making the kernel recompute it.
+	// A multi-segment slot's superpacket header is rawPkt's, patched in place at flush.
 	rawPkt []byte
 
 	fk       flowKey
-	hdrBuf   [udpCoalesceHdrCap]byte
 	hdrLen   int
 	ipHdrLen int
 	isV6     bool
@@ -114,18 +111,43 @@ func (p *parsedUDP) parseTail(pkt []byte, ipHdrLen int) bool {
 	return true
 }
 
+// sealFlow closes fk's open chain, if any, keeping lastSlot in lockstep. The len guard skips
+// hashing the 38-byte key when no chains are open.
+func (c *UDPCoalescer) sealFlow(fk flowKey) {
+	if len(c.openSlots) == 0 {
+		return
+	}
+	if last := c.lastSlot; last != nil && last.fk == fk {
+		c.lastSlot = nil
+	}
+	delete(c.openSlots, fk)
+}
+
+// commitStaged commits one staged packet dispatch routed to this lane. A shape the lane cannot
+// coalesce (any fragmentation, unparseable header) seals every open chain — its flow is unknown —
+// and rides the lane as an in-lane verbatim, still in transmission order.
+func (c *UDPCoalescer) commitStaged(sp stagedPacket) error {
+	if sp.fragAny {
+		c.sealAllOpen()
+		c.addVerbatim(sp.pkt)
+		return nil
+	}
+	var info parsedUDP
+	if !info.parseAt(sp.pkt, int(sp.ipHdrLen)) {
+		c.sealAllOpen()
+		c.addVerbatim(sp.pkt)
+		return nil
+	}
+	return c.commitParsed(sp.pkt, &info)
+}
+
 // commitParsed commits one parsed UDP packet. The caller (dispatch, via parseAt) supplies a
 // valid parse so the header is not re-walked here.
 func (c *UDPCoalescer) commitParsed(pkt []byte, info *parsedUDP) error {
 	// A zero-length UDP datagram (length == 8) is legal and must reach the TUN, but cannot be
-	// coalesced. The len guard skips hashing the key when no flow is open.
+	// coalesced.
 	if info.payLen == 0 {
-		if len(c.openSlots) != 0 {
-			if last := c.lastSlot; last != nil && last.fk == info.fk {
-				c.lastSlot = nil
-			}
-			delete(c.openSlots, info.fk)
-		}
+		c.sealFlow(info.fk)
 		c.addVerbatim(pkt)
 		return nil
 	}
@@ -140,8 +162,7 @@ func (c *UDPCoalescer) commitParsed(pkt []byte, info *parsedUDP) error {
 		if c.canAppend(open, pkt, info) {
 			if c.appendPayload(open, pkt, info) {
 				// Chain closed (short segment): stop extending it.
-				delete(c.openSlots, info.fk)
-				c.lastSlot = nil
+				c.sealFlow(info.fk)
 			} else {
 				c.lastSlot = open
 			}
@@ -149,10 +170,7 @@ func (c *UDPCoalescer) commitParsed(pkt []byte, info *parsedUDP) error {
 		}
 		// Can't extend: evict it from openSlots and fall through to seed a
 		// fresh slot.
-		delete(c.openSlots, info.fk)
-		if c.lastSlot == open {
-			c.lastSlot = nil
-		}
+		c.sealFlow(info.fk)
 	}
 	c.seed(pkt, info)
 	return nil
@@ -197,14 +215,18 @@ func (c *UDPCoalescer) addVerbatim(pkt []byte) {
 }
 
 func (c *UDPCoalescer) seed(pkt []byte, info *parsedUDP) {
-	if info.hdrLen > udpCoalesceHdrCap || info.hdrLen+info.payLen > udpCoalesceBufSize {
+	if info.hdrLen+info.payLen > udpCoalesceBufSize {
+		// Pathological shape that can't ride a superpacket; emit as-is. No chain for this flow can
+		// be open here (commitParsed evicts before seeding), so sealFlow is defense in depth
+		// against a stale cache entry absorbing later data.
+		c.sealFlow(info.fk)
 		c.addVerbatim(pkt)
 		return
 	}
 	s := c.take()
 	s.verbatim = false
-	// rawPkt serves the numSeg==1 fast path in Flush and is the header source for canAppend until
-	// the first append copies it into hdrBuf.
+	// rawPkt serves the numSeg==1 fast path in Flush, is the header source for canAppend, and is
+	// the superpacket header flushSlot patches in place.
 	s.rawPkt = pkt
 	s.hdrLen = info.hdrLen
 	s.ipHdrLen = info.ipHdrLen
@@ -235,9 +257,8 @@ func (c *UDPCoalescer) canAppend(s *udpSlot, pkt []byte, info *parsedUDP) bool {
 	if s.hdrLen+s.totalPay+info.payLen > udpCoalesceBufSize {
 		return false
 	}
-	// Header reads use rawPkt because hdrBuf is populated lazily on the first append; the fields
-	// consulted here are never patched before flush. A closed chain never reaches here; closing
-	// removes the slot from openSlots, the only path in.
+	// Header reads use rawPkt, which is never mutated before flush. A closed chain never reaches
+	// here; closing removes the slot from openSlots, the only path in.
 	if !s.isV6 && !ipv4CanCoalesceID(s.rawPkt, pkt, s.numSeg) {
 		return false
 	}
@@ -251,11 +272,6 @@ func (c *UDPCoalescer) canAppend(s *udpSlot, pkt []byte, info *parsedUDP) bool {
 // UDP-GSO requires every segment but the last to be exactly gsoSize, so a short segment must be
 // the final one. The caller must deregister a closed slot from openSlots.
 func (c *UDPCoalescer) appendPayload(s *udpSlot, pkt []byte, info *parsedUDP) bool {
-	if s.numSeg == 1 {
-		// First append: populate hdrBuf from the seed. Deferred out of seed so solo slots, which
-		// flush from rawPkt, never pay the copy.
-		copy(s.hdrBuf[:s.hdrLen], s.rawPkt[:s.hdrLen])
-	}
 	s.payIovs = append(s.payIovs, pkt[info.hdrLen:info.hdrLen+info.payLen])
 	s.numSeg++
 	s.totalPay += info.payLen
@@ -273,27 +289,19 @@ func (c *UDPCoalescer) take() *udpSlot {
 }
 
 func (c *UDPCoalescer) release(s *udpSlot) {
-	s.verbatim = false
-	s.rawPkt = nil
+	// Reset every field, identity ones included; see TCPCoalescer.release.
 	clear(s.payIovs)
-	s.payIovs = s.payIovs[:0]
-	s.numSeg = 0
-	s.totalPay = 0
-	// Zero the identity fields too; see TCPCoalescer.release.
-	s.fk = flowKey{}
-	s.hdrLen = 0
-	s.ipHdrLen = 0
-	s.isV6 = false
-	s.gsoSize = 0
+	*s = udpSlot{payIovs: s.payIovs[:0]}
 	c.pool = append(c.pool, s)
 }
 
 // flushSlot patches the IP header total length / IPv6 payload length and
 // the UDP length to the *total* across all coalesced segments, then seeds
 // the UDP checksum field with the pseudo-header partial (single-fold, not
-// inverted) per virtio NEEDS_CSUM.
+// inverted) per virtio NEEDS_CSUM. The patches land in place in rawPkt; the
+// slot is released right after, so nothing re-reads the patched header.
 func (c *UDPCoalescer) flushSlot(s *udpSlot) error {
-	hdr := s.hdrBuf[:s.hdrLen]
+	hdr := s.rawPkt[:s.hdrLen]
 	total := s.hdrLen + s.totalPay // full IP+UDP+all_payloads bytes
 	l4Len := total - s.ipHdrLen    // total UDP (8 + sum of payloads)
 
@@ -330,11 +338,8 @@ func udpHeadersMatch(a, b []byte, isV6 bool, ipHdrLen int) bool {
 	if !ipHeadersMatch(a, b, isV6) {
 		return false
 	}
-	// UDP: compare sport+dport ([0:4]). Skip length [4:6] and checksum [6:8]
+	// UDP: compare sport+dport ([0:4]). Skip length [4:6] and checksum [6:8]:
 	// length varies (we rewrite at flush) and the checksum will be redone.
 	udp := ipHdrLen
-	if a[udp] != b[udp] || a[udp+1] != b[udp+1] || a[udp+2] != b[udp+2] || a[udp+3] != b[udp+3] {
-		return false
-	}
-	return true
+	return bytes.Equal(a[udp:udp+4], b[udp:udp+4])
 }
