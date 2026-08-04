@@ -27,7 +27,7 @@ var ErrOutOfWindow = errors.New("out of window packet")
 // readOutsidePackets processes one received underlay packet.
 // Message payloads are decrypted IN PLACE, so packet must stay untouched
 // by the caller until the batcher for queue q has been flushed
-func (f *Interface) readOutsidePackets(via ViaSender, scratch []byte, packet []byte, h *header.H, fwPacket *firewall.ParsedPacket, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) readOutsidePackets(via ViaSender, scratch []byte, packet []byte, h *header.H, fwPacket *firewall.ParsedPacket, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache, hmCache map[uint32]*HostInfo) {
 	err := h.Parse(packet)
 	if err != nil {
 		// Hole punch packets are 0 or 1 byte big, so lets ignore printing those errors
@@ -95,7 +95,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, scratch []byte, packet []b
 	if isMessageRelay {
 		hostinfo = f.hostMap.QueryRelayIndex(h.RemoteIndex)
 	} else {
-		hostinfo = f.hostMap.QueryIndex(h.RemoteIndex)
+		hostinfo = f.hostMap.QueryIndexCached(h.RemoteIndex, hmCache)
 	}
 
 	// At this point we should have a valid existing tunnel, verify and send
@@ -125,7 +125,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, scratch []byte, packet []b
 			}
 			return
 		}
-		f.handleOutsideRelayPacket(hostinfo, via, scratch, packet, h, fwPacket, lhf, nb, q, localCache)
+		f.handleOutsideRelayPacket(hostinfo, via, scratch, packet, h, fwPacket, lhf, nb, q, localCache, hmCache)
 		return
 	}
 
@@ -187,7 +187,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, scratch []byte, packet []b
 	}
 }
 
-func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, scratch []byte, packet []byte, h *header.H, fwPacket *firewall.ParsedPacket, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, scratch []byte, packet []byte, h *header.H, fwPacket *firewall.ParsedPacket, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache, hmCache map[uint32]*HostInfo) {
 	// Successfully validated the thing. Get rid of the Relay header and the AEAD tag
 	signedPayload := packet[header.Len : len(packet)-hostinfo.ConnectionState.dKey.Overhead()]
 	// Pull the Roaming parts up here, and return in all call paths.
@@ -214,7 +214,7 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 			relay:     relay,
 			IsRelayed: true,
 		}
-		f.readOutsidePackets(via, scratch, signedPayload, h, fwPacket, lhf, nb, q, localCache)
+		f.readOutsidePackets(via, scratch, signedPayload, h, fwPacket, lhf, nb, q, localCache, hmCache)
 	case ForwardingType:
 		// Find the target HostInfo relay object
 		targetHI, targetRelay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relay.PeerAddr)

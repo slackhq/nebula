@@ -363,15 +363,17 @@ func (f *Interface) listenOut(i int) {
 	fwPacket := &firewall.ParsedPacket{}
 	nb := make([]byte, 12, 12)
 	scratch := make([]byte, mtu)
+	hostmapCache := map[uint32]*HostInfo{} //todo is this stupid
 
 	listener := func(fromUdpAddr netip.AddrPort, payload []byte) {
-		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, scratch, payload, h, fwPacket, lhh, nb, i, ctCache.Get())
+		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, scratch, payload, h, fwPacket, lhh, nb, i, ctCache.Get(), hostmapCache)
 	}
 
 	flusher := func() {
 		if err := f.batchers[i].Flush(); err != nil {
 			f.l.Error("Failed to flush tun coalescer", "error", err)
 		}
+		clear(hostmapCache)
 	}
 
 	err := li.ListenOut(listener, flusher)
