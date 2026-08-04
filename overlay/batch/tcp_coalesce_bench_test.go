@@ -145,7 +145,7 @@ func BenchmarkCommitRunInterleaved4(b *testing.B) {
 	runCommitBench(b, pkts, len(pkts))
 }
 
-// BenchmarkCommitPassthrough exercises the non-TCP branch: parseTCPBase
+// BenchmarkCommitPassthrough exercises the non-TCP branch: parseBase
 // bails early and addVerbatim is the only work.
 func BenchmarkCommitPassthrough(b *testing.B) {
 	pkt := buildICMPv4()

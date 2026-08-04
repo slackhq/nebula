@@ -83,42 +83,40 @@ type parsedUDP struct {
 	payLen   int
 }
 
-// parseUDPAt extracts the flow key and IP/UDP offsets for a packet the dispatcher already knows is
-// UDP; ipHdrLen is the upstream-resolved L4 offset (see parseIPAt). Returns ok=false for malformed
-// input or any shape that must not coalesce (IPv4 options/fragmentation, IPv6 extension headers).
-func parseUDPAt(pkt []byte, ipHdrLen int) (parsedUDP, bool) {
-	ip, ok := parseIPAt(pkt, ipHdrLen)
+// parseAt extracts the flow key and IP/UDP offsets for a packet the dispatcher already knows is
+// UDP; ipHdrLen is the upstream-resolved L4 offset (see flowKey.parseIPAt). p must be zero on
+// entry and is filled in place. Returns false for malformed input or any shape that must not
+// coalesce (IPv4 options/fragmentation, IPv6 extension headers).
+func (p *parsedUDP) parseAt(pkt []byte, ipHdrLen int) bool {
+	trimmed, ok := p.fk.parseIPAt(pkt, ipHdrLen)
 	if !ok {
-		return parsedUDP{}, false
+		return false
 	}
-	return parseUDPTail(ip)
+	return p.parseTail(trimmed, ipHdrLen)
 }
 
-// parseUDPTail layers the UDP-header parse on a validated IP prologue.
-func parseUDPTail(ip parsedIP) (parsedUDP, bool) {
-	var p parsedUDP
-	pkt := ip.pkt
-	p.fk = ip.fk
-	p.ipHdrLen = ip.ipHdrLen
-
-	if len(pkt) < p.ipHdrLen+8 {
-		return p, false
+// parseTail layers the UDP-header parse on a validated IP prologue. pkt is the trimmed packet;
+// fk's addresses are already filled.
+func (p *parsedUDP) parseTail(pkt []byte, ipHdrLen int) bool {
+	if len(pkt) < ipHdrLen+8 {
+		return false
 	}
-	p.hdrLen = p.ipHdrLen + 8
 	// UDP `length` field: must equal IP-derived length-of-UDP-header-plus-payload.
-	udpLen := int(binary.BigEndian.Uint16(pkt[p.ipHdrLen+4 : p.ipHdrLen+6]))
-	if udpLen < 8 || udpLen > len(pkt)-p.ipHdrLen {
-		return p, false
+	udpLen := int(binary.BigEndian.Uint16(pkt[ipHdrLen+4 : ipHdrLen+6]))
+	if udpLen < 8 || udpLen > len(pkt)-ipHdrLen {
+		return false
 	}
+	p.ipHdrLen = ipHdrLen
+	p.hdrLen = ipHdrLen + 8
 	p.payLen = udpLen - 8
-	p.fk.sport = binary.BigEndian.Uint16(pkt[p.ipHdrLen : p.ipHdrLen+2])
-	p.fk.dport = binary.BigEndian.Uint16(pkt[p.ipHdrLen+2 : p.ipHdrLen+4])
-	return p, true
+	p.fk.sport = binary.BigEndian.Uint16(pkt[ipHdrLen : ipHdrLen+2])
+	p.fk.dport = binary.BigEndian.Uint16(pkt[ipHdrLen+2 : ipHdrLen+4])
+	return true
 }
 
-// commitParsed commits one parsed UDP packet. The caller (dispatch, via parseUDPAt) supplies a
+// commitParsed commits one parsed UDP packet. The caller (dispatch, via parseAt) supplies a
 // valid parse so the header is not re-walked here.
-func (c *UDPCoalescer) commitParsed(pkt []byte, info parsedUDP) error {
+func (c *UDPCoalescer) commitParsed(pkt []byte, info *parsedUDP) error {
 	// A zero-length UDP datagram (length == 8) is legal and must reach the TUN, but cannot be
 	// coalesced. The len guard skips hashing the key when no flow is open.
 	if info.payLen == 0 {
@@ -198,7 +196,7 @@ func (c *UDPCoalescer) addVerbatim(pkt []byte) {
 	c.slots = append(c.slots, s)
 }
 
-func (c *UDPCoalescer) seed(pkt []byte, info parsedUDP) {
+func (c *UDPCoalescer) seed(pkt []byte, info *parsedUDP) {
 	if info.hdrLen > udpCoalesceHdrCap || info.hdrLen+info.payLen > udpCoalesceBufSize {
 		c.addVerbatim(pkt)
 		return
@@ -224,7 +222,7 @@ func (c *UDPCoalescer) seed(pkt []byte, info parsedUDP) {
 // canAppend reports whether info's packet extends the slot's seed.
 // Kernel UDP-GSO requires every segment except possibly the last to be
 // exactly gsoSize, and the last may be shorter (≤ gsoSize).
-func (c *UDPCoalescer) canAppend(s *udpSlot, pkt []byte, info parsedUDP) bool {
+func (c *UDPCoalescer) canAppend(s *udpSlot, pkt []byte, info *parsedUDP) bool {
 	if info.hdrLen != s.hdrLen {
 		return false
 	}
@@ -252,7 +250,7 @@ func (c *UDPCoalescer) canAppend(s *udpSlot, pkt []byte, info parsedUDP) bool {
 // appendPayload folds info's packet into s and reports whether the chain is now closed: kernel
 // UDP-GSO requires every segment but the last to be exactly gsoSize, so a short segment must be
 // the final one. The caller must deregister a closed slot from openSlots.
-func (c *UDPCoalescer) appendPayload(s *udpSlot, pkt []byte, info parsedUDP) bool {
+func (c *UDPCoalescer) appendPayload(s *udpSlot, pkt []byte, info *parsedUDP) bool {
 	if s.numSeg == 1 {
 		// First append: populate hdrBuf from the seed. Deferred out of seed so solo slots, which
 		// flush from rawPkt, never pay the copy.

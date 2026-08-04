@@ -105,41 +105,39 @@ type parsedTCP struct {
 	flags    byte
 }
 
-// parseTCPAt extracts the flow key and IP/TCP offsets for a packet the dispatcher already knows is
-// TCP; ipHdrLen is the upstream-resolved L4 offset (see parseIPAt). Returns ok=false for malformed
-// input or any shape that must not coalesce (IPv4 options/fragmentation, IPv6 extension headers).
-func parseTCPAt(pkt []byte, ipHdrLen int) (parsedTCP, bool) {
-	ip, ok := parseIPAt(pkt, ipHdrLen)
+// parseAt extracts the flow key and IP/TCP offsets for a packet the dispatcher already knows is
+// TCP; ipHdrLen is the upstream-resolved L4 offset (see flowKey.parseIPAt). p must be zero on
+// entry and is filled in place; see flowKey.parseIPAt for why. Returns false for malformed input
+// or any shape that must not coalesce (IPv4 options/fragmentation, IPv6 extension headers).
+func (p *parsedTCP) parseAt(pkt []byte, ipHdrLen int) bool {
+	trimmed, ok := p.fk.parseIPAt(pkt, ipHdrLen)
 	if !ok {
-		return parsedTCP{}, false
+		return false
 	}
-	return parseTCPTail(ip)
+	return p.parseTail(trimmed, ipHdrLen)
 }
 
-// parseTCPTail layers the TCP-header parse on a validated IP prologue.
-func parseTCPTail(ip parsedIP) (parsedTCP, bool) {
-	var p parsedTCP
-	pkt := ip.pkt
-	p.fk = ip.fk
-	p.ipHdrLen = ip.ipHdrLen
-
-	if len(pkt) < p.ipHdrLen+20 {
-		return p, false
+// parseTail layers the TCP-header parse on a validated IP prologue. pkt is the trimmed packet;
+// fk's addresses are already filled.
+func (p *parsedTCP) parseTail(pkt []byte, ipHdrLen int) bool {
+	if len(pkt) < ipHdrLen+20 {
+		return false
 	}
-	tcpOff := int(pkt[p.ipHdrLen+12]>>4) * 4
+	tcpOff := int(pkt[ipHdrLen+12]>>4) * 4
 	if tcpOff < 20 || tcpOff > 60 {
-		return p, false
+		return false
 	}
-	if len(pkt) < p.ipHdrLen+tcpOff {
-		return p, false
+	if len(pkt) < ipHdrLen+tcpOff {
+		return false
 	}
-	p.hdrLen = p.ipHdrLen + tcpOff
+	p.ipHdrLen = ipHdrLen
+	p.hdrLen = ipHdrLen + tcpOff
 	p.payLen = len(pkt) - p.hdrLen
-	p.fk.sport = binary.BigEndian.Uint16(pkt[p.ipHdrLen : p.ipHdrLen+2])
-	p.fk.dport = binary.BigEndian.Uint16(pkt[p.ipHdrLen+2 : p.ipHdrLen+4])
-	p.seq = binary.BigEndian.Uint32(pkt[p.ipHdrLen+4 : p.ipHdrLen+8])
-	p.flags = pkt[p.ipHdrLen+13]
-	return p, true
+	p.fk.sport = binary.BigEndian.Uint16(pkt[ipHdrLen : ipHdrLen+2])
+	p.fk.dport = binary.BigEndian.Uint16(pkt[ipHdrLen+2 : ipHdrLen+4])
+	p.seq = binary.BigEndian.Uint32(pkt[ipHdrLen+4 : ipHdrLen+8])
+	p.flags = pkt[ipHdrLen+13]
+	return true
 }
 
 // TCP flag bits (byte 13 of the TCP header). Only the bits the coalescer consults are named;
@@ -157,9 +155,9 @@ func (c *TCPCoalescer) sealAllOpen() {
 	c.lastSlot = nil
 }
 
-// commitParsed commits one parsed TCP packet. The caller (dispatch, via parseTCPAt) supplies a
+// commitParsed commits one parsed TCP packet. The caller (dispatch, via parseAt) supplies a
 // valid parse so the header is not re-walked here.
-func (c *TCPCoalescer) commitParsed(pkt []byte, info parsedTCP) error {
+func (c *TCPCoalescer) commitParsed(pkt []byte, info *parsedTCP) error {
 	// Admission: only ACK, ACK|PSH, ACK|ECE, ACK|PSH|ECE may ride a coalesce chain. CWR marks a
 	// one-shot congestion transition the receiver must observe at a segment boundary. NB: AccECN
 	// reuses CWR as ACE counter bits; revisit this check if inner hosts adopt AccECN.
@@ -253,7 +251,7 @@ func (c *TCPCoalescer) addVerbatim(pkt []byte) {
 	c.slots = append(c.slots, s)
 }
 
-func (c *TCPCoalescer) seed(pkt []byte, info parsedTCP) {
+func (c *TCPCoalescer) seed(pkt []byte, info *parsedTCP) {
 	if info.hdrLen > tcpCoalesceHdrCap || info.hdrLen+info.payLen > tcpCoalesceBufSize {
 		// Pathological shape. Can't fit our scratch, emit as-is.
 		c.addVerbatim(pkt)
@@ -288,7 +286,7 @@ func (c *TCPCoalescer) seed(pkt []byte, info parsedTCP) {
 // contents, adjacent seq, not oversized. A closed chain never reaches here; closing removes the
 // slot from openSlots, the only path in. Header reads use rawPkt because hdrBuf is populated
 // lazily on the first append; every field consulted here is one the pre-flush patches never touch.
-func (c *TCPCoalescer) canAppend(s *coalesceSlot, pkt []byte, info parsedTCP) bool {
+func (c *TCPCoalescer) canAppend(s *coalesceSlot, pkt []byte, info *parsedTCP) bool {
 	if info.hdrLen != s.hdrLen {
 		return false
 	}
@@ -322,7 +320,7 @@ func (c *TCPCoalescer) canAppend(s *coalesceSlot, pkt []byte, info parsedTCP) bo
 // appendPayload folds info's packet into s and reports whether the chain is now closed: the
 // segment was sub-gsoSize (kernel TSO allows only the final segment to be short) or carried PSH.
 // The caller must deregister a closed slot from openSlots.
-func (c *TCPCoalescer) appendPayload(s *coalesceSlot, pkt []byte, info parsedTCP) bool {
+func (c *TCPCoalescer) appendPayload(s *coalesceSlot, pkt []byte, info *parsedTCP) bool {
 	if s.numSeg == 1 {
 		// First append: populate hdrBuf from the seed. Deferred out of seed so solo slots, which
 		// flush from rawPkt, never pay the copy.

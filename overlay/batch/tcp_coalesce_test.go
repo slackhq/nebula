@@ -1252,7 +1252,7 @@ func TestCoalescerUnparseableSealsAllChains(t *testing.T) {
 	if err := c.Commit(buildTCPv4(2200, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
-	// IHL=6 fakes IP options: parseTCPBase bails, flow key unknown.
+	// IHL=6 fakes IP options: the parse bails, flow key unknown.
 	opts := buildTCPv4(5000, tcpAck, make([]byte, 500))
 	opts[0] = 0x46
 	if err := c.Commit(opts); err != nil {

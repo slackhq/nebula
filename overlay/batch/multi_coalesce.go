@@ -94,13 +94,13 @@ func (m *MultiCoalescer) dispatch(sp stagedPacket) error {
 				m.tcp.addVerbatim(sp.pkt)
 				return nil
 			}
-			info, ok := parseTCPAt(sp.pkt, int(sp.ipHdrLen))
-			if !ok {
+			var info parsedTCP
+			if !info.parseAt(sp.pkt, int(sp.ipHdrLen)) {
 				m.tcp.sealAllOpen()
 				m.tcp.addVerbatim(sp.pkt)
 				return nil
 			}
-			return m.tcp.commitParsed(sp.pkt, info)
+			return m.tcp.commitParsed(sp.pkt, &info)
 		}
 	case ipProtoUDP:
 		if m.udp != nil {
@@ -109,13 +109,13 @@ func (m *MultiCoalescer) dispatch(sp stagedPacket) error {
 				m.udp.addVerbatim(sp.pkt)
 				return nil
 			}
-			info, ok := parseUDPAt(sp.pkt, int(sp.ipHdrLen))
-			if !ok {
+			var info parsedUDP
+			if !info.parseAt(sp.pkt, int(sp.ipHdrLen)) {
 				m.udp.sealAllOpen()
 				m.udp.addVerbatim(sp.pkt)
 				return nil
 			}
-			return m.udp.commitParsed(sp.pkt, info)
+			return m.udp.commitParsed(sp.pkt, &info)
 		}
 	}
 	return m.pt.enqueue(sp.pkt)
