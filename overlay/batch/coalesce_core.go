@@ -3,40 +3,16 @@ package batch
 import (
 	"bytes"
 	"encoding/binary"
-	"math/bits"
-	"math/rand/v2"
 )
 
-// flowKey is a keyed 64-bit digest of a flow's {src, dst, sport, dport, family}. It is an index,
-// not an identity: canAppend's headersMatch compares the real header bytes before any merge, so a
-// key collision costs at most one lost merge or a prematurely closed chain, never a cross-flow
-// merge. 64 bits keeps openSlots on the runtime's fast 8-byte-key map path and makes the lastSlot
-// compare a single instruction; flowKeySeed keys the digest so crafted traffic cannot
-// deterministically collide with a victim flow. Shared by the TCP and UDP coalescers; each keeps
-// its own openSlots map, so a TCP and UDP flow on the same 5-tuple never alias.
-type flowKey uint64
-
-// flowKeySeed is the per-process random key for the flow digest.
-var flowKeySeed = [2]uint64{rand.Uint64(), rand.Uint64()}
-
-// Mixing constants (from wyhash). Distinct constants per position separate the v4 and v6 domains.
-const (
-	flowKeyM1 = 0xa0761d6478bd642f
-	flowKeyM2 = 0xe7037ed1a0b428db
-	flowKeyM3 = 0x8ebc6af09c88c6e3
-)
-
-// mix64 is a wyhash-style multiply-fold: both halves of the 128-bit product, XORed. One mulx and
-// one xor on amd64.
-func mix64(a, b uint64) uint64 {
-	hi, lo := bits.Mul64(a, b)
-	return hi ^ lo
-}
-
-// withPorts folds the L4 port pair (the raw 4 bytes at the L4 offset) into the digest. Called by
-// the transport tails once the L4 header bounds are checked.
-func (fk flowKey) withPorts(ports uint32) flowKey {
-	return flowKey(mix64(uint64(fk)^uint64(ports), flowKeySeed[1]|1))
+// flowKey identifies a transport flow by {src, dst, sport, dport, family}.
+// Comparable, so map lookups and linear scans over the slot list stay tight.
+// Shared by the TCP and UDP coalescers; each coalescer keeps its own
+// openSlots map, so a TCP and UDP flow on the same 5-tuple-without-proto never alias.
+type flowKey struct {
+	src, dst     [16]byte
+	sport, dport uint16
+	isV6         bool
 }
 
 // initialSlots is the starting capacity of the slot pool.
@@ -50,10 +26,11 @@ const initialSlots = 64
 // shape. The v6 check is load-bearing: it rejects extension-header packets whose L4 is not at
 // byte 40.
 //
-// The prologues write the address portion of the digest into fk (the transport tails fold the
-// ports in via withPorts) and return pkt trimmed to the IP-declared length. The
-// receiver-as-out-pointer shape is deliberate: these functions are too big to inline, and
-// returning parse structs by value put five 64-byte copies on the per-packet path.
+// The prologues fill fk's addresses and family in place (ports belong to the L4 parser; fk must
+// be zero on entry so the v4 path leaves src[4:]/dst[4:] clear for map equality) and return pkt
+// trimmed to the IP-declared length. The receiver-as-out-pointer shape is deliberate: these
+// functions are too big to inline, and returning structs by value put five 64-byte copies on the
+// per-packet path.
 func (fk *flowKey) parseIPAt(pkt []byte, ipHdrLen int) ([]byte, bool) {
 	if len(pkt) < 20 {
 		return nil, false
@@ -89,7 +66,9 @@ func (fk *flowKey) parseIPv4Prologue(pkt []byte) ([]byte, bool) {
 	if totalLen > len(pkt) || totalLen < ihl {
 		return nil, false
 	}
-	*fk = flowKey(mix64(binary.LittleEndian.Uint64(pkt[12:20])^flowKeySeed[0], flowKeyM1))
+	fk.isV6 = false
+	copy(fk.src[:4], pkt[12:16])
+	copy(fk.dst[:4], pkt[16:20])
 	return pkt[:totalLen], true
 }
 
@@ -100,11 +79,9 @@ func (fk *flowKey) parseIPv6Prologue(pkt []byte) ([]byte, bool) {
 	if 40+payloadLen > len(pkt) {
 		return nil, false
 	}
-	s0 := binary.LittleEndian.Uint64(pkt[8:16])
-	s1 := binary.LittleEndian.Uint64(pkt[16:24])
-	d0 := binary.LittleEndian.Uint64(pkt[24:32])
-	d1 := binary.LittleEndian.Uint64(pkt[32:40])
-	*fk = flowKey(mix64(s0^flowKeySeed[0], s1^flowKeyM2) ^ mix64(d0^flowKeyM3, d1^flowKeyM1))
+	fk.isV6 = true
+	copy(fk.src[:], pkt[8:24])
+	copy(fk.dst[:], pkt[24:40])
 	return pkt[:40+payloadLen], true
 }
 
