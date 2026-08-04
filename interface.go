@@ -349,6 +349,31 @@ func (f *Interface) onFatal(err error) {
 	}
 }
 
+type rxContext struct {
+	q       int
+	scratch []byte
+	// nb is a re-usable nonce buffer for decrypt calls to use
+	nb           []byte
+	h            *header.H
+	fwPacket     *firewall.ParsedPacket
+	hostmapCache map[uint32]*HostInfo
+	lhh          *LightHouseHandler
+	ctCache      *firewall.ConntrackCacheTicker
+}
+
+func newRxContext(f *Interface, q int) *rxContext {
+	return &rxContext{
+		q:            q,
+		scratch:      make([]byte, mtu),
+		nb:           make([]byte, 12, 12),
+		h:            &header.H{},
+		fwPacket:     &firewall.ParsedPacket{},
+		hostmapCache: map[uint32]*HostInfo{},
+		lhh:          f.lightHouse.NewRequestHandler(),
+		ctCache:      firewall.NewConntrackCacheTicker(f.ctx, f.l, f.conntrackCacheTimeout),
+	}
+}
+
 func (f *Interface) listenOut(i int) {
 	var li udp.Conn
 	if i > 0 {
@@ -357,23 +382,17 @@ func (f *Interface) listenOut(i int) {
 		li = f.outside
 	}
 
-	ctCache := firewall.NewConntrackCacheTicker(f.ctx, f.l, f.conntrackCacheTimeout)
-	lhh := f.lightHouse.NewRequestHandler()
-	h := &header.H{}
-	fwPacket := &firewall.ParsedPacket{}
-	nb := make([]byte, 12, 12)
-	scratch := make([]byte, mtu)
-	hostmapCache := map[uint32]*HostInfo{} //todo is this stupid
+	rxc := newRxContext(f, i)
 
 	listener := func(fromUdpAddr netip.AddrPort, payload []byte) {
-		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, scratch, payload, h, fwPacket, lhh, nb, i, ctCache.Get(), hostmapCache)
+		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, payload, rxc)
 	}
 
 	flusher := func() {
 		if err := f.batchers[i].Flush(); err != nil {
 			f.l.Error("Failed to flush tun coalescer", "error", err)
 		}
-		clear(hostmapCache)
+		clear(rxc.hostmapCache)
 	}
 
 	err := li.ListenOut(listener, flusher)

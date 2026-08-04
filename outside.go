@@ -27,7 +27,8 @@ var ErrOutOfWindow = errors.New("out of window packet")
 // readOutsidePackets processes one received underlay packet.
 // Message payloads are decrypted IN PLACE, so packet must stay untouched
 // by the caller until the batcher for queue q has been flushed
-func (f *Interface) readOutsidePackets(via ViaSender, scratch []byte, packet []byte, h *header.H, fwPacket *firewall.ParsedPacket, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache, hmCache map[uint32]*HostInfo) {
+func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxContext) {
+	h := rxc.h
 	err := h.Parse(packet)
 	if err != nil {
 		// Hole punch packets are 0 or 1 byte big, so lets ignore printing those errors
@@ -95,7 +96,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, scratch []byte, packet []b
 	if isMessageRelay {
 		hostinfo = f.hostMap.QueryRelayIndex(h.RemoteIndex)
 	} else {
-		hostinfo = f.hostMap.QueryIndexCached(h.RemoteIndex, hmCache)
+		hostinfo = f.hostMap.QueryIndexCached(h.RemoteIndex, rxc.hostmapCache)
 	}
 
 	// At this point we should have a valid existing tunnel, verify and send
@@ -118,18 +119,18 @@ func (f *Interface) readOutsidePackets(via ViaSender, scratch []byte, packet []b
 	// All remaining packets are encrypted
 	if isMessageRelay {
 		// Relay packets are special, this branch should always early-return
-		err = hostinfo.ConnectionState.VerifyRelay(f.l, h.MessageCounter, packet, nb)
+		err = hostinfo.ConnectionState.VerifyRelay(f.l, h.MessageCounter, packet, rxc.nb)
 		if err != nil {
 			if f.l.Enabled(context.Background(), slog.LevelDebug) {
 				hostinfo.logger(f.l).Debug("Failed to verify relay packet", "error", err, "from", via, "header", h)
 			}
 			return
 		}
-		f.handleOutsideRelayPacket(hostinfo, via, scratch, packet, h, fwPacket, lhf, nb, q, localCache, hmCache)
+		f.handleOutsideRelayPacket(hostinfo, via, packet, rxc)
 		return
 	}
 
-	out, err := hostinfo.ConnectionState.Decrypt(f.l, h.MessageCounter, packet, nb)
+	out, err := hostinfo.ConnectionState.Decrypt(f.l, h.MessageCounter, packet, rxc.nb)
 	if err != nil {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(f.l).Debug("Failed to decrypt packet", "error", err, "from", via, "header", h)
@@ -145,7 +146,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, scratch []byte, packet []b
 	case header.Message:
 		switch h.Subtype {
 		case header.MessageNone:
-			f.handleOutsideMessagePacket(hostinfo, h.MessageCounter, out, scratch, fwPacket, nb, q, localCache)
+			f.handleOutsideMessagePacket(hostinfo, h.MessageCounter, out, rxc)
 		default:
 			hostinfo.logger(f.l).Error("IsValidSubType was true, but unexpected message subtype seen", "from", via, "header", h)
 			return
@@ -153,7 +154,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, scratch []byte, packet []b
 
 	case header.LightHouse:
 		//TODO: assert via is not relayed
-		lhf.HandleRequest(via.UdpAddr, hostinfo.vpnAddrs, out, f)
+		rxc.lhh.HandleRequest(via.UdpAddr, hostinfo.vpnAddrs, out, f)
 
 	case header.Test:
 		switch h.Subtype {
@@ -162,14 +163,14 @@ func (f *Interface) readOutsidePackets(via ViaSender, scratch []byte, packet []b
 		case header.TestRequest:
 			const maxCipherOverhead = 16 //todo we use this too often, needs a real importable const
 			const maxOverhead = header.Len + header.Len + maxCipherOverhead + maxCipherOverhead
-			if maxOverhead+len(out) > len(scratch) {
+			if maxOverhead+len(out) > len(rxc.scratch) {
 				// A reply that cannot fit in scratch is dropped no matter the log level.
 				if f.l.Enabled(context.Background(), slog.LevelDebug) {
 					hostinfo.logger(f.l).Debug("dropping oversized test request", "payloadLen", len(out), "from", via)
 				}
 				return
 			}
-			f.send(header.Test, header.TestReply, hostinfo.ConnectionState, hostinfo, out, nb, scratch[:0])
+			f.send(header.Test, header.TestReply, hostinfo.ConnectionState, hostinfo, out, rxc.nb, rxc.scratch[:0])
 		default:
 			hostinfo.logger(f.l).Error("IsValidSubType was true, but unexpected test subtype seen", "from", via, "header", h)
 			return
@@ -187,7 +188,8 @@ func (f *Interface) readOutsidePackets(via ViaSender, scratch []byte, packet []b
 	}
 }
 
-func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, scratch []byte, packet []byte, h *header.H, fwPacket *firewall.ParsedPacket, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache, hmCache map[uint32]*HostInfo) {
+func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, packet []byte, rxc *rxContext) {
+	h := rxc.h
 	// Successfully validated the thing. Get rid of the Relay header and the AEAD tag
 	signedPayload := packet[header.Len : len(packet)-hostinfo.ConnectionState.dKey.Overhead()]
 	// Pull the Roaming parts up here, and return in all call paths.
@@ -214,7 +216,7 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 			relay:     relay,
 			IsRelayed: true,
 		}
-		f.readOutsidePackets(via, scratch, signedPayload, h, fwPacket, lhf, nb, q, localCache, hmCache)
+		f.readOutsidePackets(via, signedPayload, rxc)
 	case ForwardingType:
 		// Find the target HostInfo relay object
 		targetHI, targetRelay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relay.PeerAddr)
@@ -235,7 +237,7 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 				// Encode overwrites the old outer header, and the new AEAD tag lands where the old one was
 				fwdBuf := packet[:0]
 				//todo it would potentially be nice to batch these
-				f.SendVia(targetHI, targetRelay, signedPayload, nb, fwdBuf, true, q)
+				f.SendVia(targetHI, targetRelay, signedPayload, rxc.nb, fwdBuf, true, rxc.q)
 			case TerminalType:
 				hostinfo.logger(f.l).Error("Unexpected Relay Type of Terminal")
 				return
@@ -469,29 +471,23 @@ func parseV4(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 	return nil
 }
 
-func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, messageCounter uint64, out []byte, scratch []byte, fwPacket *firewall.ParsedPacket, nb []byte, q int, localCache firewall.ConntrackCache) {
-	err := newPacket(out, true, fwPacket)
+func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, messageCounter uint64, out []byte, rxc *rxContext) {
+	err := newPacket(out, true, rxc.fwPacket)
 	if err != nil {
-		hostinfo.logger(f.l).Warn("Error while validating inbound packet",
-			"error", err,
-			"packet", out,
-		)
+		hostinfo.logger(f.l).Warn("Error while validating inbound packet", "error", err, "packet", out)
 		return
 	}
 
-	dropReason := f.firewall.Drop(fwPacket.Packet, true, hostinfo, f.pki.GetCAPool(), localCache)
+	dropReason := f.firewall.Drop(rxc.fwPacket.Packet, true, hostinfo, f.pki.GetCAPool(), rxc.ctCache.Get())
 	if dropReason != nil {
-		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, nb, scratch, q)
+		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, rxc.nb, rxc.scratch, rxc.q)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.logger(f.l).Debug("dropping inbound packet",
-				"fwPacket", fwPacket,
-				"reason", dropReason,
-			)
+			hostinfo.logger(f.l).Debug("dropping inbound packet", "fwPacket", rxc.fwPacket, "reason", dropReason)
 		}
 		return
 	}
 
-	err = f.batchers[q].Commit(out, batch.SortKey{Epoch: hostinfo.ConnectionState.epoch, Counter: messageCounter}, fwPacket)
+	err = f.batchers[rxc.q].Commit(out, batch.SortKey{Epoch: hostinfo.ConnectionState.epoch, Counter: messageCounter}, rxc.fwPacket)
 	if err != nil {
 		f.l.Error("Failed to write to tun", "error", err)
 	}
