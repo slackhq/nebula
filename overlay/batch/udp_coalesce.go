@@ -81,6 +81,7 @@ type parsedUDP struct {
 	ipHdrLen int
 	hdrLen   int // ipHdrLen + 8
 	payLen   int
+	isV6     bool
 }
 
 // parseAt extracts the flow key and IP/UDP offsets for a packet the dispatcher already knows is
@@ -109,8 +110,8 @@ func (p *parsedUDP) parseTail(pkt []byte, ipHdrLen int) bool {
 	p.ipHdrLen = ipHdrLen
 	p.hdrLen = ipHdrLen + 8
 	p.payLen = udpLen - 8
-	p.fk.sport = binary.BigEndian.Uint16(pkt[ipHdrLen : ipHdrLen+2])
-	p.fk.dport = binary.BigEndian.Uint16(pkt[ipHdrLen+2 : ipHdrLen+4])
+	p.fk = p.fk.withPorts(binary.LittleEndian.Uint32(pkt[ipHdrLen : ipHdrLen+4]))
+	p.isV6 = ipHdrLen == 40
 	return true
 }
 
@@ -208,7 +209,7 @@ func (c *UDPCoalescer) seed(pkt []byte, info *parsedUDP) {
 	s.rawPkt = pkt
 	s.hdrLen = info.hdrLen
 	s.ipHdrLen = info.ipHdrLen
-	s.isV6 = info.fk.isV6
+	s.isV6 = info.isV6
 	s.fk = info.fk
 	s.gsoSize = info.payLen
 	s.numSeg = 1
@@ -280,7 +281,7 @@ func (c *UDPCoalescer) release(s *udpSlot) {
 	s.numSeg = 0
 	s.totalPay = 0
 	// Zero the identity fields too; see TCPCoalescer.release.
-	s.fk = flowKey{}
+	s.fk = 0
 	s.hdrLen = 0
 	s.ipHdrLen = 0
 	s.isV6 = false

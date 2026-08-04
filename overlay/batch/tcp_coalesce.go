@@ -103,6 +103,7 @@ type parsedTCP struct {
 	payLen   int
 	seq      uint32
 	flags    byte
+	isV6     bool
 }
 
 // parseAt extracts the flow key and IP/TCP offsets for a packet the dispatcher already knows is
@@ -133,8 +134,8 @@ func (p *parsedTCP) parseTail(pkt []byte, ipHdrLen int) bool {
 	p.ipHdrLen = ipHdrLen
 	p.hdrLen = ipHdrLen + tcpOff
 	p.payLen = len(pkt) - p.hdrLen
-	p.fk.sport = binary.BigEndian.Uint16(pkt[ipHdrLen : ipHdrLen+2])
-	p.fk.dport = binary.BigEndian.Uint16(pkt[ipHdrLen+2 : ipHdrLen+4])
+	p.fk = p.fk.withPorts(binary.LittleEndian.Uint32(pkt[ipHdrLen : ipHdrLen+4]))
+	p.isV6 = ipHdrLen == 40
 	p.seq = binary.BigEndian.Uint32(pkt[ipHdrLen+4 : ipHdrLen+8])
 	p.flags = pkt[ipHdrLen+13]
 	return true
@@ -264,7 +265,7 @@ func (c *TCPCoalescer) seed(pkt []byte, info *parsedTCP) {
 	s.rawPkt = pkt
 	s.hdrLen = info.hdrLen
 	s.ipHdrLen = info.ipHdrLen
-	s.isV6 = info.fk.isV6
+	s.isV6 = info.isV6
 	s.fk = info.fk
 	s.gsoSize = info.payLen
 	s.numSeg = 1
@@ -357,7 +358,7 @@ func (c *TCPCoalescer) release(s *coalesceSlot) {
 	// Zero the identity fields too: addVerbatim doesn't set them, so a
 	// pooled slot reused as a verbatim must not carry a stale flow key
 	// that a future refactor could mistake for real.
-	s.fk = flowKey{}
+	s.fk = 0
 	s.hdrLen = 0
 	s.ipHdrLen = 0
 	s.isV6 = false
@@ -433,11 +434,12 @@ func (c *TCPCoalescer) logSeqGaps() {
 		}
 		if prev, ok := prevByFlow[s.fk]; ok && prev.nextSeq != slotSeedSeq(s) {
 			gap := int64(slotSeedSeq(s)) - int64(prev.nextSeq)
+			src, dst, sport, dport := slotFlowAddrs(s)
 			c.l.Debug("tcp coalesce: cross-slot seq gap",
-				"src", flowKeyAddr(s.fk, false),
-				"dst", flowKeyAddr(s.fk, true),
-				"sport", s.fk.sport,
-				"dport", s.fk.dport,
+				"src", src,
+				"dst", dst,
+				"sport", sport,
+				"dport", dport,
 				"prev_seed_seq", slotSeedSeq(prev),
 				"prev_next_seq", prev.nextSeq,
 				"this_seed_seq", slotSeedSeq(s),
@@ -450,20 +452,20 @@ func (c *TCPCoalescer) logSeqGaps() {
 	}
 }
 
-// flowKeyAddr returns the src or dst address from fk as a netip.Addr for
-// logging. Only used on the cold gap-log path so the netip allocation
-// doesn't matter.
-func flowKeyAddr(fk flowKey, dst bool) netip.Addr {
-	src := fk.src
-	if dst {
-		src = fk.dst
+// slotFlowAddrs extracts the addresses and ports from the slot's seed packet for the debug log;
+// the flow digest cannot be reversed. Cold path only.
+func slotFlowAddrs(s *coalesceSlot) (src, dst netip.Addr, sport, dport uint16) {
+	pkt := s.rawPkt
+	if s.isV6 {
+		src = netip.AddrFrom16([16]byte(pkt[8:24]))
+		dst = netip.AddrFrom16([16]byte(pkt[24:40]))
+	} else {
+		src = netip.AddrFrom4([4]byte(pkt[12:16]))
+		dst = netip.AddrFrom4([4]byte(pkt[16:20]))
 	}
-	if fk.isV6 {
-		return netip.AddrFrom16(src)
-	}
-	var v4 [4]byte
-	copy(v4[:], src[:4])
-	return netip.AddrFrom4(v4)
+	sport = binary.BigEndian.Uint16(pkt[s.ipHdrLen : s.ipHdrLen+2])
+	dport = binary.BigEndian.Uint16(pkt[s.ipHdrLen+2 : s.ipHdrLen+4])
+	return
 }
 
 // slotSeedSeq returns the TCP seq of the slot's seed (first segment).
