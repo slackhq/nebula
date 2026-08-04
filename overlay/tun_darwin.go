@@ -30,7 +30,10 @@ type tun struct {
 	Routes      atomic.Pointer[[]Route]
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	linkAddr    *netroute.LinkAddr
-	l           *slog.Logger
+	// hostOwned means the fd arrived from the OS, which has already configured addressing, mtu
+	// and routes for it. NEPacketTunnelProvider on darwin does this.
+	hostOwned bool
+	l         *slog.Logger
 }
 
 type ifReq struct {
@@ -150,8 +153,48 @@ func (t *tun) deviceBytes() (o [16]byte) {
 	return
 }
 
-func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (*tun, error) {
-	return nil, fmt.Errorf("newTunFromFd not supported in Darwin")
+// newTunFromFd adopts a utun the host already created and configured, which is how a darwin
+// network extension is handed its device. Everything about moving packets is shared with newTun,
+// only the setup differs: the host owns addressing and routing here.
+func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
+	if err := unix.SetNonblock(deviceFd, true); err != nil {
+		// We own the fd from the moment it is handed to us
+		_ = unix.Close(deviceFd)
+		return nil, fmt.Errorf("failed to set the tun fd to non-blocking mode: %w", err)
+	}
+
+	file := os.NewFile(uintptr(deviceFd), "/dev/tun")
+	t := &tun{
+		f:           file,
+		Device:      utunNameFromFd(deviceFd),
+		vpnNetworks: vpnNetworks,
+		DefaultMTU:  c.GetInt("tun.mtu", DefaultMTU),
+		hostOwned:   true,
+		l:           l,
+	}
+
+	if err := t.reload(c, true); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+
+	c.RegisterReloadCallback(func(c *config.C) {
+		if err := t.reload(c, false); err != nil {
+			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
+		}
+	})
+
+	return t, nil
+}
+
+// utunNameFromFd asks the socket what interface it is, for logs. A blank name is not worth
+// failing a tunnel over, so an error just leaves it empty.
+func utunNameFromFd(fd int) string {
+	name, err := unix.GetsockoptString(fd, unix.AF_SYS_CONTROL, _UTUN_OPT_IFNAME)
+	if err != nil {
+		return ""
+	}
+	return name
 }
 
 func (t *tun) Close() error {
@@ -162,6 +205,12 @@ func (t *tun) Close() error {
 }
 
 func (t *tun) Activate() error {
+	// The host handed us a configured device. Its addresses, mtu and routes come from the network
+	// settings it applied, and a sandboxed extension cannot change them anyway.
+	if t.hostOwned {
+		return nil
+	}
+
 	devName := t.deviceBytes()
 
 	s, err := unix.Socket(
@@ -375,6 +424,11 @@ func getLinkAddr(name string) (*netroute.LinkAddr, error) {
 }
 
 func (t *tun) addRoutes(logErrors bool) error {
+	// The route tree is still ours, the system routing table is not
+	if t.hostOwned {
+		return nil
+	}
+
 	routes := *t.Routes.Load()
 
 	for _, r := range routes {
@@ -404,6 +458,10 @@ func (t *tun) addRoutes(logErrors bool) error {
 }
 
 func (t *tun) removeRoutes(routes []Route) error {
+	if t.hostOwned {
+		return nil
+	}
+
 	for _, r := range routes {
 		if !r.Install {
 			continue
