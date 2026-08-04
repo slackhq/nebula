@@ -2,11 +2,9 @@ package batch
 
 import (
 	"bytes"
-	"context"
 	"encoding/binary"
 	"io"
 	"log/slog"
-	"net/netip"
 
 	"github.com/slackhq/nebula/overlay/tio"
 )
@@ -217,9 +215,6 @@ func (c *TCPCoalescer) commitParsed(pkt []byte, info *parsedTCP) error {
 }
 
 func (c *TCPCoalescer) Flush() error {
-	if c.l.Enabled(context.Background(), slog.LevelDebug) {
-		c.logSeqGaps()
-	}
 	var first error
 	for _, s := range c.slots {
 		var err error
@@ -421,59 +416,6 @@ func headersMatch(a, b []byte, isV6 bool, ipHdrLen int) bool {
 	return true
 }
 
-// logSeqGaps reports same-flow seq discontinuities between consecutively created data slots. Input
-// is in transmission order, so a gap is traffic this batch never contained: loss upstream of
-// nebula, reorder across a flush boundary, or a retransmit (negative gap). The caller gates on
-// debug level, so the map only allocates when enabled.
-func (c *TCPCoalescer) logSeqGaps() {
-	prevByFlow := make(map[flowKey]*coalesceSlot, len(c.slots))
-	for _, s := range c.slots {
-		if s.verbatim {
-			continue
-		}
-		if prev, ok := prevByFlow[s.fk]; ok && prev.nextSeq != slotSeedSeq(s) {
-			gap := int64(slotSeedSeq(s)) - int64(prev.nextSeq)
-			c.l.Debug("tcp coalesce: cross-slot seq gap",
-				"src", flowKeyAddr(s.fk, false),
-				"dst", flowKeyAddr(s.fk, true),
-				"sport", s.fk.sport,
-				"dport", s.fk.dport,
-				"prev_seed_seq", slotSeedSeq(prev),
-				"prev_next_seq", prev.nextSeq,
-				"this_seed_seq", slotSeedSeq(s),
-				"gap_bytes", gap,
-				"prev_seg_count", prev.numSeg,
-				"prev_total_pay", prev.totalPay,
-			)
-		}
-		prevByFlow[s.fk] = s
-	}
-}
-
-// flowKeyAddr returns the src or dst address from fk as a netip.Addr for
-// logging. Only used on the cold gap-log path so the netip allocation
-// doesn't matter.
-func flowKeyAddr(fk flowKey, dst bool) netip.Addr {
-	src := fk.src
-	if dst {
-		src = fk.dst
-	}
-	if fk.isV6 {
-		return netip.AddrFrom16(src)
-	}
-	var v4 [4]byte
-	copy(v4[:], src[:4])
-	return netip.AddrFrom4(v4)
-}
-
-// slotSeedSeq returns the TCP seq of the slot's seed (first segment).
-// nextSeq tracks the seq just past the last appended byte; subtracting
-// totalPay walks back to the seed. uint32 wraparound is the right TCP
-// arithmetic so no special-casing is needed.
-func slotSeedSeq(s *coalesceSlot) uint32 {
-	return s.nextSeq - uint32(s.totalPay)
-}
-
 // ipv4HdrChecksum computes the IPv4 header checksum over hdr (which must
 // already have its checksum field zeroed) and returns the folded/inverted
 // 16-bit value to store.
@@ -518,9 +460,8 @@ func pseudoSumIPv6(src, dst []byte, proto byte, l4Len int) uint32 {
 	return sum
 }
 
-// foldOnceNoInvert folds the 32-bit accumulator to 16 bits and returns it
-// unchanged (no one's complement). This is what virtio NEEDS_CSUM wants in
-// the L4 checksum field — the kernel will add the payload sum and invert.
+// foldOnceNoInvert folds the 32-bit accumulator to 16 bits and returns it unchanged (no one's complement).
+// This is what virtio NEEDS_CSUM wants in the L4 checksum field
 func foldOnceNoInvert(sum uint32) uint16 {
 	for sum>>16 != 0 {
 		sum = (sum & 0xffff) + (sum >> 16)
