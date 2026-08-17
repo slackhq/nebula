@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 )
@@ -515,7 +516,7 @@ func Test_IPv6FindUpperProtocol(t *testing.T) {
 				assert.ErrorIs(t, err, tt.wantErr)
 				return
 			}
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Equal(t, tt.wantProto, proto)
 			assert.Equal(t, tt.wantOffset, offset)
 			assert.Equal(t, tt.wantFragment, isFragment)
