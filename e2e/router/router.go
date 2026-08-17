@@ -6,6 +6,7 @@ package router
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -22,7 +23,6 @@ import (
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/udp"
-	"golang.org/x/exp/maps"
 )
 
 // outNatKey is the (from, to) pair used by outNat. Comparable struct, so it works as a map key without the
