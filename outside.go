@@ -13,6 +13,7 @@ import (
 
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/iputil"
 	"golang.org/x/net/ipv4"
 )
 
@@ -299,7 +300,6 @@ var (
 	ErrIPv4InvalidHeaderLength = errors.New("invalid ipv4 header length")
 	ErrIPv4PacketTooShort      = errors.New("ipv4 packet is too short")
 	ErrIPv6PacketTooShort      = errors.New("ipv6 packet is too short")
-	ErrIPv6CouldNotFindPayload = errors.New("could not find payload in ipv6 packet")
 )
 
 // newPacket validates and parses the interesting bits for the firewall out of the ip and sub protocol headers
@@ -332,105 +332,57 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 		fp.RemoteAddr, _ = netip.AddrFromSlice(data[24:40])
 	}
 
-	protoAt := 6             // NextHeader is at 6 bytes into the ipv6 header
-	offset := ipv6.HeaderLen // Start at the end of the ipv6 header
-	next := 0
-	for {
-		if protoAt >= dataLen {
-			break
-		}
-		proto := layers.IPProtocol(data[protoAt])
-
-		switch proto {
-		case layers.IPProtocolESP, layers.IPProtocolNoNextHeader:
-			fp.Protocol = uint8(proto)
-			fp.RemotePort = 0
-			fp.LocalPort = 0
-			fp.Fragment = false
-			return nil
-
-		case layers.IPProtocolICMPv6:
-			if dataLen < offset+6 {
-				return ErrIPv6PacketTooShort
-			}
-			fp.Protocol = uint8(proto)
-			fp.LocalPort = 0 //incoming vs outgoing doesn't matter for icmpv6
-			icmptype := data[offset+1]
-			switch icmptype {
-			case layers.ICMPv6TypeEchoRequest, layers.ICMPv6TypeEchoReply:
-				fp.RemotePort = binary.BigEndian.Uint16(data[offset+4 : offset+6]) //identifier
-			default:
-				fp.RemotePort = 0
-			}
-			fp.Fragment = false
-			return nil
-
-		case layers.IPProtocolTCP, layers.IPProtocolUDP:
-			if dataLen < offset+4 {
-				return ErrIPv6PacketTooShort
-			}
-
-			fp.Protocol = uint8(proto)
-			if incoming {
-				fp.RemotePort = binary.BigEndian.Uint16(data[offset : offset+2])
-				fp.LocalPort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
-			} else {
-				fp.LocalPort = binary.BigEndian.Uint16(data[offset : offset+2])
-				fp.RemotePort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
-			}
-
-			fp.Fragment = false
-			return nil
-
-		case layers.IPProtocolIPv6Fragment:
-			// Fragment header is 8 bytes, need at least offset+4 to read the offset field
-			if dataLen < offset+8 {
-				return ErrIPv6PacketTooShort
-			}
-
-			// Check if this is the first fragment
-			fragmentOffset := binary.BigEndian.Uint16(data[offset+2:offset+4]) &^ uint16(0x7) // Remove the reserved and M flag bits
-			if fragmentOffset != 0 {
-				// Non-first fragment, use what we have now and stop processing
-				fp.Protocol = data[offset]
-				fp.Fragment = true
-				fp.RemotePort = 0
-				fp.LocalPort = 0
-				return nil
-			}
-
-			// The next loop should be the transport layer since we are the first fragment
-			next = 8 // Fragment headers are always 8 bytes
-
-		case layers.IPProtocolAH:
-			// Auth headers, used by IPSec, have a different meaning for header length
-			if dataLen <= offset+1 {
-				return ErrIPv6CouldNotFindPayload
-			}
-			next = (int(data[offset+1]) + 2) << 2
-
-		case layers.IPProtocolIPv6HopByHop, layers.IPProtocolIPv6Routing, layers.IPProtocolIPv6Destination:
-			// Real ipv6 extension headers, walk past them to find the transport
-			if dataLen <= offset+1 {
-				return ErrIPv6CouldNotFindPayload
-			}
-			next = (int(data[offset+1]) + 1) << 3
-
-		default:
-			// Anything else is a real upper layer protocol we don't dissect, so stop here and fail closed.
-			// Walking it like an extension header would let a crafted payload forge a protocol/port pair.
-			fp.Protocol = uint8(proto)
-			fp.RemotePort = 0
-			fp.LocalPort = 0
-			fp.Fragment = false
-			return nil
-		}
-
-		protoAt = offset
-		offset = offset + next
+	// Walk the extension header chain to the upper layer protocol. iputil.IPv6FindUpperProtocol is the single
+	// source of truth for which headers are extension headers, so this stays in lockstep with the reject path
+	// and cannot drift into misreading an unknown protocol (SCTP, GRE, etc.) as a forged transport.
+	proto, offset, isFragment, err := iputil.IPv6FindUpperProtocol(data)
+	if err != nil {
+		return ErrIPv6PacketTooShort
 	}
 
-	return ErrIPv6CouldNotFindPayload
+	fp.Protocol = proto
+	fp.Fragment = isFragment
+	if isFragment {
+		// Non-first fragments carry no transport header, so we have no ports to read
+		fp.RemotePort = 0
+		fp.LocalPort = 0
+		return nil
+	}
+
+	switch layers.IPProtocol(proto) {
+	case layers.IPProtocolICMPv6:
+		if dataLen < offset+6 {
+			return ErrIPv6PacketTooShort
+		}
+		fp.LocalPort = 0 //incoming vs outgoing doesn't matter for icmpv6
+		icmptype := data[offset]
+		switch icmptype {
+		case layers.ICMPv6TypeEchoRequest, layers.ICMPv6TypeEchoReply:
+			fp.RemotePort = binary.BigEndian.Uint16(data[offset+4 : offset+6]) //identifier
+		default:
+			fp.RemotePort = 0
+		}
+
+	case layers.IPProtocolTCP, layers.IPProtocolUDP:
+		if dataLen < offset+4 {
+			return ErrIPv6PacketTooShort
+		}
+		if incoming {
+			fp.RemotePort = binary.BigEndian.Uint16(data[offset : offset+2])
+			fp.LocalPort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
+		} else {
+			fp.LocalPort = binary.BigEndian.Uint16(data[offset : offset+2])
+			fp.RemotePort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
+		}
+
+	default:
+		// ESP, NoNextHeader, and any upper layer protocol we don't dissect (SCTP, GRE, etc.). Fail closed:
+		// keep the true protocol with no ports so it can only match an `any` rule, never a forged port pair.
+		fp.RemotePort = 0
+		fp.LocalPort = 0
+	}
+
+	return nil
 }
 
 func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {

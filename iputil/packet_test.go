@@ -474,3 +474,57 @@ func TestCreateICMPEchoResponse_IPv6_NotICMPv6(t *testing.T) {
 	result := CreateICMPEchoResponse(packet, out)
 	assert.Nil(t, result)
 }
+
+func Test_IPv6FindUpperProtocol(t *testing.T) {
+	src := net.ParseIP("fd00::1")
+	dst := net.ParseIP("fd00::2")
+
+	// 8 byte extension/transport stand-ins, first byte is the next header, second is the length field
+	extToTCP := []byte{6, 0, 0, 0, 0, 0, 0, 0}        // len 0 -> 8 bytes, next = TCP
+	extToUDP := []byte{17, 0, 0, 0, 0, 0, 0, 0}       // len 0 -> 8 bytes, next = UDP
+	ahToUDP := []byte{17, 0, 0, 0, 0, 0, 0, 0}        // AH len 0 -> (0+2)<<2 = 8 bytes, next = UDP
+	firstFragToUDP := []byte{17, 0, 0, 1, 0, 0, 0, 1} // frag offset 0, M=1, next = UDP
+	nonFirstFrag := []byte{17, 0, 0, 9, 0, 0, 0, 1}   // frag offset non-zero, next = UDP
+	transport := []byte{0, 80, 1, 187, 0, 0, 0, 0}    // stand-in bytes, IPv6FindUpperProtocol never reads ports
+
+	tests := []struct {
+		name         string
+		nextHeader   uint8
+		payload      []byte
+		wantProto    uint8
+		wantOffset   int
+		wantFragment bool
+		wantErr      error
+	}{
+		{"plain udp", 17, transport, 17, ipv6.HeaderLen, false, nil},
+		{"hop-by-hop then tcp", 0, append(extToTCP, transport...), 6, ipv6.HeaderLen + 8, false, nil},
+		{"routing then tcp", 43, append(extToTCP, transport...), 6, ipv6.HeaderLen + 8, false, nil},
+		{"destination then udp", 60, append(extToUDP, transport...), 17, ipv6.HeaderLen + 8, false, nil},
+		{"ah then udp", 51, append(ahToUDP, transport...), 17, ipv6.HeaderLen + 8, false, nil},
+		{"first fragment walks to transport", 44, append(firstFragToUDP, transport...), 17, ipv6.HeaderLen + 8, false, nil},
+		{"non-first fragment stops", 44, append(nonFirstFrag, transport...), 17, ipv6.HeaderLen, true, nil},
+		{"unknown protocol is terminal", 132, transport, 132, ipv6.HeaderLen, false, nil}, // SCTP
+		{"truncated extension header", 0, nil, 0, ipv6.HeaderLen, false, ErrIPv6CouldNotFindPayload},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			packet := makeIPv6Packet(src, dst, tt.nextHeader, tt.payload)
+			proto, offset, isFragment, err := IPv6FindUpperProtocol(packet)
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.wantProto, proto)
+			assert.Equal(t, tt.wantOffset, offset)
+			assert.Equal(t, tt.wantFragment, isFragment)
+		})
+	}
+
+	// A packet smaller than an ipv6 header must error rather than panic reading byte 6
+	t.Run("shorter than ipv6 header", func(t *testing.T) {
+		_, _, _, err := IPv6FindUpperProtocol(make([]byte, 6))
+		assert.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	})
+}

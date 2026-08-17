@@ -115,12 +115,12 @@ func Test_newPacket_v6(t *testing.T) {
 	require.NoError(t, err)
 
 	err = newPacket(buffer.Bytes(), true, p)
-	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
 
 	// A v6 packet with a hop-by-hop extension
 	// ICMPv6 Payload (Echo Request)
 	icmpLayer := layers.ICMPv6{
-		TypeCode: layers.ICMPv6TypeEchoRequest,
+		TypeCode: layers.CreateICMPv6TypeCode(layers.ICMPv6TypeEchoRequest, 0),
 	}
 	// Hop-by-Hop Extension Header
 	hopOption := layers.IPv6HopByHopOption{}
@@ -149,12 +149,12 @@ func Test_newPacket_v6(t *testing.T) {
 	// A full IPv6 header and 1 byte in the first extension, but missing
 	// the length byte.
 	err = newPacket(buffer.Bytes()[:41], true, p)
-	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
 
 	// A full IPv6 header plus 1 full extension, but only 1 byte of the
 	// next layer, missing length byte
 	err = newPacket(buffer.Bytes()[:49], true, p)
-	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
 	err = nil
 
 	// A good ICMP packet
@@ -167,7 +167,7 @@ func Test_newPacket_v6(t *testing.T) {
 	}
 
 	icmp := layers.ICMPv6{
-		TypeCode: layers.ICMPv6TypeEchoRequest,
+		TypeCode: layers.CreateICMPv6TypeCode(layers.ICMPv6TypeEchoRequest, 0),
 		Checksum: 0x1234,
 	}
 
@@ -340,12 +340,12 @@ func Test_newPacket_v6(t *testing.T) {
 
 	// Ensure buffer bounds checking during processing, a truncated AH header can't reach the payload
 	err = newPacket(b[:41], true, p)
-	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
 
 	// Invalid AH header
 	b = buffer.Bytes()
 	err = newPacket(b, true, p)
-	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
 }
 
 func Test_newPacket_ipv6Fragment(t *testing.T) {
@@ -698,7 +698,7 @@ func Test_newPacket_v6ExtHeaderConfusion(t *testing.T) {
 	// low byte of the src port below) was read as the header length, giving next=(0+1)*8=8, which landed the
 	// walk on byte 40 (0x11), misread as NextHeader=UDP, then bytes 48-51 as ports.
 	binary.BigEndian.PutUint16(pkt[40:42], 0x1100) // SCTP src port; byte 40=0x11, byte 41=0x00
-	binary.BigEndian.PutUint16(pkt[42:44], 445)    // SCTP dst port, the real target
+	binary.BigEndian.PutUint16(pkt[42:44], 445)    // SCTP dst port, never read by parseV6
 	binary.BigEndian.PutUint16(pkt[48:50], 53)     // SCTP checksum bytes, pre-fix forged RemotePort
 	binary.BigEndian.PutUint16(pkt[50:52], 53)     // pre-fix forged LocalPort
 
@@ -708,9 +708,9 @@ func Test_newPacket_v6ExtHeaderConfusion(t *testing.T) {
 	assert.Equal(t, uint16(0), p.LocalPort)
 	assert.False(t, p.Fragment)
 
-	// Same confusion but with the unknown protocol sitting after a real extension header, so the walk state
-	// has advanced (protoAt != 6) before it hits the terminal default branch. A HopByHop of 8 bytes is walked
-	// correctly, then SCTP at offset 48 must still fail closed rather than be walked into its own payload.
+	// Same confusion, but the unknown protocol sits after a real extension header. The HopByHop is walked
+	// correctly, then SCTP must still fail closed instead of being walked into its own payload. Protocol is
+	// the only assertion that discriminates the fix here, a regression that walked SCTP would misclassify it.
 	chained := make([]byte, 60)
 	chained[0] = 0x60                                  // version 6
 	chained[6] = byte(layers.IPProtocolIPv6HopByHop)   // NextHeader = HopByHop extension
@@ -718,7 +718,7 @@ func Test_newPacket_v6ExtHeaderConfusion(t *testing.T) {
 	chained[40] = byte(layers.IPProtocolSCTP)          // HopByHop NextHeader = SCTP
 	chained[41] = 0                                    // HopByHop length 0 -> 8 bytes, SCTP begins at offset 48
 	binary.BigEndian.PutUint16(chained[48:50], 0x1100) // SCTP src port, pre-fix forged NextHeader/length bait
-	binary.BigEndian.PutUint16(chained[50:52], 445)    // SCTP dst port, the real target
+	binary.BigEndian.PutUint16(chained[50:52], 445)    // SCTP dst port, never read by parseV6
 
 	require.NoError(t, newPacket(chained, true, p))
 	assert.Equal(t, uint8(layers.IPProtocolSCTP), p.Protocol, "must fail closed on the unknown protocol after the extension header")
