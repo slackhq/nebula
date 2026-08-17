@@ -275,6 +275,16 @@ func (f *Interface) sendTo(t header.MessageType, st header.MessageSubType, ci *C
 	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out, 0)
 }
 
+// dropExhausted releases the caller's write lock and logs once, on the crossing send, for a spent tunnel.
+func (f *Interface) dropExhausted(cs *ConnectionState, hostinfo *HostInfo, c uint64, msg string) {
+	if noiseutil.EncryptLockNeeded {
+		cs.writeLock.Unlock()
+	}
+	if c == RejectAfterMessages {
+		hostinfo.logger(f.l).Error(msg)
+	}
+}
+
 // SendVia sends a payload through a Relay tunnel. No authentication or encryption is done
 // to the payload for the ultimate target host, making this a useful method for sending
 // handshake messages to peers through relay tunnels.
@@ -294,7 +304,11 @@ func (f *Interface) SendVia(via *HostInfo,
 		// NOTE: for goboring AESGCMTLS we need to lock because of the nonce check
 		via.ConnectionState.writeLock.Lock()
 	}
-	c := via.ConnectionState.messageCounter.Add(1)
+	c, ok := via.ConnectionState.NextMessageCounter()
+	if !ok {
+		f.dropExhausted(via.ConnectionState, via, c, "Dropping outbound relay packets, tunnel message counter is exhausted")
+		return
+	}
 
 	out = header.Encode(out, header.Version, header.Message, header.MessageRelay, relay.RemoteIndex, c)
 	f.connectionManager.Out(via)
@@ -361,7 +375,11 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		// NOTE: for goboring AESGCMTLS we need to lock because of the nonce check
 		ci.writeLock.Lock()
 	}
-	c := ci.messageCounter.Add(1)
+	c, ok := ci.NextMessageCounter()
+	if !ok {
+		f.dropExhausted(ci, hostinfo, c, "Dropping outbound packets, tunnel message counter is exhausted")
+		return
+	}
 
 	//l.WithField("trace", string(debug.Stack())).Error("out Header ", &Header{Version, t, st, 0, hostinfo.remoteIndexId, c}, p)
 	out = header.Encode(out, header.Version, t, st, hostinfo.remoteIndexId, c)

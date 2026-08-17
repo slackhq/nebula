@@ -12,7 +12,18 @@ import (
 	"github.com/slackhq/nebula/noiseutil"
 )
 
-const ReplayWindow = 1024
+const (
+	ReplayWindow = 1024
+
+	// RehandshakeAfterMessages is the outbound counter where the connection manager re-handshakes to roll keys.
+	RehandshakeAfterMessages = uint64(1) << 32
+
+	// RejectAfterMessages is the nonce ceiling enforced by noiseutil; a tunnel here is deleted locally, not notified.
+	RejectAfterMessages = noiseutil.RejectAfterMessages
+)
+
+// RehandshakeAfterMessages must stay below RejectAfterMessages so tunnels roll before the hard send stop.
+const _ = RejectAfterMessages - RehandshakeAfterMessages
 
 type ConnectionState struct {
 	eKey           noiseutil.CipherState
@@ -52,6 +63,16 @@ func (cs *ConnectionState) MarshalJSON() ([]byte, error) {
 		"initiator":       cs.initiator,
 		"message_counter": cs.messageCounter.Load(),
 	})
+}
+
+// NextMessageCounter reserves the next outbound counter, pinning at RejectAfterMessages so it can never wrap.
+func (cs *ConnectionState) NextMessageCounter() (uint64, bool) {
+	c := cs.messageCounter.Add(1)
+	if c >= RejectAfterMessages {
+		cs.messageCounter.Store(RejectAfterMessages)
+		return c, false
+	}
+	return c, true
 }
 
 func (cs *ConnectionState) Curve() cert.Curve {

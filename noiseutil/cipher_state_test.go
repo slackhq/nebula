@@ -89,6 +89,20 @@ func roundtrip(t *testing.T, enc, dec CipherState) {
 	assert.Equal(t, 16, enc.Overhead())
 }
 
+func TestEncryptRejectsExhaustedCounter(t *testing.T) {
+	encA, _ := buildCipherStates(t, CipherAESGCM)
+	encC, _ := buildCipherStates(t, noise.CipherChaChaPoly)
+	nb := make([]byte, 12)
+
+	for _, cs := range []CipherState{NewCipherStateAESGCM(encA), NewCipherStateChaChaPoly(encC)} {
+		_, err := cs.EncryptDanger(nil, nil, []byte("x"), RejectAfterMessages-1, nb)
+		require.NoError(t, err)
+
+		_, err = cs.EncryptDanger(nil, nil, []byte("x"), RejectAfterMessages, nb)
+		require.ErrorIs(t, err, ErrMessageCounterExhausted)
+	}
+}
+
 func BenchmarkCipherStateEncryptAESGCM(b *testing.B) {
 	enc, _ := buildCipherStatesB(b, CipherAESGCM)
 	benchEncryptCipherState(b, NewCipherState(enc, CipherAESGCM))

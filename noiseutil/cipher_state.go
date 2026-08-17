@@ -1,10 +1,18 @@
 package noiseutil
 
 import (
+	"errors"
 	"fmt"
+	"math"
 
 	"github.com/flynn/noise"
 )
+
+// RejectAfterMessages is the nonce at which we refuse to encrypt, keeping 2^32 of headroom below wrap.
+const RejectAfterMessages = math.MaxUint64 - (uint64(1) << 32)
+
+// ErrMessageCounterExhausted is returned by EncryptDanger once the nonce reaches RejectAfterMessages.
+var ErrMessageCounterExhausted = errors.New("message counter exhausted")
 
 // CipherState is the post-handshake AEAD cipher used for the data plane.
 // Each supported cipher has its own concrete implementation in this package with the nonce endianness hardcoded,

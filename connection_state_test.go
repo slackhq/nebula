@@ -10,6 +10,7 @@ import (
 	ct "github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -77,6 +78,43 @@ func runTestHandshake(t *testing.T) (initR, respR *handshake.Result) {
 	require.NotNil(t, initR)
 
 	return initR, respR
+}
+
+func TestConnectionState_NextMessageCounter(t *testing.T) {
+	cs := &ConnectionState{}
+	cs.messageCounter.Store(RejectAfterMessages - 2)
+
+	c, ok := cs.NextMessageCounter()
+	assert.True(t, ok)
+	assert.Equal(t, RejectAfterMessages-1, c)
+
+	// Hitting the limit refuses and pins the counter there
+	c, ok = cs.NextMessageCounter()
+	assert.False(t, ok)
+	assert.Equal(t, RejectAfterMessages, c)
+	assert.Equal(t, RejectAfterMessages, cs.messageCounter.Load())
+
+	// Continued send attempts stay refused and the counter never wraps
+	for i := 0; i < 10; i++ {
+		_, ok = cs.NextMessageCounter()
+		assert.False(t, ok)
+	}
+	assert.Equal(t, RejectAfterMessages, cs.messageCounter.Load())
+}
+
+// TestSendNoMetricsDropsExhausted drives the real send path to the exhausted drop; nil f.writers means a
+// fall-through to a write panics. The boring-only writeLock unlock in dropExhausted is not exercised here.
+func TestSendNoMetricsDropsExhausted(t *testing.T) {
+	initR, _ := runTestHandshake(t)
+	ci := newConnectionStateFromResult(initR)
+	ci.messageCounter.Store(RejectAfterMessages - 1)
+
+	f := &Interface{l: test.NewLogger()}
+	hostinfo := &HostInfo{vpnAddrs: []netip.Addr{netip.MustParseAddr("10.0.0.1")}, ConnectionState: ci}
+
+	// The crossing send is refused and the counter is pinned rather than advancing to a real write.
+	f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, []byte{}, make([]byte, 12), make([]byte, mtu), 0)
+	assert.Equal(t, RejectAfterMessages, ci.messageCounter.Load())
 }
 
 func TestNewConnectionStateFromResult(t *testing.T) {
