@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -374,7 +375,7 @@ func (r *R) RenderHostmaps(title string, controls ...*nebula.Control) {
 }
 
 func (r *R) renderHostmaps(title string) {
-	c := maps.Values(r.controls)
+	c := slices.AppendSeq(make([]*nebula.Control, 0, len(r.controls)), maps.Values(r.controls))
 	sort.SliceStable(c, func(i, j int) bool {
 		return c[i].GetVpnAddrs()[0].Compare(c[j].GetVpnAddrs()[0]) > 0
 	})
