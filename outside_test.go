@@ -213,11 +213,15 @@ func Test_newPacket_v6(t *testing.T) {
 	assert.Equal(t, uint16(0), p.LocalPort)
 	assert.False(t, p.Fragment)
 
-	// An unknown protocol packet
+	// An unknown protocol packet, we don't dissect it so we fail closed on its true protocol with no ports
 	b = buffer.Bytes()
 	b[6] = 255 // 255 is a reserved protocol number
 	err = newPacket(b, true, p)
-	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	require.NoError(t, err)
+	assert.Equal(t, uint8(255), p.Protocol)
+	assert.Equal(t, uint16(0), p.RemotePort)
+	assert.Equal(t, uint16(0), p.LocalPort)
+	assert.False(t, p.Fragment)
 
 	// A good UDP packet
 	ip = layers.IPv6{
@@ -334,9 +338,9 @@ func Test_newPacket_v6(t *testing.T) {
 	assert.Equal(t, uint16(22), p.LocalPort)
 	assert.False(t, p.Fragment)
 
-	// Ensure buffer bounds checking during processing
+	// Ensure buffer bounds checking during processing, a truncated AH header can't reach the payload
 	err = newPacket(b[:41], true, p)
-	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
+	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
 
 	// Invalid AH header
 	b = buffer.Bytes()
@@ -674,4 +678,51 @@ func Test_newPacket_v6ExtHeaderOverflow(t *testing.T) {
 	// LocalPort is the destination port for incoming traffic. It must be the real port (22)
 	// the host delivers to, not the forged 443 at the overflowed offset.
 	assert.Equal(t, uint16(22), p.LocalPort, "firewall must parse the real transport header, not the overflowed offset")
+}
+
+// Test_newPacket_v6ExtHeaderConfusion is a regression test for parseV6 walking any unrecognized
+// Next Header as if it were an ipv6 extension header. A real upper layer protocol Nebula doesn't
+// dissect (SCTP here) is not walkable, so applying the (len+1)*8 formula marched into the SCTP
+// payload and landed on a byte that looked like UDP, forging a protocol/port pair the firewall
+// would trust while the host delivered the real SCTP datagram. The fix fails closed: the packet
+// is classified as its true protocol with no ports, so it only matches an `any` rule.
+func Test_newPacket_v6ExtHeaderConfusion(t *testing.T) {
+	p := &firewall.Packet{}
+
+	pkt := make([]byte, 52)
+	pkt[0] = 0x60                        // version 6
+	pkt[6] = byte(layers.IPProtocolSCTP) // NextHeader = SCTP, a real protocol, not an extension header
+	pkt[7] = 64                          // hop limit
+
+	// Real SCTP header at offset 40. Pre-fix parseV6 walked SCTP as an extension header: byte 41 (0x00, the
+	// low byte of the src port below) was read as the header length, giving next=(0+1)*8=8, which landed the
+	// walk on byte 40 (0x11), misread as NextHeader=UDP, then bytes 48-51 as ports.
+	binary.BigEndian.PutUint16(pkt[40:42], 0x1100) // SCTP src port; byte 40=0x11, byte 41=0x00
+	binary.BigEndian.PutUint16(pkt[42:44], 445)    // SCTP dst port, the real target
+	binary.BigEndian.PutUint16(pkt[48:50], 53)     // SCTP checksum bytes, pre-fix forged RemotePort
+	binary.BigEndian.PutUint16(pkt[50:52], 53)     // pre-fix forged LocalPort
+
+	require.NoError(t, newPacket(pkt, true, p))
+	assert.Equal(t, uint8(layers.IPProtocolSCTP), p.Protocol, "must classify as the true protocol, not the forged UDP")
+	assert.Equal(t, uint16(0), p.RemotePort)
+	assert.Equal(t, uint16(0), p.LocalPort)
+	assert.False(t, p.Fragment)
+
+	// Same confusion but with the unknown protocol sitting after a real extension header, so the walk state
+	// has advanced (protoAt != 6) before it hits the terminal default branch. A HopByHop of 8 bytes is walked
+	// correctly, then SCTP at offset 48 must still fail closed rather than be walked into its own payload.
+	chained := make([]byte, 60)
+	chained[0] = 0x60                             // version 6
+	chained[6] = byte(layers.IPProtocolIPv6HopByHop) // NextHeader = HopByHop extension
+	chained[7] = 64                              // hop limit
+	chained[40] = byte(layers.IPProtocolSCTP)    // HopByHop NextHeader = SCTP
+	chained[41] = 0                              // HopByHop length 0 -> 8 bytes, SCTP begins at offset 48
+	binary.BigEndian.PutUint16(chained[48:50], 0x1100) // SCTP src port, pre-fix forged NextHeader/length bait
+	binary.BigEndian.PutUint16(chained[50:52], 445)    // SCTP dst port, the real target
+
+	require.NoError(t, newPacket(chained, true, p))
+	assert.Equal(t, uint8(layers.IPProtocolSCTP), p.Protocol, "must fail closed on the unknown protocol after the extension header")
+	assert.Equal(t, uint16(0), p.RemotePort)
+	assert.Equal(t, uint16(0), p.LocalPort)
+	assert.False(t, p.Fragment)
 }

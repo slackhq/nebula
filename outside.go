@@ -405,21 +405,25 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 		case layers.IPProtocolAH:
 			// Auth headers, used by IPSec, have a different meaning for header length
 			if dataLen <= offset+1 {
-				break
+				return ErrIPv6CouldNotFindPayload
 			}
 			next = (int(data[offset+1]) + 2) << 2
 
-		default:
-			// Normal ipv6 header length processing
+		case layers.IPProtocolIPv6HopByHop, layers.IPProtocolIPv6Routing, layers.IPProtocolIPv6Destination:
+			// Real ipv6 extension headers, walk past them to find the transport
 			if dataLen <= offset+1 {
-				break
+				return ErrIPv6CouldNotFindPayload
 			}
 			next = (int(data[offset+1]) + 1) << 3
-		}
 
-		if next <= 0 {
-			// Safety check, each ipv6 header has to be at least 8 bytes
-			next = 8
+		default:
+			// Anything else is a real upper layer protocol we don't dissect, so stop here and fail closed.
+			// Walking it like an extension header would let a crafted payload forge a protocol/port pair.
+			fp.Protocol = uint8(proto)
+			fp.RemotePort = 0
+			fp.LocalPort = 0
+			fp.Fragment = false
+			return nil
 		}
 
 		protoAt = offset
