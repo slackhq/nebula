@@ -712,11 +712,11 @@ func Test_newPacket_v6ExtHeaderConfusion(t *testing.T) {
 	// has advanced (protoAt != 6) before it hits the terminal default branch. A HopByHop of 8 bytes is walked
 	// correctly, then SCTP at offset 48 must still fail closed rather than be walked into its own payload.
 	chained := make([]byte, 60)
-	chained[0] = 0x60                             // version 6
-	chained[6] = byte(layers.IPProtocolIPv6HopByHop) // NextHeader = HopByHop extension
-	chained[7] = 64                              // hop limit
-	chained[40] = byte(layers.IPProtocolSCTP)    // HopByHop NextHeader = SCTP
-	chained[41] = 0                              // HopByHop length 0 -> 8 bytes, SCTP begins at offset 48
+	chained[0] = 0x60                                  // version 6
+	chained[6] = byte(layers.IPProtocolIPv6HopByHop)   // NextHeader = HopByHop extension
+	chained[7] = 64                                    // hop limit
+	chained[40] = byte(layers.IPProtocolSCTP)          // HopByHop NextHeader = SCTP
+	chained[41] = 0                                    // HopByHop length 0 -> 8 bytes, SCTP begins at offset 48
 	binary.BigEndian.PutUint16(chained[48:50], 0x1100) // SCTP src port, pre-fix forged NextHeader/length bait
 	binary.BigEndian.PutUint16(chained[50:52], 445)    // SCTP dst port, the real target
 
