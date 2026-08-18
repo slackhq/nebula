@@ -6,11 +6,13 @@ package router
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -22,7 +24,6 @@ import (
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/udp"
-	"golang.org/x/exp/maps"
 )
 
 // outNatKey is the (from, to) pair used by outNat. Comparable struct, so it works as a map key without the
@@ -374,7 +375,7 @@ func (r *R) RenderHostmaps(title string, controls ...*nebula.Control) {
 }
 
 func (r *R) renderHostmaps(title string) {
-	c := maps.Values(r.controls)
+	c := slices.AppendSeq(make([]*nebula.Control, 0, len(r.controls)), maps.Values(r.controls))
 	sort.SliceStable(c, func(i, j int) bool {
 		return c[i].GetVpnAddrs()[0].Compare(c[j].GetVpnAddrs()[0]) > 0
 	})
