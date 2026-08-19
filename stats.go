@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"reflect"
 	"runtime"
 	"strconv"
 	"sync"
@@ -50,7 +51,8 @@ type statsRuntime struct {
 }
 
 // statsConfig is the snapshot of stats-related config that drives the runtime.
-// It is comparable with == so reload can detect "no change" cheaply.
+// reload compares it with reflect.DeepEqual to detect "no change" (prom.listen
+// is a slice, so the struct isn't comparable with ==).
 type statsConfig struct {
 	typ      string
 	interval time.Duration
@@ -69,7 +71,9 @@ type graphiteConfig struct {
 }
 
 type promConfig struct {
-	listen    string
+	// listen holds one or more "host:port" bind addresses. A single string in
+	// config yields one entry; a list yields several (all served together).
+	listen    []string
 	path      string
 	namespace string
 	subsystem string
@@ -118,7 +122,7 @@ func (s *statsServer) reload(c *config.C, initial bool) error {
 	enabled := newCfg.typ != "" && newCfg.typ != "none"
 
 	s.runMu.Lock()
-	sameCfg := s.runCfg != nil && *s.runCfg == newCfg
+	sameCfg := s.runCfg != nil && reflect.DeepEqual(*s.runCfg, newCfg)
 	s.runCfg = &newCfg
 	running := s.run != nil
 	s.runMu.Unlock()
@@ -166,7 +170,7 @@ func (s *statsServer) Start() {
 		// Graphite: no HTTP listener to serve; block until teardown.
 		<-runCtx.Done()
 	} else {
-		cleanExit = s.serveListener(listener)
+		cleanExit = s.serveListeners(listener, cfg.prom.listen)
 	}
 
 	// Clear our runtime only if nothing has replaced it. Stop races through
@@ -186,20 +190,35 @@ func (s *statsServer) Start() {
 	s.runMu.Unlock()
 }
 
-// serveListener runs ListenAndServe and ensures ctx cancellation unblocks it.
-// Returns true if the listener exited cleanly (Stop, ctx cancellation, or any
-// other http.ErrServerClosed path), false on an unexpected error.
-func (s *statsServer) serveListener(listener *http.Server) bool {
-	// Per-invocation watcher: ctx cancellation triggers a listener shutdown
-	// which in turn unblocks ListenAndServe. Closing `done` on exit keeps
-	// the watcher from outliving this call.
+// serveListeners binds every configured address up front and serves them all
+// from one http.Server. Binding is all-or-nothing: a single bind failure closes
+// the already-bound listeners and reports an unclean exit, so a same-config
+// SIGHUP can retry. ctx cancellation (or Stop) shuts the server down, which
+// closes every listener it is serving, unblocking all the Serve goroutines.
+func (s *statsServer) serveListeners(srv *http.Server, addrs []string) bool {
+	listeners := make([]net.Listener, 0, len(addrs))
+	for _, a := range addrs {
+		ln, err := net.Listen("tcp", a)
+		if err != nil {
+			s.l.Error("Failed to bind prometheus stats listener", "addr", a, "error", err)
+			for _, l := range listeners {
+				_ = l.Close()
+			}
+			return false
+		}
+		listeners = append(listeners, ln)
+	}
+
+	// Per-invocation watcher: ctx cancellation triggers a server shutdown that
+	// closes all served listeners. Closing `done` on exit keeps the watcher
+	// from outliving this call.
 	done := make(chan struct{})
 	go func() {
 		select {
 		case <-s.ctx.Done():
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if err := listener.Shutdown(shutdownCtx); err != nil {
+			if err := srv.Shutdown(shutdownCtx); err != nil {
 				s.l.Warn("Failed to shut down prometheus stats listener", "error", err)
 			}
 		case <-done:
@@ -207,13 +226,26 @@ func (s *statsServer) serveListener(listener *http.Server) bool {
 	}()
 	defer close(done)
 
-	s.l.Info("Starting prometheus stats listener", "addr", listener.Addr)
-	err := listener.ListenAndServe()
-	if err == nil || errors.Is(err, http.ErrServerClosed) {
-		return true
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	cleanExit := true
+	for _, ln := range listeners {
+		s.l.Info("Starting prometheus stats listener", "addr", ln.Addr())
+		wg.Add(1)
+		go func(ln net.Listener) {
+			defer wg.Done()
+			err := srv.Serve(ln)
+			if err == nil || errors.Is(err, http.ErrServerClosed) {
+				return
+			}
+			s.l.Error("Prometheus stats listener exited", "addr", ln.Addr(), "error", err)
+			mu.Lock()
+			cleanExit = false
+			mu.Unlock()
+		}(ln)
 	}
-	s.l.Error("Prometheus stats listener exited", "error", err)
-	return false
+	wg.Wait()
+	return cleanExit
 }
 
 // Stop tears down the active runtime, if any. Idempotent.
@@ -301,7 +333,9 @@ func (s *statsServer) buildRuntime(cfg statsConfig) ([]func(), *http.Server) {
 		errLog := slog.NewLogLogger(s.l.Handler(), slog.LevelError)
 		mux := http.NewServeMux()
 		mux.Handle(cfg.prom.path, promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: errLog}))
-		return captureFns, &http.Server{Addr: cfg.prom.listen, Handler: mux}
+		// Addr is unused: serveListeners binds each address explicitly via
+		// net.Listen and serves them with srv.Serve.
+		return captureFns, &http.Server{Handler: mux}
 	}
 	return captureFns, nil
 }
@@ -349,8 +383,8 @@ func loadStatsConfig(c *config.C) (statsConfig, error) {
 		cfg.graphite.resolvedAddr = addr.String()
 		cfg.graphite.prefix = c.GetString("stats.prefix", "nebula")
 	case "prometheus":
-		cfg.prom.listen = c.GetString("stats.listen", "")
-		if cfg.prom.listen == "" {
+		cfg.prom.listen = getListenAddrs(c, "stats.listen")
+		if len(cfg.prom.listen) == 0 {
 			return cfg, errors.New("stats.listen should not be empty")
 		}
 		cfg.prom.path = c.GetString("stats.path", "")
