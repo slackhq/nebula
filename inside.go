@@ -275,11 +275,9 @@ func (f *Interface) sendTo(t header.MessageType, st header.MessageSubType, ci *C
 	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out, 0)
 }
 
-// dropExhausted releases the caller's write lock and logs once, on the crossing send, for a spent tunnel.
-func (f *Interface) dropExhausted(cs *ConnectionState, hostinfo *HostInfo, c uint64, msg string) {
-	if noiseutil.EncryptLockNeeded {
-		cs.writeLock.Unlock()
-	}
+// dropExhausted records an exhaustion drop and logs once, on the crossing send, for a spent tunnel.
+func (f *Interface) dropExhausted(hostinfo *HostInfo, c uint64, msg string) {
+	f.messageMetrics.TxExhausted(1)
 	if c == RejectAfterMessages {
 		hostinfo.logger(f.l).Error(msg)
 	}
@@ -306,7 +304,10 @@ func (f *Interface) SendVia(via *HostInfo,
 	}
 	c, ok := via.ConnectionState.NextMessageCounter()
 	if !ok {
-		f.dropExhausted(via.ConnectionState, via, c, "Dropping outbound relay packets, tunnel message counter is exhausted")
+		if noiseutil.EncryptLockNeeded {
+			via.ConnectionState.writeLock.Unlock()
+		}
+		f.dropExhausted(via, c, "Dropping outbound relay packets, tunnel message counter is exhausted")
 		return
 	}
 
@@ -377,7 +378,10 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	}
 	c, ok := ci.NextMessageCounter()
 	if !ok {
-		f.dropExhausted(ci, hostinfo, c, "Dropping outbound packets, tunnel message counter is exhausted")
+		if noiseutil.EncryptLockNeeded {
+			ci.writeLock.Unlock()
+		}
+		f.dropExhausted(hostinfo, c, "Dropping outbound packets, tunnel message counter is exhausted")
 		return
 	}
 

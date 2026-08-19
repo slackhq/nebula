@@ -8,8 +8,11 @@ import (
 	"github.com/flynn/noise"
 )
 
-// RejectAfterMessages is the nonce at which we refuse to encrypt, keeping 2^32 of headroom below wrap.
-const RejectAfterMessages = math.MaxUint64 - (uint64(1) << 32)
+// RejectHeadroom is the wrap gap for senders racing the counter, sized large enough for any routine count.
+const RejectHeadroom = uint64(1) << 40
+
+// RejectAfterMessages is the nonce ceiling: encrypting stops RejectHeadroom short of the wrap.
+const RejectAfterMessages = math.MaxUint64 - RejectHeadroom
 
 // ErrMessageCounterExhausted is returned by EncryptDanger once the nonce reaches RejectAfterMessages.
 var ErrMessageCounterExhausted = errors.New("message counter exhausted")

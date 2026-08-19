@@ -15,8 +15,8 @@ import (
 const (
 	ReplayWindow = 1024
 
-	// RehandshakeAfterMessages is the outbound counter where the connection manager re-handshakes to roll keys.
-	RehandshakeAfterMessages = uint64(1) << 32
+	// RehandshakeAfterMessages rolls keys inside the AES-GCM data-volume margin (~2^-36 advantage at 64KB frames).
+	RehandshakeAfterMessages = uint64(1) << 34
 
 	// RejectAfterMessages is the nonce ceiling enforced by noiseutil; a tunnel here is deleted locally, not notified.
 	RejectAfterMessages = noiseutil.RejectAfterMessages
@@ -65,7 +65,7 @@ func (cs *ConnectionState) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// NextMessageCounter reserves the next outbound counter, pinning at RejectAfterMessages so it can never wrap.
+// NextMessageCounter reserves the next 1-based counter; RejectAfterMessages is the first we refuse, pinned to not wrap.
 func (cs *ConnectionState) NextMessageCounter() (uint64, bool) {
 	c := cs.messageCounter.Add(1)
 	if c >= RejectAfterMessages {

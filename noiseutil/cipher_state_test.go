@@ -1,6 +1,7 @@
 package noiseutil
 
 import (
+	"math"
 	"testing"
 
 	"github.com/flynn/noise"
@@ -90,6 +91,10 @@ func roundtrip(t *testing.T, enc, dec CipherState) {
 }
 
 func TestEncryptRejectsExhaustedCounter(t *testing.T) {
+	// Pin the headroom below the uint64 wrap so a typo can't silently move the ceiling.
+	require.Equal(t, uint64(1)<<40, RejectHeadroom)
+	require.Equal(t, math.MaxUint64-RejectHeadroom, RejectAfterMessages)
+
 	encA, _ := buildCipherStates(t, CipherAESGCM)
 	encC, _ := buildCipherStates(t, noise.CipherChaChaPoly)
 	nb := make([]byte, 12)

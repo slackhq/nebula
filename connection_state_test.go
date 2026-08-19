@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/flynn/noise"
+	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
 	ct "github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/handshake"
@@ -102,19 +103,20 @@ func TestConnectionState_NextMessageCounter(t *testing.T) {
 	assert.Equal(t, RejectAfterMessages, cs.messageCounter.Load())
 }
 
-// TestSendNoMetricsDropsExhausted drives the real send path to the exhausted drop; nil f.writers means a
-// fall-through to a write panics. The boring-only writeLock unlock in dropExhausted is not exercised here.
+// TestSendNoMetricsDropsExhausted drives the send path to the exhausted drop; metric and out flag prove it.
 func TestSendNoMetricsDropsExhausted(t *testing.T) {
 	initR, _ := runTestHandshake(t)
 	ci := newConnectionStateFromResult(initR)
 	ci.messageCounter.Store(RejectAfterMessages - 1)
 
-	f := &Interface{l: test.NewLogger()}
+	f := &Interface{l: test.NewLogger(), messageMetrics: &MessageMetrics{txExhausted: metrics.NewCounter()}}
 	hostinfo := &HostInfo{vpnAddrs: []netip.Addr{netip.MustParseAddr("10.0.0.1")}, ConnectionState: ci}
 
-	// The crossing send is refused and the counter is pinned rather than advancing to a real write.
 	f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, []byte{}, make([]byte, 12), make([]byte, mtu), 0)
-	assert.Equal(t, RejectAfterMessages, ci.messageCounter.Load())
+
+	// The crossing send is refused: it records an exhaustion drop and never reaches connectionManager.Out.
+	assert.Equal(t, int64(1), f.messageMetrics.txExhausted.Count())
+	assert.False(t, hostinfo.out.Load())
 }
 
 func TestNewConnectionStateFromResult(t *testing.T) {

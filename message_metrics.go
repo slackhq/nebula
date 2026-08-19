@@ -14,7 +14,8 @@ type MessageMetrics struct {
 	rxUnknown metrics.Counter
 	txUnknown metrics.Counter
 
-	rxInvalid metrics.Counter
+	rxInvalid   metrics.Counter
+	txExhausted metrics.Counter
 }
 
 func (m *MessageMetrics) Rx(t header.MessageType, s header.MessageSubType, i int64) {
@@ -41,6 +42,13 @@ func (m *MessageMetrics) RxInvalid(i int64) {
 	}
 }
 
+// TxExhausted counts outbound packets dropped because the tunnel's message counter is spent.
+func (m *MessageMetrics) TxExhausted(i int64) {
+	if m != nil && m.txExhausted != nil {
+		m.txExhausted.Inc(i)
+	}
+}
+
 func newMessageMetrics() *MessageMetrics {
 	gen := func(t string) [][]metrics.Counter {
 		return [][]metrics.Counter{
@@ -61,9 +69,10 @@ func newMessageMetrics() *MessageMetrics {
 		rx: gen("rx"),
 		tx: gen("tx"),
 
-		rxUnknown: metrics.GetOrRegisterCounter("messages.rx.other", nil),
-		txUnknown: metrics.GetOrRegisterCounter("messages.tx.other", nil),
-		rxInvalid: metrics.GetOrRegisterCounter("messages.rx.invalid", nil),
+		rxUnknown:   metrics.GetOrRegisterCounter("messages.rx.other", nil),
+		txUnknown:   metrics.GetOrRegisterCounter("messages.tx.other", nil),
+		rxInvalid:   metrics.GetOrRegisterCounter("messages.rx.invalid", nil),
+		txExhausted: metrics.GetOrRegisterCounter("messages.tx.exhausted", nil),
 	}
 }
 
