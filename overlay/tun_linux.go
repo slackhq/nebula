@@ -5,6 +5,7 @@ package overlay
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -483,7 +484,16 @@ func (t *tun) addIPs(link netlink.Link) error {
 	//iterate over remainder, remove whoever shouldn't be there
 	al, err := netlink.AddrList(link, netlink.FAMILY_ALL)
 	if err != nil {
-		return fmt.Errorf("failed to get tun address list: %s", err)
+		//RTM_GETADDR dumps the whole system, so any concurrent address change
+		//interrupts it - including the kernel's async tentative->preferred
+		//flip of an IPv6 address the AddrReplace calls above just added,
+		//which makes this a race against our own setup. Partial results are
+		//still returned; the worst case is a stale address surviving until
+		//the next config reload, which beats failing startup over it.
+		if !errors.Is(err, netlink.ErrDumpInterrupted) {
+			return fmt.Errorf("failed to get tun address list: %s", err)
+		}
+		t.l.Warn("tun address list dump was interrupted, stale addresses may remain")
 	}
 
 	for i := range al {
