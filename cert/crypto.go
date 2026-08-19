@@ -227,17 +227,15 @@ func UnmarshalNebulaEncryptedData(b []byte) (*NebulaEncryptedData, error) {
 }
 
 func unmarshalArgon2Parameters(params *RawNebulaArgon2Parameters) (*Argon2Parameters, error) {
-	if params.Version < math.MinInt32 || params.Version > math.MaxInt32 {
-		return nil, fmt.Errorf("Argon2Parameters Version must be at least %d and no more than %d", math.MinInt32, math.MaxInt32)
+	if params.Memory == 0 {
+		return nil, fmt.Errorf("Argon2Parameters Memory must be greater than 0")
 	}
-	if params.Memory <= 0 || params.Memory > math.MaxUint32 {
-		return nil, fmt.Errorf("Argon2Parameters Memory must be be greater than 0 and no more than %d KiB", uint32(math.MaxUint32))
+	// Parallelism is uint32 in the proto but uint8 in the struct cast below.
+	if params.Parallelism == 0 || params.Parallelism > math.MaxUint8 {
+		return nil, fmt.Errorf("Argon2Parameters Parallelism must be greater than 0 and no more than %d", math.MaxUint8)
 	}
-	if params.Parallelism <= 0 || params.Parallelism > math.MaxUint8 {
-		return nil, fmt.Errorf("Argon2Parameters Parallelism must be be greater than 0 and no more than %d", math.MaxUint8)
-	}
-	if params.Iterations <= 0 || params.Iterations > math.MaxUint32 {
-		return nil, fmt.Errorf("-argon-iterations must be be greater than 0 and no more than %d", uint32(math.MaxUint32))
+	if params.Iterations == 0 {
+		return nil, fmt.Errorf("-argon-iterations must be greater than 0")
 	}
 
 	return &Argon2Parameters{

@@ -312,3 +312,99 @@ func (pr *trackingPasswordReader) ReadPassword() ([]byte, error) {
 	pr.calls++
 	return []byte(""), nil
 }
+
+func TestParseArgonParameters_Validation(t *testing.T) {
+	tests := []struct {
+		name             string
+		memory           uint
+		parallelism      uint
+		iterations       uint
+		wantErr          bool
+		wantErrSubstring string
+		wantOut          struct {
+			memory      uint32
+			parallelism uint8
+			iterations  uint32
+		}
+	}{
+		{
+			name:             "memory == 0 is rejected",
+			memory:           0,
+			parallelism:      4,
+			iterations:       3,
+			wantErr:          true,
+			wantErrSubstring: "-argon-memory",
+		},
+		{
+			name:             "parallelism == 0 is rejected",
+			memory:           65536,
+			parallelism:      0,
+			iterations:       3,
+			wantErr:          true,
+			wantErrSubstring: "-argon-parallelism",
+		},
+		{
+			name:             "parallelism > MaxUint8 is rejected (cast on next line would truncate)",
+			memory:           65536,
+			parallelism:      256,
+			iterations:       3,
+			wantErr:          true,
+			wantErrSubstring: "-argon-parallelism",
+		},
+		{
+			name:             "parallelism = 1000 is rejected (mid-range silent-truncation hazard)",
+			memory:           65536,
+			parallelism:      1000,
+			iterations:       3,
+			wantErr:          true,
+			wantErrSubstring: "-argon-parallelism",
+		},
+		{
+			name:             "iterations == 0 is rejected",
+			memory:           65536,
+			parallelism:      4,
+			iterations:       0,
+			wantErr:          true,
+			wantErrSubstring: "-argon-iterations",
+		},
+		{
+			name:        "valid params construct an Argon2Parameters",
+			memory:      65536,
+			parallelism: 4,
+			iterations:  3,
+			wantOut: struct {
+				memory      uint32
+				parallelism uint8
+				iterations  uint32
+			}{65536, 4, 3},
+		},
+		{
+			name:        "max-uint8 parallelism is accepted (boundary just below the rejection threshold)",
+			memory:      65536,
+			parallelism: 255,
+			iterations:  3,
+			wantOut: struct {
+				memory      uint32
+				parallelism uint8
+				iterations  uint32
+			}{65536, 255, 3},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseArgonParameters(tc.memory, tc.parallelism, tc.iterations)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.wantErrSubstring,
+					"error message must name the offending flag so the user can find it")
+				require.Nil(t, got)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.Equal(t, tc.wantOut.memory, got.Memory)
+			assert.Equal(t, tc.wantOut.parallelism, got.Parallelism)
+			assert.Equal(t, tc.wantOut.iterations, got.Iterations)
+		})
+	}
+}
