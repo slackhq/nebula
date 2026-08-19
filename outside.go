@@ -377,7 +377,6 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 
 	default:
 		// ESP, NoNextHeader, and any upper layer protocol we don't dissect (SCTP, GRE, etc.). Fail closed:
-		// keep the true protocol with no ports so it can only match an `any` rule, never a forged port pair.
 		fp.RemotePort = 0
 		fp.LocalPort = 0
 	}
