@@ -309,8 +309,6 @@ func newCertStateFromConfig(c *config.C, cipher string) (*CertState, error) {
 
 	if strings.Contains(pubPathOrPEM, "-----BEGIN") {
 		rawCert = []byte(pubPathOrPEM)
-		pubPathOrPEM = "<inline>"
-
 	} else {
 		rawCert, err = os.ReadFile(pubPathOrPEM)
 		if err != nil {
