@@ -106,7 +106,8 @@ func TestConnectionState_NextMessageCounter(t *testing.T) {
 // TestSendNoMetricsDropsExhausted drives the send path to the exhausted drop; metric and out flag prove it.
 func TestSendNoMetricsDropsExhausted(t *testing.T) {
 	initR, _ := runTestHandshake(t)
-	ci := newConnectionStateFromResult(initR)
+	ci, err := newConnectionStateFromResult(initR)
+	require.NoError(t, err)
 	ci.messageCounter.Store(RejectAfterMessages - 1)
 
 	f := &Interface{l: test.NewLogger(), messageMetrics: &MessageMetrics{txExhausted: metrics.NewCounter()}}
@@ -123,7 +124,8 @@ func TestNewConnectionStateFromResult(t *testing.T) {
 	initR, respR := runTestHandshake(t)
 
 	t.Run("initiator", func(t *testing.T) {
-		ci := newConnectionStateFromResult(initR)
+		ci, err := newConnectionStateFromResult(initR)
+		require.NoError(t, err)
 		assert.True(t, ci.initiator)
 		assert.Equal(t, initR.MyCert, ci.myCert)
 		assert.Equal(t, initR.RemoteCert, ci.peerCert)
@@ -142,8 +144,17 @@ func TestNewConnectionStateFromResult(t *testing.T) {
 		assert.True(t, ci.window.Check(nil, 3), "counter 3 must not be pre-seeded")
 	})
 
+	t.Run("message index too large is refused", func(t *testing.T) {
+		bad := *initR
+		bad.MessageIndex = ReplayWindow
+		ci, err := newConnectionStateFromResult(&bad)
+		require.Error(t, err)
+		assert.Nil(t, ci)
+	})
+
 	t.Run("responder", func(t *testing.T) {
-		ci := newConnectionStateFromResult(respR)
+		ci, err := newConnectionStateFromResult(respR)
+		require.NoError(t, err)
 		assert.False(t, ci.initiator)
 		assert.Equal(t, respR.MyCert, ci.myCert)
 		assert.Equal(t, respR.RemoteCert, ci.peerCert)

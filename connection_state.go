@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -41,7 +42,12 @@ type ConnectionState struct {
 // completed handshake.Result. It seeds messageCounter and the replay window so
 // that the post-handshake message indices already used on the wire don't count
 // as missed traffic in the data plane.
-func newConnectionStateFromResult(r *handshake.Result) *ConnectionState {
+func newConnectionStateFromResult(r *handshake.Result) (*ConnectionState, error) {
+	// Refuse a MessageIndex too big for the replay window: it can only be a bug, and would spin the seed loop below.
+	if r.MessageIndex >= ReplayWindow {
+		return nil, fmt.Errorf("handshake message index %d exceeds replay window", r.MessageIndex)
+	}
+
 	ci := &ConnectionState{
 		myCert:    r.MyCert,
 		initiator: r.Initiator,
@@ -54,7 +60,7 @@ func newConnectionStateFromResult(r *handshake.Result) *ConnectionState {
 	for i := uint64(1); i <= r.MessageIndex; i++ {
 		ci.window.Update(nil, i)
 	}
-	return ci
+	return ci, nil
 }
 
 func (cs *ConnectionState) MarshalJSON() ([]byte, error) {
