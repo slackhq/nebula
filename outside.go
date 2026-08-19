@@ -351,13 +351,16 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 
 	switch layers.IPProtocol(proto) {
 	case layers.IPProtocolICMPv6:
-		if dataLen < offset+6 {
+		// An ICMPv6 message is at least type, code and checksum, 4 bytes. Only echo carries more than we read.
+		if dataLen < offset+4 {
 			return ErrIPv6PacketTooShort
 		}
-		fp.LocalPort = 0 //incoming vs outgoing doesn't matter for icmpv6
-		icmptype := data[offset]
-		switch icmptype {
+		fp.LocalPort = 0      //incoming vs outgoing doesn't matter for icmpv6
+		switch data[offset] { //icmp type
 		case layers.ICMPv6TypeEchoRequest, layers.ICMPv6TypeEchoReply:
+			if dataLen < offset+6 {
+				return ErrIPv6PacketTooShort
+			}
 			fp.RemotePort = binary.BigEndian.Uint16(data[offset+4 : offset+6]) //identifier
 		default:
 			fp.RemotePort = 0

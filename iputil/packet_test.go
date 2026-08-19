@@ -483,6 +483,7 @@ func Test_IPv6FindUpperProtocol(t *testing.T) {
 	// 8 byte extension/transport stand-ins, first byte is the next header, second is the length field
 	extToTCP := []byte{6, 0, 0, 0, 0, 0, 0, 0}        // len 0 -> 8 bytes, next = TCP
 	extToUDP := []byte{17, 0, 0, 0, 0, 0, 0, 0}       // len 0 -> 8 bytes, next = UDP
+	extToRouting := []byte{43, 0, 0, 0, 0, 0, 0, 0}   // len 0 -> 8 bytes, next = Routing
 	ahToUDP := []byte{17, 0, 0, 0, 0, 0, 0, 0}        // AH len 0 -> (0+2)<<2 = 8 bytes, next = UDP
 	firstFragToUDP := []byte{17, 0, 0, 1, 0, 0, 0, 1} // frag offset 0, M=1, next = UDP
 	nonFirstFrag := []byte{17, 0, 0, 9, 0, 0, 0, 1}   // frag offset non-zero, next = UDP
@@ -501,6 +502,7 @@ func Test_IPv6FindUpperProtocol(t *testing.T) {
 		{"hop-by-hop then tcp", 0, append(extToTCP, transport...), 6, ipv6.HeaderLen + 8, false, nil},
 		{"routing then tcp", 43, append(extToTCP, transport...), 6, ipv6.HeaderLen + 8, false, nil},
 		{"destination then udp", 60, append(extToUDP, transport...), 17, ipv6.HeaderLen + 8, false, nil},
+		{"hop-by-hop, routing, then tcp", 0, append(append(extToRouting, extToTCP...), transport...), 6, ipv6.HeaderLen + 16, false, nil},
 		{"ah then udp", 51, append(ahToUDP, transport...), 17, ipv6.HeaderLen + 8, false, nil},
 		{"first fragment walks to transport", 44, append(firstFragToUDP, transport...), 17, ipv6.HeaderLen + 8, false, nil},
 		{"non-first fragment stops", 44, append(nonFirstFrag, transport...), 17, ipv6.HeaderLen, true, nil},

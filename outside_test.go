@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 )
 
 func Test_newPacket(t *testing.T) {
@@ -186,6 +187,18 @@ func Test_newPacket_v6(t *testing.T) {
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
 	assert.Equal(t, uint16(0xabcd), p.RemotePort)
+	assert.Equal(t, uint16(0), p.LocalPort)
+	assert.False(t, p.Fragment)
+
+	// A minimal 4 byte non-echo ICMPv6 message (type, code, checksum), no identifier to read
+	icmpMin := make([]byte, ipv6.HeaderLen+4)
+	copy(icmpMin, buffer.Bytes()[:ipv6.HeaderLen])
+	icmpMin[6] = byte(layers.IPProtocolICMPv6)
+	icmpMin[ipv6.HeaderLen] = 1 // type 1, destination unreachable, not echo
+	err = newPacket(icmpMin, true, p)
+	require.NoError(t, err)
+	assert.Equal(t, uint8(layers.IPProtocolICMPv6), p.Protocol)
+	assert.Equal(t, uint16(0), p.RemotePort)
 	assert.Equal(t, uint16(0), p.LocalPort)
 	assert.False(t, p.Fragment)
 
