@@ -85,7 +85,7 @@ else
 
   echo "Backporting #${PR_NUMBER} (${MERGE_SHA}) onto ${TARGET_BRANCH} as ${BRANCH}"
 
-  git fetch origin "$TARGET_BRANCH"
+  git fetch origin
   git checkout -b "$BRANCH" "origin/${TARGET_BRANCH}"
 
   # -m 1 handles a real merge commit; plain cherry-pick handles a squash merge.
