@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/netip"
@@ -455,7 +456,7 @@ func (f *Interface) prepareSendVia(via *HostInfo,
 			via.ConnectionState.writeLock.Unlock()
 		}
 		f.dropExhausted(via, c, "Dropping outbound relay packets, tunnel message counter is exhausted")
-		return
+		return nil, fmt.Errorf("tunnel message counter is exhausted")
 	}
 
 	out = header.Encode(out, header.Version, header.Message, header.MessageRelay, relay.RemoteIndex, c)
