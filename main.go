@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/sshd"
 	"github.com/slackhq/nebula/udp"
@@ -19,6 +20,12 @@ import (
 )
 
 type m = map[string]any
+
+// maxRoutines caps routines below the RejectHeadroom nonce gap so concurrent senders can't race the counter past wrap.
+const maxRoutines = 1 << 16
+
+// The reject headroom must exceed every sender that can be mid-reservation at once, about two per routine.
+const _ = noiseutil.RejectHeadroom - 4*maxRoutines
 
 func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, deviceFactory overlay.DeviceFactory) (retcon *Control, reterr error) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -81,9 +88,6 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		if routines < 1 {
 			routines = 1
 		}
-		if routines > 1 {
-			l.Info("Using multiple routines", "routines", routines)
-		}
 	} else {
 		// deprecated and undocumented
 		tunQueues := c.GetInt("tun.routines", 1)
@@ -92,6 +96,12 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		if routines != 1 {
 			l.Warn("Setting tun.routines and listen.routines is deprecated. Use `routines` instead", "routines", routines)
 		}
+	}
+	if routines > maxRoutines {
+		l.Warn("Using multiple routines", "routines", maxRoutines, "clamped", true, "requestedRoutines", routines)
+		routines = maxRoutines
+	} else if routines > 1 {
+		l.Info("Using multiple routines", "routines", routines)
 	}
 
 	// EXPERIMENTAL

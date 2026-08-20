@@ -323,6 +323,12 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 		return closeTunnel, hostinfo, nil
 	}
 
+	if hostinfo.ConnectionState != nil && hostinfo.ConnectionState.messageCounter.Load() >= RejectAfterMessages {
+		// Send path can't encrypt a CloseTunnel notify, so just delete locally; the peer recovers via recv_error.
+		hostinfo.logger(cm.l).Error("Dropping tunnel, message counter is exhausted")
+		return deleteTunnel, hostinfo, nil
+	}
+
 	primary := cm.hostMap.Hosts[hostinfo.vpnAddrs[0]]
 	mainHostInfo := true
 	if primary != nil && primary != hostinfo {
@@ -448,6 +454,11 @@ func (cm *connectionManager) shouldSwapPrimary(current *HostInfo) bool {
 		return false
 	}
 
+	if current.ConnectionState.messageCounter.Load() >= RehandshakeAfterMessages {
+		// This tunnel is being rolled for counter exhaustion, never swap back onto its spent key.
+		return false
+	}
+
 	crt := cm.intf.pki.getCertState().getCertificate(current.ConnectionState.myCert.Version())
 	if crt == nil {
 		//my cert was reloaded away. We should definitely swap from this tunnel
@@ -542,6 +553,15 @@ func (cm *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 		cm.l.Info("Re-handshaking with remote",
 			"vpnAddrs", hostinfo.vpnAddrs,
 			"reason", "current cert version < pki.initiatingVersion",
+		)
+
+		cm.intf.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], nil)
+		return
+	}
+	if hostinfo.ConnectionState.messageCounter.Load() >= RehandshakeAfterMessages {
+		cm.l.Info("Re-handshaking with remote",
+			"vpnAddrs", hostinfo.vpnAddrs,
+			"reason", "message counter rehandshake threshold reached",
 		)
 
 		cm.intf.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], nil)
