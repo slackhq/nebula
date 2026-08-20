@@ -5,6 +5,16 @@ import (
 	"encoding/binary"
 )
 
+// SortKey identifies a packet's position in its sender's transmission order.
+type SortKey struct {
+	// Epoch is a receiver-local ordinal for the tunnel (ConnectionState) that decrypted the packet:
+	// a re-handshake replaces the tunnel outright and the replacement's epoch is higher,
+	// so the old tunnel's packets sort first during the cutover overlap.
+	Epoch uint64
+	// Counter is the packet's AEAD message counter within that tunnel.
+	Counter uint64
+}
+
 // flowKey identifies a transport flow by {src, dst, sport, dport, family}.
 // Comparable, so map lookups and linear scans over the slot list stay tight.
 // Shared by the TCP and UDP coalescers; each coalescer keeps its own
@@ -16,15 +26,13 @@ type flowKey struct {
 }
 
 // initialSlots is the starting capacity of the slot pool.
-// One flow per packet is the worst case,
-// so this matches a typical carrier-side recvmmsg batch on the UDP socket.
+// One flow per packet is the worst case, so this matches a typical carrier-side recvmmsg batch on the UDP socket.
 const initialSlots = 64
 
 // parseIPAt validates the IP header for lane parsing. newPacket already resolved the L4 protocol
 // and offset for the firewall, so there is no proto sniff here; the caller's ipHdrLen is
 // cross-checked instead. A plain header (v4 IHL 20, v6 exactly 40) is the only coalesceable
-// shape. The v6 check is load-bearing: it rejects extension-header packets whose L4 is not at
-// byte 40.
+// shape. The v6 check is load-bearing: it rejects extension-header packets whose L4 is not at byte 40.
 //
 // The prologues fill fk's addresses and family in place (ports belong to the L4 parser; fk must
 // be zero on entry so the v4 path leaves src[4:]/dst[4:] clear for map equality) and return pkt
