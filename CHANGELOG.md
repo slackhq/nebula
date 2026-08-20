@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.1] - 2026-08-20
+
+See the [v1.11.1](https://github.com/slackhq/nebula/milestone/30?closed=1) milestone for a complete list of changes.
+
 ### Changed
 
 - IPv6 packets whose next header is a protocol Nebula does not parse (SCTP, GRE, IP-in-IP, etc.) are now
@@ -15,11 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   their true protocol, so only a `proto: any` rule allows them. If you carry one of these protocols over the
   overlay, confirm a `proto: any` rule covers it before upgrading, it may have been passing only through this
   bypass. (#1840)
+- Drop the dependency on `github.com/cyberdelia/go-metrics-graphite`, which has been unmaintained for over ten
+  years, by inlining the small amount of code Nebula used. (#1832)
 
 ### Fixed
 
 - The ICMPv6 type was read from the wrong byte when classifying IPv6 packets, so the echo identifier used
   for conntrack was never picked up. (#1840)
+- Enforce outbound message counter limits so a tunnel is rehandshaked before the counter can wrap, preventing
+  nonce reuse. (#1841)
+- Prevent `nebula-cert ca` from running out of memory on 32bit systems when generating encrypted private keys. (#1834)
+- Tolerate `ErrDumpInterrupted` when listing tun addresses on Linux, so a transient interrupted netlink dump
+  no longer aborts startup. (#1835)
 
 ## [1.11.0] - 2026-07-23
 
@@ -884,7 +895,9 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.10.3...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.11.1...HEAD
+[1.11.1]: https://github.com/slackhq/nebula/releases/tag/v1.11.1
+[1.11.0]: https://github.com/slackhq/nebula/releases/tag/v1.11.0
 [1.10.3]: https://github.com/slackhq/nebula/releases/tag/v1.10.3
 [1.10.2]: https://github.com/slackhq/nebula/releases/tag/v1.10.2
 [1.10.1]: https://github.com/slackhq/nebula/releases/tag/v1.10.1
