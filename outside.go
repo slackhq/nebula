@@ -353,14 +353,14 @@ func parseV6(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 	// Walk the extension header chain to the upper layer protocol. iputil.IPv6FindUpperProtocol is the single
 	// source of truth for which headers are extension headers, so this stays in lockstep with the reject path
 	// and cannot drift into misreading an unknown protocol (SCTP, GRE, etc.) as a forged transport.
-	proto, offset, isFragment, err := iputil.IPv6FindUpperProtocol(data)
+	proto, offset, isFragment, anyFragment, err := iputil.IPv6FindUpperProtocol(data)
 	if err != nil {
 		return ErrIPv6PacketTooShort
 	}
 
 	fp.Protocol = proto
 	fp.Fragment = isFragment
-	fp.FragAny = isFragment //todo find initial fragments!
+	fp.FragAny = anyFragment
 	fp.IPHdrLen = offset
 	if isFragment {
 		// Non-first fragments carry no transport header, so we have no ports to read
@@ -375,8 +375,8 @@ func parseV6(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 		if dataLen < offset+4 {
 			return ErrIPv6PacketTooShort
 		}
-			fp.LocalPort = 0 //incoming vs outgoing doesn't matter for icmpv6
-			switch data[offset] { //icmp type
+		fp.LocalPort = 0      //incoming vs outgoing doesn't matter for icmpv6
+		switch data[offset] { //icmp type
 		case layers.ICMPv6TypeEchoRequest, layers.ICMPv6TypeEchoReply:
 			if dataLen < offset+6 {
 				return ErrIPv6PacketTooShort

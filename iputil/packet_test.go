@@ -537,26 +537,27 @@ func Test_IPv6FindUpperProtocol(t *testing.T) {
 		wantProto    uint8
 		wantOffset   int
 		wantFragment bool
+		wantAnyFrag  bool
 		wantErr      error
 	}{
-		{"plain udp", 17, transport, 17, ipv6.HeaderLen, false, nil},
-		{"hop-by-hop then tcp", 0, append(extToTCP, transport...), 6, ipv6.HeaderLen + 8, false, nil},
-		{"routing then tcp", 43, append(extToTCP, transport...), 6, ipv6.HeaderLen + 8, false, nil},
-		{"destination then udp", 60, append(extToUDP, transport...), 17, ipv6.HeaderLen + 8, false, nil},
-		{"hop-by-hop, routing, then tcp", 0, append(append(extToRouting, extToTCP...), transport...), 6, ipv6.HeaderLen + 16, false, nil},
-		{"ah then udp", 51, append(ahToUDP, transport...), 17, ipv6.HeaderLen + 8, false, nil},
-		{"first fragment walks to transport", 44, append(firstFragToUDP, transport...), 17, ipv6.HeaderLen + 8, false, nil},
-		{"non-first fragment stops", 44, append(nonFirstFrag, transport...), 17, ipv6.HeaderLen, true, nil},
-		{"unknown protocol is terminal", 132, transport, 132, ipv6.HeaderLen, false, nil}, // SCTP
-		{"truncated extension header", 0, nil, 0, ipv6.HeaderLen, false, ErrIPv6CouldNotFindPayload},
+		{"plain udp", 17, transport, 17, ipv6.HeaderLen, false, false, nil},
+		{"hop-by-hop then tcp", 0, append(extToTCP, transport...), 6, ipv6.HeaderLen + 8, false, false, nil},
+		{"routing then tcp", 43, append(extToTCP, transport...), 6, ipv6.HeaderLen + 8, false, false, nil},
+		{"destination then udp", 60, append(extToUDP, transport...), 17, ipv6.HeaderLen + 8, false, false, nil},
+		{"hop-by-hop, routing, then tcp", 0, append(append(extToRouting, extToTCP...), transport...), 6, ipv6.HeaderLen + 16, false, false, nil},
+		{"ah then udp", 51, append(ahToUDP, transport...), 17, ipv6.HeaderLen + 8, false, false, nil},
+		{"first fragment walks to transport", 44, append(firstFragToUDP, transport...), 17, ipv6.HeaderLen + 8, false, true, nil},
+		{"non-first fragment stops", 44, append(nonFirstFrag, transport...), 17, ipv6.HeaderLen, true, true, nil},
+		{"unknown protocol is terminal", 132, transport, 132, ipv6.HeaderLen, false, false, nil}, // SCTP
+		{"truncated extension header", 0, nil, 0, ipv6.HeaderLen, false, false, ErrIPv6CouldNotFindPayload},
 		// Destination Options with a declared length (255+1)*8 = 2048 that runs past the 48 byte buffer, next = SCTP
-		{"extension length past buffer", 60, []byte{132, 255, 0, 0, 0, 0, 0, 0}, 132, ipv6.HeaderLen + 2048, false, ErrIPv6CouldNotFindPayload},
+		{"extension length past buffer", 60, []byte{132, 255, 0, 0, 0, 0, 0, 0}, 132, ipv6.HeaderLen + 2048, false, false, ErrIPv6CouldNotFindPayload},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			packet := makeIPv6Packet(src, dst, tt.nextHeader, tt.payload)
-			proto, offset, isFragment, err := IPv6FindUpperProtocol(packet)
+			proto, offset, isFragment, anyFragment, err := IPv6FindUpperProtocol(packet)
 			if tt.wantErr != nil {
 				assert.ErrorIs(t, err, tt.wantErr)
 				return
@@ -565,12 +566,13 @@ func Test_IPv6FindUpperProtocol(t *testing.T) {
 			assert.Equal(t, tt.wantProto, proto)
 			assert.Equal(t, tt.wantOffset, offset)
 			assert.Equal(t, tt.wantFragment, isFragment)
+			assert.Equal(t, tt.wantAnyFrag, anyFragment)
 		})
 	}
 
 	// A packet smaller than an ipv6 header must error rather than panic reading byte 6
 	t.Run("shorter than ipv6 header", func(t *testing.T) {
-		_, _, _, err := IPv6FindUpperProtocol(make([]byte, 6))
+		_, _, _, _, err := IPv6FindUpperProtocol(make([]byte, 6))
 		assert.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
 	})
 }

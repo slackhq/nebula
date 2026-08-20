@@ -697,7 +697,7 @@ func Test_newPacket_v6ExtHeaderOverflow(t *testing.T) {
 // advances the walk past the end of the packet. The upper layer protocol's header isn't actually present,
 // so parseV6 must drop the packet rather than classify it as the terminal protocol with no ports.
 func Test_newPacket_v6ExtHeaderPastBuffer(t *testing.T) {
-	p := &firewall.Packet{}
+	p := &firewall.ParsedPacket{}
 
 	pkt := make([]byte, 48)
 	pkt[0] = 0x60
@@ -716,7 +716,7 @@ func Test_newPacket_v6ExtHeaderPastBuffer(t *testing.T) {
 // would trust while the host delivered the real SCTP datagram. The fix fails closed: the packet
 // is classified as its true protocol with no ports, so it only matches an `any` rule.
 func Test_newPacket_v6ExtHeaderConfusion(t *testing.T) {
-	p := &firewall.Packet{}
+	p := &firewall.ParsedPacket{}
 
 	pkt := make([]byte, 52)
 	pkt[0] = 0x60                        // version 6
