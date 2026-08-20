@@ -27,9 +27,9 @@ type StdConn struct {
 
 var _ Conn = &StdConn{}
 
-func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
-	lc := NewListenConfig(multi)
-	pc, err := lc.ListenPacket(context.TODO(), "udp", net.JoinHostPort(ip.String(), fmt.Sprintf("%v", port)))
+func NewListener(l *slog.Logger, s Settings) (Conn, error) {
+	lc := NewListenConfig(s.Multi)
+	pc, err := lc.ListenPacket(context.TODO(), "udp", s.Listen.String())
 	if err != nil {
 		return nil, err
 	}

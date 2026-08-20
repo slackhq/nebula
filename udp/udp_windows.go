@@ -7,12 +7,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"net/netip"
 	"syscall"
 )
 
-func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
-	if multi {
+func NewListener(l *slog.Logger, s Settings) (Conn, error) {
+	if s.Multi {
 		//NOTE: Technically we can support it with RIO but it wouldn't be at the socket level
 		// The udp stack would need to be reworked to hide away the implementation differences between
 		// Windows and Linux
@@ -20,12 +19,12 @@ func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int)
 	}
 
 	var conn Conn
-	rc, err := NewRIOListener(l, ip, port)
+	rc, err := NewRIOListener(l, s.Listen.Addr(), int(s.Listen.Port()))
 	if err == nil {
 		conn = rc
 	} else {
 		l.Error("Falling back to standard udp sockets", "error", err)
-		conn, err = NewGenericListener(l, ip, port, multi, batch)
+		conn, err = NewGenericListener(l, s)
 		if err != nil {
 			return nil, err
 		}

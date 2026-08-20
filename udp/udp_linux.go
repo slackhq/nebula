@@ -30,17 +30,12 @@ type StdConn struct {
 	// udp_linux_writebatch.go.
 	bw *batchWriter
 
-	// UDP GRO (recvmsg with UDP_GRO cmsg) support. groSupported is probed
-	// once at socket creation. When true, ListenOut allocates larger
-	// RX buffers and a per-entry cmsg slot so the kernel can coalesce
-	// consecutive same-flow datagrams into a single recvmmsg entry; the
-	// delivered cmsg carries the gso_size used to split them back apart.
 	groSupported bool
 }
 
-func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
+func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 	af := unix.AF_INET6
-	if ip.Is4() {
+	if s.Listen.Addr().Is4() {
 		af = unix.AF_INET
 	}
 	syscall.ForkLock.RLock()
@@ -53,7 +48,7 @@ func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int)
 		return nil, fmt.Errorf("unable to open socket: %w", err)
 	}
 
-	if multi {
+	if s.Multi {
 		if err = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil {
 			_ = unix.Close(fd)
 			return nil, fmt.Errorf("unable to set SO_REUSEPORT: %w", err)
@@ -61,13 +56,14 @@ func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int)
 	}
 
 	var sa unix.Sockaddr
-	if ip.Is4() {
+	port := int(s.Listen.Port())
+	if s.Listen.Addr().Is4() {
 		sa4 := &unix.SockaddrInet4{Port: port}
-		sa4.Addr = ip.As4()
+		sa4.Addr = s.Listen.Addr().As4()
 		sa = sa4
 	} else {
 		sa6 := &unix.SockaddrInet6{Port: port}
-		sa6.Addr = ip.As16()
+		sa6.Addr = s.Listen.Addr().As16()
 		sa = sa6
 	}
 	if err = unix.Bind(fd, sa); err != nil {
@@ -75,15 +71,13 @@ func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int)
 		return nil, fmt.Errorf("unable to bind to socket: %w", err)
 	}
 
-	out := &StdConn{sysFd: fd, isV4: ip.Is4(), l: l, batch: batch}
+	out := &StdConn{sysFd: fd, isV4: s.Listen.Addr().Is4(), l: l, batch: s.Batch}
 
-	out.bw = newBatchWriter(fd, out.isV4, l)
+	out.bw = newBatchWriter(fd, out.isV4, l, s.Offloads)
 
-	// GRO coalesces same-flow datagrams into superpackets that must be split
-	// back apart via the delivered gso_size cmsg. batch == 1 means the caller
-	// wants plain single-datagram reads with MTU-sized buffers, so leave it
-	// off there.
-	if batch > 1 {
+	// GRO coalesces same-flow datagrams into superpackets that must be split back apart via the delivered gso_size cmsg
+	// batch == 1 means the caller wants plain single-datagram reads with MTU-sized buffers, so leave it off.
+	if s.Batch > 1 && s.Offloads {
 		out.prepareGRO()
 	}
 

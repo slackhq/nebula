@@ -20,7 +20,13 @@ import (
 // recvmmsg with n>=1/Len==0 (not n==0). recvmmsg must turn that into net.ErrClosed
 // once Close set closed, so a parked reader exits instead of spinning.
 func TestShutdownWakesAfterRx_Mechanism(t *testing.T) {
-	c, err := NewListener(testLogger(), netip.MustParseAddr("127.0.0.1"), 0, true, 64)
+	udpSettings := Settings{
+		Listen:   netip.MustParseAddrPort("127.0.0.1:0"),
+		Multi:    true,
+		Batch:    64,
+		Offloads: true,
+	}
+	c, err := NewListener(testLogger(), udpSettings)
 	if err != nil {
 		t.Fatalf("NewListener: %v", err)
 	}
@@ -115,7 +121,13 @@ func TestListenOutTeardown_TrafficPatterns(t *testing.T) {
 }
 
 func runTeardownCase(t *testing.T, batch int, name string, traffic func(send net.Conn, stop <-chan struct{})) {
-	c, err := NewListener(testLogger(), netip.MustParseAddr("127.0.0.1"), 0, true, batch)
+	udpSettings := Settings{
+		Listen:   netip.MustParseAddrPort("127.0.0.1:0"),
+		Multi:    true,
+		Batch:    batch,
+		Offloads: true,
+	}
+	c, err := NewListener(testLogger(), udpSettings)
 	if err != nil {
 		t.Fatalf("NewListener: %v", err)
 	}

@@ -84,14 +84,14 @@ type TesterConn struct {
 	l *slog.Logger
 }
 
-func NewListener(l *slog.Logger, ip netip.Addr, port int, _ bool, _ int) (Conn, error) {
+func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 	c := &TesterConn{
 		RxPackets: make(chan *Packet, 10),
 		TxPackets: make(chan *Packet, 10),
 		done:      make(chan struct{}),
 		l:         l,
 	}
-	c.SetAddr(netip.AddrPortFrom(ip, uint16(port)))
+	c.SetAddr(s.Listen)
 	return c, nil
 }
 

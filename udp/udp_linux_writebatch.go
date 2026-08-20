@@ -75,11 +75,13 @@ type batchWriter struct {
 	entryPkts []int
 }
 
-func newBatchWriter(fd int, isV4 bool, l *slog.Logger) *batchWriter {
+func newBatchWriter(fd int, isV4 bool, l *slog.Logger, offloadsEnabled bool) *batchWriter {
 	w := &batchWriter{fd: fd, isV4: isV4, l: l}
 	w.sendFn = w.sendmmsg
-	w.prepareWriteMessages(MaxWriteBatch)
-	w.prepareGSO()
+	if offloadsEnabled {
+		w.prepareGSO()
+	}
+	w.prepareWriteMessages(MaxWriteBatch, offloadsEnabled)
 	return w
 }
 
@@ -90,7 +92,7 @@ func newBatchWriter(fd int, isV4 bool, l *slog.Logger) *batchWriter {
 // Each entry's cmsg slot holds one UDP_SEGMENT (gso_size, uint16) header,
 // pre-filled here; only its payload is rewritten per call.
 // Hdr.Control/Controllen select whether it applies (none / segment).
-func (w *batchWriter) prepareWriteMessages(n int) {
+func (w *batchWriter) prepareWriteMessages(n int, offloadsEnabled bool) {
 	w.msgs = make([]rawMessage, n)
 	w.iovs = make([]iovec, n)
 	w.names = make([][]byte, n)
@@ -98,6 +100,16 @@ func (w *batchWriter) prepareWriteMessages(n int) {
 	w.entryPkts = make([]int, n)
 
 	w.cmsgSpace = unix.CmsgSpace(2)
+
+	for i := range w.msgs {
+		w.names[i] = make([]byte, unix.SizeofSockaddrInet6)
+		w.msgs[i].Hdr.Name = &w.names[i][0]
+	}
+
+	if !offloadsEnabled || !w.gsoSupported {
+		return //avoid allocating cmsg space if we will never use it
+	}
+
 	w.cmsg = make([]byte, n*w.cmsgSpace)
 
 	for k := 0; k < n; k++ {
@@ -106,11 +118,6 @@ func (w *batchWriter) prepareWriteMessages(n int) {
 		seg.Level = unix.SOL_UDP
 		seg.Type = unix.UDP_SEGMENT
 		setCmsgLen(seg, unix.CmsgLen(2))
-	}
-
-	for i := range w.msgs {
-		w.names[i] = make([]byte, unix.SizeofSockaddrInet6)
-		w.msgs[i].Hdr.Name = &w.names[i][0]
 	}
 }
 

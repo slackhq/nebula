@@ -24,7 +24,13 @@ func TestWriteBatchNoAllocs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ip := netip.MustParseAddr(tc.addr)
 			newConn := func() Conn {
-				c, err := NewListener(testLogger(), ip, 0, false, 8)
+				udpSettings := Settings{
+					Listen:   netip.AddrPortFrom(ip, 0),
+					Multi:    false,
+					Batch:    8,
+					Offloads: true,
+				}
+				c, err := NewListener(testLogger(), udpSettings)
 				if err != nil {
 					t.Fatalf("NewListener: %v", err)
 				}

@@ -74,7 +74,13 @@ func TestWriteBatchBadFamilyDeliversOthers(t *testing.T) {
 	// socket. A wildcard v4 bind (0.0.0.0) via network "udp" comes up as a
 	// dual-stack AF_INET6 socket on Linux, for which a v6 dest is not a bad
 	// family — which would defeat the point of this test.
-	c, err := NewListener(testLogger(), netip.MustParseAddr("127.0.0.1"), 0, false, 1)
+	udpSettings := Settings{
+		Listen:   netip.MustParseAddrPort("127.0.0.1:0"),
+		Multi:    false,
+		Batch:    1,
+		Offloads: false,
+	}
+	c, err := NewListener(testLogger(), udpSettings)
 	if err != nil {
 		t.Skipf("cannot open v4 sender (sandbox?): %v", err)
 	}
@@ -128,7 +134,13 @@ func TestWriteBatchUnreachableDestDeliversOthers(t *testing.T) {
 	defer rx.Close()
 	rxPort := rx.LocalAddr().(*net.UDPAddr).Port
 
-	c, err := NewListener(testLogger(), netip.MustParseAddr("127.0.0.1"), 0, false, 1)
+	udpSettings := Settings{
+		Listen:   netip.MustParseAddrPort("127.0.0.1:0"),
+		Multi:    false,
+		Batch:    1,
+		Offloads: false,
+	}
+	c, err := NewListener(testLogger(), udpSettings)
 	if err != nil {
 		t.Skipf("cannot open v4 sender (sandbox?): %v", err)
 	}
@@ -286,9 +298,11 @@ func TestDeliverSegments(t *testing.T) {
 // that actually hits the kernel fails loudly.
 func newRewindTestWriter() *batchWriter {
 	w := &batchWriter{fd: -1, isV4: true, l: testLogger()}
-	w.prepareWriteMessages(MaxWriteBatch)
+	// gsoSupported must be set before prepareWriteMessages: the cmsg slab is
+	// only allocated when GSO is already known to be supported.
 	w.gsoSupported = true
 	w.maxGSOSegments = 63
+	w.prepareWriteMessages(MaxWriteBatch, true)
 	return w
 }
 
@@ -616,7 +630,13 @@ func TestGSOEngagesOnLoopback(t *testing.T) {
 	defer rx.Close()
 	dst := rx.LocalAddr().(*net.UDPAddr).AddrPort()
 
-	uc, err := NewListener(testLogger(), netip.MustParseAddr("127.0.0.1"), 0, false, 8)
+	udpSettings := Settings{
+		Listen:   netip.MustParseAddrPort("127.0.0.1:0"),
+		Multi:    false,
+		Batch:    8,
+		Offloads: true,
+	}
+	uc, err := NewListener(testLogger(), udpSettings)
 	if err != nil {
 		t.Fatalf("NewListener: %v", err)
 	}

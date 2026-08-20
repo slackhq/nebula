@@ -19,6 +19,13 @@ type EncReader func(
 	payload []byte,
 )
 
+type Settings struct {
+	Listen   netip.AddrPort
+	Multi    bool
+	Batch    int
+	Offloads bool
+}
+
 type Conn interface {
 	Rebind() error
 	LocalAddr() (netip.AddrPort, error)

@@ -172,6 +172,8 @@ listen:
   # allowing for more precise routing decisions based on the packet tags. Default is 0 meaning no mark is set.
   # This setting is reloadable.
   #so_mark: 0
+  # the udp_offloads setting controls if Nebula will attempt to enable GSO and GRO for its UDP socket(s). Linux only, not reloadable.
+  # udp_offloads: true
 
 # Routines is the number of thread pairs to run that consume from the tun and UDP queues.
 # Currently, this defaults to 1 which means we have 1 tun queue reader and 1
