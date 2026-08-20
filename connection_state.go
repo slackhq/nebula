@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -12,7 +13,18 @@ import (
 	"github.com/slackhq/nebula/noiseutil"
 )
 
-const ReplayWindow = 1024
+const (
+	ReplayWindow = 1024
+
+	// RehandshakeAfterMessages rolls keys inside the AES-GCM data-volume margin (~2^-36 advantage at 64KB frames).
+	RehandshakeAfterMessages = uint64(1) << 34
+
+	// RejectAfterMessages is the nonce ceiling enforced by noiseutil; a tunnel here is deleted locally, not notified.
+	RejectAfterMessages = noiseutil.RejectAfterMessages
+)
+
+// RehandshakeAfterMessages must stay below RejectAfterMessages so tunnels roll before the hard send stop.
+const _ = RejectAfterMessages - RehandshakeAfterMessages
 
 type ConnectionState struct {
 	eKey           noiseutil.CipherState
@@ -30,7 +42,12 @@ type ConnectionState struct {
 // completed handshake.Result. It seeds messageCounter and the replay window so
 // that the post-handshake message indices already used on the wire don't count
 // as missed traffic in the data plane.
-func newConnectionStateFromResult(r *handshake.Result) *ConnectionState {
+func newConnectionStateFromResult(r *handshake.Result) (*ConnectionState, error) {
+	// Refuse a MessageIndex too big for the replay window: it can only be a bug, and would spin the seed loop below.
+	if r.MessageIndex >= ReplayWindow {
+		return nil, fmt.Errorf("handshake message index %d exceeds replay window", r.MessageIndex)
+	}
+
 	ci := &ConnectionState{
 		myCert:    r.MyCert,
 		initiator: r.Initiator,
@@ -43,7 +60,7 @@ func newConnectionStateFromResult(r *handshake.Result) *ConnectionState {
 	for i := uint64(1); i <= r.MessageIndex; i++ {
 		ci.window.Update(nil, i)
 	}
-	return ci
+	return ci, nil
 }
 
 func (cs *ConnectionState) MarshalJSON() ([]byte, error) {
@@ -52,6 +69,16 @@ func (cs *ConnectionState) MarshalJSON() ([]byte, error) {
 		"initiator":       cs.initiator,
 		"message_counter": cs.messageCounter.Load(),
 	})
+}
+
+// NextMessageCounter reserves the next 1-based counter; RejectAfterMessages is the first we refuse, pinned to not wrap.
+func (cs *ConnectionState) NextMessageCounter() (uint64, bool) {
+	c := cs.messageCounter.Add(1)
+	if c >= RejectAfterMessages {
+		cs.messageCounter.Store(RejectAfterMessages)
+		return c, false
+	}
+	return c, true
 }
 
 func (cs *ConnectionState) Curve() cert.Curve {

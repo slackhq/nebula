@@ -1,6 +1,7 @@
 package noiseutil
 
 import (
+	"math"
 	"testing"
 
 	"github.com/flynn/noise"
@@ -87,6 +88,24 @@ func roundtrip(t *testing.T, enc, dec CipherState) {
 
 	assert.Equal(t, enc.Overhead(), dec.Overhead())
 	assert.Equal(t, 16, enc.Overhead())
+}
+
+func TestEncryptRejectsExhaustedCounter(t *testing.T) {
+	// Pin the headroom below the uint64 wrap so a typo can't silently move the ceiling.
+	require.Equal(t, uint64(1)<<40, RejectHeadroom)
+	require.Equal(t, math.MaxUint64-RejectHeadroom, RejectAfterMessages)
+
+	encA, _ := buildCipherStates(t, CipherAESGCM)
+	encC, _ := buildCipherStates(t, noise.CipherChaChaPoly)
+	nb := make([]byte, 12)
+
+	for _, cs := range []CipherState{NewCipherStateAESGCM(encA), NewCipherStateChaChaPoly(encC)} {
+		_, err := cs.EncryptDanger(nil, nil, []byte("x"), RejectAfterMessages-1, nb)
+		require.NoError(t, err)
+
+		_, err = cs.EncryptDanger(nil, nil, []byte("x"), RejectAfterMessages, nb)
+		require.ErrorIs(t, err, ErrMessageCounterExhausted)
+	}
 }
 
 func BenchmarkCipherStateEncryptAESGCM(b *testing.B) {
