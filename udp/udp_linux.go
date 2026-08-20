@@ -1,5 +1,4 @@
 //go:build !android && !e2e_testing
-// +build !android,!e2e_testing
 
 package udp
 
@@ -93,14 +92,11 @@ func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int)
 
 // udpGROBufferSize sizes the per-entry recvmmsg buffer when UDP_GRO is on.
 // The kernel stitches a run of same-flow datagrams into a single skb whose
-// length is bounded by sk_gso_max_size (typically 65535); anything larger
-// would be MSG_TRUNCed. We use the maximum representable UDP length so a
-// full superpacket always lands intact.
+// length is bounded by sk_gso_max_size (65535)
 const udpGROBufferSize = 65535
 
 // udpGROCmsgPayload is the size of the UDP_GRO cmsg data delivered by the
-// kernel: a single int (gso_size in bytes). See udp_cmsg_recv() in
-// net/ipv4/udp.c.
+// kernel: a single int (gso_size in bytes). See udp_cmsg_recv() in net/ipv4/udp.c.
 const udpGROCmsgPayload = 4
 
 // prepareGRO turns on UDP_GRO so the kernel coalesces consecutive same-flow
@@ -184,9 +180,7 @@ func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 	}
 }
 
-// recvmmsg does one blocking recvmmsg (MSG_WAITFORONE), reading up to len(msgs)
-// datagrams. With len(msgs) == 1 it degenerates to a plain single-datagram
-// read (the kernel implements recvmmsg as a recvmsg loop).
+// recvmmsg does one blocking recvmmsg (MSG_WAITFORONE), reading up to len(msgs) datagrams.
 func (u *StdConn) recvmmsg(msgs []rawMessage) (int, error) {
 	r, _, errno := unix.Syscall6(
 		unix.SYS_RECVMMSG,
@@ -210,10 +204,10 @@ func (u *StdConn) recvmmsg(msgs []rawMessage) (int, error) {
 	return n, nil
 }
 
-// prepareRawMessages allocates the recvmmsg scratch: n rawMessages, each
-// wired to its own bufSize receive buffer, sockaddr name slot and — when
-// cmsgSpace > 0 — a slice of one contiguous ancillary-data slab. All iovecs
-// share a single slab kept alive by the msghdrs that point into it.
+// prepareRawMessages allocates the recvmmsg scratch:
+// n rawMessages, each wired to its own bufSize receive buffer, sockaddr name slot
+// and, when cmsgSpace > 0, a slice of one contiguous ancillary-data slab.
+// All iovecs share a single slab kept alive by the msghdrs that point into it.
 func prepareRawMessages(n, bufSize, cmsgSpace int) ([]rawMessage, [][]byte, [][]byte, []byte) {
 	msgs := make([]rawMessage, n)
 	buffers := make([][]byte, n)
@@ -268,9 +262,6 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 
 	for {
 		if cmsgSpace > 0 {
-			// TODO: the kernel only rewrites Controllen on entries it fills,
-			// so resetting just the first `n` from the previous wakeup would
-			// save ~(batch-n) stores per wakeup on trickle traffic.
 			for i := range msgs {
 				setMsgControllen(&msgs[i].Hdr, cmsgSpace)
 			}
@@ -286,7 +277,7 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 			return err
 		}
 
-		for i := 0; i < n; i++ {
+		for i := range n {
 			from := getFrom(names, i, u.isV4)
 			payload := buffers[i][:msgs[i].Len]
 
