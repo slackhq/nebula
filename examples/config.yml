@@ -267,6 +267,9 @@ tun:
   # Default MTU for every packet, safe setting is (and the default) 1300 for internet based traffic
   mtu: 1300
 
+  # the use_offloads setting controls if Nebula will attempt to enable GSO and GRO for the tun device. Linux only, not reloadable.
+  #use_offloads: true
+
   # Linux only. pin_threads pins each tun reader/encrypt OS thread to a single CPU. This keeps every goroutine's
   # batched sends flowing through one XPS-selected NIC TX ring, so packets within a flow stay ordered on the wire
   # instead of being sprayed across multiple TX rings and reordered. Not reloadable. Coerced to false if routines <= 1.
