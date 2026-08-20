@@ -126,22 +126,23 @@ func offloadUSOEnabled(offloadFlags uint) bool {
 }
 
 func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue bool) (*tun, error) {
+	var err error
 	// IFF_TUN_EXCL prevents us from attaching to an already-running tun
 	baseFlags := uint16(unix.IFF_TUN | unix.IFF_NO_PI | unix.IFF_TUN_EXCL)
 	if multiqueue {
 		baseFlags |= unix.IFF_MULTI_QUEUE
 	}
 	nameStr := c.GetString("tun.dev", "")
-
-	fd, err := openTunDev()
-	if err != nil {
-		return nil, err
-	}
 	useOffloads := c.GetBool("tun.use_offloads", true)
 
+	var fd int
 	var name string
 	var offloadFlags uint
 	if useOffloads {
+		fd, err = openTunDev()
+		if err != nil {
+			return nil, err
+		}
 		// First try to enable IFF_VNET_HDR via TUNSETIFF and negotiate TUN_F_* offloads
 		// We try TSO+USO first, fall back to TSO-only on kernels without USO (Linux < 6.2),
 		// and finally give up on virtio headers entirely and reopen as a plain TUN if neither offload mask is accepted.
@@ -177,9 +178,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue 
 		}
 	}
 
-	if useOffloads {
-		l.Info("TUN offload enabled", "tso", true, "uso", offloadUSOEnabled(offloadFlags))
-	}
+	l.Info("TUN offload status", "tso", useOffloads, "uso", offloadUSOEnabled(offloadFlags))
 
 	t, err := newTunGeneric(c, l, fd, useOffloads, offloadFlags, vpnNetworks, name)
 	if err != nil {
