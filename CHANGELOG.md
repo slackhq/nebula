@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- IPv6 packets whose next header is a protocol Nebula does not parse (SCTP, GRE, IP-in-IP, etc.) are now
+  classified as that protocol with no ports, closing a firewall bypass where a crafted payload could steer
+  the classifier into reading one as TCP/UDP and matching a TCP/UDP rule. These packets are now matched as
+  their true protocol, so only a `proto: any` rule allows them. If you carry one of these protocols over the
+  overlay, confirm a `proto: any` rule covers it before upgrading, it may have been passing only through this
+  bypass. (#1840)
+
+### Fixed
+
+- The ICMPv6 type was read from the wrong byte when classifying IPv6 packets, so the echo identifier used
+  for conntrack was never picked up. (#1840)
+
 ## [1.11.0] - 2026-07-23
 
 See the [v1.11.0](https://github.com/slackhq/nebula/milestone/25?closed=1) milestone for a complete list of changes.
