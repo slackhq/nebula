@@ -275,6 +275,11 @@ tun:
   # instead of being sprayed across multiple TX rings and reordered. Not reloadable. Coerced to false if routines <= 1.
   #pin_threads: true
 
+  # pin_threads_key helps the CPU-auto-selector shuffle which CPUs are chosen for pinning.
+  # Valid options are "pid" or "port". Use "port" if you want Nebula to choose the same cores every time, which is nice for benchmarking.
+  # Linux only, not reloadable.
+  #pin_threads_key: "pid"
+
   # Linux only. cpu_affinity overrides which CPUs the tun reader threads pin to: a list of CPU IDs, one per routine
   # (see the top-level `routines` setting). Lists shorter than `routines` are modulo-cycled across the queues; extra
   # entries are ignored. IDs must be within the process's allowed CPU set, so this respects taskset / cgroup cpusets;

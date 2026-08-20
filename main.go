@@ -248,6 +248,18 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		// distinct across instances sharing a box, stable across restarts.
 		// A nil result keeps listenIn's stock allowed[i] fallback.
 		key := uint64(os.Getpid())
+		pinKeyStr := strings.ToLower(c.GetString("tun.pin_threads_key", ""))
+		switch pinKeyStr {
+		case "":
+			l.Debug("tun.pin_threads_key is empty, using PID")
+		case "pid":
+			l.Debug("tun.pin_threads_key is PID")
+		case "port":
+			l.Info("tun.pin_threads_key is port number")
+		default:
+			l.Warn("tun.pin_threads_key is invalid, using PID")
+		}
+
 		if ap, err := udpConns[0].LocalAddr(); err == nil && ap.Port() != 0 {
 			key = uint64(ap.Port())
 		}
