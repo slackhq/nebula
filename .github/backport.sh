@@ -137,3 +137,6 @@ gh pr create \
 
 # The backport now exists, so drop the label that flagged this PR for one.
 gh pr edit "$PR_NUMBER" --remove-label needs-backport
+
+# Switch back to the original branch we were on before doing the backport
+git checkout -
