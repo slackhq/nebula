@@ -381,6 +381,11 @@ func IPv6FindUpperProtocol(packet []byte) (nextHeader uint8, offset int, isFragm
 			offset += (int(packet[offset+1]) + 2) << 2
 
 		default:
+			// A prior extension header can declare a length that advances offset past the packet. The terminal
+			// protocol's header isn't actually here, so treat the chain as truncated rather than classifying it.
+			if offset > len(packet) {
+				return nextHeader, offset, isFragment, ErrIPv6CouldNotFindPayload
+			}
 			return nextHeader, offset, isFragment, nil
 		}
 	}

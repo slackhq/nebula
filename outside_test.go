@@ -693,6 +693,22 @@ func Test_newPacket_v6ExtHeaderOverflow(t *testing.T) {
 	assert.Equal(t, uint16(22), p.LocalPort, "firewall must parse the real transport header, not the overflowed offset")
 }
 
+// Test_newPacket_v6ExtHeaderPastBuffer is a regression test for an extension header whose declared length
+// advances the walk past the end of the packet. The upper layer protocol's header isn't actually present,
+// so parseV6 must drop the packet rather than classify it as the terminal protocol with no ports.
+func Test_newPacket_v6ExtHeaderPastBuffer(t *testing.T) {
+	p := &firewall.Packet{}
+
+	pkt := make([]byte, 48)
+	pkt[0] = 0x60
+	pkt[6] = byte(layers.IPProtocolIPv6Destination) // Destination Options
+	pkt[7] = 64                                     // hop limit
+	pkt[40] = byte(layers.IPProtocolSCTP)           // Dest Options next header = SCTP
+	pkt[41] = 255                                   // declared length (255+1)*8 = 2048, past the 48 byte buffer
+
+	require.ErrorIs(t, newPacket(pkt, true, p), ErrIPv6PacketTooShort)
+}
+
 // Test_newPacket_v6ExtHeaderConfusion is a regression test for parseV6 walking any unrecognized
 // Next Header as if it were an ipv6 extension header. A real upper layer protocol Nebula doesn't
 // dissect (SCTP here) is not walkable, so applying the (len+1)*8 formula marched into the SCTP

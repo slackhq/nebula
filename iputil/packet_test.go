@@ -508,6 +508,8 @@ func Test_IPv6FindUpperProtocol(t *testing.T) {
 		{"non-first fragment stops", 44, append(nonFirstFrag, transport...), 17, ipv6.HeaderLen, true, nil},
 		{"unknown protocol is terminal", 132, transport, 132, ipv6.HeaderLen, false, nil}, // SCTP
 		{"truncated extension header", 0, nil, 0, ipv6.HeaderLen, false, ErrIPv6CouldNotFindPayload},
+		// Destination Options with a declared length (255+1)*8 = 2048 that runs past the 48 byte buffer, next = SCTP
+		{"extension length past buffer", 60, []byte{132, 255, 0, 0, 0, 0, 0, 0}, 132, ipv6.HeaderLen + 2048, false, ErrIPv6CouldNotFindPayload},
 	}
 
 	for _, tt := range tests {
