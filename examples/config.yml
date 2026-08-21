@@ -131,6 +131,9 @@ listen:
   port: 4242
   # Sets the max number of packets to pull from the kernel for each syscall (under systems that support recvmmsg)
   # default is 64, does not support reload
+  # Note: on Linux with UDP GRO (kernel 5.10+), each receive slot is sized for a full 64KiB coalesced
+  # superpacket, so the receive scratch is batch * 64KiB per listening socket (~4MiB per routine at the
+  # default of 64). Lower this to trade peak per-syscall throughput for memory on constrained hosts.
   #batch: 64
   # Configure socket buffers for the udp side (outside), leave unset to use the system defaults. Values will be doubled by the kernel
   # Default is net.core.rmem_default and net.core.wmem_default (/proc/sys/net/core/rmem_default and /proc/sys/net/core/rmem_default)
@@ -169,6 +172,8 @@ listen:
   # allowing for more precise routing decisions based on the packet tags. Default is 0 meaning no mark is set.
   # This setting is reloadable.
   #so_mark: 0
+  # the udp_offloads setting controls if Nebula will attempt to enable GSO and GRO for its UDP socket(s). Linux only, not reloadable.
+  # udp_offloads: true
 
 # Routines is the number of thread pairs to run that consume from the tun and UDP queues.
 # Currently, this defaults to 1 which means we have 1 tun queue reader and 1
@@ -261,6 +266,33 @@ tun:
   tx_queue: 500
   # Default MTU for every packet, safe setting is (and the default) 1300 for internet based traffic
   mtu: 1300
+
+  # the use_offloads setting controls if Nebula will attempt to enable GSO and GRO for the tun device. Linux only, not reloadable.
+  #use_offloads: true
+
+  # Linux only. pin_threads pins each tun reader/encrypt OS thread to a single CPU. This keeps every goroutine's
+  # batched sends flowing through one XPS-selected NIC TX ring, so packets within a flow stay ordered on the wire
+  # instead of being sprayed across multiple TX rings and reordered. Not reloadable. Coerced to false if routines <= 1.
+  #pin_threads: true
+
+  # pin_threads_key helps the CPU-auto-selector shuffle which CPUs are chosen for pinning.
+  # Valid options are "pid" or "port". Use "port" if you want Nebula to choose the same cores every time, which is nice for benchmarking.
+  # Linux only, not reloadable.
+  #pin_threads_key: "pid"
+
+  # Linux only. cpu_affinity overrides which CPUs the tun reader threads pin to: a list of CPU IDs, one per routine
+  # (see the top-level `routines` setting). Lists shorter than `routines` are modulo-cycled across the queues; extra
+  # entries are ignored. IDs must be within the process's allowed CPU set, so this respects taskset / cgroup cpusets;
+  # a non-integer or not-allowed entry disables the override, leaving the default pin selection described below.
+  # Only meaningful while pin_threads is true. Not reloadable.
+  # When unset (or rejected), the default spread prefers performance cores on heterogeneous CPUs (ARM big.LITTLE,
+  # Intel P/E hybrids, AMD compact cores), keeps all readers on one NUMA node and on distinct physical cores when the
+  # topology allows (SMT siblings last), leaves CPU 0's physical core as a last resort, and rotates its starting
+  # point per instance (keyed by the bound UDP port) so co-located nebulas don't stack their readers onto the
+  # same cores.
+  #cpu_affinity:
+  #  - 2
+  #  - 4
 
   # Route based MTU overrides, you have known vpn ip paths that can support larger MTUs you can increase/decrease them here
   routes:

@@ -6,7 +6,6 @@ package overlay
 import (
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/netip"
 	"os"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	netroute "golang.org/x/net/route"
@@ -550,7 +550,9 @@ func (t *tun) Read(to []byte) (int, error) {
 	return n - 4, nil
 }
 
-// Write pushes one IP packet onto the utun device.
+// Write pushes one IP packet onto the utun device. Safe for concurrent use:
+// the AF prefix and iovecs are per-call stack state, and the fd write itself
+// serializes on the runtime's fd mutex (see the Queue contract in tio.go).
 func (t *tun) Write(from []byte) (int, error) {
 	if len(from) == 0 {
 		return 0, syscall.EIO
@@ -606,10 +608,6 @@ func (t *tun) Name() string {
 	return t.Device
 }
 
-func (t *tun) SupportsMultiqueue() bool {
-	return false
-}
-
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented for darwin")
+func (t *tun) Queues(int) ([]tio.Queue, error) {
+	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}, nil
 }

@@ -27,9 +27,9 @@ type GenericConn struct {
 
 var _ Conn = &GenericConn{}
 
-func NewGenericListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
-	lc := NewListenConfig(multi)
-	pc, err := lc.ListenPacket(context.TODO(), "udp", net.JoinHostPort(ip.String(), fmt.Sprintf("%v", port)))
+func NewGenericListener(l *slog.Logger, s Settings) (Conn, error) {
+	lc := NewListenConfig(s.Multi)
+	pc, err := lc.ListenPacket(context.TODO(), "udp", s.Listen.String())
 	if err != nil {
 		return nil, err
 	}
@@ -42,6 +42,19 @@ func NewGenericListener(l *slog.Logger, ip netip.Addr, port int, multi bool, bat
 func (u *GenericConn) WriteTo(b []byte, addr netip.AddrPort) error {
 	_, err := u.UDPConn.WriteToUDPAddrPort(b, addr)
 	return err
+}
+
+func (u *GenericConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
+	// An un-sendable destination costs its own packet, never the ones behind it in the batch.
+	written := 0
+	for i, b := range bufs {
+		if _, err := u.UDPConn.WriteToUDPAddrPort(b, addrs[i]); err == nil {
+			written++
+		} else {
+			u.l.Debug("failed to write packet in batch", "udpAddr", addrs[i], "error", err)
+		}
+	}
+	return written, nil
 }
 
 func (u *GenericConn) LocalAddr() (netip.AddrPort, error) {
@@ -73,7 +86,7 @@ type rawMessage struct {
 	Len uint32
 }
 
-func (u *GenericConn) ListenOut(r EncReader) error {
+func (u *GenericConn) ListenOut(r EncReader, flush func()) error {
 	buffer := make([]byte, MTU)
 
 	var lastRecvErr time.Time
@@ -93,7 +106,8 @@ func (u *GenericConn) ListenOut(r EncReader) error {
 			continue
 		}
 
-		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n])
+		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n:n])
+		flush()
 	}
 }
 

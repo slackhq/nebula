@@ -6,6 +6,7 @@ import (
 	"net/netip"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 )
 
@@ -46,12 +47,16 @@ func (d *UserDevice) RoutesFor(ip netip.Addr) routing.Gateways {
 	return routing.Gateways{routing.NewGateway(ip, 1)}
 }
 
-func (d *UserDevice) SupportsMultiqueue() bool {
-	return true
-}
-
-func (d *UserDevice) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return d, nil
+func (d *UserDevice) Queues(n int) ([]tio.Queue, error) {
+	out := make([]tio.Queue, n)
+	for i := range out {
+		// All queues share the underlying pipes (the io.Pipe serializes
+		// concurrent callers) but each owns a private scratch buffer so
+		// concurrent Reads across queues never alias. NoClose: the pipes are
+		// owned by the UserDevice and torn down once by UserDevice.Close.
+		out[i] = tio.NewSingleQueueNoClose(d, defaultBatchBufSize)
+	}
+	return out, nil
 }
 
 func (d *UserDevice) Pipe() (*io.PipeReader, *io.PipeWriter) {
@@ -61,9 +66,11 @@ func (d *UserDevice) Pipe() (*io.PipeReader, *io.PipeWriter) {
 func (d *UserDevice) Read(p []byte) (n int, err error) {
 	return d.outboundReader.Read(p)
 }
+
 func (d *UserDevice) Write(p []byte) (n int, err error) {
 	return d.inboundWriter.Write(p)
 }
+
 func (d *UserDevice) Close() error {
 	d.inboundWriter.Close()
 	d.outboundWriter.Close()

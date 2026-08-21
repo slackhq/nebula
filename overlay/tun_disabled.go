@@ -10,6 +10,7 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 )
 
@@ -21,6 +22,23 @@ type disabledTun struct {
 	tx metrics.Counter
 	rx metrics.Counter
 	l  *slog.Logger
+}
+
+// Read hands the next queued packet to a reader, copying it into b. Reads
+// from concurrent queues are safe: the channel receive serializes them and
+// each queue copies into its own private scratch buffer.
+func (t *disabledTun) Read(b []byte) (int, error) {
+	r, ok := <-t.read
+	if !ok {
+		return 0, io.EOF
+	}
+
+	t.tx.Inc(1)
+	if t.l.Enabled(context.Background(), slog.LevelDebug) {
+		t.l.Debug("Write payload", "raw", prettyPacket(r))
+	}
+
+	return copy(b, r), nil
 }
 
 func newDisabledTun(vpnNetworks []netip.Prefix, queueLen int, metricsEnabled bool, l *slog.Logger) *disabledTun {
@@ -57,24 +75,6 @@ func (*disabledTun) Name() string {
 	return "disabled"
 }
 
-func (t *disabledTun) Read(b []byte) (int, error) {
-	r, ok := <-t.read
-	if !ok {
-		return 0, io.EOF
-	}
-
-	if len(r) > len(b) {
-		return 0, fmt.Errorf("packet larger than mtu: %d > %d bytes", len(r), len(b))
-	}
-
-	t.tx.Inc(1)
-	if t.l.Enabled(context.Background(), slog.LevelDebug) {
-		t.l.Debug("Write payload", "raw", prettyPacket(r))
-	}
-
-	return copy(b, r), nil
-}
-
 func (t *disabledTun) handleICMPEchoRequest(b []byte) bool {
 	out := make([]byte, len(b))
 	out = iputil.CreateICMPEchoResponse(b, out)
@@ -106,12 +106,14 @@ func (t *disabledTun) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-func (t *disabledTun) SupportsMultiqueue() bool {
-	return true
-}
-
-func (t *disabledTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return t, nil
+func (t *disabledTun) Queues(n int) ([]tio.Queue, error) {
+	out := make([]tio.Queue, n)
+	for i := range out {
+		// NoClose: the shared channel and metrics are owned by the
+		// disabledTun; Close on the device tears them down once for everybody.
+		out[i] = tio.NewSingleQueueNoClose(t, defaultBatchBufSize)
+	}
+	return out, nil
 }
 
 func (t *disabledTun) Close() error {

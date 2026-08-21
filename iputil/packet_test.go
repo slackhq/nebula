@@ -1,6 +1,7 @@
 package iputil
 
 import (
+	"bytes"
 	"encoding/binary"
 	"net"
 	"testing"
@@ -178,6 +179,46 @@ func Test_CreateRejectPacket_NoICMPError(t *testing.T) {
 		rejectPacket := CreateRejectPacket(b, out)
 		assert.NotNil(t, rejectPacket, "ICMP type %d should generate a reject packet", icmpType)
 	}
+}
+
+// Test_CreateRejectPacket_RespectsCap ensures it is impossible for
+// an oversized ICMPv6 reject to overwrite the neighbor segment's bytes.
+func Test_CreateRejectPacket_RespectsCap(t *testing.T) {
+	src := net.ParseIP("fd00::1")
+	dst := net.ParseIP("fd00::2")
+
+	// Inner IPv6 UDP packet. An ICMPv6 reject copies the whole inner packet
+	// plus a 48-byte header (40 IPv6 + 8 ICMPv6), so it needs 48 more bytes
+	// than the inner packet length.
+	inner := makeIPv6Packet(src, dst, 17, make([]byte, 20))
+
+	// The ciphertext scratch reused as the reject buffer is the received
+	// datagram: 16-byte Nebula header + inner + 16-byte AEAD tag. That is only
+	// 32 bytes of slack, so a full ICMPv6 reject overruns it by 16 bytes.
+	const nebulaOverhead = 32
+	segLen := len(inner) + nebulaOverhead
+
+	// Shared backing row laid out as [segment][neighbor's 16-byte Nebula header].
+	const neighborHdr = 16
+	sentinel := bytes.Repeat([]byte{0xAB}, neighborHdr)
+
+	// Uncapped: the slice's capacity reaches into the neighbor, reproducing
+	// the overrun that silently drops the neighbor packet.
+	backing := make([]byte, segLen+neighborHdr)
+	copy(backing[segLen:], sentinel)
+	reject := CreateRejectPacket(inner, backing[:segLen])
+	assert.NotNil(t, reject, "uncapped buffer reaches into the neighbor, so the reject is built")
+	assert.NotEqual(t, sentinel, backing[segLen:segLen+neighborHdr],
+		"without the cap the oversized reject overruns into the neighbor segment")
+
+	// Capped (the fix): cap==len, so the builder cannot exceed the segment. The
+	// reject does not fit, so it is refused rather than corrupting the neighbor.
+	backing = make([]byte, segLen+neighborHdr)
+	copy(backing[segLen:], sentinel)
+	reject = CreateRejectPacket(inner, backing[:segLen:segLen])
+	assert.Nil(t, reject, "capped segment is 16 bytes too small for a full ICMPv6 reject, so it is refused")
+	assert.Equal(t, sentinel, backing[segLen:segLen+neighborHdr],
+		"capped segment must leave the neighbor untouched")
 }
 
 func makeIPv6Packet(src, dst net.IP, nextHeader uint8, payload []byte) []byte {
@@ -496,26 +537,27 @@ func Test_IPv6FindUpperProtocol(t *testing.T) {
 		wantProto    uint8
 		wantOffset   int
 		wantFragment bool
+		wantAnyFrag  bool
 		wantErr      error
 	}{
-		{"plain udp", 17, transport, 17, ipv6.HeaderLen, false, nil},
-		{"hop-by-hop then tcp", 0, append(extToTCP, transport...), 6, ipv6.HeaderLen + 8, false, nil},
-		{"routing then tcp", 43, append(extToTCP, transport...), 6, ipv6.HeaderLen + 8, false, nil},
-		{"destination then udp", 60, append(extToUDP, transport...), 17, ipv6.HeaderLen + 8, false, nil},
-		{"hop-by-hop, routing, then tcp", 0, append(append(extToRouting, extToTCP...), transport...), 6, ipv6.HeaderLen + 16, false, nil},
-		{"ah then udp", 51, append(ahToUDP, transport...), 17, ipv6.HeaderLen + 8, false, nil},
-		{"first fragment walks to transport", 44, append(firstFragToUDP, transport...), 17, ipv6.HeaderLen + 8, false, nil},
-		{"non-first fragment stops", 44, append(nonFirstFrag, transport...), 17, ipv6.HeaderLen, true, nil},
-		{"unknown protocol is terminal", 132, transport, 132, ipv6.HeaderLen, false, nil}, // SCTP
-		{"truncated extension header", 0, nil, 0, ipv6.HeaderLen, false, ErrIPv6CouldNotFindPayload},
+		{"plain udp", 17, transport, 17, ipv6.HeaderLen, false, false, nil},
+		{"hop-by-hop then tcp", 0, append(extToTCP, transport...), 6, ipv6.HeaderLen + 8, false, false, nil},
+		{"routing then tcp", 43, append(extToTCP, transport...), 6, ipv6.HeaderLen + 8, false, false, nil},
+		{"destination then udp", 60, append(extToUDP, transport...), 17, ipv6.HeaderLen + 8, false, false, nil},
+		{"hop-by-hop, routing, then tcp", 0, append(append(extToRouting, extToTCP...), transport...), 6, ipv6.HeaderLen + 16, false, false, nil},
+		{"ah then udp", 51, append(ahToUDP, transport...), 17, ipv6.HeaderLen + 8, false, false, nil},
+		{"first fragment walks to transport", 44, append(firstFragToUDP, transport...), 17, ipv6.HeaderLen + 8, false, true, nil},
+		{"non-first fragment stops", 44, append(nonFirstFrag, transport...), 17, ipv6.HeaderLen, true, true, nil},
+		{"unknown protocol is terminal", 132, transport, 132, ipv6.HeaderLen, false, false, nil}, // SCTP
+		{"truncated extension header", 0, nil, 0, ipv6.HeaderLen, false, false, ErrIPv6CouldNotFindPayload},
 		// Destination Options with a declared length (255+1)*8 = 2048 that runs past the 48 byte buffer, next = SCTP
-		{"extension length past buffer", 60, []byte{132, 255, 0, 0, 0, 0, 0, 0}, 132, ipv6.HeaderLen + 2048, false, ErrIPv6CouldNotFindPayload},
+		{"extension length past buffer", 60, []byte{132, 255, 0, 0, 0, 0, 0, 0}, 132, ipv6.HeaderLen + 2048, false, false, ErrIPv6CouldNotFindPayload},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			packet := makeIPv6Packet(src, dst, tt.nextHeader, tt.payload)
-			proto, offset, isFragment, err := IPv6FindUpperProtocol(packet)
+			proto, offset, isFragment, anyFragment, err := IPv6FindUpperProtocol(packet)
 			if tt.wantErr != nil {
 				assert.ErrorIs(t, err, tt.wantErr)
 				return
@@ -524,12 +566,13 @@ func Test_IPv6FindUpperProtocol(t *testing.T) {
 			assert.Equal(t, tt.wantProto, proto)
 			assert.Equal(t, tt.wantOffset, offset)
 			assert.Equal(t, tt.wantFragment, isFragment)
+			assert.Equal(t, tt.wantAnyFrag, anyFragment)
 		})
 	}
 
 	// A packet smaller than an ipv6 header must error rather than panic reading byte 6
 	t.Run("shorter than ipv6 header", func(t *testing.T) {
-		_, _, _, err := IPv6FindUpperProtocol(make([]byte, 6))
+		_, _, _, _, err := IPv6FindUpperProtocol(make([]byte, 6))
 		assert.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
 	})
 }

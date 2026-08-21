@@ -84,14 +84,14 @@ type TesterConn struct {
 	l *slog.Logger
 }
 
-func NewListener(l *slog.Logger, ip netip.Addr, port int, _ bool, _ int) (Conn, error) {
+func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 	c := &TesterConn{
 		RxPackets: make(chan *Packet, 10),
 		TxPackets: make(chan *Packet, 10),
 		done:      make(chan struct{}),
 		l:         l,
 	}
-	c.SetAddr(netip.AddrPortFrom(ip, uint16(port)))
+	c.SetAddr(s.Listen)
 	return c, nil
 }
 
@@ -171,14 +171,28 @@ func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
 		return nil
 	}
 }
+func (u *TesterConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
+	written := 0
+	for i, b := range bufs {
+		if err := u.WriteTo(b, addrs[i]); err == nil {
+			written++
+		} else {
+			u.l.Debug("failed to write packet in batch", "udpAddr", addrs[i], "error", err)
+		}
+	}
+	return written, nil
+}
 
-func (u *TesterConn) ListenOut(r EncReader) error {
+func (u *TesterConn) ListenOut(r EncReader, flush func()) error {
 	for {
 		select {
 		case <-u.done:
 			return os.ErrClosed
 		case p := <-u.RxPackets:
-			r(p.From, p.Data)
+			r(p.From, p.Data[:len(p.Data):len(p.Data)])
+			// The batcher borrows plaintext decrypted in place inside p.Data
+			// until Flush, so the packet must stay alive across flush()
+			flush()
 			p.Release()
 		}
 	}

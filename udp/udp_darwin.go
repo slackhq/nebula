@@ -27,9 +27,9 @@ type StdConn struct {
 
 var _ Conn = &StdConn{}
 
-func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
-	lc := NewListenConfig(multi)
-	pc, err := lc.ListenPacket(context.TODO(), "udp", net.JoinHostPort(ip.String(), fmt.Sprintf("%v", port)))
+func NewListener(l *slog.Logger, s Settings) (Conn, error) {
+	lc := NewListenConfig(s.Multi)
+	pc, err := lc.ListenPacket(context.TODO(), "udp", s.Listen.String())
 	if err != nil {
 		return nil, err
 	}
@@ -140,6 +140,22 @@ func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
 	}
 }
 
+func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
+	// An un-sendable destination costs its own packet, never the ones behind it in the batch.
+	// TODO: WriteTo maps EWOULDBLOCK to an error, so a full send buffer
+	// silently drops the rest of a burst (linux blocks instead). Poll for
+	// writability on EAGAIN before giving up on the remainder.
+	written := 0
+	for i, b := range bufs {
+		if err := u.WriteTo(b, addrs[i]); err == nil {
+			written++
+		} else {
+			u.l.Debug("failed to write packet in batch", "udpAddr", addrs[i], "error", err)
+		}
+	}
+	return written, nil
+}
+
 func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 	a := u.UDPConn.LocalAddr()
 
@@ -165,7 +181,7 @@ func NewUDPStatsEmitter(udpConns []Conn) func() {
 	return func() {}
 }
 
-func (u *StdConn) ListenOut(r EncReader) error {
+func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 	buffer := make([]byte, MTU)
 
 	for {
@@ -179,7 +195,8 @@ func (u *StdConn) ListenOut(r EncReader) error {
 			continue
 		}
 
-		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n])
+		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n:n])
+		flush()
 	}
 }
 

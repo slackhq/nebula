@@ -6,11 +6,14 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"os"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/cpupick"
 	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/sshd"
@@ -39,6 +42,9 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	if buildVersion == "" {
 		buildVersion = moduleVersion()
 	}
+
+	// Debug builds (-tags debug) serve pprof on :6060; a no-op otherwise.
+	startPprofServer(ctx, l)
 
 	// Print the config if in test, the exit comes later
 	if configTest {
@@ -170,8 +176,21 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		}
 
 		for i := 0; i < routines; i++ {
-			l.Info("listening", "addr", netip.AddrPortFrom(listenHost, uint16(port)))
-			udpServer, err := udp.NewListener(l, listenHost, port, routines > 1, c.GetInt("listen.batch", 64))
+			listen := netip.AddrPortFrom(listenHost, uint16(port))
+			l.Info("listening", "addr", listen)
+			batchSize := c.GetInt("listen.batch", 64)
+			if batchSize < 1 {
+				oldBatch := batchSize
+				batchSize = 1
+				l.Warn("listen.batch size is invalid", "provided", oldBatch, "overridden to", batchSize)
+			}
+			udpSettings := udp.Settings{
+				Listen:   listen,
+				Multi:    routines > 1,
+				Batch:    batchSize,
+				Offloads: c.GetBool("listen.udp_offloads", true),
+			}
+			udpServer, err := udp.NewListener(l, udpSettings)
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
@@ -220,6 +239,33 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		l.Warn("Failed to start DNS responder", "error", err)
 	}
 
+	pinThreads := c.GetBool("tun.pin_threads", true)
+	cpuAffinity := parseCpuAffinity(c, l, routines)
+	if pinThreads && routines > 1 && len(cpuAffinity) == 0 && !configTest {
+		// The operator didn't choose pin CPUs, so pick a default set that
+		// prefers performance cores and doesn't stack co-located instances
+		// onto allowed[0]. The bound UDP port keys the per-instance spread:
+		// distinct across instances sharing a box, stable across restarts.
+		// A nil result keeps listenIn's stock allowed[i] fallback.
+		key := uint64(os.Getpid())
+		pinKeyStr := strings.ToLower(c.GetString("tun.pin_threads_key", ""))
+		switch pinKeyStr {
+		case "":
+			l.Debug("tun.pin_threads_key is empty, using PID")
+		case "pid":
+			l.Debug("tun.pin_threads_key is PID")
+		case "port":
+			l.Info("tun.pin_threads_key is port number")
+		default:
+			l.Warn("tun.pin_threads_key is invalid, using PID")
+		}
+
+		if ap, err := udpConns[0].LocalAddr(); err == nil && ap.Port() != 0 {
+			key = uint64(ap.Port())
+		}
+		cpuAffinity = cpupick.Default(routines, key, l)
+	}
+
 	ifConfig := &InterfaceConfig{
 		HostMap:               hostMap,
 		Inside:                tun,
@@ -241,6 +287,8 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		relayManager:          NewRelayManager(ctx, l, hostMap, c),
 		punchy:                punchy,
 		ConntrackCacheTimeout: conntrackCacheTimeout,
+		CpuAffinity:           cpuAffinity,
+		PinThreads:            pinThreads,
 		l:                     l,
 	}
 
@@ -293,6 +341,70 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		networkChangeStart:     networkChanges.Start,
 		connectionManagerStart: connManager.Start,
 	}, nil
+}
+
+// parseCpuAffinity reads `tun.cpu_affinity` from the config — a list of
+// integer CPU IDs, one per TUN reader goroutine. Empty / unset returns nil
+// (listenIn falls back to spreading queues across the allowed CPU set).
+// Length mismatch with `routines` is a warning, not an error: shorter lists
+// are modulo-cycled across queues, longer lists' tail is ignored. Invalid
+// entries (non-integer, or a CPU ID we're not allowed to run on) are also a
+// warning and disable the override entirely so we don't silently pin to the
+// wrong CPU. Entries are validated against the process's current affinity
+// mask (util.AllowedCPUs) rather than 0..NumCPU-1: under a cgroup cpuset or
+// taskset the runnable IDs are frequently not that contiguous range, and
+// pinning to an unrunnable ID always fails. If the allowed set can't be
+// determined we fall back to a plain non-negative check.
+func parseCpuAffinity(c *config.C, l *slog.Logger, routines int) []int {
+	raw := c.Get("tun.cpu_affinity")
+	if raw == nil {
+		return nil
+	}
+	rv, ok := raw.([]any)
+	if !ok {
+		l.Warn("tun.cpu_affinity must be a list of integers; ignoring", "value", raw)
+		return nil
+	}
+	// allowed is the set of CPU IDs we're actually permitted to run on. A nil
+	// slice (unsupported platform or lookup error) means "can't tell", so we
+	// only apply the weaker non-negative check in that case.
+	allowed, err := util.AllowedCPUs()
+	if err != nil {
+		l.Warn("could not determine allowed CPUs; validating tun.cpu_affinity against non-negative only", "error", err)
+		allowed = nil
+	}
+	cpus := make([]int, 0, len(rv))
+	for i, e := range rv {
+		var cpu int
+		switch v := e.(type) {
+		case int:
+			cpu = v
+		case int64:
+			cpu = int(v)
+		case float64:
+			cpu = int(v)
+		default:
+			l.Warn("tun.cpu_affinity entry not an integer; ignoring affinity",
+				"index", i, "value", e)
+			return nil
+		}
+		if cpu < 0 {
+			l.Warn("tun.cpu_affinity entry out of range; ignoring affinity",
+				"index", i, "cpu", cpu)
+			return nil
+		}
+		if len(allowed) > 0 && !slices.Contains(allowed, cpu) {
+			l.Warn("tun.cpu_affinity entry not in allowed CPU set; ignoring affinity",
+				"index", i, "cpu", cpu, "allowed", allowed)
+			return nil
+		}
+		cpus = append(cpus, cpu)
+	}
+	if len(cpus) != routines {
+		l.Warn("tun.cpu_affinity length doesn't match routines; queues will modulo-cycle through the list",
+			"affinity_len", len(cpus), "routines", routines)
+	}
+	return cpus
 }
 
 func moduleVersion() string {
