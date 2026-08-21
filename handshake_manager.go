@@ -50,6 +50,12 @@ type HandshakeConfig struct {
 	retries       int64
 	triggerBuffer int
 
+	// RejectOnNoCommonNetworks causes the handshake to be aborted when the peer
+	// certificate advertises no vpn networks in common with our own. This
+	// prevents peers from occupying tunnel state when they can never exchange
+	// data-plane traffic with us (the firewall would drop their packets).
+	RejectOnNoCommonNetworks bool
+
 	messageMetrics *MessageMetrics
 }
 
@@ -772,6 +778,15 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 	msg := "Handshake message received"
 	if !anyVpnAddrsInCommon {
 		msg = "Handshake message received, but no vpnNetworks in common."
+		if hm.config.RejectOnNoCommonNetworks {
+			f.l.Info(msg+" Rejecting per handshakes.reject_on_no_common_networks.",
+				"vpnAddrs", vpnAddrs,
+				"from", via,
+				"certName", remoteCert.Certificate.Name(),
+				"fingerprint", remoteCert.Fingerprint,
+			)
+			return
+		}
 	}
 	f.l.Info(msg,
 		"vpnAddrs", vpnAddrs,
@@ -960,6 +975,17 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	msg := "Handshake message received"
 	if !anyVpnAddrsInCommon {
 		msg = "Handshake message received, but no vpnNetworks in common."
+		if hm.config.RejectOnNoCommonNetworks {
+			f.l.Info(msg+" Rejecting per handshakes.reject_on_no_common_networks.",
+				"vpnAddrs", vpnAddrs,
+				"from", via,
+				"certName", remoteCert.Certificate.Name(),
+				"fingerprint", remoteCert.Fingerprint,
+			)
+			hm.DeleteHostInfo(hostinfo)
+			f.sendCloseTunnel(hostinfo)
+			return
+		}
 	}
 	f.l.Info(msg,
 		"vpnAddrs", vpnAddrs,
