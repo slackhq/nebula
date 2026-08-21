@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/ecdh"
+	"crypto/fips140"
 	"crypto/rand"
 	"errors"
 	"flag"
@@ -266,6 +267,10 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		defer func(client *pkclient.PKClient) {
 			_ = client.Close()
 		}(p11Client)
+	}
+
+	if fips140.Enforced() && curve == cert.Curve_CURVE25519 {
+		return errors.New("use of Curve25519 is not allowed in FIPS 140-only mode")
 	}
 
 	if *sf.inPubPath != "" {
