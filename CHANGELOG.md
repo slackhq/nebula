@@ -27,7 +27,7 @@ See the [v1.11.1](https://github.com/slackhq/nebula/milestone/30?closed=1) miles
 - The ICMPv6 type was read from the wrong byte when classifying IPv6 packets, so the echo identifier used
   for conntrack was never picked up. (#1840)
 - Enforce outbound message counter limits so a tunnel is rehandshaked before the counter can wrap, preventing
-  nonce reuse. (#1841)
+  nonce reuse. This is unreachable in practice, but is enforced as a defense-in-depth measure. (#1841)
 - Prevent `nebula-cert ca` from running out of memory on 32bit systems when generating encrypted private keys. (#1834)
 - Tolerate `ErrDumpInterrupted` when listing tun addresses on Linux, so a transient interrupted netlink dump
   no longer aborts startup. (#1835)
