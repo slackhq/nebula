@@ -190,13 +190,18 @@ func SubTypeName(t MessageType, s MessageSubType) string {
 }
 
 func IsValidSubType(t MessageType, s MessageSubType) bool {
-	if n, ok := subTypeMap[t]; ok {
-		if _, ok := (*n)[s]; ok {
-			return true
-		}
+	switch t {
+	case Message:
+		return s == MessageNone || s == MessageRelay
+	case Handshake:
+		return s == HandshakeIXPSK0
+	case Test:
+		return s == TestReply || s == TestRequest
+	case Control, CloseTunnel, RecvError, LightHouse:
+		return s == 0
+	default:
+		return false
 	}
-
-	return false
 }
 
 // NewHeader turns bytes into a header

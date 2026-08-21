@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/bits"
 	"net/netip"
 	"os"
 	"strings"
@@ -52,6 +53,20 @@ func defaultCurve() string {
 }
 
 func newCaFlags() *caFlags {
+	// prevent running out of memory on 32-bit systems by defaulting to
+	// RFC9106's recommendation for memory-constrained environments
+	var (
+		defaultArgonMemory     uint
+		defaultArgonIterations uint
+	)
+	if bits.UintSize == 32 {
+		defaultArgonMemory = 64 * 1024
+		defaultArgonIterations = 3
+	} else {
+		defaultArgonMemory = 2 * 1024 * 1024
+		defaultArgonIterations = 1
+	}
+
 	cf := caFlags{set: flag.NewFlagSet("ca", flag.ContinueOnError)}
 	cf.set.Usage = func() {}
 	cf.name = cf.set.String("name", "", "Required: name of the certificate authority")
@@ -63,9 +78,9 @@ func newCaFlags() *caFlags {
 	cf.groups = cf.set.String("groups", "", "Optional: comma separated list of groups. This will limit which groups subordinate certs can use")
 	cf.networks = cf.set.String("networks", "", "Optional: comma separated list of ip address and network in CIDR notation. This will limit which ip addresses and networks subordinate certs can use in networks")
 	cf.unsafeNetworks = cf.set.String("unsafe-networks", "", "Optional: comma separated list of ip address and network in CIDR notation. This will limit which ip addresses and networks subordinate certs can use in unsafe networks")
-	cf.argonMemory = cf.set.Uint("argon-memory", 2*1024*1024, "Optional: Argon2 memory parameter (in KiB) used for encrypted private key passphrase")
+	cf.argonMemory = cf.set.Uint("argon-memory", defaultArgonMemory, "Optional: Argon2 memory parameter (in KiB) used for encrypted private key passphrase")
 	cf.argonParallelism = cf.set.Uint("argon-parallelism", 4, "Optional: Argon2 parallelism parameter used for encrypted private key passphrase")
-	cf.argonIterations = cf.set.Uint("argon-iterations", 1, "Optional: Argon2 iterations parameter used for encrypted private key passphrase")
+	cf.argonIterations = cf.set.Uint("argon-iterations", defaultArgonIterations, "Optional: Argon2 iterations parameter used for encrypted private key passphrase")
 	cf.encryption = cf.set.Bool("encrypt", false, "Optional: prompt for passphrase and write out-key in an encrypted format")
 	cf.curve = cf.set.String("curve", defaultCurve(), "EdDSA/ECDSA Curve (25519, P256)")
 	cf.p11url = p11Flag(cf.set)

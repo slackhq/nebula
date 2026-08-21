@@ -6,10 +6,12 @@ import (
 	"time"
 
 	"github.com/flynn/noise"
+	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
 	ct "github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -79,11 +81,51 @@ func runTestHandshake(t *testing.T) (initR, respR *handshake.Result) {
 	return initR, respR
 }
 
+func TestConnectionState_NextMessageCounter(t *testing.T) {
+	cs := &ConnectionState{}
+	cs.messageCounter.Store(RejectAfterMessages - 2)
+
+	c, ok := cs.NextMessageCounter()
+	assert.True(t, ok)
+	assert.Equal(t, RejectAfterMessages-1, c)
+
+	// Hitting the limit refuses and pins the counter there
+	c, ok = cs.NextMessageCounter()
+	assert.False(t, ok)
+	assert.Equal(t, RejectAfterMessages, c)
+	assert.Equal(t, RejectAfterMessages, cs.messageCounter.Load())
+
+	// Continued send attempts stay refused and the counter never wraps
+	for i := 0; i < 10; i++ {
+		_, ok = cs.NextMessageCounter()
+		assert.False(t, ok)
+	}
+	assert.Equal(t, RejectAfterMessages, cs.messageCounter.Load())
+}
+
+// TestSendNoMetricsDropsExhausted drives the send path to the exhausted drop; metric and out flag prove it.
+func TestSendNoMetricsDropsExhausted(t *testing.T) {
+	initR, _ := runTestHandshake(t)
+	ci, err := newConnectionStateFromResult(initR)
+	require.NoError(t, err)
+	ci.messageCounter.Store(RejectAfterMessages - 1)
+
+	f := &Interface{l: test.NewLogger(), messageMetrics: &MessageMetrics{txExhausted: metrics.NewCounter()}}
+	hostinfo := &HostInfo{vpnAddrs: []netip.Addr{netip.MustParseAddr("10.0.0.1")}, ConnectionState: ci}
+
+	f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, []byte{}, make([]byte, 12), make([]byte, mtu), 0)
+
+	// The crossing send is refused: it records an exhaustion drop and never reaches connectionManager.Out.
+	assert.Equal(t, int64(1), f.messageMetrics.txExhausted.Count())
+	assert.False(t, hostinfo.out.Load())
+}
+
 func TestNewConnectionStateFromResult(t *testing.T) {
 	initR, respR := runTestHandshake(t)
 
 	t.Run("initiator", func(t *testing.T) {
-		ci := newConnectionStateFromResult(initR)
+		ci, err := newConnectionStateFromResult(initR)
+		require.NoError(t, err)
 		assert.True(t, ci.initiator)
 		assert.Equal(t, initR.MyCert, ci.myCert)
 		assert.Equal(t, initR.RemoteCert, ci.peerCert)
@@ -102,8 +144,17 @@ func TestNewConnectionStateFromResult(t *testing.T) {
 		assert.True(t, ci.window.Check(nil, 3), "counter 3 must not be pre-seeded")
 	})
 
+	t.Run("message index too large is refused", func(t *testing.T) {
+		bad := *initR
+		bad.MessageIndex = ReplayWindow
+		ci, err := newConnectionStateFromResult(&bad)
+		require.Error(t, err)
+		assert.Nil(t, ci)
+	})
+
 	t.Run("responder", func(t *testing.T) {
-		ci := newConnectionStateFromResult(respR)
+		ci, err := newConnectionStateFromResult(respR)
+		require.NoError(t, err)
 		assert.False(t, ci.initiator)
 		assert.Equal(t, respR.MyCert, ci.myCert)
 		assert.Equal(t, respR.RemoteCert, ci.peerCert)

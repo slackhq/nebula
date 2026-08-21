@@ -2,10 +2,15 @@ package iputil
 
 import (
 	"encoding/binary"
+	"errors"
 
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 )
+
+// ErrIPv6CouldNotFindPayload is returned when the ipv6 extension header chain is truncated before a terminal
+// upper layer protocol is reached.
+var ErrIPv6CouldNotFindPayload = errors.New("could not find payload in ipv6 packet")
 
 const (
 	// MaxIPv4RejectPacketSize is the largest IPv4 reject packet:
@@ -199,8 +204,8 @@ func ipv4CreateRejectTCPPacket(packet []byte, out []byte) []byte {
 }
 
 func ipv6CreateRejectPacket(packet []byte, out []byte) []byte {
-	proto, offset, isFragment := ipv6FindUpperProtocol(packet)
-	if isFragment {
+	proto, offset, isFragment, _, err := IPv6FindUpperProtocol(packet)
+	if err != nil || isFragment {
 		return nil
 	}
 	switch proto {
@@ -333,40 +338,60 @@ func ipv6CreateRejectTCPPacket(packet []byte, out []byte, offset int) []byte {
 	return out
 }
 
-func ipv6FindUpperProtocol(packet []byte) (nextHeader uint8, offset int, isFragment bool) {
+// IPv6FindUpperProtocol walks the ipv6 extension header chain and returns the upper layer protocol, the
+// offset it begins at, and whether the packet is a non-first fragment. Only the RFC 8200 and IANA extension
+// headers below are walked. Everything else, including Mobility (135), HIP (139), Shim6 (140), experimental
+// 253/254, and real upper layer protocols like SCTP or GRE, is terminal. Walking those as extension headers
+// is a firewall bypass, so they fail closed. For a non-first fragment the returned protocol is the fragmented
+// protocol and offset points at the fragment header, there is no transport header to locate. Returns
+// ErrIPv6CouldNotFindPayload if packet is smaller than an ipv6 header or the chain is truncated before a
+// terminal protocol is reached.
+func IPv6FindUpperProtocol(packet []byte) (nextHeader uint8, offset int, isFragment bool, anyFragment bool, err error) {
+	const maxIPv6ExtHeaders = 8
+	if len(packet) < ipv6.HeaderLen {
+		return 0, 0, false, false, ErrIPv6CouldNotFindPayload
+	}
 	nextHeader = packet[6]
 	offset = ipv6.HeaderLen
 
-	for {
+	for range maxIPv6ExtHeaders {
 		switch nextHeader {
 		case 0, 43, 60: // Hop-by-Hop, Routing, Destination
 			if len(packet) < offset+2 {
-				return nextHeader, offset, isFragment
+				return nextHeader, offset, isFragment, anyFragment, ErrIPv6CouldNotFindPayload
 			}
 			nextHeader = packet[offset]
 			offset += (int(packet[offset+1]) + 1) << 3
 
 		case 44: // Fragment
 			if len(packet) < offset+8 {
-				return nextHeader, offset, isFragment
+				return nextHeader, offset, isFragment, anyFragment, ErrIPv6CouldNotFindPayload
 			}
+			anyFragment = true
+			// Non-first fragments carry no transport header, report the fragmented protocol and stop
 			if packet[offset+2] != 0 || packet[offset+3]&0xf8 != 0 {
-				isFragment = true
+				return packet[offset], offset, true, anyFragment, nil
 			}
 			nextHeader = packet[offset]
 			offset += 8
 
 		case 51: // AH
 			if len(packet) < offset+2 {
-				return nextHeader, offset, isFragment
+				return nextHeader, offset, isFragment, anyFragment, ErrIPv6CouldNotFindPayload
 			}
 			nextHeader = packet[offset]
 			offset += (int(packet[offset+1]) + 2) << 2
 
 		default:
-			return nextHeader, offset, isFragment
+			// A prior extension header can declare a length that advances offset past the packet. The terminal
+			// protocol's header isn't actually here, so treat the chain as truncated rather than classifying it.
+			if offset > len(packet) {
+				return nextHeader, offset, isFragment, anyFragment, ErrIPv6CouldNotFindPayload
+			}
+			return nextHeader, offset, isFragment, anyFragment, nil
 		}
 	}
+	return nextHeader, offset, isFragment, anyFragment, nil
 }
 
 func CreateICMPEchoResponse(packet, out []byte) []byte {

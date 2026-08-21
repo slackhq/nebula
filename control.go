@@ -115,7 +115,7 @@ func (c *Control) Start() error {
 		c.lighthouseStart()
 	}
 
-	c.f.triggerShutdown = c.Stop
+	c.f.triggerShutdown = func() { go c.Stop() }
 
 	// Start reading packets.
 	c.f.run()

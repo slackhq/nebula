@@ -543,6 +543,17 @@ func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) bool {
 	return final
 }
 
+func (hm *HostMap) QueryIndexCached(index uint32, cache map[uint32]*HostInfo) *HostInfo {
+	if out, ok := cache[index]; ok {
+		return out
+	}
+	out := hm.QueryIndex(index)
+	if out != nil {
+		cache[index] = out
+	}
+	return out
+}
+
 func (hm *HostMap) QueryIndex(index uint32) *HostInfo {
 	hm.RLock()
 	if h, ok := hm.Indexes[index]; ok {

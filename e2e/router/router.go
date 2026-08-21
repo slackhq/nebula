@@ -6,11 +6,13 @@ package router
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -22,7 +24,6 @@ import (
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/udp"
-	"golang.org/x/exp/maps"
 )
 
 // outNatKey is the (from, to) pair used by outNat. Comparable struct, so it works as a map key without the
@@ -153,6 +154,9 @@ const (
 	ExitNow ExitType = 1
 	// RouteAndExit routes this packet and exits immediately afterwards
 	RouteAndExit ExitType = 2
+	// Drop discards this packet without delivering it and keeps routing. Use it to simulate a blackhole, such as
+	// a restrictive NAT refusing traffic from an address it has not seen.
+	Drop ExitType = 3
 )
 
 type ExitFunc func(packet *udp.Packet, receiver *nebula.Control) ExitType
@@ -163,7 +167,9 @@ type ExitFunc func(packet *udp.Packet, receiver *nebula.Control) ExitType
 func NewR(t testing.TB, controls ...*nebula.Control) *R {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	if err := os.MkdirAll("mermaid", 0755); err != nil {
+	// t.Name() contains a slash for subtests, so the flow log can land in a nested directory
+	fn := filepath.Join("mermaid", fmt.Sprintf("%s.md", t.Name()))
+	if err := os.MkdirAll(filepath.Dir(fn), 0755); err != nil {
 		panic(err)
 	}
 
@@ -174,7 +180,7 @@ func NewR(t testing.TB, controls ...*nebula.Control) *R {
 		outNat:       make(map[outNatKey]netip.AddrPort),
 		flow:         []flowEntry{},
 		ignoreFlows:  []ignoreFlow{},
-		fn:           filepath.Join("mermaid", fmt.Sprintf("%s.md", t.Name())),
+		fn:           fn,
 		t:            t,
 		cancelRender: cancel,
 	}
@@ -369,7 +375,7 @@ func (r *R) RenderHostmaps(title string, controls ...*nebula.Control) {
 }
 
 func (r *R) renderHostmaps(title string) {
-	c := maps.Values(r.controls)
+	c := slices.AppendSeq(make([]*nebula.Control, 0, len(r.controls)), maps.Values(r.controls))
 	sort.SliceStable(c, func(i, j int) bool {
 		return c[i].GetVpnAddrs()[0].Compare(c[j].GetVpnAddrs()[0]) > 0
 	})
@@ -687,6 +693,10 @@ func (r *R) RouteExitFunc(sender *nebula.Control, whatDo ExitFunc) {
 			p.Release()
 			return
 
+		case Drop:
+			// Record it so the flow log shows the attempt, but never hand it to the receiver
+			r.unlockedInjectFlow(sender, receiver, p, false)
+
 		case KeepRouting:
 			fp := r.unlockedInjectFlow(sender, receiver, p, false)
 			receiver.InjectUDPPacket(p)
@@ -778,6 +788,10 @@ func (r *R) RouteForAllExitFuncOrTimeout(timeout time.Duration, whatDo ExitFunc)
 			r.Unlock()
 			p.Release()
 			return true
+
+		case Drop:
+			// Record it so the flow log shows the attempt, but never hand it to the receiver
+			r.unlockedInjectFlow(cm[x], receiver, p, false)
 
 		case KeepRouting:
 			fp := r.unlockedInjectFlow(cm[x], receiver, p, false)
@@ -883,6 +897,10 @@ func (r *R) RouteForAllExitFunc(whatDo ExitFunc) {
 			r.Unlock()
 			p.Release()
 			return
+
+		case Drop:
+			// Record it so the flow log shows the attempt, but never hand it to the receiver
+			r.unlockedInjectFlow(cm[x], receiver, p, false)
 
 		case KeepRouting:
 			fp := r.unlockedInjectFlow(cm[x], receiver, p, false)

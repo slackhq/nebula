@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/slackhq/nebula/logging"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 )
@@ -30,27 +31,27 @@ func newFixedTicker(t *testing.T, l *slog.Logger, cacheLen int) *ConntrackCacheT
 
 func TestConntrackCacheTicker_Get_TextFormat(t *testing.T) {
 	buf := &bytes.Buffer{}
-	l := test.NewLoggerWithOutputAndLevel(buf, slog.LevelDebug)
+	l := test.NewLoggerWithOutputAndLevel(buf, logging.LevelTrace)
 
 	c := newFixedTicker(t, l, 3)
 	c.Get()
 
-	assert.Equal(t, "level=DEBUG msg=\"resetting conntrack cache\" len=3\n", buf.String())
+	assert.Equal(t, "level=DEBUG-4 msg=\"resetting conntrack cache\" len=3\n", buf.String())
 }
 
 func TestConntrackCacheTicker_Get_JSONFormat(t *testing.T) {
 	buf := &bytes.Buffer{}
-	l := test.NewJSONLoggerWithOutput(buf, slog.LevelDebug)
+	l := test.NewJSONLoggerWithOutput(buf, logging.LevelTrace)
 
 	c := newFixedTicker(t, l, 2)
 	c.Get()
 
-	assert.JSONEq(t, `{"level":"DEBUG","msg":"resetting conntrack cache","len":2}`, strings.TrimSpace(buf.String()))
+	assert.JSONEq(t, `{"level":"DEBUG-4","msg":"resetting conntrack cache","len":2}`, strings.TrimSpace(buf.String()))
 }
 
-func TestConntrackCacheTicker_Get_QuietBelowDebug(t *testing.T) {
+func TestConntrackCacheTicker_Get_QuietBelowTrace(t *testing.T) {
 	buf := &bytes.Buffer{}
-	l := test.NewLoggerWithOutputAndLevel(buf, slog.LevelInfo)
+	l := test.NewLoggerWithOutputAndLevel(buf, slog.LevelDebug)
 
 	c := newFixedTicker(t, l, 5)
 	c.Get()
@@ -60,7 +61,7 @@ func TestConntrackCacheTicker_Get_QuietBelowDebug(t *testing.T) {
 
 func TestConntrackCacheTicker_Get_QuietWhenCacheEmpty(t *testing.T) {
 	buf := &bytes.Buffer{}
-	l := test.NewLoggerWithOutputAndLevel(buf, slog.LevelDebug)
+	l := test.NewLoggerWithOutputAndLevel(buf, logging.LevelTrace)
 
 	c := newFixedTicker(t, l, 0)
 	c.Get()
