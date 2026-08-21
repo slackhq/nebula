@@ -3,7 +3,9 @@ package main
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/fips140"
 	"crypto/rand"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -44,6 +46,13 @@ type caFlags struct {
 	subnets *string
 }
 
+func defaultCurve() string {
+	if fips140.Enforced() {
+		return "P256"
+	}
+	return "25519"
+}
+
 func newCaFlags() *caFlags {
 	// prevent running out of memory on 32-bit systems by defaulting to
 	// RFC9106's recommendation for memory-constrained environments
@@ -74,7 +83,7 @@ func newCaFlags() *caFlags {
 	cf.argonParallelism = cf.set.Uint("argon-parallelism", 4, "Optional: Argon2 parallelism parameter used for encrypted private key passphrase")
 	cf.argonIterations = cf.set.Uint("argon-iterations", defaultArgonIterations, "Optional: Argon2 iterations parameter used for encrypted private key passphrase")
 	cf.encryption = cf.set.Bool("encrypt", false, "Optional: prompt for passphrase and write out-key in an encrypted format")
-	cf.curve = cf.set.String("curve", "25519", "EdDSA/ECDSA Curve (25519, P256)")
+	cf.curve = cf.set.String("curve", defaultCurve(), "EdDSA/ECDSA Curve (25519, P256)")
 	cf.p11url = p11Flag(cf.set)
 
 	cf.ips = cf.set.String("ips", "", "Deprecated, see -networks")
@@ -259,6 +268,9 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 	} else {
 		switch *cf.curve {
 		case "25519", "X25519", "Curve25519", "CURVE25519":
+			if fips140.Enforced() {
+				return errors.New("use of Curve25519 is not allowed in FIPS 140-only mode")
+			}
 			curve = cert.Curve_CURVE25519
 			pub, rawPriv, err = ed25519.GenerateKey(rand.Reader)
 			if err != nil {

@@ -58,9 +58,14 @@ jobs:
           e2e-cmd: make e2evv
         - name: linux-boringcrypto
           os: ubuntu-latest
-          build-cmd: make bin-boringcrypto
-          test-cmd: make test-boringcrypto
-          e2e-cmd: make e2e GOEXPERIMENT=boringcrypto CGO_ENABLED=1 TEST_ENV="TEST_LOGS=1" TEST_FLAGS="-v -ldflags -checklinkname=0"
+          build-cmd: make boringcrypto
+          test-cmd: make boringcrypto test
+          e2e-cmd: make boringcrypto e2evv
+        - name: linux-fips140
+          os: ubuntu-latest
+          build-cmd: make fips140-all
+          test-cmd: make fips140-all GOALS=test
+          e2e-cmd: make fips140-all GOALS=e2evv
         - name: linux-pkcs11
           os: ubuntu-latest
           build-cmd: make bin-pkcs11

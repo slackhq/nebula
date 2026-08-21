@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/fips140"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -24,7 +26,7 @@ func newKeygenFlags() *keygenFlags {
 	cf.set.Usage = func() {}
 	cf.outPubPath = cf.set.String("out-pub", "", "Required: path to write the public key to")
 	cf.outKeyPath = cf.set.String("out-key", "", "Required: path to write the private key to")
-	cf.curve = cf.set.String("curve", "25519", "ECDH Curve (25519, P256)")
+	cf.curve = cf.set.String("curve", defaultCurve(), "ECDH Curve (25519, P256)")
 	cf.p11url = p11Flag(cf.set)
 	return &cf
 }
@@ -61,6 +63,9 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 	} else {
 		switch *cf.curve {
 		case "25519", "X25519", "Curve25519", "CURVE25519":
+			if fips140.Enforced() {
+				return errors.New("use of Curve25519 is not allowed in FIPS 140-only mode")
+			}
 			pub, rawPriv = x25519Keypair()
 			curve = cert.Curve_CURVE25519
 		case "P256":
