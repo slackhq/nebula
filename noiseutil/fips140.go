@@ -5,6 +5,7 @@ import (
 	"crypto/cipher"
 	"crypto/fips140"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"reflect"
 	"runtime"
@@ -113,6 +114,12 @@ func (c *aeadGCMFIPS140Cipher) Decrypt(out []byte, n uint64, ad, ciphertext []by
 }
 
 func (c *aeadGCMFIPS140Cipher) EncryptDanger(out, ad, plaintext []byte, n uint64, nb []byte) ([]byte, error) {
+	if c == nil {
+		return nil, errors.New("no cipher state available to encrypt")
+	}
+	if n >= RejectAfterMessages {
+		return nil, ErrMessageCounterExhausted
+	}
 	binary.BigEndian.PutUint64(nb[4:], n)
 	out = c.Seal(out, nb, plaintext, ad)
 	return out, nil
