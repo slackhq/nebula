@@ -130,14 +130,19 @@ func aeadGCMFIPS140CipherNonce(n uint64) []byte {
 	return nonce[:]
 }
 
-// init validates the go:linkname + reflection extraction and the nonce-reuse
-// protection at startup, in every build. cipherAESGCMFIPS140 relies on unexported
+func init() {
+	if boringEnabled || fips140.Enabled() {
+		initSelfTestAESGCMFIPS140()
+	}
+}
+
+// validates the go:linkname + reflection extraction and the nonce-reuse
+// protection at startup. cipherAESGCMFIPS140 relies on unexported
 // crypto/tls and crypto/internal/fips140 internals; if a future Go version changes
 // those, this fails fast with a clear message instead of panicking per-handshake
 // (or, worse, silently losing the strictly-increasing nonce check that is the whole
-// point of using this cipher). Because this file has no build tag, this self-test
-// runs even in non-FIPS builds, so the default CI lane catches an incompatible Go.
-func init() {
+// point of using this cipher).
+func initSelfTestAESGCMFIPS140() {
 	var key [32]byte
 	c := cipherAESGCMFIPS140(key)
 
@@ -154,13 +159,9 @@ func init() {
 	}
 
 	// Verify the nonce-reuse protection still fires: re-encrypting with the same
-	// counter must panic. This is the guarantee we depend on for nonce safety, so
+	// counter must panic. This is the defensive check that FIPS-140 requires, so
 	// if the extraction ever silently yields an AEAD without it, refuse to start.
-	// The strictly-increasing nonce check only exists under boringcrypto/fips140;
-	// in a plain build aeadAESGCMTLS13 wraps a standard GCM that does not enforce
-	// it (and CipherAESGCMFIPS140 is unused there anyway), so only assert it when
-	// one of those modes is active.
-	if (boringEnabled || fips140.Enabled()) && !reusePanics(c) {
+	if !reusePanics(c) {
 		panic(fmt.Sprintf("noiseutil: FIPS AES-GCM self-test did not reject a reused nonce on %s; nonce-reuse protection is missing (incompatible Go version)", runtime.Version()))
 	}
 }
