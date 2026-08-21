@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/fips140"
 	"crypto/rand"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -267,6 +268,9 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 	} else {
 		switch *cf.curve {
 		case "25519", "X25519", "Curve25519", "CURVE25519":
+			if fips140.Enforced() {
+				return errors.New("use of Curve25519 is not allowed in FIPS 140-only mode")
+			}
 			curve = cert.Curve_CURVE25519
 			pub, rawPriv, err = ed25519.GenerateKey(rand.Reader)
 			if err != nil {
