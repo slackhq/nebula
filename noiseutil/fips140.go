@@ -126,8 +126,18 @@ func (c *aeadGCMFIPS140Cipher) EncryptDanger(out, ad, plaintext []byte, n uint64
 }
 
 func (c *aeadGCMFIPS140Cipher) DecryptDanger(out, ad, ciphertext []byte, n uint64, nb []byte) ([]byte, error) {
+	if c == nil {
+		return []byte{}, nil
+	}
 	binary.BigEndian.PutUint64(nb[4:], n)
 	return c.Open(out, nb, ciphertext, ad)
+}
+
+func (c *aeadGCMFIPS140Cipher) Overhead() int {
+	if c == nil {
+		return 0
+	}
+	return c.AEAD.Overhead()
 }
 
 func aeadGCMFIPS140CipherNonce(n uint64) []byte {
