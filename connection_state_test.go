@@ -12,6 +12,7 @@ import (
 	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/test"
+	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -117,7 +118,33 @@ func TestSendNoMetricsDropsExhausted(t *testing.T) {
 
 	// The crossing send is refused: it records an exhaustion drop and never reaches connectionManager.Out.
 	assert.Equal(t, int64(1), f.messageMetrics.txExhausted.Count())
-	assert.False(t, hostinfo.out.Load())
+	assert.False(t, hostinfo.sentSinceCheck())
+}
+
+// TestSendNoMetricsCloseTunnelKeepsRebindEpoch pins that a closing tunnel does not consume a rebind, a later
+// packet on a re-established tunnel still needs that edge to trigger the far-side punch.
+func TestSendNoMetricsCloseTunnelKeepsRebindEpoch(t *testing.T) {
+	initR, _ := runTestHandshake(t)
+	ci, err := newConnectionStateFromResult(initR)
+	require.NoError(t, err)
+
+	f := &Interface{
+		l:                 test.NewLogger(),
+		messageMetrics:    &MessageMetrics{txExhausted: metrics.NewCounter()},
+		writers:           []udp.Conn{udp.NoopConn{}},
+		connectionManager: &connectionManager{},
+	}
+	hostinfo := &HostInfo{vpnAddrs: []netip.Addr{netip.MustParseAddr("10.0.0.1")}, ConnectionState: ci}
+
+	// Tunnel is on epoch 0, then we rebind.
+	hostinfo.markOut(0)
+	f.rebindEpoch.Add(1)
+
+	remote := netip.MustParseAddrPort("10.0.0.2:4242")
+	f.sendNoMetrics(header.CloseTunnel, 0, ci, hostinfo, remote, []byte{}, make([]byte, 12), make([]byte, mtu), 0)
+
+	// markOut at the new epoch still reports the move, so the edge was preserved.
+	assert.True(t, hostinfo.markOut(1), "a CloseTunnel send must not consume the rebind epoch")
 }
 
 func TestNewConnectionStateFromResult(t *testing.T) {
