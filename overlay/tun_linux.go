@@ -133,7 +133,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue 
 		baseFlags |= unix.IFF_MULTI_QUEUE
 	}
 	nameStr := c.GetString("tun.dev", "")
-	useOffloads := c.GetBool("tun.use_offloads", true)
+	useOffloads := c.GetBool("tun.use_offloads", false)
 
 	var fd int
 	var name string
