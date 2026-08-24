@@ -188,7 +188,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 				Listen:   listen,
 				Multi:    routines > 1,
 				Batch:    batchSize,
-				Offloads: c.GetBool("listen.udp_offloads", true),
+				Offloads: c.GetBool("listen.udp_offloads", false),
 			}
 			udpServer, err := udp.NewListener(l, udpSettings)
 			if err != nil {
