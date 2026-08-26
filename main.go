@@ -247,7 +247,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		// onto allowed[0]. The bound UDP port keys the per-instance spread:
 		// distinct across instances sharing a box, stable across restarts.
 		// A nil result keeps listenIn's stock allowed[i] fallback.
-		key := uint64(os.Getpid())
+		key := uint64(os.Getpid()) //default to PID
 		pinKeyStr := strings.ToLower(c.GetString("tun.pin_threads_key", ""))
 		switch pinKeyStr {
 		case "":
@@ -255,14 +255,16 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		case "pid":
 			l.Debug("tun.pin_threads_key is PID")
 		case "port":
-			l.Info("tun.pin_threads_key is port number")
+			if ap, err := udpConns[0].LocalAddr(); err == nil && ap.Port() != 0 {
+				l.Info("tun.pin_threads_key is port number")
+				key = uint64(ap.Port())
+			} else {
+				l.Warn("Failed to get a port number for tun.pin_threads_key, falling back to PID", err)
+			}
 		default:
 			l.Warn("tun.pin_threads_key is invalid, using PID")
 		}
 
-		if ap, err := udpConns[0].LocalAddr(); err == nil && ap.Port() != 0 {
-			key = uint64(ap.Port())
-		}
 		cpuAffinity = cpupick.Default(routines, key, l)
 	}
 
