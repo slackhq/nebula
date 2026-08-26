@@ -259,7 +259,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 				l.Info("tun.pin_threads_key is port number")
 				key = uint64(ap.Port())
 			} else {
-				l.Warn("Failed to get a port number for tun.pin_threads_key, falling back to PID", err)
+				l.Warn("Failed to get a port number for tun.pin_threads_key, falling back to PID", "err", err)
 			}
 		default:
 			l.Warn("tun.pin_threads_key is invalid, using PID")
