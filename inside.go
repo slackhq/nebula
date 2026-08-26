@@ -58,6 +58,9 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Parse
 			// kernel as one giant blob; segment first so the loopback
 			// path sees one IP datagram per Write.
 			err := tio.SegmentSuperpacket(pkt, func(seg []byte) error {
+				// The kernel may have left the transport checksum for hardware
+				// offload to finish; nothing between here and the tun will.
+				iputil.SetTransportChecksum(seg)
 				_, werr := f.queues[q].Write(seg)
 				return werr
 			})
