@@ -37,6 +37,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		// routes packets from the Nebula addr to the Nebula addr through the Nebula
 		// TUN device.
 		if immediatelyForwardToSelf {
+			iputil.SetTransportChecksum(packet)
 			_, err := f.readers[q].Write(packet)
 			if err != nil {
 				f.l.Error("Failed to forward to tun", "error", err)
