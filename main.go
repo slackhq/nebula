@@ -244,9 +244,11 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	if pinThreads && routines > 1 && len(cpuAffinity) == 0 && !configTest {
 		// The operator didn't choose pin CPUs, so pick a default set that
 		// prefers performance cores and doesn't stack co-located instances
-		// onto allowed[0]. The bound UDP port keys the per-instance spread:
-		// distinct across instances sharing a box, stable across restarts.
-		// A nil result keeps listenIn's stock allowed[i] fallback.
+		// onto allowed[0].
+
+		// key is used to seed the spreading of routines->cores.
+		// use PID if you want to ensure many different Nebulas in VMs or containers land on different cores
+		// use port if you want to always end up on the same cores, ideal for benchmarking.
 		key := uint64(os.Getpid()) //default to PID
 		pinKeyStr := strings.ToLower(c.GetString("tun.pin_threads_key", ""))
 		switch pinKeyStr {
