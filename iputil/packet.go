@@ -28,6 +28,7 @@ const (
 
 	MaxRejectPacketSize = maxIPv6RejectPacketSize
 
+	IPProtocolICMP        = 1
 	IPProtocolICMPv6      = 58
 	IPProtocolTCP         = 6
 	IPProtocolUDP         = 17

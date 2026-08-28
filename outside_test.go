@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+	"github.com/slackhq/nebula/iputil"
 
 	"github.com/slackhq/nebula/firewall"
 	"github.com/stretchr/testify/assert"
@@ -58,7 +59,7 @@ func Test_newPacket(t *testing.T) {
 		Src:      net.IPv4(10, 0, 0, 1),
 		Dst:      net.IPv4(10, 0, 0, 2),
 		Options:  []byte{0, 1, 0, 2},
-		Protocol: firewall.ProtoTCP,
+		Protocol: iputil.IPProtocolTCP,
 	}
 
 	b, _ = h.Marshal()
@@ -66,7 +67,7 @@ func Test_newPacket(t *testing.T) {
 	err = newPacket(b, true, p)
 
 	require.NoError(t, err)
-	assert.Equal(t, uint8(firewall.ProtoTCP), p.Protocol)
+	assert.Equal(t, uint8(iputil.IPProtocolTCP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("10.0.0.2"), p.LocalAddr)
 	assert.Equal(t, netip.MustParseAddr("10.0.0.1"), p.RemoteAddr)
 	assert.Equal(t, uint16(3), p.RemotePort)
@@ -239,7 +240,7 @@ func Test_newPacket_v6(t *testing.T) {
 	// A good UDP packet
 	ip = layers.IPv6{
 		Version:    6,
-		NextHeader: firewall.ProtoUDP,
+		NextHeader: iputil.IPProtocolUDP,
 		HopLimit:   128,
 		SrcIP:      net.IPv6linklocalallrouters,
 		DstIP:      net.IPv6linklocalallnodes,
@@ -262,7 +263,7 @@ func Test_newPacket_v6(t *testing.T) {
 	// incoming
 	err = newPacket(b, true, p)
 	require.NoError(t, err)
-	assert.Equal(t, uint8(firewall.ProtoUDP), p.Protocol)
+	assert.Equal(t, uint8(iputil.IPProtocolUDP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
 	assert.Equal(t, uint16(36123), p.RemotePort)
@@ -272,7 +273,7 @@ func Test_newPacket_v6(t *testing.T) {
 	// outgoing
 	err = newPacket(b, false, p)
 	require.NoError(t, err)
-	assert.Equal(t, uint8(firewall.ProtoUDP), p.Protocol)
+	assert.Equal(t, uint8(iputil.IPProtocolUDP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.LocalAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.RemoteAddr)
 	assert.Equal(t, uint16(36123), p.LocalPort)
@@ -289,7 +290,7 @@ func Test_newPacket_v6(t *testing.T) {
 	// incoming
 	err = newPacket(b, true, p)
 	require.NoError(t, err)
-	assert.Equal(t, uint8(firewall.ProtoTCP), p.Protocol)
+	assert.Equal(t, uint8(iputil.IPProtocolTCP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
 	assert.Equal(t, uint16(36123), p.RemotePort)
@@ -299,7 +300,7 @@ func Test_newPacket_v6(t *testing.T) {
 	// outgoing
 	err = newPacket(b, false, p)
 	require.NoError(t, err)
-	assert.Equal(t, uint8(firewall.ProtoTCP), p.Protocol)
+	assert.Equal(t, uint8(iputil.IPProtocolTCP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.LocalAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.RemoteAddr)
 	assert.Equal(t, uint16(36123), p.LocalPort)
@@ -344,7 +345,7 @@ func Test_newPacket_v6(t *testing.T) {
 
 	err = newPacket(b, true, p)
 	require.NoError(t, err)
-	assert.Equal(t, uint8(firewall.ProtoUDP), p.Protocol)
+	assert.Equal(t, uint8(iputil.IPProtocolUDP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
 	assert.Equal(t, uint16(36123), p.RemotePort)
@@ -678,7 +679,7 @@ func Test_newPacket_v6ExtHeaderOverflow(t *testing.T) {
 	pkt := make([]byte, realTCPAt+4)
 	pkt[0] = 0x60                                   // version 6
 	pkt[6] = byte(layers.IPProtocolIPv6Destination) // NextHeader -> Destination Options
-	pkt[40] = byte(firewall.ProtoTCP)               // Dest-Options NextHeader -> TCP
+	pkt[40] = byte(iputil.IPProtocolTCP)            // Dest-Options NextHeader -> TCP
 	pkt[41] = 255                                   // HdrExtLen = 255
 
 	// Forged transport header at the pre-fix (wrong) offset: dst port 443.
@@ -687,7 +688,7 @@ func Test_newPacket_v6ExtHeaderOverflow(t *testing.T) {
 	binary.BigEndian.PutUint16(pkt[realTCPAt+2:realTCPAt+4], 22)
 
 	require.NoError(t, newPacket(pkt, true, p))
-	assert.Equal(t, uint8(firewall.ProtoTCP), p.Protocol)
+	assert.Equal(t, uint8(iputil.IPProtocolTCP), p.Protocol)
 	// LocalPort is the destination port for incoming traffic. It must be the real port (22)
 	// the host delivers to, not the forged 443 at the overflowed offset.
 	assert.Equal(t, uint16(22), p.LocalPort, "firewall must parse the real transport header, not the overflowed offset")
@@ -766,7 +767,7 @@ func Test_newPacket_parsedFields(t *testing.T) {
 	// Plain IPv4 TCP, IHL 20: L4 offset 20, no fragment shape.
 	v4 := make([]byte, 28)
 	v4[0] = 0x45
-	v4[9] = firewall.ProtoTCP
+	v4[9] = iputil.IPProtocolTCP
 	binary.BigEndian.PutUint16(v4[6:8], 0x4000) // DF only
 	require.NoError(t, newPacket(v4, true, p))
 	assert.Equal(t, 20, p.IPHdrLen)
@@ -777,7 +778,7 @@ func Test_newPacket_parsedFields(t *testing.T) {
 	// (Fragment false) but the coalescer must not touch it (FragAny true).
 	ff := make([]byte, 28)
 	ff[0] = 0x45
-	ff[9] = firewall.ProtoUDP
+	ff[9] = iputil.IPProtocolUDP
 	binary.BigEndian.PutUint16(ff[6:8], 0x2000) // MF, offset 0
 	require.NoError(t, newPacket(ff, true, p))
 	assert.False(t, p.Fragment)
@@ -787,7 +788,7 @@ func Test_newPacket_parsedFields(t *testing.T) {
 	// IPv4 non-first fragment (nonzero offset): both flags set.
 	nf := make([]byte, 28)
 	nf[0] = 0x45
-	nf[9] = firewall.ProtoUDP
+	nf[9] = iputil.IPProtocolUDP
 	binary.BigEndian.PutUint16(nf[6:8], 0x00b9)
 	require.NoError(t, newPacket(nf, true, p))
 	assert.True(t, p.Fragment)
@@ -796,7 +797,7 @@ func Test_newPacket_parsedFields(t *testing.T) {
 	// IPv4 with options (IHL 24): IPHdrLen tracks the real L4 offset.
 	opts := make([]byte, 32)
 	opts[0] = 0x46
-	opts[9] = firewall.ProtoTCP
+	opts[9] = iputil.IPProtocolTCP
 	binary.BigEndian.PutUint16(opts[6:8], 0x4000)
 	require.NoError(t, newPacket(opts, true, p))
 	assert.Equal(t, 24, p.IPHdrLen)
@@ -805,7 +806,7 @@ func Test_newPacket_parsedFields(t *testing.T) {
 	// Plain IPv6 TCP: L4 at 40.
 	v6 := make([]byte, 60)
 	v6[0] = 0x60
-	v6[6] = firewall.ProtoTCP
+	v6[6] = iputil.IPProtocolTCP
 	require.NoError(t, newPacket(v6, true, p))
 	assert.Equal(t, 40, p.IPHdrLen)
 	assert.False(t, p.FragAny)
@@ -814,7 +815,7 @@ func Test_newPacket_parsedFields(t *testing.T) {
 	hbh := make([]byte, 60)
 	hbh[0] = 0x60
 	hbh[6] = 0 // hop-by-hop
-	hbh[40] = firewall.ProtoTCP
+	hbh[40] = iputil.IPProtocolTCP
 	hbh[41] = 0 // HdrExtLen 0 -> 8-byte header
 	require.NoError(t, newPacket(hbh, true, p))
 	assert.Equal(t, 48, p.IPHdrLen)
@@ -824,17 +825,17 @@ func Test_newPacket_parsedFields(t *testing.T) {
 	f6 := make([]byte, 60)
 	f6[0] = 0x60
 	f6[6] = 44 // fragment extension header
-	f6[40] = firewall.ProtoUDP
+	f6[40] = iputil.IPProtocolUDP
 	require.NoError(t, newPacket(f6, true, p))
 	assert.True(t, p.FragAny)
 	assert.False(t, p.Fragment)
-	assert.Equal(t, uint8(firewall.ProtoUDP), p.Protocol)
+	assert.Equal(t, uint8(iputil.IPProtocolUDP), p.Protocol)
 
 	// IPv6 non-first fragment: both set, walk stops at the fragment header.
 	f6n := make([]byte, 60)
 	f6n[0] = 0x60
 	f6n[6] = 44
-	f6n[40] = firewall.ProtoUDP
+	f6n[40] = iputil.IPProtocolUDP
 	binary.BigEndian.PutUint16(f6n[42:44], 0x0008)
 	require.NoError(t, newPacket(f6n, true, p))
 	assert.True(t, p.Fragment)

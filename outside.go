@@ -434,7 +434,7 @@ func parseV4(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 	// Accounting for a variable header length, do we have enough data for our src/dst tuples?
 	minLen := ihl
 	if !fp.Fragment {
-		if fp.Protocol == firewall.ProtoICMP {
+		if fp.Protocol == iputil.IPProtocolICMP {
 			minLen += minFwPacketLen + 2
 		} else {
 			minLen += minFwPacketLen
@@ -456,7 +456,7 @@ func parseV4(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 	if fp.Fragment {
 		fp.RemotePort = 0
 		fp.LocalPort = 0
-	} else if fp.Protocol == firewall.ProtoICMP { //note that orientation doesn't matter on ICMP
+	} else if fp.Protocol == iputil.IPProtocolICMP { //note that orientation doesn't matter on ICMP
 		fp.RemotePort = binary.BigEndian.Uint16(data[ihl+4 : ihl+6]) //identifier
 		fp.LocalPort = 0                                             //code would be uint16(data[ihl+1])
 	} else if incoming {
