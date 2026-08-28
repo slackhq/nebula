@@ -27,6 +27,12 @@ const (
 	maxIPv6RejectPacketSize = ipv6.HeaderLen + 8 + 1000
 
 	MaxRejectPacketSize = maxIPv6RejectPacketSize
+
+	IPProtocolICMPv6      = 58
+	IPProtocolTCP         = 6
+	IPProtocolUDP         = 17
+	ICMPv6TypeEchoRequest = 128
+	ICMPv6TypeEchoReply   = 129
 )
 
 func CreateRejectPacket(packet []byte, out []byte) []byte {
