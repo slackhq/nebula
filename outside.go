@@ -8,7 +8,6 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/google/gopacket/layers"
 	"golang.org/x/net/ipv6"
 
 	"github.com/slackhq/nebula/firewall"
@@ -369,15 +368,15 @@ func parseV6(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 		return nil
 	}
 
-	switch layers.IPProtocol(proto) {
-	case layers.IPProtocolICMPv6:
+	switch proto {
+	case iputil.IPProtocolICMPv6:
 		// An ICMPv6 message is at least type, code and checksum, 4 bytes. Only echo carries more than we read.
 		if dataLen < offset+4 {
 			return ErrIPv6PacketTooShort
 		}
 		fp.LocalPort = 0      //incoming vs outgoing doesn't matter for icmpv6
 		switch data[offset] { //icmp type
-		case layers.ICMPv6TypeEchoRequest, layers.ICMPv6TypeEchoReply:
+		case iputil.ICMPv6TypeEchoRequest, iputil.ICMPv6TypeEchoReply:
 			if dataLen < offset+6 {
 				return ErrIPv6PacketTooShort
 			}
@@ -386,7 +385,7 @@ func parseV6(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 			fp.RemotePort = 0
 		}
 
-	case layers.IPProtocolTCP, layers.IPProtocolUDP:
+	case iputil.IPProtocolTCP, iputil.IPProtocolUDP:
 		if dataLen < offset+4 {
 			return ErrIPv6PacketTooShort
 		}
@@ -435,7 +434,7 @@ func parseV4(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 	// Accounting for a variable header length, do we have enough data for our src/dst tuples?
 	minLen := ihl
 	if !fp.Fragment {
-		if fp.Protocol == firewall.ProtoICMP {
+		if fp.Protocol == iputil.IPProtocolICMP {
 			minLen += minFwPacketLen + 2
 		} else {
 			minLen += minFwPacketLen
@@ -457,7 +456,7 @@ func parseV4(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 	if fp.Fragment {
 		fp.RemotePort = 0
 		fp.LocalPort = 0
-	} else if fp.Protocol == firewall.ProtoICMP { //note that orientation doesn't matter on ICMP
+	} else if fp.Protocol == iputil.IPProtocolICMP { //note that orientation doesn't matter on ICMP
 		fp.RemotePort = binary.BigEndian.Uint16(data[ihl+4 : ihl+6]) //identifier
 		fp.LocalPort = 0                                             //code would be uint16(data[ihl+1])
 	} else if incoming {

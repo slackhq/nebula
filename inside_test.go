@@ -8,6 +8,7 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/firewall"
+	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
@@ -63,7 +64,7 @@ type l4Proto struct {
 }
 
 var (
-	tcpSyn = l4Proto{"tcp", firewall.ProtoTCP, 16, func() []byte {
+	tcpSyn = l4Proto{"tcp", iputil.IPProtocolTCP, 16, func() []byte {
 		h := make([]byte, 20)
 		binary.BigEndian.PutUint16(h[0:2], 49152)
 		binary.BigEndian.PutUint16(h[2:4], 443)
@@ -74,7 +75,7 @@ var (
 		return h
 	}}
 
-	udpDatagram = l4Proto{"udp", firewall.ProtoUDP, 6, func() []byte {
+	udpDatagram = l4Proto{"udp", iputil.IPProtocolUDP, 6, func() []byte {
 		h := make([]byte, 8+4)
 		binary.BigEndian.PutUint16(h[0:2], 49152)
 		binary.BigEndian.PutUint16(h[2:4], 53)
@@ -83,8 +84,8 @@ var (
 		return h
 	}}
 
-	icmpEcho   = l4Proto{"icmp", firewall.ProtoICMP, 2, func() []byte { return echoRequest(8) }}
-	icmpv6Echo = l4Proto{"icmpv6", firewall.ProtoICMPv6, 2, func() []byte { return echoRequest(128) }}
+	icmpEcho   = l4Proto{"icmp", iputil.IPProtocolICMP, 2, func() []byte { return echoRequest(8) }}
+	icmpv6Echo = l4Proto{"icmpv6", iputil.IPProtocolICMPv6, 2, func() []byte { return echoRequest(128) }}
 )
 
 // echoRequest builds an echo request body. The type differs between ICMP and
@@ -107,7 +108,7 @@ func buildIPv6(src, dst netip.Addr, p l4Proto) []byte {
 	copy(pkt[8:24], src.AsSlice())
 	copy(pkt[24:40], dst.AsSlice())
 	copy(pkt[ipv6HeaderLen:], l4)
-	if l4 := pkt[ipv6HeaderLen:]; p.nextHdr == firewall.ProtoTCP || p.nextHdr == firewall.ProtoUDP {
+	if l4 := pkt[ipv6HeaderLen:]; p.nextHdr == iputil.IPProtocolTCP || p.nextHdr == iputil.IPProtocolUDP {
 		sum := ipv6PseudoheaderSum(src, dst, uint32(p.nextHdr), uint32(len(l4)))
 		binary.BigEndian.PutUint16(l4[p.cksumAt:], ^fold(sumBytes(l4, sum)))
 	}
@@ -124,7 +125,7 @@ func buildIPv4(src, dst netip.Addr, p l4Proto) []byte {
 	copy(pkt[12:16], src.AsSlice())
 	copy(pkt[16:20], dst.AsSlice())
 	copy(pkt[ipv4HeaderLen:], l4)
-	if l4 := pkt[ipv4HeaderLen:]; p.nextHdr == firewall.ProtoTCP || p.nextHdr == firewall.ProtoUDP {
+	if l4 := pkt[ipv4HeaderLen:]; p.nextHdr == iputil.IPProtocolTCP || p.nextHdr == iputil.IPProtocolUDP {
 		sum := sumBytes(pkt[12:20], uint32(p.nextHdr)+uint32(len(l4)))
 		binary.BigEndian.PutUint16(l4[p.cksumAt:], ^fold(sumBytes(l4, sum)))
 	}

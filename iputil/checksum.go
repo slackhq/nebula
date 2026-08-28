@@ -3,7 +3,6 @@ package iputil
 import (
 	"encoding/binary"
 
-	"github.com/google/gopacket/layers"
 	"github.com/slackhq/nebula/overlay/checksum"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -57,7 +56,7 @@ func setTransportChecksum4(packet []byte) {
 		return
 	}
 	csum := ipv4PseudoheaderChecksum(packet[12:16], packet[16:20], uint32(packet[9]), uint32(len(transport)))
-	writeTransportChecksum(transport, layers.IPProtocol(packet[9]), csum)
+	writeTransportChecksum(transport, packet[9], csum)
 }
 
 func setTransportChecksum6(packet []byte) {
@@ -83,7 +82,7 @@ func setTransportChecksum6(packet []byte) {
 		return
 	}
 	csum := ipv6PseudoheaderChecksum(packet[8:24], packet[24:40], uint32(proto), uint32(len(transport)))
-	writeTransportChecksum(transport, layers.IPProtocol(proto), csum)
+	writeTransportChecksum(transport, proto, csum)
 }
 
 // transportExtent narrows a segment to the length its own header declares. UDP
@@ -94,7 +93,7 @@ func setTransportChecksum6(packet []byte) {
 // the IP payload. A Length that overruns the bytes IP delivered describes a
 // datagram that is not there.
 func transportExtent(transport []byte, proto uint8) ([]byte, bool) {
-	if layers.IPProtocol(proto) != layers.IPProtocolUDP {
+	if proto != IPProtocolUDP {
 		return transport, true
 	}
 	if len(transport) < udpHeaderLen {
@@ -112,12 +111,12 @@ func transportExtent(transport []byte, proto uint8) ([]byte, bool) {
 // computes to zero goes on the wire as 0xffff: zero means no checksum was
 // computed (RFC 768), and over IPv6 the checksum is mandatory (RFC 8200
 // section 8.1).
-func writeTransportChecksum(transport []byte, proto layers.IPProtocol, csum uint32) {
+func writeTransportChecksum(transport []byte, proto uint8, csum uint32) {
 	var at, minLen int
 	switch proto {
-	case layers.IPProtocolTCP:
+	case IPProtocolTCP:
 		at, minLen = 16, 20
-	case layers.IPProtocolUDP:
+	case IPProtocolUDP:
 		at, minLen = 6, udpHeaderLen
 	default:
 		return
@@ -128,7 +127,7 @@ func writeTransportChecksum(transport []byte, proto layers.IPProtocol, csum uint
 
 	transport[at], transport[at+1] = 0, 0
 	sum := ^checksum.Checksum(transport, fold(csum))
-	if sum == 0 && proto == layers.IPProtocolUDP {
+	if sum == 0 && proto == IPProtocolUDP {
 		sum = 0xffff
 	}
 	binary.BigEndian.PutUint16(transport[at:], sum)
