@@ -34,7 +34,9 @@ type LightHouse struct {
 
 	myVpnNetworks      []netip.Prefix
 	myVpnNetworksTable *bart.Lite
-	punchy             *Punchy
+	// myVpnAddrsTable contaings our overlay host addrs, as opposed to the overlay networks
+	myVpnAddrsTable *bart.Lite
+	punchy          *Punchy
 
 	// localAddrsFn enumerates the underlay addresses we advertise. It is a field so tests can supply simulated
 	// addresses rather than whatever this machine's NICs happen to be. Set it before Start.
@@ -104,6 +106,7 @@ func NewLightHouseFromConfig(ctx context.Context, l *slog.Logger, c *config.C, c
 		amLighthouse:       amLighthouse,
 		myVpnNetworks:      cs.myVpnNetworks,
 		myVpnNetworksTable: cs.myVpnNetworksTable,
+		myVpnAddrsTable:    cs.myVpnAddrsTable,
 		addrMap:            make(map[netip.Addr]*RemoteList),
 		nebulaPort:         nebulaPort,
 		punchy:             p,
@@ -1152,6 +1155,17 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 		if lhh.l.Enabled(context.Background(), slog.LevelDebug) {
 			lhh.l.Debug("invalid vpn addr for v1 handleHostQuery",
 				"vpnAddrs", fromVpnAddrs,
+				"queryVpnAddr", queryVpnAddr,
+			)
+		}
+		return
+	}
+
+	// Don't respond to requests for us.
+	if lhh.lh.myVpnAddrsTable.Contains(queryVpnAddr) {
+		if lhh.l.Enabled(context.Background(), slog.LevelDebug) {
+			lhh.l.Debug("Ignoring HostQuery for one of my own addresses",
+				"from", fromVpnAddrs,
 				"queryVpnAddr", queryVpnAddr,
 			)
 		}
