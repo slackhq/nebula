@@ -97,7 +97,7 @@ func TestConnectionState_NextMessageCounter(t *testing.T) {
 	assert.Equal(t, RejectAfterMessages, cs.messageCounter.Load())
 
 	// Continued send attempts stay refused and the counter never wraps
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		_, ok = cs.NextMessageCounter()
 		assert.False(t, ok)
 	}
