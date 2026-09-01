@@ -108,7 +108,7 @@ func TestUserDeviceReadersConcurrentRace(t *testing.T) {
 	var wg sync.WaitGroup
 	run := func(idx int) {
 		defer wg.Done()
-		for i := 0; i < iterations; i++ {
+		for range iterations {
 			pkts, err := readers[idx].Read()
 			if err != nil {
 				errs <- err
@@ -136,7 +136,7 @@ func TestUserDeviceReadersConcurrentRace(t *testing.T) {
 	// waiting reader's private buffer, so reusing buf between writes is safe.
 	go func() {
 		buf := make([]byte, 32)
-		for i := 0; i < 2*iterations; i++ {
+		for i := range 2 * iterations {
 			for j := range buf {
 				buf[j] = byte(i + j)
 			}

@@ -1,5 +1,4 @@
 //go:build linux && !android
-// +build linux,!android
 
 // Package virtio implements the pure validation, header-correction, and
 // per-segment slicing logic for kernel-supplied TSO/USO superpackets on
@@ -254,12 +253,9 @@ func SegmentTCP(pkt []byte, hdrLenU, csumStartU, gsoSizeU uint16, yield func(seg
 	var savedHdr [maxSegHdrLen]byte
 	copy(savedHdr[:headerLen], pkt[:headerLen])
 
-	for i := 0; i < numSeg; i++ {
+	for i := range numSeg {
 		segStart := i * gsoSize
-		segEnd := segStart + gsoSize
-		if segEnd > payLen {
-			segEnd = payLen
-		}
+		segEnd := min(segStart+gsoSize, payLen)
 		segPayLen := segEnd - segStart
 		segLen := headerLen + segPayLen
 		headerOff := i * gsoSize
@@ -359,12 +355,9 @@ func SegmentUDP(pkt []byte, hdrLenU, csumStartU, gsoSizeU uint16, yield func(seg
 	var savedHdr [maxSegHdrLen]byte
 	copy(savedHdr[:headerLen], pkt[:headerLen])
 
-	for i := 0; i < numSeg; i++ {
+	for i := range numSeg {
 		segStart := i * gsoSize
-		segEnd := segStart + gsoSize
-		if segEnd > payLen {
-			segEnd = payLen
-		}
+		segEnd := min(segStart+gsoSize, payLen)
 		segPayLen := segEnd - segStart
 		segLen := headerLen + segPayLen
 		headerOff := i * gsoSize

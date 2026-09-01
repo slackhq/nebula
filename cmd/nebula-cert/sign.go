@@ -146,7 +146,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 			passphrase = []byte(os.Getenv("NEBULA_CA_PASSPHRASE"))
 			if len(passphrase) == 0 {
 				// ask for a passphrase until we get one
-				for i := 0; i < 5; i++ {
+				for range 5 {
 					errOut.Write([]byte("Enter passphrase: "))
 					passphrase, err = pr.ReadPassword()
 
@@ -203,7 +203,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 	}
 
 	if *sf.networks != "" {
-		for _, rs := range strings.Split(*sf.networks, ",") {
+		for rs := range strings.SplitSeq(*sf.networks, ",") {
 			rs := strings.Trim(rs, " ")
 			if rs != "" {
 				n, err := netip.ParsePrefix(rs)
@@ -228,7 +228,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 	}
 
 	if *sf.unsafeNetworks != "" {
-		for _, rs := range strings.Split(*sf.unsafeNetworks, ",") {
+		for rs := range strings.SplitSeq(*sf.unsafeNetworks, ",") {
 			rs := strings.Trim(rs, " ")
 			if rs != "" {
 				n, err := netip.ParsePrefix(rs)
@@ -247,7 +247,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 
 	var groups []string
 	if *sf.groups != "" {
-		for _, rg := range strings.Split(*sf.groups, ",") {
+		for rg := range strings.SplitSeq(*sf.groups, ",") {
 			g := strings.TrimSpace(rg)
 			if g != "" {
 				groups = append(groups, g)

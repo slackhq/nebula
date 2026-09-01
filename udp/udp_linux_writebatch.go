@@ -112,7 +112,7 @@ func (w *batchWriter) prepareWriteMessages(n int, offloadsEnabled bool) {
 
 	w.cmsg = make([]byte, n*w.cmsgSpace)
 
-	for k := 0; k < n; k++ {
+	for k := range n {
 		base := k * w.cmsgSpace
 		seg := (*unix.Cmsghdr)(unsafe.Pointer(&w.cmsg[base]))
 		seg.Level = unix.SOL_UDP
@@ -214,7 +214,7 @@ func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, er
 				break
 			}
 
-			for k := 0; k < runLen; k++ {
+			for k := range runLen {
 				b := bufs[i+k]
 				if len(b) == 0 {
 					w.iovs[iovIdx+k].Base = nil
@@ -318,10 +318,7 @@ func (w *batchWriter) planRun(bufs [][]byte, addrs []netip.AddrPort, start, iovB
 		return 1, segSize
 	}
 	dst := addrs[start]
-	maxLen := w.maxGSOSegments
-	if iovBudget < maxLen {
-		maxLen = iovBudget
-	}
+	maxLen := min(iovBudget, w.maxGSOSegments)
 	runLen := 1
 	total := segSize
 	for runLen < maxLen && start+runLen < len(bufs) {

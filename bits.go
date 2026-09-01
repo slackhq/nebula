@@ -79,10 +79,7 @@ func (b *Bits) clearRange(startPos, count uint64) uint64 {
 	// handle the potential partial word before pos becomes u64 aligned
 	word := pos >> 6
 	bit := pos & 63
-	take := min(uint64(64)-bit, remaining)
-	if take > b.length-pos {
-		take = b.length - pos
-	}
+	take := min(min(uint64(64)-bit, remaining), b.length-pos)
 	var mask uint64
 	if take == 64 {
 		mask = math.MaxUint64
