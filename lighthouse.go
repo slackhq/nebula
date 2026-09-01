@@ -34,7 +34,7 @@ type LightHouse struct {
 
 	myVpnNetworks      []netip.Prefix
 	myVpnNetworksTable *bart.Lite
-	// myVpnAddrsTable contaings our overlay host addrs, as opposed to the overlay networks
+	// myVpnAddrsTable contains our overlay host addrs, as opposed to the overlay networks
 	myVpnAddrsTable *bart.Lite
 	punchy          *Punchy
 
