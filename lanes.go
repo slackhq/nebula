@@ -487,7 +487,7 @@ func (f *Interface) probeLanes(hostinfo *HostInfo, now time.Time, nb, out []byte
 			p.retryAt = now.Add(laneRetryDelay(p.fails))
 			if up {
 				ls.txAddr[s].Store(nil)
-				hostinfo.logger(f.l).Info("Multiport lane demoted, probe unanswered", "lane", s)
+				hostinfo.logger(f.l).Debug("Multiport lane demoted, probe unanswered", "lane", s)
 			}
 			continue
 		}
@@ -598,6 +598,6 @@ func (f *Interface) handleLaneProbeAck(hostinfo *HostInfo, payload []byte) {
 	}
 
 	if ls.noteAck(int(payload[0]), payload[1], time.Now()) {
-		hostinfo.logger(f.l).Info("Multiport lane up", "lane", payload[0])
+		hostinfo.logger(f.l).Debug("Multiport lane up", "lane", payload[0])
 	}
 }
