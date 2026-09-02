@@ -37,13 +37,13 @@ type LaneDetails struct {
 
 // Proto field numbers for NebulaHandshakeDetails
 const (
-	fieldCert           = 1 // bytes
-	fieldInitiatorIndex = 2 // uint32
-	fieldResponderIndex = 3 // uint32
-	fieldTime           = 5 // uint64
-	fieldInitiatorLanes = 6 // LaneDetails
-	fieldResponderLanes = 7 // LaneDetails
-	fieldCertVersion    = 8 // uint32
+	fieldCert           = 1  // bytes
+	fieldInitiatorIndex = 2  // uint32
+	fieldResponderIndex = 3  // uint32
+	fieldTime           = 5  // uint64
+	fieldCertVersion    = 8  // uint32
+	fieldInitiatorLanes = 9  // LaneDetails
+	fieldResponderLanes = 10 // LaneDetails
 )
 
 // Proto field numbers for LaneDetails
@@ -75,6 +75,12 @@ func MarshalPayload(out []byte, p Payload) []byte {
 		details = protowire.AppendTag(details, fieldTime, protowire.VarintType)
 		details = protowire.AppendVarint(details, p.Time)
 	}
+	if p.CertVersion != 0 {
+		details = protowire.AppendTag(details, fieldCertVersion, protowire.VarintType)
+		details = protowire.AppendVarint(details, uint64(p.CertVersion))
+	}
+	// Emitted last to keep the encoding in ascending field-number order, which
+	// is what protoc-gen-go would produce for the same message.
 	if p.InitiatorLanes != nil {
 		details = protowire.AppendTag(details, fieldInitiatorLanes, protowire.BytesType)
 		details = protowire.AppendBytes(details, p.InitiatorLanes.marshal(nil))
@@ -82,10 +88,6 @@ func MarshalPayload(out []byte, p Payload) []byte {
 	if p.ResponderLanes != nil {
 		details = protowire.AppendTag(details, fieldResponderLanes, protowire.BytesType)
 		details = protowire.AppendBytes(details, p.ResponderLanes.marshal(nil))
-	}
-	if p.CertVersion != 0 {
-		details = protowire.AppendTag(details, fieldCertVersion, protowire.VarintType)
-		details = protowire.AppendVarint(details, uint64(p.CertVersion))
 	}
 
 	out = protowire.AppendTag(out, 1, protowire.BytesType)
