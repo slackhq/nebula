@@ -721,12 +721,10 @@ func (hm *HandshakeManager) laneAdvert() *handshake.LaneDetails {
 	}
 }
 
-// maybeAllocLanes derives the multiport lane sessions for a just-completed
-// tunnel. Must run before the hostinfo becomes visible in the hostmap: the data
-// plane reads hostinfo.lanes with no synchronization at all.
-//
-// A failure here costs the tunnel its lanes, not the tunnel: the base session is
-// already usable and every lane the data plane wants falls back to it.
+// maybeAllocLanes sets up the multiport lanes for a just-completed tunnel. Must
+// run before the hostinfo becomes visible in the hostmap: the data plane reads
+// hostinfo.lanes without synchronizing on it. The sessions themselves are derived
+// later, on the first packet that needs each one.
 func (hm *HandshakeManager) maybeAllocLanes(hostinfo *HostInfo, result *handshake.Result) {
 	if hm.config.laneCount == 0 || result.PeerPortCount == 0 {
 		return
@@ -735,12 +733,7 @@ func (hm *HandshakeManager) maybeAllocLanes(hostinfo *HostInfo, result *handshak
 		return
 	}
 
-	ls, err := newLaneSet(result, hm.config.laneCount, hm.f.myVpnAddrs[0], hostinfo.vpnAddrs[0])
-	if err != nil {
-		hostinfo.logger(hm.l).Error("Failed to derive multiport lanes", "error", err)
-		return
-	}
-	hostinfo.lanes = ls
+	hostinfo.lanes = newLaneSet(result, hm.config.laneCount, hm.f.myVpnAddrs[0], hostinfo.vpnAddrs[0])
 }
 
 // beginHandshake handles an incoming handshake packet that doesn't match any

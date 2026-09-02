@@ -77,8 +77,8 @@ func newConnectionStateFromResult(r *handshake.Result) (*ConnectionState, error)
 	return ci, nil
 }
 
-// newLaneConnectionState derives multiport lane s's session from the completed
-// base handshake. Each key is an HKDF expansion of the base tunnel's matching
+// newLaneConnectionState derives multiport lane s's session from the base
+// tunnel's material. Each key is an HKDF expansion of the base tunnel's matching
 // key, labelled with the lane index, so the pair stays matched with no extra
 // negotiation: Noise leaves our send key equal to the peer's receive key, and
 // expanding both with the same label preserves that.
@@ -86,26 +86,26 @@ func newConnectionStateFromResult(r *handshake.Result) (*ConnectionState, error)
 // The lane gets its own counter and replay window starting from zero. No
 // handshake messages were spent on it, so unlike the base session there is
 // nothing to seed.
-func newLaneConnectionState(r *handshake.Result, lane uint8) (*ConnectionState, error) {
+func newLaneConnectionState(m *laneMaterial, lane uint8) (*ConnectionState, error) {
 	if lane == 0 {
 		return nil, fmt.Errorf("lane 0 is the base session")
 	}
 
-	eKey, err := deriveLaneKey(r.EKey.UnsafeKey(), lane)
+	eKey, err := deriveLaneKey(m.eKey, lane)
 	if err != nil {
 		return nil, err
 	}
-	dKey, err := deriveLaneKey(r.DKey.UnsafeKey(), lane)
+	dKey, err := deriveLaneKey(m.dKey, lane)
 	if err != nil {
 		return nil, err
 	}
 
 	return &ConnectionState{
-		myCert:    r.MyCert,
-		initiator: r.Initiator,
-		peerCert:  r.RemoteCert,
-		eKey:      noiseutil.NewCipherStateFromKey(eKey, r.Cipher),
-		dKey:      noiseutil.NewCipherStateFromKey(dKey, r.Cipher),
+		myCert:    m.myCert,
+		initiator: m.initiator,
+		peerCert:  m.peerCert,
+		eKey:      noiseutil.NewCipherStateFromKey(eKey, m.cipher),
+		dKey:      noiseutil.NewCipherStateFromKey(dKey, m.cipher),
 		window:    NewBits(ReplayWindow),
 		epoch:     sessionEpoch.Add(1),
 	}, nil

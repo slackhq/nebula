@@ -111,25 +111,34 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxCont
 	// is the base tunnel; a higher lane is one of the sessions derived from it.
 	ci := hostinfo.ConnectionState
 	lane := h.Lane()
+	laneCached := true
 	if lane != 0 {
-		ci = hostinfo.laneSession(lane)
+		if isMessageRelay {
+			// A relay carrier is always the base tunnel, so lane ciphertext can
+			// never legitimately arrive wrapped in one. Checked before the lookup
+			// below so a junk relay packet can't make us derive a session.
+			f.messageMetrics.RxInvalid(1)
+			if f.l.Enabled(context.Background(), slog.LevelDebug) {
+				hostinfo.logger(f.l).Debug("Refusing relayed multiport lane packet", "from", via, "header", h)
+			}
+			return
+		}
+
+		var err error
+		ci, laneCached, err = hostinfo.laneSession(lane)
+		if err != nil {
+			f.messageMetrics.RxInvalid(1)
+			hostinfo.logger(f.l).Error("Failed to derive multiport lane session", "error", err, "lane", lane)
+			return
+		}
 		if ci == nil {
-			// A lane we have no session for: a stale lane from a tunnel that has
+			// A lane this tunnel doesn't have: a stale lane from a tunnel that has
 			// since rolled, or a peer sending above what it advertised. Dropping
 			// silently is right for both — a recv_error would tear down a
 			// perfectly good base tunnel on the strength of one odd packet.
 			f.messageMetrics.RxInvalid(1)
 			if f.l.Enabled(context.Background(), slog.LevelDebug) {
 				hostinfo.logger(f.l).Debug("Unknown multiport lane", "from", via, "header", h)
-			}
-			return
-		}
-		if isMessageRelay {
-			// A relay carrier is always the base tunnel, so lane ciphertext can
-			// never legitimately arrive wrapped in one.
-			f.messageMetrics.RxInvalid(1)
-			if f.l.Enabled(context.Background(), slog.LevelDebug) {
-				hostinfo.logger(f.l).Debug("Refusing relayed multiport lane packet", "from", via, "header", h)
 			}
 			return
 		}
@@ -163,6 +172,12 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxCont
 			hostinfo.logger(f.l).Debug("Failed to decrypt packet", "error", err, "from", via, "header", h)
 		}
 		return
+	}
+
+	if !laneCached {
+		// The packet decrypted, so the peer really is using this lane and the
+		// session we derived for it is worth keeping.
+		hostinfo.lanes.installSession(lane, ci)
 	}
 
 	// Roam before we respond, but only on the base tunnel: a lane's source

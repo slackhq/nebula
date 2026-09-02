@@ -24,16 +24,24 @@ var (
 	testPeerAddr = netip.MustParseAddr("10.0.0.2")
 )
 
-// newTestLaneSet derives a lane set from a real handshake result so the sessions
-// hold usable keys.
+// newTestLaneSet builds a lane set from a real handshake result so the sessions
+// it derives hold usable keys.
 func newTestLaneSet(t *testing.T, r *handshake.Result, myLanes int, peerPorts, peerBase, peerTxLanes uint32) *laneSet {
 	t.Helper()
 	r.PeerPortCount = peerPorts
 	r.PeerBasePort = peerBase
 	r.PeerTxLanes = peerTxLanes
-	ls, err := newLaneSet(r, myLanes, testMyAddr, testPeerAddr)
+	return newLaneSet(r, myLanes, testMyAddr, testPeerAddr)
+}
+
+// laneSessionFor derives lane s's session and installs it, standing in for the
+// data-plane call that would normally be the first to need it.
+func laneSessionFor(t *testing.T, ls *laneSet, s int) *ConnectionState {
+	t.Helper()
+	cs, err := ls.session(s)
 	require.NoError(t, err)
-	return ls
+	require.NotNil(t, cs)
+	return cs
 }
 
 func newTestLaneHostInfo(t *testing.T, r *handshake.Result, ls *laneSet) *HostInfo {
@@ -118,15 +126,15 @@ func TestLaneKeyDerivationSymmetry(t *testing.T) {
 	initLS := newTestLaneSet(t, initR, 4, 4, 4242, 4)
 	respLS := newTestLaneSet(t, respR, 4, 4, 4242, 4)
 	require.Len(t, initLS.sessions, 4)
-	assert.Nil(t, initLS.sessions[0], "lane 0 is the base session, not a derived one")
+	assert.Nil(t, initLS.sessions[0].Load(), "lane 0 is the base session, not a derived one")
 
 	nb := make([]byte, 12)
 	for s := 1; s < 4; s++ {
 		out := header.EncodeLane(make([]byte, 0, mtu), header.Version, header.Message, 0, 200, 1, uint8(s))
-		ct, err := initLS.sessions[s].eKey.EncryptDanger(out, out, []byte("lane payload"), 1, nb)
+		ct, err := laneSessionFor(t, initLS, s).eKey.EncryptDanger(out, out, []byte("lane payload"), 1, nb)
 		require.NoError(t, err)
 
-		pt, err := respLS.sessions[s].Decrypt(test.NewLogger(), 1, ct, nb)
+		pt, err := laneSessionFor(t, respLS, s).Decrypt(test.NewLogger(), 1, ct, nb)
 		require.NoError(t, err, "lane %d keys did not match", s)
 		assert.Equal(t, []byte("lane payload"), pt)
 	}
@@ -134,9 +142,9 @@ func TestLaneKeyDerivationSymmetry(t *testing.T) {
 	// Distinct lanes get distinct keys: lane 2's session must not open lane 1's
 	// ciphertext, or the header's lane index would be forgeable in effect.
 	out := header.EncodeLane(make([]byte, 0, mtu), header.Version, header.Message, 0, 200, 7, 1)
-	ct, err := initLS.sessions[1].eKey.EncryptDanger(out, out, []byte("lane payload"), 7, nb)
+	ct, err := laneSessionFor(t, initLS, 1).eKey.EncryptDanger(out, out, []byte("lane payload"), 7, nb)
 	require.NoError(t, err)
-	_, err = respLS.sessions[2].Decrypt(test.NewLogger(), 7, ct, nb)
+	_, err = laneSessionFor(t, respLS, 2).Decrypt(test.NewLogger(), 7, ct, nb)
 	assert.Error(t, err)
 }
 
@@ -144,26 +152,76 @@ func TestNewLaneSetSizing(t *testing.T) {
 	initR, _ := runTestHandshake(t)
 
 	// A peer with no multiport advert gets no lanes at all.
-	ls, err := newLaneSet(&handshake.Result{}, 4, testMyAddr, testPeerAddr)
-	require.NoError(t, err)
-	assert.Nil(t, ls)
+	assert.Nil(t, newLaneSet(&handshake.Result{}, 4, testMyAddr, testPeerAddr))
 
 	// One lane means only the base tunnel, which is not a lane set.
-	ls, err = newLaneSet(&handshake.Result{PeerPortCount: 4, PeerTxLanes: 1}, 1, testMyAddr, testPeerAddr)
-	require.NoError(t, err)
-	assert.Nil(t, ls)
+	assert.Nil(t, newLaneSet(&handshake.Result{PeerPortCount: 4, PeerTxLanes: 1}, 1, testMyAddr, testPeerAddr))
 
 	// Sessions cover both directions: enough for everything the peer may send,
 	// even though we may only send on a few.
-	ls = newTestLaneSet(t, initR, 2, 8, 4242, 6)
+	ls := newTestLaneSet(t, initR, 2, 8, 4242, 6)
 	assert.Len(t, ls.sessions, 6, "sessions must cover the peer's tx lanes")
 	assert.Equal(t, 2, ls.txLanes, "we may only send on our own lanes")
+
+	// The peer's advert sizes the session table but nothing else. Its lane count
+	// is its own choice, so it must not be able to make us allocate per-lane tx
+	// state we will never use.
+	assert.Len(t, ls.txAddr, 2)
+	assert.Len(t, ls.demand, 2)
+	assert.Len(t, ls.probe, 2)
+
+	// Nothing is derived up front, for the same reason.
+	for s := range ls.sessions {
+		assert.Nil(t, ls.sessions[s].Load(), "lane %d derived before anything needed it", s)
+	}
 
 	// Our tx lanes are clamped to the ports the peer actually bound: a lane
 	// aimed past the peer's range would land on some unrelated socket.
 	ls = newTestLaneSet(t, initR, 8, 3, 4242, 8)
 	assert.Equal(t, 3, ls.txLanes)
 	assert.Len(t, ls.sessions, 8)
+}
+
+// The RX path must not cache a session for a lane until a packet on it has
+// actually decrypted, or a spoofer naming lanes at random could make us hold a
+// replay window and two cipher states per lane without authenticating anything.
+func TestLaneSessionRxDerivation(t *testing.T) {
+	initR, respR := runTestHandshake(t)
+	respLS := newTestLaneSet(t, respR, 4, 4, 4242, 4)
+	hi := newTestLaneHostInfo(t, respR, respLS)
+
+	ci, cached, err := hi.laneSession(2)
+	require.NoError(t, err)
+	require.NotNil(t, ci)
+	assert.False(t, cached, "the first packet on a lane derives, it does not hit")
+	assert.Nil(t, respLS.sessions[2].Load(), "an unauthenticated packet must not install a session")
+
+	// The lane the peer really is using decrypts, and that is what installs it.
+	nb := make([]byte, 12)
+	out := header.EncodeLane(make([]byte, 0, mtu), header.Version, header.Message, 0, 200, 1, 2)
+	ct, err := laneSessionFor(t, newTestLaneSet(t, initR, 4, 4, 4242, 4), 2).
+		eKey.EncryptDanger(out, out, []byte("real lane traffic"), 1, nb)
+	require.NoError(t, err)
+	pt, err := ci.Decrypt(test.NewLogger(), 1, ct, nb)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("real lane traffic"), pt)
+
+	respLS.installSession(2, ci)
+	assert.Same(t, ci, respLS.sessions[2].Load())
+
+	// Now it is a hit, and the replay window the decrypt above advanced is the
+	// one the next packet sees.
+	got, cached, err := hi.laneSession(2)
+	require.NoError(t, err)
+	assert.True(t, cached)
+	assert.Same(t, ci, got)
+
+	// A racing install loses rather than swapping the session out, which would
+	// throw away the replay window the live one has been accumulating.
+	other, err := newLaneConnectionState(&respLS.material, 2)
+	require.NoError(t, err)
+	respLS.installSession(2, other)
+	assert.Same(t, ci, respLS.sessions[2].Load())
 }
 
 func TestLaneTxGate(t *testing.T) {
@@ -178,12 +236,19 @@ func TestLaneTxGate(t *testing.T) {
 	assert.True(t, ls.demand[1].Load())
 	assert.False(t, ls.demand[2].Load(), "demand raised on an untouched lane")
 
-	// Promotion publishes the session and destination together.
+	// An up lane with no session derived yet cannot happen — the probe that
+	// promoted it derived one — but it must fall back rather than send in the
+	// clear if it ever does.
 	want := netip.MustParseAddrPort("192.0.2.1:4243")
 	ls.txAddr[1].Store(&want)
+	ci, _ = ls.txLane(1)
+	assert.Nil(t, ci)
+
+	// Promotion publishes the session and destination together.
+	sess := laneSessionFor(t, ls, 1)
 	ls.demand[1].Store(false)
 	ci, addr = ls.txLane(1)
-	assert.Equal(t, ls.sessions[1], ci)
+	assert.Same(t, sess, ci)
 	assert.Equal(t, want, addr)
 	assert.False(t, ls.demand[1].Load(), "a hit must not raise demand")
 
@@ -199,14 +264,30 @@ func TestLaneSessionLookup(t *testing.T) {
 	ls := newTestLaneSet(t, initR, 3, 4, 4242, 3)
 	hi := newTestLaneHostInfo(t, initR, ls)
 
-	assert.Nil(t, hi.laneSession(0), "lane 0 is the base session")
-	assert.Equal(t, ls.sessions[2], hi.laneSession(2))
-	assert.Nil(t, hi.laneSession(3), "a lane we never derived")
-	assert.Nil(t, hi.laneSession(255))
+	assertNoLane := func(s uint8, msg string) {
+		t.Helper()
+		ci, cached, err := hi.laneSession(s)
+		require.NoError(t, err)
+		assert.Nil(t, ci, msg)
+		assert.False(t, cached, msg)
+	}
+
+	assertNoLane(0, "lane 0 is the base session")
+	assertNoLane(3, "a lane beyond what this tunnel covers")
+	assertNoLane(255, "a lane beyond what this tunnel covers")
+
+	// An already-derived lane is returned as a hit.
+	sess := laneSessionFor(t, ls, 2)
+	ci, cached, err := hi.laneSession(2)
+	require.NoError(t, err)
+	assert.Same(t, sess, ci)
+	assert.True(t, cached)
 
 	// A peer without lanes answers nil for every lane rather than panicking.
 	bare := &HostInfo{}
-	assert.Nil(t, bare.laneSession(1))
+	ci, _, err = bare.laneSession(1)
+	require.NoError(t, err)
+	assert.Nil(t, ci)
 }
 
 func TestMaxMessageCounter(t *testing.T) {
@@ -219,7 +300,7 @@ func TestMaxMessageCounter(t *testing.T) {
 
 	// A lane past the base is what the rehandshake threshold has to notice: the
 	// base counter would sit still while the lane burns through its nonces.
-	ls.sessions[2].messageCounter.Store(9000)
+	laneSessionFor(t, ls, 2).messageCounter.Store(9000)
 	assert.Equal(t, uint64(9000), hi.maxMessageCounter())
 
 	assert.Equal(t, uint64(0), (&HostInfo{}).maxMessageCounter())
@@ -418,7 +499,7 @@ func TestHandleLaneProbe(t *testing.T) {
 	assert.Equal(t, header.LaneProbeAck, h.Subtype)
 	assert.Equal(t, uint8(0), h.Lane(), "the ack is base-tunnel traffic")
 
-	pt, err := newTestLaneSet(t, initR, 4, 4, 4242, 4).sessions[1].dKey.DecryptDanger(
+	pt, err := laneSessionFor(t, newTestLaneSet(t, initR, 4, 4, 4242, 4), 1).dKey.DecryptDanger(
 		nil, sent.bufs[0][:header.Len], sent.bufs[0][header.Len:], h.MessageCounter, make([]byte, 12))
 	_ = pt
 	assert.Error(t, err, "the ack must not be readable with a lane key")
@@ -522,8 +603,11 @@ func TestSendInsideMessageLaneSwap(t *testing.T) {
 	assert.Equal(t, uint8(0), h.Lane())
 
 	// Once the lane is up, slot-1 traffic rides the lane session, the lane
-	// socket and the lane's destination, tagged with the lane index.
+	// socket and the lane's destination, tagged with the lane index. Promotion
+	// normally happens on the ack of a probe, which is also what derived the
+	// session, so stand both up here.
 	laneRemote := netip.MustParseAddrPort("192.0.2.1:5354")
+	laneSessionFor(t, ls, 1)
 	ls.txAddr[1].Store(&laneRemote)
 	ls.demand[1].Store(false)
 	ifce.sendInsideMessage(hi, pkt, nb, tx1)
@@ -537,7 +621,7 @@ func TestSendInsideMessageLaneSwap(t *testing.T) {
 	assert.Equal(t, hi.remoteIndexId, h.RemoteIndex)
 
 	// And the peer's derived lane-1 session is what opens it.
-	pt, err := peerLS.sessions[1].Decrypt(test.NewLogger(), h.MessageCounter, laneWriter.bufs[0], nb)
+	pt, err := laneSessionFor(t, peerLS, 1).Decrypt(test.NewLogger(), h.MessageCounter, laneWriter.bufs[0], nb)
 	require.NoError(t, err)
 	assert.Equal(t, pkt.Bytes, pt)
 

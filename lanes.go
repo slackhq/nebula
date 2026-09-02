@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/flynn/noise"
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/noiseutil"
@@ -28,11 +30,18 @@ import (
 // Lane 0 is the base tunnel itself: HostInfo.ConnectionState, socket 0, and the
 // peer's real remote address. Lane s > 0 egresses writers[s] (bound to
 // listen.port+s) toward the peer's advertised port range. Receiving on a lane
-// needs no permission — the session exists as soon as the base handshake
+// needs no permission — the keys are derivable the moment the base handshake
 // completes — but sending on one needs proof the new 5-tuple actually works,
 // since nothing else would notice a middlebox quietly dropping it. So a lane
 // stays down until a probe on it is acked, and falls back to the base tunnel the
 // moment it stops being acked.
+//
+// Both directions are pay-per-use. A lane session is derived on the first packet
+// that needs it, because how many lanes exist is partly the peer's call: it
+// advertises how many it sends on, and we have to be able to receive all of
+// them. Deriving them all up front would let a peer advertising the maximum cost
+// us a replay window and two cipher states per lane, per tunnel, for lanes it
+// may never send on.
 
 const (
 	// laneKeyInfo is the HKDF label prefix for lane key expansion. Changing it
@@ -65,28 +74,35 @@ const (
 // laneSet holds a peer's lane sessions and the state deciding which lanes may
 // carry traffic. It is built when the base handshake completes and never
 // resized, so the slices and their lengths are immutable; mu guards the fields
-// under it, and txAddr/demand are atomics read by the data plane without it.
+// under it, and sessions/txAddr/demand are atomics read by the data plane
+// without it.
 type laneSet struct {
-	// sessions[s] is lane s's session. sessions[0] is nil: lane 0 is the base
-	// tunnel's own ConnectionState. Immutable, so the RX path reads it with no
-	// synchronization at all.
-	sessions []*ConnectionState
+	// sessions[s] holds lane s's session once something has needed it, and nil
+	// until then. sessions[0] is never populated: lane 0 is the base tunnel's own
+	// ConnectionState. The length is immutable, so the data plane bounds-checks
+	// and loads with no locking.
+	sessions []atomic.Pointer[ConnectionState]
+
+	// material is what a lane session is derived from, kept because sessions are
+	// derived lazily and the handshake result is long gone by then.
+	material laneMaterial
 
 	// txAddr[s] holds lane s's remote address while the lane is proven usable
 	// and nil otherwise. This single atomic is both the TX gate and the
 	// destination, so a routine that loads non-nil has everything it needs.
+	// Sized txLanes: lanes above that never send.
 	txAddr []atomic.Pointer[netip.AddrPort]
 
 	// demand[s] is raised by the TX path when a routine riding lane s has
 	// traffic for this peer and the lane is down. Probing is demand-driven: a
 	// peer we exchange a trickle with never costs more than its base tunnel, no
-	// matter how many lanes are configured.
+	// matter how many lanes are configured. Sized txLanes.
 	demand []atomic.Bool
 
 	// txLanes is how many lanes we may send on — our lane count clamped to the
-	// ports the peer bound. Lanes from txLanes up exist only to receive, which
-	// is how a peer with more routines than us still spreads its own traffic.
-	// Immutable.
+	// ports the peer bound. Lanes from txLanes up can only receive, which is how
+	// a peer with more routines than us still spreads its own traffic.
+	// Immutable, and the length of every TX-side slice here.
 	txLanes int
 
 	mu sync.Mutex
@@ -103,8 +119,20 @@ type laneSet struct {
 	// a roam invalidates every lane rather than moving it.
 	peerAddr netip.Addr
 
-	// probe[s] is lane s's probe and backoff state.
+	// probe[s] is lane s's probe and backoff state. Sized txLanes.
 	probe []laneProbeState
+}
+
+// laneMaterial is everything a lane session is derived from. The two base keys
+// are the same secret the base tunnel's own cipher states already hold — the
+// noiseutil.CipherState interface just doesn't hand them back, so a lane set
+// keeps its own copy rather than a reference to the session.
+type laneMaterial struct {
+	eKey, dKey [32]byte
+	cipher     noise.CipherFunc
+	myCert     cert.Certificate
+	peerCert   *cert.CachedCertificate
+	initiator  bool
 }
 
 type laneProbeState struct {
@@ -128,46 +156,48 @@ type laneProbeState struct {
 	retryAt time.Time
 }
 
-// newLaneSet derives the lane sessions for a freshly completed base handshake.
-// It returns nil when the pair has no lane beyond the base tunnel, which is the
-// normal answer for a peer running without multiport.
-func newLaneSet(r *handshake.Result, myLanes int, myAddr, peerAddr netip.Addr) (*laneSet, error) {
+// newLaneSet sets up the lanes for a freshly completed base handshake. It
+// returns nil when the pair has no lane beyond the base tunnel, which is the
+// normal answer for a peer running without multiport. No session is derived
+// here; each is derived on the first packet that needs it.
+func newLaneSet(r *handshake.Result, myLanes int, myAddr, peerAddr netip.Addr) *laneSet {
 	// PeerPortCount and PeerBasePort are already bounded to uint16 by the
 	// handshake payload parser. A zero port count is a peer that did not
 	// advertise multiport at all, so there is no lane to be had in either
 	// direction.
 	peerPorts := uint16(r.PeerPortCount)
 	if peerPorts == 0 {
-		return nil, nil
+		return nil
 	}
 
 	// Sessions have to cover both directions: we send on our lanes and receive
 	// on the peer's, and one derived session serves both ends of a lane index.
+	// Only the session table is sized by the peer's advertised count; the TX-side
+	// state is sized by what we will actually send on.
 	n := min(max(myLanes, int(r.PeerTxLanes)), header.MaxLane+1)
 	if n < 2 {
-		return nil, nil
+		return nil
 	}
+	txLanes := min(myLanes, int(peerPorts), n)
 
-	ls := &laneSet{
-		sessions:      make([]*ConnectionState, n),
-		txAddr:        make([]atomic.Pointer[netip.AddrPort], n),
-		demand:        make([]atomic.Bool, n),
-		probe:         make([]laneProbeState, n),
-		txLanes:       min(myLanes, int(peerPorts), n),
+	return &laneSet{
+		sessions: make([]atomic.Pointer[ConnectionState], n),
+		material: laneMaterial{
+			eKey:      r.EKey.UnsafeKey(),
+			dKey:      r.DKey.UnsafeKey(),
+			cipher:    r.Cipher,
+			myCert:    r.MyCert,
+			peerCert:  r.RemoteCert,
+			initiator: r.Initiator,
+		},
+		txAddr:        make([]atomic.Pointer[netip.AddrPort], txLanes),
+		demand:        make([]atomic.Bool, txLanes),
+		probe:         make([]laneProbeState, txLanes),
+		txLanes:       txLanes,
 		peerPortCount: peerPorts,
 		peerBasePort:  uint16(r.PeerBasePort),
 		portOffset:    lanePortOffset(myAddr, peerAddr, peerPorts),
 	}
-
-	for s := 1; s < n; s++ {
-		cs, err := newLaneConnectionState(r, uint8(s))
-		if err != nil {
-			return nil, err
-		}
-		ls.sessions[s] = cs
-	}
-
-	return ls, nil
 }
 
 // lanePortOffset returns the rotation applied to this pair's lane target ports,
@@ -202,13 +232,63 @@ func lanePortOffset(myAddr, peerAddr netip.Addr, peerPortCount uint16) uint16 {
 	return o
 }
 
-// laneSession returns lane s's session, or nil if this peer has no lane s.
-func (i *HostInfo) laneSession(s uint8) *ConnectionState {
+// laneSession returns the session to decrypt a lane s packet with, deriving one
+// if this is the first packet to claim that lane. A nil session with no error
+// means this tunnel has no lane s at all.
+//
+// cached reports whether the session was already in the table. A fresh one is
+// deliberately left out of it: anyone who can spoof this tunnel's local index
+// can name any lane, and installing on sight would let them make us hold a
+// replay window and two cipher states per lane without authenticating anything.
+// The caller installs with installSession once the packet decrypts, which is the
+// first moment the lane is known to be real.
+func (i *HostInfo) laneSession(s uint8) (ci *ConnectionState, cached bool, err error) {
 	ls := i.lanes
-	if ls == nil || int(s) >= len(ls.sessions) {
-		return nil
+	if ls == nil || s == 0 || int(s) >= len(ls.sessions) {
+		return nil, false, nil
 	}
-	return ls.sessions[s]
+
+	if cs := ls.sessions[s].Load(); cs != nil {
+		return cs, true, nil
+	}
+
+	cs, err := newLaneConnectionState(&ls.material, s)
+	if err != nil {
+		return nil, false, err
+	}
+	return cs, false, nil
+}
+
+// installSession publishes a session derived by laneSession, so the next packet
+// on the lane doesn't have to derive it again. cs must have already decrypted a
+// packet from the peer.
+//
+// A loser of the race keeps the session it decrypted with and drops it after,
+// which loses that one packet's replay-window entry. The alternative is holding
+// a lock across a decrypt to close a window that is one packet wide and only
+// open on the first packet of a lane.
+func (ls *laneSet) installSession(s uint8, cs *ConnectionState) {
+	ls.sessions[s].CompareAndSwap(nil, cs)
+}
+
+// session returns lane s's session for our own use, deriving and installing it
+// if it doesn't exist yet. Unlike the RX path this needs no proof the lane is
+// real: we only ask for lanes we chose to send on. s must be a lane this set
+// covers.
+func (ls *laneSet) session(s int) (*ConnectionState, error) {
+	if cs := ls.sessions[s].Load(); cs != nil {
+		return cs, nil
+	}
+
+	cs, err := newLaneConnectionState(&ls.material, uint8(s))
+	if err != nil {
+		return nil, err
+	}
+
+	if !ls.sessions[s].CompareAndSwap(nil, cs) {
+		return ls.sessions[s].Load(), nil
+	}
+	return cs, nil
 }
 
 // maxMessageCounter returns the highest counter across the base session and
@@ -222,8 +302,10 @@ func (i *HostInfo) maxMessageCounter() uint64 {
 	}
 	c := i.ConnectionState.messageCounter.Load()
 	if ls := i.lanes; ls != nil {
-		for _, cs := range ls.sessions {
+		for s := range ls.sessions {
+			cs := ls.sessions[s].Load()
 			if cs == nil {
+				// Never derived, so it has never sent anything either.
 				continue
 			}
 			if lc := cs.messageCounter.Load(); lc > c {
@@ -244,7 +326,13 @@ func (ls *laneSet) txLane(s int) (*ConnectionState, netip.AddrPort) {
 	}
 
 	if addr := ls.txAddr[s].Load(); addr != nil {
-		return ls.sessions[s], *addr
+		// The lane is only up because a probe was acked on it, and that probe
+		// derived the session, so this load cannot miss. Fall back rather than
+		// derive here anyway: this is the hot path and a nil is not worth an HKDF.
+		if cs := ls.sessions[s].Load(); cs != nil {
+			return cs, *addr
+		}
+		return nil, netip.AddrPort{}
 	}
 
 	// Load-guarded so the common case of a lane that will not come up is a
@@ -395,7 +483,12 @@ func (ls *laneSet) resetLocked() {
 // keys we derived for this lane match the ones it derived. Reports whether the
 // probe made it onto the wire.
 func (f *Interface) sendLaneProbe(hostinfo *HostInfo, s int, gen uint8, addr netip.AddrPort, nb, out []byte) bool {
-	ci := hostinfo.lanes.sessions[s]
+	// The first probe on a lane is what derives its session.
+	ci, err := hostinfo.lanes.session(s)
+	if err != nil {
+		hostinfo.logger(f.l).Error("Failed to derive multiport lane session", "error", err, "lane", s)
+		return false
+	}
 	if ci == nil || ci.eKey == nil {
 		return false
 	}
@@ -413,7 +506,7 @@ func (f *Interface) sendLaneProbe(hostinfo *HostInfo, s int, gen uint8, addr net
 	}
 
 	b := header.EncodeLane(out[:0], header.Version, header.Test, header.LaneProbe, hostinfo.remoteIndexId, c, uint8(s))
-	b, err := ci.eKey.EncryptDanger(b, b, []byte{uint8(s), gen}, c, nb)
+	b, err = ci.eKey.EncryptDanger(b, b, []byte{uint8(s), gen}, c, nb)
 	if noiseutil.EncryptLockNeeded {
 		ci.writeLock.Unlock()
 	}

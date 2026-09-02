@@ -434,7 +434,7 @@ func copyLanes(h *HostInfo) []ControlLane {
 			l.Up = true
 			l.Remote = *addr
 		}
-		if cs := ls.sessions[s]; cs != nil {
+		if cs := ls.sessions[s].Load(); cs != nil {
 			l.MessageCounter = cs.messageCounter.Load()
 		}
 		lanes = append(lanes, l)
