@@ -365,7 +365,6 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 		return cm.makeLaneTrafficDecision(hostinfo, now)
 	}
 
-
 	primary := cm.hostMap.Hosts[hostinfo.vpnAddrs[0]]
 	mainHostInfo := true
 	if primary != nil && primary != hostinfo {

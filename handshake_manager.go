@@ -1012,7 +1012,6 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		return
 	}
 
-
 	hostinfo := &HostInfo{
 		ConnectionState:   connState,
 		localIndexId:      result.LocalIndex,
