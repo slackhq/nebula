@@ -206,7 +206,7 @@ func TestLaneSessionRxDerivation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []byte("real lane traffic"), pt)
 
-	respLS.installSession(2, ci)
+	respLS.installSession(test.NewLogger(), 2, ci, 1)
 	assert.Same(t, ci, respLS.sessions[2].Load())
 
 	// Now it is a hit, and the replay window the decrypt above advanced is the
@@ -217,11 +217,16 @@ func TestLaneSessionRxDerivation(t *testing.T) {
 	assert.Same(t, ci, got)
 
 	// A racing install loses rather than swapping the session out, which would
-	// throw away the replay window the live one has been accumulating.
+	// throw away the replay window the live one has been accumulating. The loser's
+	// packet still has to be marked seen on the winner, or dropping its session
+	// would make that one counter replayable.
 	other, err := newLaneConnectionState(&respLS.material, 2)
 	require.NoError(t, err)
-	respLS.installSession(2, other)
+	require.True(t, ci.window.Check(test.NewLogger(), 7), "counter 7 seen before the race")
+	respLS.installSession(test.NewLogger(), 2, other, 7)
 	assert.Same(t, ci, respLS.sessions[2].Load())
+	assert.False(t, ci.window.Check(test.NewLogger(), 7),
+		"the loser's counter was not carried to the surviving window")
 }
 
 func TestLaneTxGate(t *testing.T) {

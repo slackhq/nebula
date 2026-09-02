@@ -177,7 +177,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxCont
 	if !laneCached {
 		// The packet decrypted, so the peer really is using this lane and the
 		// session we derived for it is worth keeping.
-		hostinfo.lanes.installSession(lane, ci)
+		hostinfo.lanes.installSession(f.l, lane, ci, h.MessageCounter)
 	}
 
 	// Roam before we respond, but only on the base tunnel: a lane's source

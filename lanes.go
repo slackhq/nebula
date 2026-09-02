@@ -240,8 +240,8 @@ func lanePortOffset(myAddr, peerAddr netip.Addr, peerPortCount uint16) uint16 {
 // deliberately left out of it: anyone who can spoof this tunnel's local index
 // can name any lane, and installing on sight would let them make us hold a
 // replay window and two cipher states per lane without authenticating anything.
-// The caller installs with installSession once the packet decrypts, which is the
-// first moment the lane is known to be real.
+// The caller must install with installSession once the packet decrypts, which is
+// the first moment the lane is known to be real.
 func (i *HostInfo) laneSession(s uint8) (ci *ConnectionState, cached bool, err error) {
 	ls := i.lanes
 	if ls == nil || s == 0 || int(s) >= len(ls.sessions) {
@@ -260,15 +260,18 @@ func (i *HostInfo) laneSession(s uint8) (ci *ConnectionState, cached bool, err e
 }
 
 // installSession publishes a session derived by laneSession, so the next packet
-// on the lane doesn't have to derive it again. cs must have already decrypted a
-// packet from the peer.
+// on the lane doesn't have to derive it again. cs must have already decrypted the
+// packet at messageCounter.
 //
-// A loser of the race keeps the session it decrypted with and drops it after,
-// which loses that one packet's replay-window entry. The alternative is holding
-// a lock across a decrypt to close a window that is one packet wide and only
-// open on the first packet of a lane.
-func (ls *laneSet) installSession(s uint8, cs *ConnectionState) {
-	ls.sessions[s].CompareAndSwap(nil, cs)
+// Two routines can race on a lane's first packet and derive a session each. The
+// loser's is dropped, and with it the replay-window entry for the packet it just
+// accepted, so hand that counter to the session that survives — the keys are
+// identical, so it is the same window in every respect that matters.
+func (ls *laneSet) installSession(l *slog.Logger, s uint8, cs *ConnectionState, messageCounter uint64) {
+	if ls.sessions[s].CompareAndSwap(nil, cs) {
+		return
+	}
+	ls.sessions[s].Load().noteSeen(l, messageCounter)
 }
 
 // session returns lane s's session for our own use, deriving and installing it

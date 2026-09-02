@@ -168,6 +168,15 @@ func (cs *ConnectionState) Decrypt(l *slog.Logger, messageCounter uint64, packet
 	return out, nil
 }
 
+// noteSeen records a counter that some other session for the same keys already
+// accepted, so a packet doesn't become replayable just because the session that
+// decrypted it was thrown away. See laneSet.installSession, its only caller.
+func (cs *ConnectionState) noteSeen(l *slog.Logger, messageCounter uint64) {
+	cs.decryptLock.Lock()
+	cs.window.Update(l, messageCounter)
+	cs.decryptLock.Unlock()
+}
+
 func (cs *ConnectionState) VerifyRelay(l *slog.Logger, messageCounter uint64, packet []byte, nb []byte) error {
 	cs.decryptLock.Lock()
 	result := cs.window.Check(l, messageCounter)
