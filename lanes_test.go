@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"log/slog"
 	"net/netip"
 	"testing"
 	"time"
@@ -180,6 +181,29 @@ func TestNewLaneSetSizing(t *testing.T) {
 	ls = newTestLaneSet(t, initR, 8, 3, 4242, 8)
 	assert.Equal(t, 3, ls.txLanes)
 	assert.Len(t, ls.sessions, 8)
+}
+
+// The handshake log lines carry the negotiated lanes, so an operator can tell a
+// peer that got none from one that was never asked.
+func TestLaneLogAttr(t *testing.T) {
+	initR, _ := runTestHandshake(t)
+
+	// Not running multiport: an empty attr, which slog drops entirely.
+	assert.Equal(t, slog.Attr{}, laneLogAttr(0, nil))
+
+	// Running multiport against a peer that isn't: zeros, not silence.
+	assert.Equal(t, m{"tx": 0, "sessions": 0}, laneLogAttr(4, nil).Value.Any())
+
+	ls := newTestLaneSet(t, initR, 2, 8, 4242, 6)
+	attr := laneLogAttr(2, ls)
+	assert.Equal(t, "lanes", attr.Key)
+	assert.Equal(t, m{
+		"tx":           2,
+		"sessions":     6,
+		"peerBasePort": uint16(4242),
+		"peerPorts":    uint16(8),
+		"portOffset":   ls.portOffset,
+	}, attr.Value.Any())
 }
 
 // The RX path must not cache a session for a lane until a packet on it has

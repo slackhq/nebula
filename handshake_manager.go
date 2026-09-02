@@ -811,6 +811,10 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		},
 	}
 
+	// Lanes are allocated before the log line so it can report what was actually
+	// negotiated, and must in any case be in place before CheckAndComplete below.
+	hm.maybeAllocLanes(hostinfo, result)
+
 	msg := "Handshake message received"
 	if !anyVpnAddrsInCommon {
 		msg = "Handshake message received, but no vpnNetworks in common."
@@ -825,6 +829,7 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		"initiatorIndex", result.RemoteIndex,
 		"responderIndex", result.LocalIndex,
 		"handshake", m{"stage": uint64(machine.MessageIndex()), "style": header.SubTypeName(header.Handshake, machine.Subtype())},
+		laneLogAttr(hm.config.laneCount, hostinfo.lanes),
 	)
 
 	// packet aliases the listener's incoming buffer, so this copy must stay.
@@ -841,7 +846,6 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		hostinfo.SetRemote(via.UdpAddr)
 	}
 	hostinfo.buildNetworks(f.myVpnNetworksTable, remoteCert.Certificate)
-	hm.maybeAllocLanes(hostinfo, result)
 
 	existing, err := hm.CheckAndComplete(hostinfo, handshakePacketStage0, f)
 	if err != nil {
@@ -1000,6 +1004,14 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	}
 
 	duration := time.Since(hh.startTime).Nanoseconds()
+
+	hostinfo.vpnAddrs = vpnAddrs
+	hostinfo.buildNetworks(f.myVpnNetworksTable, remoteCert.Certificate)
+
+	// Lanes are allocated before the log line so it can report what was actually
+	// negotiated, and must in any case be in place before Complete below.
+	hm.maybeAllocLanes(hostinfo, result)
+
 	msg := "Handshake message received"
 	if !anyVpnAddrsInCommon {
 		msg = "Handshake message received, but no vpnNetworks in common."
@@ -1016,12 +1028,9 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		"handshake", m{"stage": uint64(machine.MessageIndex()), "style": header.SubTypeName(header.Handshake, machine.Subtype())},
 		"durationNs", duration,
 		"sentCachedPackets", len(hh.packetStore),
+		laneLogAttr(hm.config.laneCount, hostinfo.lanes),
 	)
 
-	hostinfo.vpnAddrs = vpnAddrs
-	hostinfo.buildNetworks(f.myVpnNetworksTable, remoteCert.Certificate)
-
-	hm.maybeAllocLanes(hostinfo, result)
 	hm.Complete(hostinfo, f)
 
 	if len(hh.packetStore) > 0 {

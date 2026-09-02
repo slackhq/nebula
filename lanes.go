@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/flynn/noise"
+	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/header"
@@ -198,6 +199,50 @@ func newLaneSet(r *handshake.Result, myLanes int, myAddr, peerAddr netip.Addr) *
 		peerBasePort:  uint16(r.PeerBasePort),
 		portOffset:    lanePortOffset(myAddr, peerAddr, peerPorts),
 	}
+}
+
+// laneLogAttr summarizes what a tunnel negotiated, for the handshake log lines.
+// It is an empty attr, which slog drops, on a node not running multiport. A peer
+// that negotiated no lanes still logs, with zeros: "we offered and got nothing"
+// is exactly what you want to see when you expected lanes and have none.
+func laneLogAttr(myLanes int, ls *laneSet) slog.Attr {
+	if myLanes == 0 {
+		return slog.Attr{}
+	}
+	if ls == nil {
+		return slog.Any("lanes", m{"tx": 0, "sessions": 0})
+	}
+	// Every field read here is immutable once the set is built.
+	return slog.Any("lanes", m{
+		"tx":           ls.txLanes,
+		"sessions":     len(ls.sessions),
+		"peerBasePort": ls.peerBasePort,
+		"peerPorts":    ls.peerPortCount,
+		"portOffset":   ls.portOffset,
+	})
+}
+
+// emitLaneStats reports how many lanes are carrying traffic and how many tunnels
+// have any. Both are counted by walking the hostmap, because a counter kept at
+// promotion and demotion would drift upward forever: a tunnel torn down while its
+// lanes are up never demotes them. Only a node running multiport pays for the
+// walk.
+func (f *Interface) emitLaneStats(up, tunnels metrics.Gauge) {
+	var nUp, nTunnels int64
+	f.hostMap.ForEachIndex(func(hostinfo *HostInfo) {
+		ls := hostinfo.lanes
+		if ls == nil {
+			return
+		}
+		nTunnels++
+		for s := 1; s < ls.txLanes; s++ {
+			if ls.txAddr[s].Load() != nil {
+				nUp++
+			}
+		}
+	})
+	up.Update(nUp)
+	tunnels.Update(nTunnels)
 }
 
 // lanePortOffset returns the rotation applied to this pair's lane target ports,

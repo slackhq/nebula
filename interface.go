@@ -706,10 +706,22 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 	certInitiatingVersion := metrics.GetOrRegisterGauge("certificate.initiating_version", nil)
 	certMaxVersion := metrics.GetOrRegisterGauge("certificate.max_version", nil)
 
+	// Registered only when we run multiport, so these don't sit at zero on a node
+	// that was never going to have a lane and read as a broken feature.
+	var lanesUpGauge, laneTunnelsGauge metrics.Gauge
+	if f.multiport && f.laneCount > 1 {
+		lanesUpGauge = metrics.GetOrRegisterGauge("multiport.lanes.up", nil)
+		laneTunnelsGauge = metrics.GetOrRegisterGauge("multiport.lanes.tunnels", nil)
+	}
+
 	emit := func() {
 		f.firewall.EmitStats()
 		f.handshakeManager.EmitStats()
 		udpStats()
+
+		if lanesUpGauge != nil {
+			f.emitLaneStats(lanesUpGauge, laneTunnelsGauge)
+		}
 
 		certState := f.pki.getCertState()
 		defaultCrt := certState.GetDefaultCertificate()

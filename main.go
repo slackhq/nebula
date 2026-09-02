@@ -325,6 +325,11 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		handshakeConfig.laneCount = lanes
 		handshakeConfig.lanePortCount = uint16(routines)
 		handshakeConfig.laneBasePort = uint16(port)
+
+		// Every other multiport log line is a reason it turned itself off, so say
+		// plainly when it is on and with what. A peer only gets lanes if it also
+		// advertises a port range, so this is our half of the negotiation.
+		l.Info("multiport enabled", "lanes", lanes, "basePort", port, "ports", routines)
 	}
 
 	handshakeManager := NewHandshakeManager(l, hostMap, lightHouse, udpConns[0], handshakeConfig)
