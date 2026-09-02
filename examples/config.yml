@@ -196,9 +196,12 @@ listen:
 #
 # Peers negotiate lanes in the handshake; vanilla peers get a single normal
 # tunnel. All control traffic (handshakes, lighthouse, punching, relays) and
-# the data fallback stay on the base tunnel/port. Lanes are established after
-# the base tunnel comes up, are kept alive with their own keepalives, and
-# traffic falls back to the base tunnel while a lane is down.
+# the data fallback stay on the base tunnel/port. Lanes are built lazily: a
+# lane is only established once a routine actually has traffic for that peer
+# and no lane to carry it, so a peer you exchange a trickle with costs one
+# tunnel regardless of how many routines are configured. Established lanes
+# are kept alive with their own keepalives, and traffic falls back to the base
+# tunnel while a lane is down or not yet up.
 #
 # Requirements: routines > 1, Linux, and the port range
 # [listen.port, listen.port+routines-1] reachable through firewalls on both

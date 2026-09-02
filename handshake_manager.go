@@ -754,9 +754,16 @@ func (hm *HandshakeManager) maybeAllocLaneState(hostinfo *HostInfo, result *hand
 }
 
 // EnsureLanes starts lane handshakes for every empty, non-pending, retry-due
-// slot of a base tunnel. Called on base handshake completion (both sides) and
-// from the connection manager's per-tunnel tick, so a dead lane re-establishes
-// within one check interval, subject to per-slot backoff.
+// slot of a base tunnel that the data plane has asked for. Called on base
+// handshake completion (both sides) and from the connection manager's
+// per-tunnel tick, so a demanded lane is established, and a dead one
+// re-established, within one check interval subject to per-slot backoff.
+//
+// Demand is what makes lanes lazy: nothing is built when the base tunnel
+// completes, only when a routine actually has traffic for the peer and finds
+// its slot empty (see noteLaneDemand). Consuming the flag here rather than
+// leaving it set also means a lane that dies after its routine went quiet
+// stays dead instead of being rebuilt forever.
 func (hm *HandshakeManager) EnsureLanes(base *HostInfo) {
 	ls := base.lanes
 	if ls == nil || hm.config.laneCount <= 1 {
@@ -769,6 +776,11 @@ func (hm *HandshakeManager) EnsureLanes(base *HostInfo) {
 	n := min(len(ls.txLanes), hm.config.laneCount)
 	for i := 1; i < n; i++ {
 		if ls.txLanes[i].Load() != nil || ls.txPending[i] || now.Before(ls.txRetryAt[i]) {
+			continue
+		}
+		// Checked last: a slot that isn't startable keeps its demand for the
+		// tick that can act on it.
+		if !ls.takeLaneDemand(i) {
 			continue
 		}
 		ls.txPending[i] = true

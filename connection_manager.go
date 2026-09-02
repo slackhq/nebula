@@ -200,11 +200,13 @@ func (cm *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte
 	cm.ensureLanes(localIndex, decision, hostinfo)
 }
 
-// ensureLanes piggybacks lane re-establishment on the per-tunnel traffic
-// tick: any live base with lane state gets its empty slots retried (subject to
-// the per-slot backoff). makeTrafficDecision returns a nil hostinfo on some
-// keep-alive paths, so re-resolve the index in that case — an idle base must
-// still restart lanes that died while it was quiet.
+// ensureLanes piggybacks lane establishment on the per-tunnel traffic tick:
+// any live base with lane state gets the slots its data plane asked for
+// started (subject to the per-slot backoff). This tick is the right place for
+// it precisely because lanes are demand-driven — a base only lands here when
+// it has traffic, which is the same condition that raises lane demand.
+// makeTrafficDecision returns a nil hostinfo on some keep-alive paths, so
+// re-resolve the index in that case.
 func (cm *connectionManager) ensureLanes(localIndex uint32, decision trafficDecision, hostinfo *HostInfo) {
 	if decision == deleteTunnel || decision == closeTunnel {
 		return

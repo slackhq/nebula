@@ -325,6 +325,14 @@ type laneState struct {
 	// data-plane routine that Loads non-nil always sees a usable tunnel.
 	txLanes []atomic.Pointer[HostInfo]
 
+	// txDemand[i] is set by the data plane when a routine riding slot i has
+	// traffic for this peer and no established lane, and consumed when
+	// EnsureLanes claims the slot. Lanes exist only where traffic asked for
+	// one: a peer we exchange a trickle with never costs more than the base
+	// tunnel, no matter how many routines are configured. Written without
+	// the Mutex.
+	txDemand []atomic.Bool
+
 	// Under Mutex: per-slot handshake-in-flight flag, consecutive failure
 	// count, and earliest next attempt, driving ensureLanes' backoff.
 	txPending []bool
@@ -342,10 +350,34 @@ func newLaneState(laneCount int, peerPortCount, peerBasePort, portOffset uint16)
 		peerBasePort:  peerBasePort,
 		portOffset:    portOffset,
 		txLanes:       make([]atomic.Pointer[HostInfo], laneCount),
+		txDemand:      make([]atomic.Bool, laneCount),
 		txPending:     make([]bool, laneCount),
 		txFails:       make([]uint8, laneCount),
 		txRetryAt:     make([]time.Time, laneCount),
 	}
+}
+
+// noteLaneDemand records that a data-plane routine has traffic for lane slot
+// i but found the slot empty. Called from the TX hot path on every packet
+// that misses, so the store is load-guarded: once the flag is up, further
+// misses are plain reads and cannot ping-pong a cache line shared with the
+// neighbouring slots' flags. Slot 0 is the base tunnel and never a lane.
+func (ls *laneState) noteLaneDemand(i int) {
+	if i <= 0 || i >= len(ls.txDemand) {
+		return
+	}
+	if !ls.txDemand[i].Load() {
+		ls.txDemand[i].Store(true)
+	}
+}
+
+// takeLaneDemand consumes slot i's demand flag, reporting whether the data
+// plane had asked for the lane since the last time we looked.
+func (ls *laneState) takeLaneDemand(i int) bool {
+	if i <= 0 || i >= len(ls.txDemand) {
+		return false
+	}
+	return ls.txDemand[i].Swap(false)
 }
 
 // laneTargetPort returns the peer port that owned lane i handshakes to and

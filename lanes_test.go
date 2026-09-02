@@ -490,6 +490,9 @@ func TestEnsureLanesBackoffOnStage0Failure(t *testing.T) {
 	vpnIp := netip.MustParseAddr("172.1.1.8")
 	base := newTestBaseHostInfo(vpnIp, 1100, 1200, 4)
 
+	for i := 1; i < 4; i++ {
+		base.lanes.noteLaneDemand(i)
+	}
 	hm.EnsureLanes(base)
 
 	base.lanes.Lock()
@@ -499,4 +502,86 @@ func TestEnsureLanesBackoffOnStage0Failure(t *testing.T) {
 		assert.Equal(t, uint8(1), base.lanes.txFails[i], "slot %d fails", i)
 		assert.True(t, base.lanes.txRetryAt[i].After(time.Now()), "slot %d retryAt", i)
 	}
+}
+
+// Lanes are demand-driven: a base tunnel with no data-plane interest in a slot
+// must not start a handshake for it, and one demand must not turn into an
+// unbounded retry loop.
+func TestEnsureLanesLazy(t *testing.T) {
+	hostMap := newHostMap(test.NewLogger())
+	_, ifce := newLaneTestConnectionManager(hostMap)
+
+	hm := ifce.handshakeManager
+	hm.config.laneCount = 4
+	hm.config.lanePortCount = 4
+	hm.config.laneBasePort = 4242
+
+	base := newTestBaseHostInfo(netip.MustParseAddr("172.1.1.9"), 1300, 1400, 4)
+	ls := base.lanes
+
+	// No demand: nothing is attempted, so nothing fails or backs off either.
+	hm.EnsureLanes(base)
+	ls.Lock()
+	for i := 1; i < 4; i++ {
+		assert.False(t, ls.txPending[i], "slot %d claimed without demand", i)
+		assert.Zero(t, ls.txFails[i], "slot %d attempted without demand", i)
+		assert.True(t, ls.txRetryAt[i].IsZero(), "slot %d backed off without demand", i)
+	}
+	ls.Unlock()
+
+	// Demand on one slot starts that slot alone. (Stage 0 fails on the test
+	// CertState, so the observable effect is a failure charged to slot 2.)
+	ls.noteLaneDemand(2)
+	hm.EnsureLanes(base)
+	ls.Lock()
+	assert.Equal(t, uint8(1), ls.txFails[2])
+	assert.Zero(t, ls.txFails[1], "untouched slot attempted")
+	assert.Zero(t, ls.txFails[3], "untouched slot attempted")
+	// The attempt consumed the demand, so a later tick past the backoff does
+	// not retry a lane nobody is asking for any more.
+	ls.txRetryAt[2] = time.Time{}
+	ls.Unlock()
+	hm.EnsureLanes(base)
+	ls.Lock()
+	assert.Equal(t, uint8(1), ls.txFails[2], "consumed demand was retried")
+	ls.Unlock()
+
+	// Slot 0 is the base tunnel and is never a lane.
+	ls.noteLaneDemand(0)
+	assert.False(t, ls.takeLaneDemand(0))
+}
+
+// A TX miss on an empty slot is what asks for the lane; a hit must not, and a
+// relay-only peer never gets that far.
+func TestSendInsideMessageRecordsLaneDemand(t *testing.T) {
+	hostMap := newHostMap(test.NewLogger())
+	_, ifce := newLaneTestConnectionManager(hostMap)
+
+	base := newTestBaseHostInfo(netip.MustParseAddr("172.1.1.10"), 1500, 1600, 4)
+	lane := newTestLaneHostInfo(base, 1, 1501, 1601, true)
+
+	init, _ := runTestHandshake(t)
+	cs, err := newConnectionStateFromResult(init)
+	require.NoError(t, err)
+	base.ConnectionState = cs
+	lane.ConnectionState = cs
+
+	writer := &recordingBatchWriter{}
+	newTx := func(laneSlot int) *txQueue {
+		sb := batch.NewSendBatch(writer, batch.SendBatchCap, 1<<16)
+		return &txQueue{laneSlot: laneSlot, base: sb, lane: sb}
+	}
+	pkt := tio.Packet{Bytes: []byte{0x45, 0, 0, 4, 1, 2, 3, 4}}
+	nb := make([]byte, 12)
+
+	// Empty slot: the send rides the base tunnel and flags demand for slot 1.
+	ifce.sendInsideMessage(base, pkt, nb, newTx(1))
+	assert.True(t, base.lanes.txDemand[1].Load(), "miss did not raise demand")
+	assert.False(t, base.lanes.txDemand[2].Load(), "demand raised on an unused slot")
+
+	// Established lane: the send uses it and asks for nothing.
+	base.lanes.txDemand[1].Store(false)
+	base.lanes.txLanes[1].Store(lane)
+	ifce.sendInsideMessage(base, pkt, nb, newTx(1))
+	assert.False(t, base.lanes.txDemand[1].Load(), "hit raised demand")
 }

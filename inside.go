@@ -233,6 +233,13 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 	// The pointer is only published once the lane's ConnectionState is fully
 	// populated, so a non-nil Load is always usable. On lane death the slot
 	// CAS-clears and traffic falls back to the base tunnel instantly.
+	//
+	// A miss is also how lanes get built in the first place: flagging demand
+	// here is the only thing that asks the handshake manager for this slot,
+	// so we pay for a lane exactly where real traffic wanted one. The
+	// connection manager's next tick on this tunnel picks the flag up, which
+	// bounds establishment by one check interval — until then the traffic
+	// rides the base tunnel, the same fallback a dead lane uses.
 	if ls := hostinfo.lanes; ls != nil && tx.laneSlot < len(ls.txLanes) {
 		if lane := ls.txLanes[tx.laneSlot].Load(); lane != nil {
 			if lci := lane.ConnectionState; lci != nil && lci.eKey != nil {
@@ -241,6 +248,8 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 				remote = lane.GetRemote()
 				sendBatch = tx.lane
 			}
+		} else {
+			ls.noteLaneDemand(tx.laneSlot)
 		}
 	}
 
