@@ -52,6 +52,28 @@ func TestParse(t *testing.T) {
 	}
 }
 
+func TestEncodeLane(t *testing.T) {
+	b := EncodeLane(make([]byte, Len), Version, Message, MessageNone, 10, 9, 3)
+	assert.Equal(t, []byte{0x11, 0x0, 0x0, 0x3}, b[:4])
+
+	h := &H{}
+	require.NoError(t, h.Parse(b))
+	assert.Equal(t, uint16(3), h.Reserved)
+	assert.Equal(t, uint8(3), h.Lane())
+
+	// Encode is EncodeLane on the base tunnel, and the H method round trips the lane.
+	assert.Equal(t,
+		EncodeLane(make([]byte, Len), Version, Message, MessageNone, 10, 9, 0),
+		Encode(make([]byte, Len), Version, Message, MessageNone, 10, 9))
+
+	rt, err := h.Encode(make([]byte, Len))
+	require.NoError(t, err)
+	assert.Equal(t, b, rt)
+
+	// Only the low 8 bits of Reserved are the lane.
+	assert.Equal(t, uint8(0x2a), (&H{Reserved: 0xff2a}).Lane())
+}
+
 func TestTypeName(t *testing.T) {
 	assert.Equal(t, "test", TypeName(Test))
 	assert.Equal(t, "test", (&H{Type: Test}).TypeName())
@@ -127,7 +149,9 @@ func TestIsValidSubType(t *testing.T) {
 
 	assert.True(t, IsValidSubType(Test, TestRequest))
 	assert.True(t, IsValidSubType(Test, TestReply))
-	assert.False(t, IsValidSubType(Test, 2))
+	assert.True(t, IsValidSubType(Test, LaneProbe))
+	assert.True(t, IsValidSubType(Test, LaneProbeAck))
+	assert.False(t, IsValidSubType(Test, 4))
 
 	// These types only ever carry subtype 0.
 	for _, mt := range []MessageType{Control, CloseTunnel, RecvError, LightHouse} {

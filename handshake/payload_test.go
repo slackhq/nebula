@@ -146,14 +146,14 @@ func TestPayloadLaneDetails(t *testing.T) {
 		data := MarshalPayload(nil, Payload{
 			InitiatorIndex: 12345,
 			Time:           999,
-			InitiatorLanes: &LaneDetails{PortCount: 8, BasePort: 4242, LaneIndex: 3},
+			InitiatorLanes: &LaneDetails{PortCount: 8, BasePort: 4242, TxLanes: 3},
 			ResponderLanes: &LaneDetails{PortCount: 4, BasePort: 5353},
 		})
 
 		got, err := UnmarshalPayload(data)
 		require.NoError(t, err)
 		require.NotNil(t, got.InitiatorLanes)
-		assert.Equal(t, LaneDetails{PortCount: 8, BasePort: 4242, LaneIndex: 3}, *got.InitiatorLanes)
+		assert.Equal(t, LaneDetails{PortCount: 8, BasePort: 4242, TxLanes: 3}, *got.InitiatorLanes)
 		require.NotNil(t, got.ResponderLanes)
 		assert.Equal(t, LaneDetails{PortCount: 4, BasePort: 5353}, *got.ResponderLanes)
 	})
@@ -237,7 +237,7 @@ func TestPayloadLaneDetails(t *testing.T) {
 
 	t.Run("lane subfield varint overflow rejected", func(t *testing.T) {
 		var lane []byte
-		lane = protowire.AppendTag(lane, fieldLaneLaneIndex, protowire.VarintType)
+		lane = protowire.AppendTag(lane, fieldLaneTxLanes, protowire.VarintType)
 		lane = protowire.AppendVarint(lane, math.MaxUint32+1)
 
 		var details []byte
@@ -442,7 +442,7 @@ func FuzzPayload(f *testing.F) {
 	f.Add(MarshalPayload(nil, Payload{
 		InitiatorIndex: 1,
 		Time:           3,
-		InitiatorLanes: &LaneDetails{PortCount: 8, BasePort: 4242, LaneIndex: 2},
+		InitiatorLanes: &LaneDetails{PortCount: 8, BasePort: 4242, TxLanes: 2},
 		ResponderLanes: &LaneDetails{PortCount: 4, BasePort: 5353},
 	}))
 	f.Add([]byte{})

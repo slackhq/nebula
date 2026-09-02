@@ -67,9 +67,16 @@ type ControlHostInfo struct {
 	CurrentRemote          netip.AddrPort   `json:"currentRemote"`
 	CurrentRelaysToMe      []netip.Addr     `json:"currentRelaysToMe"`
 	CurrentRelaysThroughMe []netip.Addr     `json:"currentRelaysThroughMe"`
-	IsLane                 bool             `json:"isLane,omitempty"`
-	LaneIndex              uint16           `json:"laneIndex,omitempty"`
-	SockIdx                int              `json:"sockIdx,omitempty"`
+	Lanes                  []ControlLane    `json:"lanes,omitempty"`
+}
+
+// ControlLane reports one multiport lane of a tunnel. Only lanes we may send on
+// are listed; receive-only lanes have no state worth showing.
+type ControlLane struct {
+	Index          uint8          `json:"index"`
+	Up             bool           `json:"up"`
+	Remote         netip.AddrPort `json:"remote,omitempty"`
+	MessageCounter uint64         `json:"messageCounter"`
 }
 
 // Start actually runs nebula, this is a nonblocking call.
@@ -365,11 +372,6 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	// Grab the hostMap lock to access the Hosts map
 	c.f.hostMap.Lock()
 	for _, relayHost := range c.f.hostMap.Indexes {
-		// Lanes ride along with their base tunnel's shutdown cascade; closing
-		// them individually would race the cascade's identity-checked deletes.
-		if relayHost.isLane() {
-			continue
-		}
 		if _, ok := relayingHosts[relayHost.vpnAddrs[0]]; !ok {
 			hostInfos = append(hostInfos, relayHost)
 		}
@@ -398,9 +400,7 @@ func copyHostInfo(h *HostInfo, preferredRanges []netip.Prefix) ControlHostInfo {
 		CurrentRelaysToMe:      h.relayState.CopyRelayIps(),
 		CurrentRelaysThroughMe: h.relayState.CopyRelayForIps(),
 		CurrentRemote:          h.GetRemote(),
-		IsLane:                 h.isLane(),
-		LaneIndex:              h.laneIndex,
-		SockIdx:                h.sockIdx,
+		Lanes:                  copyLanes(h),
 	}
 
 	for i, a := range h.vpnAddrs {
@@ -416,6 +416,30 @@ func copyHostInfo(h *HostInfo, preferredRanges []netip.Prefix) ControlHostInfo {
 	}
 
 	return chi
+}
+
+// copyLanes snapshots the sendable multiport lanes of a tunnel, or nil when it
+// has none. txAddr is the lane's gate as well as its destination, so a nil load
+// is exactly "this lane is down and its routine is riding the base tunnel".
+func copyLanes(h *HostInfo) []ControlLane {
+	ls := h.lanes
+	if ls == nil || ls.txLanes < 2 {
+		return nil
+	}
+
+	lanes := make([]ControlLane, 0, ls.txLanes-1)
+	for s := 1; s < ls.txLanes; s++ {
+		l := ControlLane{Index: uint8(s)}
+		if addr := ls.txAddr[s].Load(); addr != nil {
+			l.Up = true
+			l.Remote = *addr
+		}
+		if cs := ls.sessions[s]; cs != nil {
+			l.MessageCounter = cs.messageCounter.Load()
+		}
+		lanes = append(lanes, l)
+	}
+	return lanes
 }
 
 func listHostMapHosts(hl controlHostLister) []ControlHostInfo {

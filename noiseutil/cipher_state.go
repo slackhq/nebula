@@ -1,6 +1,7 @@
 package noiseutil
 
 import (
+	"crypto/cipher"
 	"errors"
 	"fmt"
 	"math"
@@ -48,6 +49,32 @@ func NewCipherState(s *noise.CipherState, cipherFunc noise.CipherFunc) CipherSta
 		return NewCipherStateAESGCM(s)
 	case noise.CipherChaChaPoly.CipherName():
 		return NewCipherStateChaChaPoly(s)
+	default:
+		panic(fmt.Sprintf("noiseutil: unsupported cipher %q", cipherFunc.CipherName()))
+	}
+}
+
+// NewCipherStateFromKey builds a data-plane CipherState directly from raw key
+// bytes, bypassing the noise handshake. Multiport lanes use this to key a
+// derived session off the base tunnel's negotiated keys; the caller owns the
+// guarantee that key is used with exactly one CipherState so nonces never
+// repeat.
+func NewCipherStateFromKey(key [32]byte, cipherFunc noise.CipherFunc) CipherState {
+	c := cipherFunc.Cipher(key)
+	if cs, ok := c.(CipherState); ok {
+		return cs
+	}
+
+	aead, ok := c.(cipher.AEAD)
+	if !ok {
+		panic(fmt.Sprintf("noiseutil: cipher %q does not expose an AEAD", cipherFunc.CipherName()))
+	}
+
+	switch cipherFunc.CipherName() {
+	case noise.CipherAESGCM.CipherName():
+		return &CipherStateAESGCM{c: aead}
+	case noise.CipherChaChaPoly.CipherName():
+		return &CipherStateChaChaPoly{c: aead}
 	default:
 		panic(fmt.Sprintf("noiseutil: unsupported cipher %q", cipherFunc.CipherName()))
 	}

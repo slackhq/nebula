@@ -15,6 +15,7 @@ import (
 
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/cpupick"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/sshd"
@@ -314,6 +315,12 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		lanes := c.GetInt("multiport.lanes", 0)
 		if lanes <= 0 || lanes > routines {
 			lanes = routines
+		}
+		if lanes > header.MaxLane+1 {
+			// The lane index rides in one byte of the nebula header, so lanes
+			// above that are unaddressable.
+			l.Warn("multiport.lanes clamped to header limit", "lanes", lanes, "limit", header.MaxLane+1)
+			lanes = header.MaxLane + 1
 		}
 		handshakeConfig.laneCount = lanes
 		handshakeConfig.lanePortCount = uint16(routines)

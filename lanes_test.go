@@ -8,6 +8,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/overlay/batch"
 	"github.com/slackhq/nebula/overlay/overlaytest"
@@ -18,33 +19,38 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newTestBaseHostInfo(vpnIp netip.Addr, localIdx, remoteIdx uint32, laneCount int) *HostInfo {
-	base := &HostInfo{
-		vpnAddrs:        []netip.Addr{vpnIp},
-		localIndexId:    localIdx,
-		remoteIndexId:   remoteIdx,
-		remotes:         NewRemoteList([]netip.Addr{vpnIp}, nil),
-		HandshakePacket: map[uint8][]byte{},
-	}
-	base.SetRemote(netip.MustParseAddrPort("192.0.2.1:4242"))
-	base.lanes = newLaneState(laneCount, uint16(laneCount), 4242, 0)
-	return base
+var (
+	testMyAddr   = netip.MustParseAddr("10.0.0.1")
+	testPeerAddr = netip.MustParseAddr("10.0.0.2")
+)
+
+// newTestLaneSet derives a lane set from a real handshake result so the sessions
+// hold usable keys.
+func newTestLaneSet(t *testing.T, r *handshake.Result, myLanes int, peerPorts, peerBase, peerTxLanes uint32) *laneSet {
+	t.Helper()
+	r.PeerPortCount = peerPorts
+	r.PeerBasePort = peerBase
+	r.PeerTxLanes = peerTxLanes
+	ls, err := newLaneSet(r, myLanes, testMyAddr, testPeerAddr)
+	require.NoError(t, err)
+	return ls
 }
 
-func newTestLaneHostInfo(base *HostInfo, laneIndex uint16, localIdx, remoteIdx uint32, owned bool) *HostInfo {
-	lane := &HostInfo{
-		vpnAddrs:        base.vpnAddrs,
-		localIndexId:    localIdx,
-		remoteIndexId:   remoteIdx,
-		remotes:         NewRemoteList(base.vpnAddrs, nil),
+func newTestLaneHostInfo(t *testing.T, r *handshake.Result, ls *laneSet) *HostInfo {
+	t.Helper()
+	cs, err := newConnectionStateFromResult(r)
+	require.NoError(t, err)
+	hi := &HostInfo{
+		vpnAddrs:        []netip.Addr{testPeerAddr},
+		localIndexId:    100,
+		remoteIndexId:   200,
+		remotes:         NewRemoteList([]netip.Addr{testPeerAddr}, nil),
 		HandshakePacket: map[uint8][]byte{},
-		sockIdx:         int(laneIndex),
-		laneIndex:       laneIndex,
-		laneOwned:       owned,
-		parent:          base,
+		ConnectionState: cs,
+		lanes:           ls,
 	}
-	lane.SetRemote(netip.MustParseAddrPort("192.0.2.1:4243"))
-	return lane
+	hi.SetRemote(netip.MustParseAddrPort("192.0.2.1:4242"))
+	return hi
 }
 
 func TestLanePortOffset(t *testing.T) {
@@ -83,132 +89,149 @@ func TestLanePortOffset(t *testing.T) {
 }
 
 func TestLaneTargetPort(t *testing.T) {
+	ls := &laneSet{peerBasePort: 4242, peerPortCount: 4}
+
 	// No rotation: lane i targets base+i, wrapping past the peer's range.
-	ls := newLaneState(4, 4, 4242, 0)
 	for i, want := range map[int]uint16{1: 4243, 2: 4244, 3: 4245, 5: 4243} {
-		assert.Equal(t, want, ls.laneTargetPort(i), "lane %d", i)
+		assert.Equal(t, want, ls.laneTargetPortLocked(i), "lane %d", i)
 	}
 
 	// Rotation shifts the whole mapping; the wrapped lane lands on the base
 	// port itself, which is a valid distinct 4-tuple (our source port differs).
-	ls = newLaneState(4, 4, 4242, 3)
+	ls.portOffset = 3
 	for i, want := range map[int]uint16{1: 4242, 2: 4243, 3: 4244} {
-		assert.Equal(t, want, ls.laneTargetPort(i), "rotated lane %d", i)
+		assert.Equal(t, want, ls.laneTargetPortLocked(i), "rotated lane %d", i)
 	}
 
 	// Fewer peer ports than local lanes: rotation still spreads across all of
 	// the peer's ports.
-	ls = newLaneState(16, 2, 4242, 1)
-	assert.Equal(t, uint16(4242), ls.laneTargetPort(1))
-	assert.Equal(t, uint16(4243), ls.laneTargetPort(2))
+	ls = &laneSet{peerBasePort: 4242, peerPortCount: 2, portOffset: 1}
+	assert.Equal(t, uint16(4242), ls.laneTargetPortLocked(1))
+	assert.Equal(t, uint16(4243), ls.laneTargetPortLocked(2))
 }
 
-func TestLaneHostmapLifecycle(t *testing.T) {
-	l := test.NewLogger()
-	hostMap := newHostMap(l)
-	ifce := &Interface{l: l} // connectionManager nil is tolerated by unlockedAddLane
+// A lane's keys are derived, not negotiated, so the whole design rests on the
+// two sides landing on the same pair without exchanging anything.
+func TestLaneKeyDerivationSymmetry(t *testing.T) {
+	initR, respR := runTestHandshake(t)
 
-	vpnIp := netip.MustParseAddr("172.1.1.2")
-	base := newTestBaseHostInfo(vpnIp, 100, 200, 4)
+	initLS := newTestLaneSet(t, initR, 4, 4, 4242, 4)
+	respLS := newTestLaneSet(t, respR, 4, 4, 4242, 4)
+	require.Len(t, initLS.sessions, 4)
+	assert.Nil(t, initLS.sessions[0], "lane 0 is the base session, not a derived one")
 
-	hostMap.Lock()
-	hostMap.unlockedAddHostInfo(base, ifce)
-	hostMap.Unlock()
+	nb := make([]byte, 12)
+	for s := 1; s < 4; s++ {
+		out := header.EncodeLane(make([]byte, 0, mtu), header.Version, header.Message, 0, 200, 1, uint8(s))
+		ct, err := initLS.sessions[s].eKey.EncryptDanger(out, out, []byte("lane payload"), 1, nb)
+		require.NoError(t, err)
 
-	lane := newTestLaneHostInfo(base, 1, 101, 201, true)
-	hostMap.Lock()
-	hostMap.unlockedAddLane(lane, ifce)
-	hostMap.Unlock()
-	base.lanes.txLanes[1].Store(lane)
+		pt, err := respLS.sessions[s].Decrypt(test.NewLogger(), 1, ct, nb)
+		require.NoError(t, err, "lane %d keys did not match", s)
+		assert.Equal(t, []byte("lane payload"), pt)
+	}
 
-	// The lane is reachable by index (RX demux, recv_error) but never a Hosts primary.
-	assert.Equal(t, lane, hostMap.QueryIndex(101))
-	assert.Equal(t, lane, hostMap.QueryReverseIndex(201))
-	assert.Equal(t, base, hostMap.Hosts[vpnIp])
-
-	// A lane can never be promoted to primary.
-	hostMap.Lock()
-	assert.False(t, hostMap.unlockedMakePrimary(lane))
-	hostMap.Unlock()
-	assert.Equal(t, base, hostMap.Hosts[vpnIp])
-
-	// Deleting the lane clears only its slot, applies backoff, and never
-	// reports "no more tunnels to peer" (final).
-	final := hostMap.DeleteHostInfo(lane)
-	assert.False(t, final)
-	assert.Nil(t, hostMap.QueryIndex(101))
-	assert.Equal(t, base, hostMap.Hosts[vpnIp])
-	assert.Nil(t, base.lanes.txLanes[1].Load())
-	base.lanes.Lock()
-	assert.Equal(t, uint8(1), base.lanes.txFails[1])
-	assert.False(t, base.lanes.txPending[1])
-	assert.True(t, base.lanes.txRetryAt[1].After(time.Now()))
-	base.lanes.Unlock()
-
-	// Idempotent: deleting again must not bump the backoff further.
-	hostMap.DeleteHostInfo(lane)
-	base.lanes.Lock()
-	assert.Equal(t, uint8(2), base.lanes.txFails[1]) // noteLaneFailure still runs, but slot CAS is a no-op
-	base.lanes.Unlock()
+	// Distinct lanes get distinct keys: lane 2's session must not open lane 1's
+	// ciphertext, or the header's lane index would be forgeable in effect.
+	out := header.EncodeLane(make([]byte, 0, mtu), header.Version, header.Message, 0, 200, 7, 1)
+	ct, err := initLS.sessions[1].eKey.EncryptDanger(out, out, []byte("lane payload"), 7, nb)
+	require.NoError(t, err)
+	_, err = respLS.sessions[2].Decrypt(test.NewLogger(), 7, ct, nb)
+	assert.Error(t, err)
 }
 
-func TestLaneHostmapCascadeDelete(t *testing.T) {
-	l := test.NewLogger()
-	hostMap := newHostMap(l)
-	ifce := &Interface{l: l}
+func TestNewLaneSetSizing(t *testing.T) {
+	initR, _ := runTestHandshake(t)
 
-	vpnIp := netip.MustParseAddr("172.1.1.3")
-	base := newTestBaseHostInfo(vpnIp, 300, 400, 4)
+	// A peer with no multiport advert gets no lanes at all.
+	ls, err := newLaneSet(&handshake.Result{}, 4, testMyAddr, testPeerAddr)
+	require.NoError(t, err)
+	assert.Nil(t, ls)
 
-	hostMap.Lock()
-	hostMap.unlockedAddHostInfo(base, ifce)
-	hostMap.Unlock()
+	// One lane means only the base tunnel, which is not a lane set.
+	ls, err = newLaneSet(&handshake.Result{PeerPortCount: 4, PeerTxLanes: 1}, 1, testMyAddr, testPeerAddr)
+	require.NoError(t, err)
+	assert.Nil(t, ls)
 
-	owned := newTestLaneHostInfo(base, 1, 301, 401, true)
-	peer := newTestLaneHostInfo(base, 2, 302, 402, false)
-	hostMap.Lock()
-	hostMap.unlockedAddLane(owned, ifce)
-	hostMap.unlockedAddLane(peer, ifce)
-	hostMap.Unlock()
-	base.lanes.txLanes[1].Store(owned)
-	base.lanes.Lock()
-	base.lanes.peerLanes = append(base.lanes.peerLanes, peer)
-	base.lanes.Unlock()
+	// Sessions cover both directions: enough for everything the peer may send,
+	// even though we may only send on a few.
+	ls = newTestLaneSet(t, initR, 2, 8, 4242, 6)
+	assert.Len(t, ls.sessions, 6, "sessions must cover the peer's tx lanes")
+	assert.Equal(t, 2, ls.txLanes, "we may only send on our own lanes")
 
-	// Deleting the base takes the whole lane family with it.
-	final := hostMap.DeleteHostInfo(base)
-	assert.True(t, final)
-	assert.Nil(t, hostMap.QueryIndex(300))
-	assert.Nil(t, hostMap.QueryIndex(301))
-	assert.Nil(t, hostMap.QueryIndex(302))
-	assert.Nil(t, hostMap.Hosts[vpnIp])
+	// Our tx lanes are clamped to the ports the peer actually bound: a lane
+	// aimed past the peer's range would land on some unrelated socket.
+	ls = newTestLaneSet(t, initR, 8, 3, 4242, 8)
+	assert.Equal(t, 3, ls.txLanes)
+	assert.Len(t, ls.sessions, 8)
 }
 
-// Regression: deleting a hostinfo whose pending entry is NOT the one recorded
-// in vpnIps (e.g. a lane, whose vpnAddrs alias the base's) must not evict a
-// concurrently pending base handshake for the same address.
-func TestHandshakeManagerVpnIpsIdentityDelete(t *testing.T) {
-	l := test.NewLogger()
-	hostMap := newHostMap(l)
-	lh := newTestLighthouse()
-	hm := NewHandshakeManager(l, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig)
+func TestLaneTxGate(t *testing.T) {
+	initR, _ := runTestHandshake(t)
+	ls := newTestLaneSet(t, initR, 4, 4, 4242, 4)
 
-	vpnIp := netip.MustParseAddr("172.1.1.4")
-	pendingBase := hm.StartHandshake(vpnIp, nil)
-	require.NotNil(t, pendingBase)
+	// A down lane hands back nothing and raises demand, which is what gets it
+	// probed.
+	ci, addr := ls.txLane(1)
+	assert.Nil(t, ci)
+	assert.False(t, addr.IsValid())
+	assert.True(t, ls.demand[1].Load())
+	assert.False(t, ls.demand[2].Load(), "demand raised on an untouched lane")
 
-	other := &HostInfo{vpnAddrs: []netip.Addr{vpnIp}, localIndexId: 999}
-	hm.DeleteHostInfo(other)
+	// Promotion publishes the session and destination together.
+	want := netip.MustParseAddrPort("192.0.2.1:4243")
+	ls.txAddr[1].Store(&want)
+	ls.demand[1].Store(false)
+	ci, addr = ls.txLane(1)
+	assert.Equal(t, ls.sessions[1], ci)
+	assert.Equal(t, want, addr)
+	assert.False(t, ls.demand[1].Load(), "a hit must not raise demand")
 
-	// The pending base handshake must still be tracked.
-	assert.Equal(t, pendingBase, hm.QueryVpnAddr(vpnIp))
-
-	// And deleting the actual owner still works.
-	hm.DeleteHostInfo(pendingBase)
-	assert.Nil(t, hm.QueryVpnAddr(vpnIp))
+	// Lane 0 is the base tunnel and lanes at or above txLanes are receive-only.
+	ci, _ = ls.txLane(0)
+	assert.Nil(t, ci)
+	ci, _ = ls.txLane(4)
+	assert.Nil(t, ci)
 }
 
-func newLaneTestConnectionManager(hostMap *HostMap) (*connectionManager, *Interface) {
+func TestLaneSessionLookup(t *testing.T) {
+	initR, _ := runTestHandshake(t)
+	ls := newTestLaneSet(t, initR, 3, 4, 4242, 3)
+	hi := newTestLaneHostInfo(t, initR, ls)
+
+	assert.Nil(t, hi.laneSession(0), "lane 0 is the base session")
+	assert.Equal(t, ls.sessions[2], hi.laneSession(2))
+	assert.Nil(t, hi.laneSession(3), "a lane we never derived")
+	assert.Nil(t, hi.laneSession(255))
+
+	// A peer without lanes answers nil for every lane rather than panicking.
+	bare := &HostInfo{}
+	assert.Nil(t, bare.laneSession(1))
+}
+
+func TestMaxMessageCounter(t *testing.T) {
+	initR, _ := runTestHandshake(t)
+	ls := newTestLaneSet(t, initR, 3, 4, 4242, 3)
+	hi := newTestLaneHostInfo(t, initR, ls)
+
+	hi.ConnectionState.messageCounter.Store(5)
+	assert.Equal(t, uint64(5), hi.maxMessageCounter())
+
+	// A lane past the base is what the rehandshake threshold has to notice: the
+	// base counter would sit still while the lane burns through its nonces.
+	ls.sessions[2].messageCounter.Store(9000)
+	assert.Equal(t, uint64(9000), hi.maxMessageCounter())
+
+	assert.Equal(t, uint64(0), (&HostInfo{}).maxMessageCounter())
+}
+
+func TestLaneRetryDelay(t *testing.T) {
+	assert.Equal(t, laneRetryBase, laneRetryDelay(0))
+	assert.Equal(t, 2*laneRetryBase, laneRetryDelay(1))
+	assert.Equal(t, laneRetryMax, laneRetryDelay(laneMaxFails), "backoff must saturate")
+}
+
+func newLaneTestInterface(hostMap *HostMap) *Interface {
 	l := test.NewLogger()
 	lh := newTestLighthouse()
 	cs := &CertState{
@@ -226,86 +249,225 @@ func newLaneTestConnectionManager(hostMap *HostMap) (*connectionManager, *Interf
 		pki:                &PKI{},
 		handshakeManager:   NewHandshakeManager(l, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
 		myVpnNetworksTable: new(bart.Lite),
+		messageMetrics:     newMessageMetricsOnlyRecvError(),
+		writers:            []udp.Conn{&udp.NoopConn{}, &udp.NoopConn{}, &udp.NoopConn{}, &udp.NoopConn{}},
 		l:                  l,
 	}
 	ifce.pki.cs.Store(cs)
 
-	conf := config.NewC(test.NewLogger())
-	punchy := NewPunchyFromConfig(test.NewLogger(), conf, nil)
-	cm := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
+	conf := config.NewC(l)
+	punchy := NewPunchyFromConfig(l, conf, nil)
+	cm := newConnectionManagerFromConfig(l, conf, hostMap, punchy)
 	cm.intf = ifce
 	ifce.connectionManager = cm
 	ifce.handshakeManager.f = ifce
-	return cm, ifce
+	return ifce
 }
 
-func TestLaneTrafficDecision(t *testing.T) {
+// The full TX lifecycle of a lane: demand -> probe -> ack -> up, then an
+// unanswered keepalive -> demoted.
+func TestLaneProbeLifecycle(t *testing.T) {
 	hostMap := newHostMap(test.NewLogger())
-	cm, ifce := newLaneTestConnectionManager(hostMap)
+	ifce := newLaneTestInterface(hostMap)
 
-	vpnIp := netip.MustParseAddr("172.1.1.5")
-	base := newTestBaseHostInfo(vpnIp, 500, 600, 4)
-	base.ConnectionState = &ConnectionState{}
-	hostMap.Lock()
-	hostMap.unlockedAddHostInfo(base, ifce)
-	hostMap.Unlock()
+	initR, _ := runTestHandshake(t)
+	ls := newTestLaneSet(t, initR, 4, 4, 5353, 4)
+	hi := newTestLaneHostInfo(t, initR, ls)
 
-	lane := newTestLaneHostInfo(base, 1, 501, 601, true)
-	lane.ConnectionState = &ConnectionState{}
-	hostMap.Lock()
-	hostMap.unlockedAddLane(lane, ifce)
-	hostMap.Unlock()
-	base.lanes.txLanes[1].Store(lane)
-
+	nb := make([]byte, 12)
+	out := make([]byte, mtu)
 	now := time.Now()
 
-	// A lane with inbound traffic is alive and never swaps primary or
-	// migrates relays.
-	lane.markIn()
-	decision, resolved, _ := cm.makeTrafficDecision(lane.localIndexId, now)
-	assert.Equal(t, doNothing, decision)
-	assert.Equal(t, lane, resolved)
-	assert.False(t, lane.isPendingDeletion())
+	// No demand: nothing is probed, so a peer we barely talk to costs nothing
+	// beyond its base tunnel.
+	ifce.probeLanes(hi, now, nb, out)
+	ls.mu.Lock()
+	for s := 1; s < 4; s++ {
+		assert.True(t, ls.probe[s].sentAt.IsZero(), "lane %d probed without demand", s)
+	}
+	ls.mu.Unlock()
 
-	// An idle lane gets an active keepalive test...
-	decision, _, _ = cm.makeTrafficDecision(lane.localIndexId, now)
-	assert.Equal(t, sendTestPacket, decision)
-	assert.True(t, lane.isPendingDeletion())
+	// Demand on lane 1 alone probes lane 1 alone, aimed at the peer's port for
+	// that lane.
+	ls.demand[1].Store(true)
+	ifce.probeLanes(hi, now, nb, out)
+	ls.mu.Lock()
+	require.False(t, ls.probe[1].sentAt.IsZero(), "demand did not produce a probe")
+	assert.True(t, ls.probe[2].sentAt.IsZero())
+	wantPort := ls.laneTargetPortLocked(1)
+	assert.Equal(t, netip.AddrPortFrom(netip.MustParseAddr("192.0.2.1"), wantPort), ls.probe[1].target)
+	gen := ls.probe[1].gen
+	assert.False(t, ls.demand[1].Load(), "the probe did not consume the demand")
+	ls.mu.Unlock()
 
-	// ...and is declared dead when the test goes unanswered.
-	decision, _, _ = cm.makeTrafficDecision(lane.localIndexId, now)
-	assert.Equal(t, deleteTunnel, decision)
+	// The lane stays down until the ack lands, and a stale generation cannot
+	// bring it up.
+	assert.Nil(t, ls.txAddr[1].Load())
+	assert.False(t, ls.noteAck(1, gen+1, now), "an ack for a superseded probe promoted the lane")
+	assert.Nil(t, ls.txAddr[1].Load())
+
+	// The matching ack promotes it, and the destination is the probed target.
+	assert.True(t, ls.noteAck(1, gen, now))
+	addr := ls.txAddr[1].Load()
+	require.NotNil(t, addr)
+	assert.Equal(t, netip.AddrPortFrom(netip.MustParseAddr("192.0.2.1"), wantPort), *addr)
+
+	// A second ack is a keepalive, not a promotion.
+	ls.mu.Lock()
+	ls.probe[1].sentAt = now
+	ls.mu.Unlock()
+	assert.False(t, ls.noteAck(1, gen, now))
+	assert.NotNil(t, ls.txAddr[1].Load())
+
+	// An up lane is left alone until the keepalive comes due.
+	ifce.probeLanes(hi, now, nb, out)
+	ls.mu.Lock()
+	assert.True(t, ls.probe[1].sentAt.IsZero(), "an up lane was re-probed early")
+	ls.mu.Unlock()
+
+	// Past the keepalive it re-proves its path...
+	now = now.Add(laneKeepalive + time.Second)
+	ifce.probeLanes(hi, now, nb, out)
+	ls.mu.Lock()
+	require.False(t, ls.probe[1].sentAt.IsZero(), "keepalive did not probe")
+	ls.mu.Unlock()
+	assert.NotNil(t, ls.txAddr[1].Load(), "lane demoted before its probe aged out")
+
+	// ...and an unanswered keepalive demotes it with backoff, so the routine
+	// falls back to the base tunnel.
+	now = now.Add(laneProbeTimeout + time.Second)
+	ifce.probeLanes(hi, now, nb, out)
+	assert.Nil(t, ls.txAddr[1].Load(), "unanswered keepalive did not demote the lane")
+	ls.mu.Lock()
+	assert.Equal(t, uint8(1), ls.probe[1].fails)
+	assert.True(t, ls.probe[1].retryAt.After(now))
+	ls.mu.Unlock()
+
+	// The backoff holds even with fresh demand.
+	ls.demand[1].Store(true)
+	ifce.probeLanes(hi, now, nb, out)
+	ls.mu.Lock()
+	assert.True(t, ls.probe[1].sentAt.IsZero(), "backoff was ignored")
+	ls.mu.Unlock()
 }
 
-func TestBaseInactiveConsidersLanes(t *testing.T) {
+// A roam is a new path with no derivable relationship to the old lane ports, so
+// every lane has to be rebuilt rather than moved.
+func TestLaneProbeRoamResets(t *testing.T) {
 	hostMap := newHostMap(test.NewLogger())
-	cm, _ := newLaneTestConnectionManager(hostMap)
-	cm.dropInactive.Store(true)
-	cm.inactivityTimeout.Store(int64(10 * time.Minute))
+	ifce := newLaneTestInterface(hostMap)
+
+	initR, _ := runTestHandshake(t)
+	ls := newTestLaneSet(t, initR, 4, 4, 5353, 4)
+	hi := newTestLaneHostInfo(t, initR, ls)
 
 	now := time.Now()
-	vpnIp := netip.MustParseAddr("172.1.1.6")
-	base := newTestBaseHostInfo(vpnIp, 700, 800, 4)
-	base.lastUsed = now.Add(-time.Hour)
+	nb := make([]byte, 12)
+	out := make([]byte, mtu)
 
-	// Base alone: inactive.
-	_, inactive := cm.isInactive(base, now)
-	assert.True(t, inactive)
+	ls.demand[1].Store(true)
+	ifce.probeLanes(hi, now, nb, out)
+	ls.mu.Lock()
+	gen := ls.probe[1].gen
+	ls.mu.Unlock()
+	require.True(t, ls.noteAck(1, gen, now))
+	require.NotNil(t, ls.txAddr[1].Load())
 
-	// A recently used lane keeps the base alive.
-	lane := newTestLaneHostInfo(base, 1, 701, 801, true)
-	lane.lastUsed = now.Add(-time.Minute)
-	base.lanes.txLanes[1].Store(lane)
-	_, inactive = cm.isInactive(base, now)
-	assert.False(t, inactive)
+	// New remote address: the lane is taken down, not retargeted.
+	hi.SetRemote(netip.MustParseAddrPort("198.51.100.7:4242"))
+	ifce.probeLanes(hi, now, nb, out)
+	assert.Nil(t, ls.txAddr[1].Load(), "lane survived a roam")
+	ls.mu.Lock()
+	assert.Zero(t, ls.probe[1].fails, "a roam is not a lane failure")
+	assert.Equal(t, netip.MustParseAddr("198.51.100.7"), ls.peerAddr)
+	ls.mu.Unlock()
 
-	// Peer-owned lanes count too.
-	base.lanes.txLanes[1].Store(nil)
-	base.lanes.Lock()
-	base.lanes.peerLanes = append(base.lanes.peerLanes, lane)
-	base.lanes.Unlock()
-	_, inactive = cm.isInactive(base, now)
-	assert.False(t, inactive)
+	// Relayed (no direct remote) means no lanes at all.
+	ls.demand[1].Store(true)
+	ifce.probeLanes(hi, now, nb, out)
+	ls.mu.Lock()
+	gen = ls.probe[1].gen
+	ls.mu.Unlock()
+	require.True(t, ls.noteAck(1, gen, now))
+	hi.SetRemote(netip.AddrPort{})
+	ifce.probeLanes(hi, now, nb, out)
+	assert.Nil(t, ls.txAddr[1].Load(), "lane survived losing the direct path")
+}
+
+// A lane probe is answered on the base tunnel, echoing the header's lane, so a
+// peer cannot get us to vouch for a lane it never probed.
+func TestHandleLaneProbe(t *testing.T) {
+	hostMap := newHostMap(test.NewLogger())
+	ifce := newLaneTestInterface(hostMap)
+
+	initR, respR := runTestHandshake(t)
+	ls := newTestLaneSet(t, respR, 4, 4, 4242, 4)
+	hi := newTestLaneHostInfo(t, respR, ls)
+
+	rxc := &rxContext{nb: make([]byte, 12), scratch: make([]byte, mtu)}
+	sent := &recordingUdpConn{}
+	ifce.writers = []udp.Conn{sent, &udp.NoopConn{}, &udp.NoopConn{}, &udp.NoopConn{}}
+
+	// The payload's lane is ignored in favour of the header's.
+	ifce.handleLaneProbe(hi, 2, []byte{3, 42}, rxc)
+	require.Len(t, sent.bufs, 1, "the ack must ride the base tunnel's socket")
+
+	h := &header.H{}
+	require.NoError(t, h.Parse(sent.bufs[0]))
+	assert.Equal(t, header.Test, h.Type)
+	assert.Equal(t, header.LaneProbeAck, h.Subtype)
+	assert.Equal(t, uint8(0), h.Lane(), "the ack is base-tunnel traffic")
+
+	pt, err := newTestLaneSet(t, initR, 4, 4, 4242, 4).sessions[1].dKey.DecryptDanger(
+		nil, sent.bufs[0][:header.Len], sent.bufs[0][header.Len:], h.MessageCounter, make([]byte, 12))
+	_ = pt
+	assert.Error(t, err, "the ack must not be readable with a lane key")
+
+	// A probe claiming lane 0 or with a truncated payload is answered with
+	// nothing at all.
+	sent.bufs = nil
+	ifce.handleLaneProbe(hi, 0, []byte{1, 2}, rxc)
+	ifce.handleLaneProbe(hi, 1, []byte{1}, rxc)
+	assert.Empty(t, sent.bufs)
+}
+
+func TestHandleLaneProbeAck(t *testing.T) {
+	hostMap := newHostMap(test.NewLogger())
+	ifce := newLaneTestInterface(hostMap)
+
+	initR, _ := runTestHandshake(t)
+	ls := newTestLaneSet(t, initR, 4, 4, 5353, 4)
+	hi := newTestLaneHostInfo(t, initR, ls)
+
+	now := time.Now()
+	ls.demand[1].Store(true)
+	ifce.probeLanes(hi, now, make([]byte, 12), make([]byte, mtu))
+	ls.mu.Lock()
+	gen := ls.probe[1].gen
+	ls.mu.Unlock()
+
+	// A short or out-of-range ack is ignored, and a peer without lanes does not
+	// panic the handler.
+	ifce.handleLaneProbeAck(hi, []byte{1})
+	ifce.handleLaneProbeAck(hi, []byte{99, gen})
+	ifce.handleLaneProbeAck(&HostInfo{}, []byte{1, gen})
+	assert.Nil(t, ls.txAddr[1].Load())
+
+	ifce.handleLaneProbeAck(hi, []byte{1, gen})
+	assert.NotNil(t, ls.txAddr[1].Load())
+}
+
+// recordingUdpConn records what was written to it, one datagram per write.
+type recordingUdpConn struct {
+	udp.NoopConn
+	bufs [][]byte
+	dsts []netip.AddrPort
+}
+
+func (c *recordingUdpConn) WriteTo(b []byte, addr netip.AddrPort) error {
+	c.bufs = append(c.bufs, append([]byte(nil), b...))
+	c.dsts = append(c.dsts, addr)
+	return nil
 }
 
 // recordingBatchWriter satisfies batch's writer interface and records what
@@ -325,21 +487,12 @@ func (w *recordingBatchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort)
 
 func TestSendInsideMessageLaneSwap(t *testing.T) {
 	hostMap := newHostMap(test.NewLogger())
-	cm, ifce := newLaneTestConnectionManager(hostMap)
-	_ = cm
+	ifce := newLaneTestInterface(hostMap)
 
-	vpnIp := netip.MustParseAddr("172.1.1.7")
-	base := newTestBaseHostInfo(vpnIp, 900, 1000, 4)
-	lane := newTestLaneHostInfo(base, 1, 901, 1001, true)
-
-	// Real cipher states from a real handshake so encryption works.
-	baseInit, _ := runTestHandshake(t)
-	laneInit, _ := runTestHandshake(t)
-	var err error
-	base.ConnectionState, err = newConnectionStateFromResult(baseInit)
-	require.NoError(t, err)
-	lane.ConnectionState, err = newConnectionStateFromResult(laneInit)
-	require.NoError(t, err)
+	initR, respR := runTestHandshake(t)
+	ls := newTestLaneSet(t, initR, 4, 4, 5353, 4)
+	hi := newTestLaneHostInfo(t, initR, ls)
+	peerLS := newTestLaneSet(t, respR, 4, 4, 4242, 4)
 
 	baseWriter := &recordingBatchWriter{}
 	laneWriter := &recordingBatchWriter{}
@@ -356,41 +509,60 @@ func TestSendInsideMessageLaneSwap(t *testing.T) {
 	pkt := tio.Packet{Bytes: []byte{0x45, 0, 0, 4, 1, 2, 3, 4}}
 	nb := make([]byte, 12)
 
-	// With the lane published, slot-1 traffic uses the lane session and the
-	// lane batch.
-	base.lanes.txLanes[1].Store(lane)
-	ifce.sendInsideMessage(base, pkt, nb, tx1)
+	// A down lane rides the base tunnel and asks for a probe.
+	ifce.sendInsideMessage(hi, pkt, nb, tx1)
 	tx1.flush(ifce)
-	require.Len(t, laneWriter.bufs, 1)
-	require.Empty(t, baseWriter.bufs)
-	assert.Equal(t, lane.GetRemote(), laneWriter.dsts[0])
+	require.Len(t, baseWriter.bufs, 1)
+	assert.Empty(t, laneWriter.bufs)
+	assert.True(t, ls.demand[1].Load(), "a miss did not raise demand")
+	assert.False(t, ls.demand[2].Load(), "demand raised on an untouched lane")
 
 	h := &header.H{}
-	require.NoError(t, h.Parse(laneWriter.bufs[0]))
-	assert.Equal(t, lane.remoteIndexId, h.RemoteIndex)
+	require.NoError(t, h.Parse(baseWriter.bufs[0]))
+	assert.Equal(t, uint8(0), h.Lane())
 
-	// An overflow routine sharing slot 1 (multiport.lanes < routines) rides
-	// the same lane session.
+	// Once the lane is up, slot-1 traffic rides the lane session, the lane
+	// socket and the lane's destination, tagged with the lane index.
+	laneRemote := netip.MustParseAddrPort("192.0.2.1:5354")
+	ls.txAddr[1].Store(&laneRemote)
+	ls.demand[1].Store(false)
+	ifce.sendInsideMessage(hi, pkt, nb, tx1)
+	tx1.flush(ifce)
+	require.Len(t, laneWriter.bufs, 1)
+	assert.Equal(t, laneRemote, laneWriter.dsts[0])
+	assert.False(t, ls.demand[1].Load(), "a hit raised demand")
+
+	require.NoError(t, h.Parse(laneWriter.bufs[0]))
+	assert.Equal(t, uint8(1), h.Lane())
+	assert.Equal(t, hi.remoteIndexId, h.RemoteIndex)
+
+	// And the peer's derived lane-1 session is what opens it.
+	pt, err := peerLS.sessions[1].Decrypt(test.NewLogger(), h.MessageCounter, laneWriter.bufs[0], nb)
+	require.NoError(t, err)
+	assert.Equal(t, pkt.Bytes, pt)
+
+	// An overflow routine sharing slot 1 (multiport.lanes < routines) rides the
+	// same lane session.
 	tx1b := newTx(1)
-	ifce.sendInsideMessage(base, pkt, nb, tx1b)
+	ifce.sendInsideMessage(hi, pkt, nb, tx1b)
 	tx1b.flush(ifce)
 	require.Len(t, laneWriter.bufs, 2)
 	require.NoError(t, h.Parse(laneWriter.bufs[1]))
-	assert.Equal(t, lane.remoteIndexId, h.RemoteIndex)
+	assert.Equal(t, uint8(1), h.Lane())
 
-	// Slot 2 has no lane: base tunnel, base batch.
-	ifce.sendInsideMessage(base, pkt, nb, tx2)
+	// Slot 2's lane is still down: base tunnel, base batch, lane 0.
+	ifce.sendInsideMessage(hi, pkt, nb, tx2)
 	tx2.flush(ifce)
-	require.Len(t, baseWriter.bufs, 1)
-	assert.Equal(t, base.GetRemote(), baseWriter.dsts[0])
-	require.NoError(t, h.Parse(baseWriter.bufs[0]))
-	assert.Equal(t, base.remoteIndexId, h.RemoteIndex)
-
-	// Lane death: slot cleared, instant fallback to base.
-	base.lanes.txLanes[1].Store(nil)
-	ifce.sendInsideMessage(base, pkt, nb, tx1)
-	tx1.flush(ifce)
 	require.Len(t, baseWriter.bufs, 2)
+	assert.Equal(t, hi.GetRemote(), baseWriter.dsts[1])
+	require.NoError(t, h.Parse(baseWriter.bufs[1]))
+	assert.Equal(t, uint8(0), h.Lane())
+
+	// Demotion falls back to the base tunnel on the very next packet.
+	ls.txAddr[1].Store(nil)
+	ifce.sendInsideMessage(hi, pkt, nb, tx1)
+	tx1.flush(ifce)
+	require.Len(t, baseWriter.bufs, 3)
 	require.Len(t, laneWriter.bufs, 2)
 }
 
@@ -414,174 +586,25 @@ func TestLaneSlotFor(t *testing.T) {
 	}
 }
 
-func TestCompleteLaneResponder(t *testing.T) {
-	hostMap := newHostMap(test.NewLogger())
-	_, ifce := newLaneTestConnectionManager(hostMap)
-	ifce.writers = []udp.Conn{&udp.NoopConn{}, &udp.NoopConn{}, &udp.NoopConn{}, &udp.NoopConn{}}
-	ifce.messageMetrics = newMessageMetricsOnlyRecvError()
+// Regression: deleting a hostinfo whose pending entry is NOT the one recorded
+// in vpnIps must not evict a concurrently pending handshake for that address.
+func TestHandshakeManagerVpnIpsIdentityDelete(t *testing.T) {
+	l := test.NewLogger()
+	hostMap := newHostMap(l)
+	lh := newTestLighthouse()
+	hm := NewHandshakeManager(l, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig)
 
-	hm := ifce.handshakeManager
-	hm.config.laneCount = 4
-	hm.config.lanePortCount = 4
-	hm.config.laneBasePort = 4242
+	vpnIp := netip.MustParseAddr("172.1.1.4")
+	pendingBase := hm.StartHandshake(vpnIp, nil)
+	require.NotNil(t, pendingBase)
 
-	// A real handshake supplies usable keys and a peer cert.
-	_, respR := runTestHandshake(t)
-	respR.PeerLaneIndex = 2
-	respR.PeerPortCount = 4
-	respR.PeerBasePort = 5353
+	other := &HostInfo{vpnAddrs: []netip.Addr{vpnIp}, localIndexId: 999}
+	hm.DeleteHostInfo(other)
 
-	via := ViaSender{UdpAddr: netip.MustParseAddrPort("192.0.2.9:5355"), SockIdx: 2}
-	packet := make([]byte, header.Len+8)
-	copy(packet[header.Len:], []byte("stage0!!"))
-	vpnAddrs := []netip.Addr{netip.MustParseAddr("172.1.1.9")}
+	// The pending base handshake must still be tracked.
+	assert.Equal(t, pendingBase, hm.QueryVpnAddr(vpnIp))
 
-	// No base tunnel: the lane handshake is dropped, nothing registered.
-	hm.completeLaneResponder(via, packet, []byte("resp"), respR, vpnAddrs)
-	assert.Nil(t, hostMap.QueryIndex(respR.LocalIndex))
-
-	// With a live base the lane attaches to it.
-	base := newTestBaseHostInfo(vpnAddrs[0], 1300, 1400, 4)
-	base.ConnectionState = &ConnectionState{}
-	hostMap.Lock()
-	hostMap.unlockedAddHostInfo(base, ifce)
-	hostMap.Unlock()
-
-	hm.completeLaneResponder(via, packet, []byte("resp"), respR, vpnAddrs)
-	lane := hostMap.QueryIndex(respR.LocalIndex)
-	require.NotNil(t, lane)
-	assert.True(t, lane.isLane())
-	assert.False(t, lane.laneOwned)
-	assert.Equal(t, uint16(2), lane.laneIndex)
-	assert.Equal(t, 2, lane.sockIdx)
-	assert.Equal(t, via.UdpAddr, lane.GetRemote())
-	assert.Equal(t, base, hostMap.Hosts[vpnAddrs[0]], "lane must not displace the base as primary")
-	base.lanes.Lock()
-	assert.Len(t, base.lanes.peerLanes, 1)
-	base.lanes.Unlock()
-
-	// A byte-identical stage-0 retransmit resends the cached response and
-	// must not register a second lane.
-	hm.completeLaneResponder(via, packet, []byte("resp"), respR, vpnAddrs)
-	base.lanes.Lock()
-	assert.Len(t, base.lanes.peerLanes, 1)
-	base.lanes.Unlock()
-
-	// An out-of-range lane index is refused.
-	respR2 := *respR
-	respR2.PeerLaneIndex = 9
-	respR2.LocalIndex = respR.LocalIndex + 1
-	hm.completeLaneResponder(via, packet, []byte("resp"), &respR2, vpnAddrs)
-	assert.Nil(t, hostMap.QueryIndex(respR2.LocalIndex))
-}
-
-func TestEnsureLanesBackoffOnStage0Failure(t *testing.T) {
-	hostMap := newHostMap(test.NewLogger())
-	_, ifce := newLaneTestConnectionManager(hostMap)
-
-	// laneCount enables multiport in the manager; the dummy CertState has no
-	// credential, so stage-0 construction must fail and release the slot with
-	// backoff rather than leaving it claimed forever.
-	hm := ifce.handshakeManager
-	hm.config.laneCount = 4
-	hm.config.lanePortCount = 4
-	hm.config.laneBasePort = 4242
-
-	vpnIp := netip.MustParseAddr("172.1.1.8")
-	base := newTestBaseHostInfo(vpnIp, 1100, 1200, 4)
-
-	for i := 1; i < 4; i++ {
-		base.lanes.noteLaneDemand(i)
-	}
-	hm.EnsureLanes(base)
-
-	base.lanes.Lock()
-	defer base.lanes.Unlock()
-	for i := 1; i < 4; i++ {
-		assert.False(t, base.lanes.txPending[i], "slot %d still pending", i)
-		assert.Equal(t, uint8(1), base.lanes.txFails[i], "slot %d fails", i)
-		assert.True(t, base.lanes.txRetryAt[i].After(time.Now()), "slot %d retryAt", i)
-	}
-}
-
-// Lanes are demand-driven: a base tunnel with no data-plane interest in a slot
-// must not start a handshake for it, and one demand must not turn into an
-// unbounded retry loop.
-func TestEnsureLanesLazy(t *testing.T) {
-	hostMap := newHostMap(test.NewLogger())
-	_, ifce := newLaneTestConnectionManager(hostMap)
-
-	hm := ifce.handshakeManager
-	hm.config.laneCount = 4
-	hm.config.lanePortCount = 4
-	hm.config.laneBasePort = 4242
-
-	base := newTestBaseHostInfo(netip.MustParseAddr("172.1.1.9"), 1300, 1400, 4)
-	ls := base.lanes
-
-	// No demand: nothing is attempted, so nothing fails or backs off either.
-	hm.EnsureLanes(base)
-	ls.Lock()
-	for i := 1; i < 4; i++ {
-		assert.False(t, ls.txPending[i], "slot %d claimed without demand", i)
-		assert.Zero(t, ls.txFails[i], "slot %d attempted without demand", i)
-		assert.True(t, ls.txRetryAt[i].IsZero(), "slot %d backed off without demand", i)
-	}
-	ls.Unlock()
-
-	// Demand on one slot starts that slot alone. (Stage 0 fails on the test
-	// CertState, so the observable effect is a failure charged to slot 2.)
-	ls.noteLaneDemand(2)
-	hm.EnsureLanes(base)
-	ls.Lock()
-	assert.Equal(t, uint8(1), ls.txFails[2])
-	assert.Zero(t, ls.txFails[1], "untouched slot attempted")
-	assert.Zero(t, ls.txFails[3], "untouched slot attempted")
-	// The attempt consumed the demand, so a later tick past the backoff does
-	// not retry a lane nobody is asking for any more.
-	ls.txRetryAt[2] = time.Time{}
-	ls.Unlock()
-	hm.EnsureLanes(base)
-	ls.Lock()
-	assert.Equal(t, uint8(1), ls.txFails[2], "consumed demand was retried")
-	ls.Unlock()
-
-	// Slot 0 is the base tunnel and is never a lane.
-	ls.noteLaneDemand(0)
-	assert.False(t, ls.takeLaneDemand(0))
-}
-
-// A TX miss on an empty slot is what asks for the lane; a hit must not, and a
-// relay-only peer never gets that far.
-func TestSendInsideMessageRecordsLaneDemand(t *testing.T) {
-	hostMap := newHostMap(test.NewLogger())
-	_, ifce := newLaneTestConnectionManager(hostMap)
-
-	base := newTestBaseHostInfo(netip.MustParseAddr("172.1.1.10"), 1500, 1600, 4)
-	lane := newTestLaneHostInfo(base, 1, 1501, 1601, true)
-
-	init, _ := runTestHandshake(t)
-	cs, err := newConnectionStateFromResult(init)
-	require.NoError(t, err)
-	base.ConnectionState = cs
-	lane.ConnectionState = cs
-
-	writer := &recordingBatchWriter{}
-	newTx := func(laneSlot int) *txQueue {
-		sb := batch.NewSendBatch(writer, batch.SendBatchCap, 1<<16)
-		return &txQueue{laneSlot: laneSlot, base: sb, lane: sb}
-	}
-	pkt := tio.Packet{Bytes: []byte{0x45, 0, 0, 4, 1, 2, 3, 4}}
-	nb := make([]byte, 12)
-
-	// Empty slot: the send rides the base tunnel and flags demand for slot 1.
-	ifce.sendInsideMessage(base, pkt, nb, newTx(1))
-	assert.True(t, base.lanes.txDemand[1].Load(), "miss did not raise demand")
-	assert.False(t, base.lanes.txDemand[2].Load(), "demand raised on an unused slot")
-
-	// Established lane: the send uses it and asks for nothing.
-	base.lanes.txDemand[1].Store(false)
-	base.lanes.txLanes[1].Store(lane)
-	ifce.sendInsideMessage(base, pkt, nb, newTx(1))
-	assert.False(t, base.lanes.txDemand[1].Load(), "hit raised demand")
+	// And deleting the actual owner still works.
+	hm.DeleteHostInfo(pendingBase)
+	assert.Nil(t, hm.QueryVpnAddr(vpnIp))
 }

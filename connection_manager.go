@@ -197,17 +197,17 @@ func (cm *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte
 	}
 
 	cm.resetRelayTrafficCheck(hostinfo)
-	cm.ensureLanes(localIndex, decision, hostinfo)
+	cm.maintainLanes(localIndex, decision, hostinfo, now, nb, out)
 }
 
-// ensureLanes piggybacks lane establishment on the per-tunnel traffic tick:
-// any live base with lane state gets the slots its data plane asked for
-// started (subject to the per-slot backoff). This tick is the right place for
-// it precisely because lanes are demand-driven — a base only lands here when
-// it has traffic, which is the same condition that raises lane demand.
+// maintainLanes piggybacks multiport lane probing on the per-tunnel traffic
+// tick. This tick is the right place for it precisely because lanes are
+// demand-driven: a tunnel only lands here when it has traffic, which is the
+// same condition that raises lane demand.
+//
 // makeTrafficDecision returns a nil hostinfo on some keep-alive paths, so
 // re-resolve the index in that case.
-func (cm *connectionManager) ensureLanes(localIndex uint32, decision trafficDecision, hostinfo *HostInfo) {
+func (cm *connectionManager) maintainLanes(localIndex uint32, decision trafficDecision, hostinfo *HostInfo, now time.Time, nb, out []byte) {
 	if decision == deleteTunnel || decision == closeTunnel {
 		return
 	}
@@ -217,10 +217,7 @@ func (cm *connectionManager) ensureLanes(localIndex uint32, decision trafficDeci
 			return
 		}
 	}
-	if hostinfo.isLane() || hostinfo.lanes == nil {
-		return
-	}
-	cm.intf.handshakeManager.EnsureLanes(hostinfo)
+	cm.intf.probeLanes(hostinfo, now, nb, out)
 }
 
 func (cm *connectionManager) resetRelayTrafficCheck(hostinfo *HostInfo) {
@@ -353,16 +350,13 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 		return closeTunnel, hostinfo, nil
 	}
 
-	// Checked ahead of the lane branch: an exhausted counter is fatal for lanes too, and makeLaneTrafficDecision
-	// only reasons about liveness.
-	if hostinfo.ConnectionState != nil && hostinfo.ConnectionState.messageCounter.Load() >= RejectAfterMessages {
+	// The highest counter across the base session and its lanes: the lanes carry
+	// the data, so the base counter alone would sit near zero while a lane runs
+	// its keys past the nonce ceiling.
+	if hostinfo.maxMessageCounter() >= RejectAfterMessages {
 		// Send path can't encrypt a CloseTunnel notify, so just delete locally; the peer recovers via recv_error.
 		hostinfo.logger(cm.l).Error("Dropping tunnel, message counter is exhausted")
 		return deleteTunnel, hostinfo, nil
-	}
-
-	if hostinfo.isLane() {
-		return cm.makeLaneTrafficDecision(hostinfo, now)
 	}
 
 	primary := cm.hostMap.Hosts[hostinfo.vpnAddrs[0]]
@@ -461,72 +455,14 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 	return decision, hostinfo, nil
 }
 
-// makeLaneTrafficDecision is the lane-tunnel subset of makeTrafficDecision:
-// no primary/swap/rehandshake logic (lanes are never primary), no punches
-// (lane keepalives egress the lane's own socket and are its NAT keepalive),
-// just alive / test / dead. A dead lane's DeleteHostInfo clears its base slot
-// with backoff, and ensureLanes re-establishes it.
-func (cm *connectionManager) makeLaneTrafficDecision(hostinfo *HostInfo, now time.Time) (trafficDecision, *HostInfo, *HostInfo) {
-	inTraffic, _ := cm.getAndResetTrafficCheck(hostinfo, now)
-
-	if inTraffic {
-		if cm.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.logger(cm.l).Debug("Tunnel status",
-				"tunnelCheck", m{"state": "alive", "method": "passive"},
-				"laneIndex", hostinfo.laneIndex,
-			)
-		}
-		hostinfo.setPendingDeletion(false)
-		cm.trafficTimer.Add(hostinfo.localIndexId, cm.checkInterval)
-		return doNothing, hostinfo, nil
-	}
-
-	if hostinfo.isPendingDeletion() {
-		hostinfo.logger(cm.l).Info("Tunnel status",
-			"tunnelCheck", m{"state": "dead", "method": "active"},
-			"laneIndex", hostinfo.laneIndex,
-		)
-		return deleteTunnel, hostinfo, nil
-	}
-
-	// Idle lanes are actively kept alive (unlike idle base tunnels, which
-	// just get punches): a lane is datapath infrastructure and its keepalive
-	// doubles as the per-path death detector.
-	decision := doNothing
-	if hostinfo.ConnectionState != nil {
-		decision = sendTestPacket
-	}
-	hostinfo.setPendingDeletion(true)
-	cm.trafficTimer.Add(hostinfo.localIndexId, cm.pendingDeletionInterval)
-	return decision, hostinfo, nil
-}
-
 func (cm *connectionManager) isInactive(hostinfo *HostInfo, now time.Time) (time.Duration, bool) {
 	if cm.dropInactive.Load() == false {
 		// We aren't configured to drop inactive tunnels
 		return 0, false
 	}
 
-	// With multiport the data rides the lanes and the base may look idle;
-	// a base is only inactive if its whole lane family is. lastUsed is only
-	// written by this ticker goroutine, so these reads are safe.
-	lastUsed := hostinfo.lastUsed
-	if ls := hostinfo.lanes; ls != nil {
-		for i := range ls.txLanes {
-			if lane := ls.txLanes[i].Load(); lane != nil && lane.lastUsed.After(lastUsed) {
-				lastUsed = lane.lastUsed
-			}
-		}
-		ls.Lock()
-		for _, lane := range ls.peerLanes {
-			if lane.lastUsed.After(lastUsed) {
-				lastUsed = lane.lastUsed
-			}
-		}
-		ls.Unlock()
-	}
-
-	inactiveDuration := now.Sub(lastUsed)
+	// Lane traffic is this hostinfo's traffic, so lastUsed already covers it.
+	inactiveDuration := now.Sub(hostinfo.lastUsed)
 	if inactiveDuration < cm.getInactivityTimeout() {
 		// It's not considered inactive
 		return inactiveDuration, false
@@ -549,7 +485,7 @@ func (cm *connectionManager) shouldSwapPrimary(current *HostInfo) bool {
 		return false
 	}
 
-	if current.ConnectionState.messageCounter.Load() >= RehandshakeAfterMessages {
+	if current.maxMessageCounter() >= RehandshakeAfterMessages {
 		// This tunnel is being rolled for counter exhaustion, never swap back onto its spent key.
 		return false
 	}
@@ -653,7 +589,7 @@ func (cm *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 		cm.intf.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], nil)
 		return
 	}
-	if hostinfo.ConnectionState.messageCounter.Load() >= RehandshakeAfterMessages {
+	if hostinfo.maxMessageCounter() >= RehandshakeAfterMessages {
 		cm.l.Info("Re-handshaking with remote",
 			"vpnAddrs", hostinfo.vpnAddrs,
 			"reason", "message counter rehandshake threshold reached",

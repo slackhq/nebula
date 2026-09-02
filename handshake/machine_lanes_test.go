@@ -61,30 +61,18 @@ func doFullLaneHandshake(t *testing.T, initLanes, respLanes *LaneDetails) (initR
 
 func TestMachineLaneAdvertBothSides(t *testing.T) {
 	initR, respR := doFullLaneHandshake(t,
-		&LaneDetails{PortCount: 8, BasePort: 4242},
-		&LaneDetails{PortCount: 4, BasePort: 5353},
+		&LaneDetails{PortCount: 8, BasePort: 4242, TxLanes: 8},
+		&LaneDetails{PortCount: 4, BasePort: 5353, TxLanes: 3},
 	)
 
 	// Each side's Result carries the peer's advert.
 	assert.Equal(t, uint32(4), initR.PeerPortCount)
 	assert.Equal(t, uint32(5353), initR.PeerBasePort)
-	assert.Equal(t, uint32(0), initR.PeerLaneIndex)
+	assert.Equal(t, uint32(3), initR.PeerTxLanes)
 
 	assert.Equal(t, uint32(8), respR.PeerPortCount)
 	assert.Equal(t, uint32(4242), respR.PeerBasePort)
-	assert.Equal(t, uint32(0), respR.PeerLaneIndex)
-}
-
-func TestMachineLaneHandshakeCarriesLaneIndex(t *testing.T) {
-	// A lane handshake: initiator tags its lane number; responder still
-	// adverts (harmlessly).
-	initR, respR := doFullLaneHandshake(t,
-		&LaneDetails{PortCount: 8, BasePort: 4242, LaneIndex: 3},
-		&LaneDetails{PortCount: 4, BasePort: 5353},
-	)
-
-	assert.Equal(t, uint32(3), respR.PeerLaneIndex)
-	assert.Equal(t, uint32(0), initR.PeerLaneIndex)
+	assert.Equal(t, uint32(8), respR.PeerTxLanes)
 }
 
 func TestMachineLaneAdvertAsymmetric(t *testing.T) {
@@ -103,11 +91,21 @@ func TestMachineLaneAdvertAsymmetric(t *testing.T) {
 func TestMachineLaneAdvertOutOfRangeIgnored(t *testing.T) {
 	// A BasePort that can't be a real UDP port is ignored, not fatal.
 	initR, respR := doFullLaneHandshake(t,
-		&LaneDetails{PortCount: 8, BasePort: 70000},
-		&LaneDetails{PortCount: 4, BasePort: 5353},
+		&LaneDetails{PortCount: 8, BasePort: 70000, TxLanes: 8},
+		&LaneDetails{PortCount: 4, BasePort: 5353, TxLanes: 4},
 	)
 	assert.Equal(t, uint32(0), respR.PeerPortCount)
 	assert.Equal(t, uint32(0), respR.PeerBasePort)
+	assert.Equal(t, uint32(0), respR.PeerTxLanes)
 	// The sane side still negotiates.
+	assert.Equal(t, uint32(4), initR.PeerPortCount)
+
+	// An out-of-range TxLanes drops the whole advert the same way: a lane index
+	// that does not fit the header is as unusable as an impossible port.
+	initR, respR = doFullLaneHandshake(t,
+		&LaneDetails{PortCount: 8, BasePort: 4242, TxLanes: 0x10000},
+		&LaneDetails{PortCount: 4, BasePort: 5353, TxLanes: 4},
+	)
+	assert.Equal(t, uint32(0), respR.PeerPortCount)
 	assert.Equal(t, uint32(4), initR.PeerPortCount)
 }

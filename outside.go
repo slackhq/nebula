@@ -107,7 +107,35 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxCont
 		return
 	}
 
-	if len(packet) < header.Len+hostinfo.ConnectionState.dKey.Overhead() {
+	// Which session decrypts this packet is the lane index in the header. Lane 0
+	// is the base tunnel; a higher lane is one of the sessions derived from it.
+	ci := hostinfo.ConnectionState
+	lane := h.Lane()
+	if lane != 0 {
+		ci = hostinfo.laneSession(lane)
+		if ci == nil {
+			// A lane we have no session for: a stale lane from a tunnel that has
+			// since rolled, or a peer sending above what it advertised. Dropping
+			// silently is right for both — a recv_error would tear down a
+			// perfectly good base tunnel on the strength of one odd packet.
+			f.messageMetrics.RxInvalid(1)
+			if f.l.Enabled(context.Background(), slog.LevelDebug) {
+				hostinfo.logger(f.l).Debug("Unknown multiport lane", "from", via, "header", h)
+			}
+			return
+		}
+		if isMessageRelay {
+			// A relay carrier is always the base tunnel, so lane ciphertext can
+			// never legitimately arrive wrapped in one.
+			f.messageMetrics.RxInvalid(1)
+			if f.l.Enabled(context.Background(), slog.LevelDebug) {
+				hostinfo.logger(f.l).Debug("Refusing relayed multiport lane packet", "from", via, "header", h)
+			}
+			return
+		}
+	}
+
+	if len(packet) < header.Len+ci.dKey.Overhead() {
 		f.messageMetrics.RxInvalid(1)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			f.l.Debug("packet too small", "from", via, "length", len(packet))
@@ -118,7 +146,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxCont
 	// All remaining packets are encrypted
 	if isMessageRelay {
 		// Relay packets are special, this branch should always early-return
-		err = hostinfo.ConnectionState.VerifyRelay(f.l, h.MessageCounter, packet, rxc.nb)
+		err = ci.VerifyRelay(f.l, h.MessageCounter, packet, rxc.nb)
 		if err != nil {
 			if f.l.Enabled(context.Background(), slog.LevelDebug) {
 				hostinfo.logger(f.l).Debug("Failed to verify relay packet", "error", err, "from", via, "header", h)
@@ -129,7 +157,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxCont
 		return
 	}
 
-	out, err := hostinfo.ConnectionState.Decrypt(f.l, h.MessageCounter, packet, rxc.nb)
+	out, err := ci.Decrypt(f.l, h.MessageCounter, packet, rxc.nb)
 	if err != nil {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(f.l).Debug("Failed to decrypt packet", "error", err, "from", via, "header", h)
@@ -137,15 +165,19 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxCont
 		return
 	}
 
-	// Roam before we respond
-	f.handleHostRoaming(hostinfo, via)
+	// Roam before we respond, but only on the base tunnel: a lane's source
+	// address is a per-lane 4-tuple, not the tunnel's remote, and letting it
+	// roam the hostinfo would point every non-lane packet at a lane port.
+	if lane == 0 {
+		f.handleHostRoaming(hostinfo, via)
+	}
 	f.connectionManager.In(hostinfo)
 
 	switch h.Type {
 	case header.Message:
 		switch h.Subtype {
 		case header.MessageNone:
-			f.handleOutsideMessagePacket(hostinfo, h.MessageCounter, out, rxc)
+			f.handleOutsideMessagePacket(hostinfo, ci, h.MessageCounter, out, rxc)
 		default:
 			hostinfo.logger(f.l).Error("IsValidSubType was true, but unexpected message subtype seen", "from", via, "header", h)
 			return
@@ -170,6 +202,10 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxCont
 				return
 			}
 			f.send(header.Test, header.TestReply, hostinfo.ConnectionState, hostinfo, out, rxc.nb, rxc.scratch[:0])
+		case header.LaneProbe:
+			f.handleLaneProbe(hostinfo, lane, out, rxc)
+		case header.LaneProbeAck:
+			f.handleLaneProbeAck(hostinfo, out)
 		default:
 			hostinfo.logger(f.l).Error("IsValidSubType was true, but unexpected test subtype seen", "from", via, "header", h)
 			return
@@ -471,7 +507,7 @@ func parseV4(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 	return nil
 }
 
-func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, messageCounter uint64, out []byte, rxc *rxContext) {
+func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, ci *ConnectionState, messageCounter uint64, out []byte, rxc *rxContext) {
 	err := newPacket(out, true, rxc.fwPacket)
 	if err != nil {
 		hostinfo.logger(f.l).Warn("Error while validating inbound packet", "error", err, "packet", out)
@@ -480,6 +516,8 @@ func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, messageCounte
 
 	dropReason := f.firewall.Drop(rxc.fwPacket.Packet, true, hostinfo, f.pki.GetCAPool(), rxc.ctCache.Get())
 	if dropReason != nil {
+		// The reject rides the base tunnel: it is a control response, not lane
+		// data, and the lane it arrived on says nothing about where it belongs.
 		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, rxc.nb, rxc.scratch, rxc.q)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(f.l).Debug("dropping inbound packet", "fwPacket", rxc.fwPacket, "reason", dropReason)
@@ -487,7 +525,7 @@ func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, messageCounte
 		return
 	}
 
-	err = f.batchers[rxc.q].Commit(out, batch.SortKey{Epoch: hostinfo.ConnectionState.epoch, Counter: messageCounter}, rxc.fwPacket)
+	err = f.batchers[rxc.q].Commit(out, batch.SortKey{Epoch: ci.epoch, Counter: messageCounter}, rxc.fwPacket)
 	if err != nil {
 		f.l.Error("Failed to write to tun", "error", err)
 	}

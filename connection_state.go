@@ -1,9 +1,12 @@
 package nebula
 
 import (
+	"crypto/hkdf"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -72,6 +75,53 @@ func newConnectionStateFromResult(r *handshake.Result) (*ConnectionState, error)
 		ci.window.Update(nil, i)
 	}
 	return ci, nil
+}
+
+// newLaneConnectionState derives multiport lane s's session from the completed
+// base handshake. Each key is an HKDF expansion of the base tunnel's matching
+// key, labelled with the lane index, so the pair stays matched with no extra
+// negotiation: Noise leaves our send key equal to the peer's receive key, and
+// expanding both with the same label preserves that.
+//
+// The lane gets its own counter and replay window starting from zero. No
+// handshake messages were spent on it, so unlike the base session there is
+// nothing to seed.
+func newLaneConnectionState(r *handshake.Result, lane uint8) (*ConnectionState, error) {
+	if lane == 0 {
+		return nil, fmt.Errorf("lane 0 is the base session")
+	}
+
+	eKey, err := deriveLaneKey(r.EKey.UnsafeKey(), lane)
+	if err != nil {
+		return nil, err
+	}
+	dKey, err := deriveLaneKey(r.DKey.UnsafeKey(), lane)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ConnectionState{
+		myCert:    r.MyCert,
+		initiator: r.Initiator,
+		peerCert:  r.RemoteCert,
+		eKey:      noiseutil.NewCipherStateFromKey(eKey, r.Cipher),
+		dKey:      noiseutil.NewCipherStateFromKey(dKey, r.Cipher),
+		window:    NewBits(ReplayWindow),
+		epoch:     sessionEpoch.Add(1),
+	}, nil
+}
+
+// deriveLaneKey expands a base tunnel key into the key for one lane.
+func deriveLaneKey(base [32]byte, lane uint8) ([32]byte, error) {
+	var out [32]byte
+	// The base key is already unique to this tunnel and direction, so the lane
+	// index is the only thing that needs to vary; no salt is required.
+	k, err := hkdf.Key(sha256.New, base[:], nil, laneKeyInfo+" "+strconv.Itoa(int(lane)), len(out))
+	if err != nil {
+		return out, err
+	}
+	copy(out[:], k)
+	return out, nil
 }
 
 func (cs *ConnectionState) MarshalJSON() ([]byte, error) {

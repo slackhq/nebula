@@ -452,10 +452,12 @@ func (f *Interface) pinThisThread(i int) {
 
 // txQueue is the per-routine TX state owned by one listenIn goroutine.
 // laneSlot is the lane this routine's traffic rides (laneSlotFor); lane is
-// bound to that slot's socket and carries lane-tunnel data; base is bound to
-// socket 0 and carries base-tunnel and relay data, which must keep the base
-// source port (a vanilla peer would otherwise see per-routine source ports
-// and roam-thrash). The two alias when multiport is off or laneSlot is 0.
+// bound to that slot's socket and carries traffic encrypted with that lane's
+// session; base is bound to socket 0 and carries base-session and relay data,
+// which must keep the base source port (a vanilla peer would otherwise see
+// per-routine source ports and roam-thrash). A routine uses base whenever its
+// lane is down, so both batches stay live for the life of the routine. The two
+// alias when multiport is off or laneSlot is 0.
 // Concurrent sendmmsg on a shared fd (socket 0, or a lane socket shared by
 // overflow routines) is safe: a flow is pinned to one routine by tun
 // steering, so per-flow wire order still holds.
@@ -473,8 +475,8 @@ func (tx *txQueue) full() bool {
 }
 
 // flush drains base before lane so that when a flow moves from the base
-// tunnel onto a freshly established lane mid-window, its packets still leave
-// this host in encryption order.
+// session onto a freshly promoted lane mid-window, its packets still leave this
+// host in encryption order.
 func (tx *txQueue) flush(f *Interface) {
 	if tx.base != tx.lane {
 		f.flushSendBatch(tx.base, 0)
@@ -485,9 +487,10 @@ func (tx *txQueue) flush(f *Interface) {
 // laneSlotFor maps a routine index to the lane its traffic rides. When
 // multiport.lanes is below routines, overflow routines share the configured
 // lanes round-robin instead of all falling back onto the base tunnel's
-// single underlay flow. Sharers use the lane's own socket and 4-tuple, so
-// this is vanilla-style same-flow sharing: no cross-path replay skew, and
-// per-flow ordering still holds (a flow stays pinned to one routine).
+// single underlay flow. Sharers use the lane's own socket, 4-tuple and
+// session, so this is vanilla-style same-flow sharing: no cross-path replay
+// skew, and per-flow ordering still holds (a flow stays pinned to one
+// routine).
 func (f *Interface) laneSlotFor(i int) int {
 	if f.multiport && f.laneCount > 0 {
 		return i % f.laneCount

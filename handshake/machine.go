@@ -42,10 +42,11 @@ type Result struct {
 
 	// Multiport lane negotiation, from the peer's LaneDetails. All zero when
 	// the peer did not advertise (vanilla peer or multiport disabled).
-	// PeerLaneIndex is nonzero only on the responder side of a lane handshake.
+	// PeerTxLanes is how many lanes the peer may send on, which is how many lane
+	// sessions we need in order to receive everything it sends.
 	PeerPortCount uint32
 	PeerBasePort  uint32
-	PeerLaneIndex uint32
+	PeerTxLanes   uint32
 }
 
 // Machine drives a Noise handshake through N messages. It handles Noise
@@ -344,18 +345,18 @@ func (m *Machine) processPayload(msg []byte, flags msgFlags) error {
 		// Multiport advert from the peer's side of the exchange. Out-of-range
 		// values mean a peer we can't pair lanes with; ignore the advert
 		// rather than failing the handshake — the tunnel itself is fine, it
-		// just won't get lanes. Semantic policing (index bounds vs advert,
-		// port-count caps) belongs to the handshake manager.
+		// just won't get lanes. Semantic policing (port-count caps, lane
+		// clamping) belongs to the handshake manager.
 		var peerLanes *LaneDetails
 		if m.result.Initiator {
 			peerLanes = payload.ResponderLanes
 		} else {
 			peerLanes = payload.InitiatorLanes
 		}
-		if peerLanes != nil && peerLanes.BasePort <= 0xffff && peerLanes.PortCount <= 0xffff {
+		if peerLanes != nil && peerLanes.BasePort <= 0xffff && peerLanes.PortCount <= 0xffff && peerLanes.TxLanes <= 0xffff {
 			m.result.PeerPortCount = peerLanes.PortCount
 			m.result.PeerBasePort = peerLanes.BasePort
-			m.result.PeerLaneIndex = peerLanes.LaneIndex
+			m.result.PeerTxLanes = peerLanes.TxLanes
 		}
 	}
 

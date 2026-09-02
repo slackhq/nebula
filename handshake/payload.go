@@ -27,12 +27,14 @@ type Payload struct {
 	ResponderLanes *LaneDetails
 }
 
-// LaneDetails advertises multiport lane capability. LaneIndex is zero on base
-// handshakes and the initiator's lane number (>= 1) on lane handshakes.
+// LaneDetails advertises multiport lane capability: the contiguous UDP port
+// range the sender bound, and how many lanes it may send on. The receiver needs
+// PortCount/BasePort to aim its own lanes and TxLanes to know how many lane
+// sessions to derive for receiving.
 type LaneDetails struct {
 	PortCount uint32
 	BasePort  uint32
-	LaneIndex uint32
+	TxLanes   uint32
 }
 
 // Proto field numbers for NebulaHandshakeDetails
@@ -46,11 +48,12 @@ const (
 	fieldResponderLanes = 10 // LaneDetails
 )
 
-// Proto field numbers for LaneDetails
+// Proto field numbers for LaneDetails.
+// Field 3 was a per-lane handshake index and is permanently reserved.
 const (
 	fieldLanePortCount = 1 // uint32
 	fieldLaneBasePort  = 2 // uint32
-	fieldLaneLaneIndex = 3 // uint32
+	fieldLaneTxLanes   = 4 // uint32
 )
 
 // MarshalPayload encodes a handshake payload in protobuf wire format compatible
@@ -105,8 +108,8 @@ func (d *LaneDetails) marshal(out []byte) []byte {
 	out = protowire.AppendVarint(out, uint64(d.PortCount))
 	out = protowire.AppendTag(out, fieldLaneBasePort, protowire.VarintType)
 	out = protowire.AppendVarint(out, uint64(d.BasePort))
-	out = protowire.AppendTag(out, fieldLaneLaneIndex, protowire.VarintType)
-	out = protowire.AppendVarint(out, uint64(d.LaneIndex))
+	out = protowire.AppendTag(out, fieldLaneTxLanes, protowire.VarintType)
+	out = protowire.AppendVarint(out, uint64(d.TxLanes))
 	return out
 }
 
@@ -256,7 +259,7 @@ func unmarshalLaneDetails(d *LaneDetails, b []byte) error {
 		// wire-type mismatch, unknown fields are skipped, repeated singular
 		// fields follow proto3 last-wins.
 		switch num {
-		case fieldLanePortCount, fieldLaneBasePort, fieldLaneLaneIndex:
+		case fieldLanePortCount, fieldLaneBasePort, fieldLaneTxLanes:
 			if typ != protowire.VarintType {
 				return errInvalidHandshakeDetails
 			}
@@ -269,8 +272,8 @@ func unmarshalLaneDetails(d *LaneDetails, b []byte) error {
 				d.PortCount = uint32(v)
 			case fieldLaneBasePort:
 				d.BasePort = uint32(v)
-			case fieldLaneLaneIndex:
-				d.LaneIndex = uint32(v)
+			case fieldLaneTxLanes:
+				d.TxLanes = uint32(v)
 			}
 			b = b[n:]
 		default:
