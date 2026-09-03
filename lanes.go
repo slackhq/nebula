@@ -12,14 +12,17 @@ import (
 	"github.com/flynn/noise"
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/noiseutil"
 )
 
-// Multiport lanes give each data-plane routine its own underlay 5-tuple, so one
-// tunnel's traffic spreads over ECMP paths, NIC receive queues and per-flow
-// policers instead of funnelling through a single flow.
+// Multiport lanes give one tunnel several underlay 5-tuples, so its traffic
+// spreads over ECMP paths, NIC receive queues and per-flow policers instead of
+// funnelling through a single flow. Each inside flow picks a lane by hashing its
+// own 5-tuple, so the spread doesn't depend on how a kernel steers tun queues
+// (see txQueue).
 //
 // A lane is not a second tunnel: it is an extra session on the same HostInfo.
 // Noise leaves us with A.eKey == B.dKey, so both sides expand the same two keys
@@ -29,7 +32,8 @@ import (
 // travels in the nebula header, inside the AEAD's associated data.
 //
 // Lane 0 is the base tunnel itself: HostInfo.ConnectionState, socket 0, and the
-// peer's real remote address. Lane s > 0 egresses writers[s] (bound to
+// peer's real remote address, and it carries its share of flows like any other.
+// Lane s > 0 egresses writers[s] (bound to
 // listen.port+s) toward the peer's advertised port range. Receiving on a lane
 // needs no permission — the keys are derivable the moment the base handshake
 // completes — but sending on one needs proof the new 5-tuple actually works,
@@ -94,15 +98,17 @@ type laneSet struct {
 	// Sized txLanes: lanes above that never send.
 	txAddr []atomic.Pointer[netip.AddrPort]
 
-	// demand[s] is raised by the TX path when a routine riding lane s has
-	// traffic for this peer and the lane is down. Probing is demand-driven: a
-	// peer we exchange a trickle with never costs more than its base tunnel, no
-	// matter how many lanes are configured. Sized txLanes.
+	// demand[s] is raised at creation, and again by the TX path whenever a flow
+	// hashes onto lane s while it is down. Probing is demand-driven, so a peer we
+	// never send to costs nothing beyond its base tunnel no matter how many lanes
+	// are configured, and a lane that keeps failing is only retried while
+	// something still wants it. Sized txLanes.
 	demand []atomic.Bool
 
 	// txLanes is how many lanes we may send on — our lane count clamped to the
-	// ports the peer bound. Lanes from txLanes up can only receive, which is how
-	// a peer with more routines than us still spreads its own traffic.
+	// ports the peer bound — and so the modulus a flow's hash is reduced by.
+	// Lanes from txLanes up can only receive, which is how a peer with more
+	// routines than us still spreads its own traffic.
 	// Immutable, and the length of every TX-side slice here.
 	txLanes int
 
@@ -114,6 +120,11 @@ type laneSet struct {
 	peerPortCount uint16
 	peerBasePort  uint16
 	portOffset    uint16
+
+	// laneBias rotates the flow hash before it picks a lane, so the two sides of
+	// a flow land on lanes that are each other's partner rather than at
+	// independent points in the range. See newLaneSet.
+	laneBias uint16
 
 	// peerAddr is the address the current lane targets were built from. The
 	// peer's lane ports have no derivable relationship to a new NAT mapping, so
@@ -181,7 +192,22 @@ func newLaneSet(r *handshake.Result, myLanes int, myAddr, peerAddr netip.Addr) *
 	}
 	txLanes := min(myLanes, int(peerPorts), n)
 
-	return &laneSet{
+	offset := lanePortOffset(myAddr, peerAddr, peerPorts)
+
+	// A flow picks its lane from a hash both sides compute identically, so with
+	// the ranges lined up the two directions of a flow would pick the same lane
+	// index — and lane s targets the peer's lane (s + portOffset), not lane s. The
+	// high-addressed side rotates its choice by the low side's offset, which is
+	// its own negated, so the two directions land on partner lanes and their
+	// 4-tuples are exact reverses: each side's traffic then arrives through the
+	// conntrack entry the other's probe opened. With mismatched ranges there are
+	// no partner lanes to find, so don't pretend: hash straight.
+	bias := uint16(0)
+	if txLanes == int(peerPorts) && peerAddr.Less(myAddr) {
+		bias = (peerPorts - offset) % peerPorts
+	}
+
+	ls := &laneSet{
 		sessions: make([]atomic.Pointer[ConnectionState], n),
 		material: laneMaterial{
 			eKey:      r.EKey.UnsafeKey(),
@@ -197,8 +223,22 @@ func newLaneSet(r *handshake.Result, myLanes int, myAddr, peerAddr netip.Addr) *
 		txLanes:       txLanes,
 		peerPortCount: peerPorts,
 		peerBasePort:  uint16(r.PeerBasePort),
-		portOffset:    lanePortOffset(myAddr, peerAddr, peerPorts),
+		portOffset:    offset,
+		laneBias:      bias,
 	}
+
+	// Every lane starts out demanded, so the first traffic tick on this tunnel
+	// probes all of them at once instead of waiting for a flow to hash onto each.
+	// Lanes have to be up *before* the flows are, not after: the peer writes a
+	// flow's inbound packets to the tun queue matching the socket they arrived on,
+	// and the kernel remembers that for as long as the flow stays busy. A flow that
+	// starts while the lanes are still down therefore gets pinned to queue 0 on
+	// both hosts for its whole life. This costs one probe per lane on any tunnel
+	// with traffic; an idle tunnel is never ticked, so it still costs nothing.
+	for s := 1; s < txLanes; s++ {
+		ls.demand[s].Store(true)
+	}
+	return ls
 }
 
 // laneLogAttr summarizes what a tunnel negotiated, for the handshake log lines.
@@ -366,8 +406,9 @@ func (i *HostInfo) maxMessageCounter() uint64 {
 
 // txLane returns the session and destination for lane s, or a nil session when
 // the lane is down and the caller must use the base tunnel. A miss raises
-// demand, which is the only thing that gets a lane probed, so we pay for a lane
-// exactly where real traffic wanted one.
+// demand, which is what gets a down lane probed again, so we pay for a lane
+// exactly where real traffic wanted one. Callers on the data plane come through
+// txLaneForFlow.
 func (ls *laneSet) txLane(s int) (*ConnectionState, netip.AddrPort) {
 	if ls == nil || s <= 0 || s >= ls.txLanes {
 		return nil, netip.AddrPort{}
@@ -389,6 +430,55 @@ func (ls *laneSet) txLane(s int) (*ConnectionState, netip.AddrPort) {
 		ls.demand[s].Store(true)
 	}
 	return nil, netip.AddrPort{}
+}
+
+// txLaneForFlow picks the lane a flow rides and returns it with its session and
+// destination, or lane 0 and a nil session when the flow belongs on the base
+// tunnel — either because the hash landed on lane 0 or because the lane it
+// landed on is down.
+//
+// The lane comes from the flow rather than from the sending routine so that lane
+// use doesn't depend on how the kernel steers tun queues; see txQueue. It is a
+// pure function of the 5-tuple, so a flow stays on one lane for its life: no
+// per-packet reordering, and one lane's replay window sees one set of flows.
+func (ls *laneSet) txLaneForFlow(p *firewall.Packet) (int, *ConnectionState, netip.AddrPort) {
+	if ls == nil || ls.txLanes < 2 {
+		return 0, nil, netip.AddrPort{}
+	}
+
+	s := int((laneFlowHash(p) + uint32(ls.laneBias)) % uint32(ls.txLanes))
+	if s == 0 {
+		// Lane 0 is the base tunnel, and a full share of flows belongs on it.
+		return 0, nil, netip.AddrPort{}
+	}
+
+	cs, addr := ls.txLane(s)
+	return s, cs, addr
+}
+
+// laneFlowHash hashes a 5-tuple to the same value from either end of the flow,
+// which is what lets both peers pick partner lanes for it (see laneBias). FNV-1a
+// by hand rather than through hash/fnv: this runs per packet, and the interface
+// there would escape the addresses to the heap.
+func laneFlowHash(p *firewall.Packet) uint32 {
+	// Order the two endpoints so the direction of travel cannot change the hash.
+	aAddr, aPort := p.LocalAddr, p.LocalPort
+	bAddr, bPort := p.RemoteAddr, p.RemotePort
+	if bAddr.Less(aAddr) || (aAddr == bAddr && bPort < aPort) {
+		aAddr, aPort, bAddr, bPort = bAddr, bPort, aAddr, aPort
+	}
+
+	const prime = 16777619
+	h := uint32(2166136261)
+	x, y := aAddr.As16(), bAddr.As16()
+	for i := range x {
+		h = (h ^ uint32(x[i])) * prime
+		h = (h ^ uint32(y[i])) * prime
+	}
+	for _, b := range [5]byte{byte(aPort >> 8), byte(aPort), byte(bPort >> 8), byte(bPort), p.Protocol} {
+		h = (h ^ uint32(b)) * prime
+	}
+	return h
 }
 
 // laneTargetPortLocked returns the peer port lane s aims at. Only meaningful

@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -19,8 +20,14 @@ import (
 
 // batchWriter owns the sendmmsg(2)/UDP-GSO transmit path for a StdConn: the
 // scratch WriteBatch packs mmsghdr entries into, plus the GSO capability
-// state probed at socket creation. Each queue has its own StdConn and
-// batchWriter, so no locking is needed.
+// state probed at socket creation.
+//
+// One socket can have several senders: under multiport every routine writes its
+// base-session traffic to socket 0, and any routine may write to any lane
+// socket, since a packet's lane comes from its flow rather than from the routine
+// that read it. The scratch is per socket, not per sender, so mu serializes
+// packing and draining. It is taken once per flush — a syscall's worth of work —
+// and only contends when two routines flush the same socket at the same instant.
 //
 // Terminology, smallest to largest:
 //
@@ -41,6 +48,10 @@ import (
 type batchWriter struct {
 	fd   int
 	isV4 bool
+
+	// mu guards everything below it: the scratch, and the GSO state WriteBatch
+	// can clear.
+	mu sync.Mutex
 
 	// UDP GSO (sendmsg with UDP_SEGMENT cmsg) support, probed once at
 	// socket creation and cleared by WriteBatch if the kernel later rejects
@@ -195,6 +206,9 @@ func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, er
 	if len(bufs) != len(addrs) {
 		return 0, fmt.Errorf("WriteBatch: len(bufs)=%d != len(addrs)=%d", len(bufs), len(addrs))
 	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
 
 	// A destination the kernel rejects results in us dropping that entry (one packet, or one same-destination GSO run).
 	// We count what actually made it out rather than returning an error.

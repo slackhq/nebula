@@ -110,7 +110,7 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Parse
 
 	dropReason := f.firewall.Drop(fwPacket.Packet, false, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason == nil {
-		f.sendInsideMessage(hostinfo, pkt, nb, tx)
+		f.sendInsideMessage(hostinfo, pkt, &fwPacket.Packet, nb, tx)
 	} else {
 		f.rejectInside(packet, rejectBuf, q)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
@@ -154,10 +154,10 @@ func (f *Interface) sendInsideEncrypt(hostinfo *HostInfo, ci *ConnectionState, l
 // scratch arena: SegmentSuperpacket builds each segment's plaintext in
 // segScratch[:segLen] in turn, and we encrypt directly into a fresh SendBatch slot.
 //
-// When routine q has a usable multiport lane to this peer, the direct path
-// swaps to the lane's session and socket below. Relay and base traffic stays on
+// When this flow has a usable multiport lane to this peer, the direct path swaps
+// to that lane's session and socket below. Relay and base traffic stays on
 // tx.base (socket 0).
-func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []byte, tx *txQueue) {
+func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, fwPacket *firewall.Packet, nb []byte, tx *txQueue) {
 	ci := hostinfo.ConnectionState
 	if ci.eKey == nil {
 		return
@@ -228,21 +228,21 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 		return
 	}
 
-	// Direct path: prefer this routine's multiport lane once it is proven
-	// usable. txLane hands back the lane's session and destination together, so
+	// Direct path: prefer this flow's multiport lane once it is proven usable.
+	// txLaneForFlow hands back the lane's session and destination together, so
 	// there is no window where one is set and the other is not, and a demotion
 	// drops us back onto the base tunnel on the very next packet.
 	//
-	// A miss is also how lanes get probed in the first place: txLane raises
+	// A miss is also how a lane gets re-probed after a demotion: txLane raises
 	// demand, which the connection manager's next tick on this tunnel picks up.
 	// Until the lane is up the traffic rides the base tunnel, the same fallback
 	// a demoted lane uses.
 	lane := uint8(0)
-	if lci, laneRemote := hostinfo.lanes.txLane(tx.laneSlot); lci != nil {
-		lane = uint8(tx.laneSlot)
+	if s, lci, laneRemote := hostinfo.lanes.txLaneForFlow(fwPacket); lci != nil {
+		lane = uint8(s)
 		ci = lci
 		remote = laneRemote
-		sendBatch = tx.lane
+		sendBatch = tx.laneBatch(f, s)
 	}
 
 	err := tio.SegmentSuperpacket(pkt, func(seg []byte) error {

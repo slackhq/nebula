@@ -451,51 +451,108 @@ func (f *Interface) pinThisThread(i int) {
 }
 
 // txQueue is the per-routine TX state owned by one listenIn goroutine.
-// laneSlot is the lane this routine's traffic rides (laneSlotFor); lane is
-// bound to that slot's socket and carries traffic encrypted with that lane's
-// session; base is bound to socket 0 and carries base-session and relay data,
-// which must keep the base source port (a vanilla peer would otherwise see
-// per-routine source ports and roam-thrash). A routine uses base whenever its
-// lane is down, so both batches stay live for the life of the routine. The two
-// alias when multiport is off or laneSlot is 0.
-// Concurrent sendmmsg on a shared fd (socket 0, or a lane socket shared by
-// overflow routines) is safe: a flow is pinned to one routine by tun
-// steering, so per-flow wire order still holds.
+//
+// base carries base-session data, relay carriers, and everything on a tunnel
+// without lanes. It goes out the socket egressSock picks for this routine: under
+// multiport that is socket 0, because base traffic must keep the base source port
+// or a vanilla peer would see per-routine source ports and roam-thrash, and
+// without multiport it is this routine's own socket, which shares one port with
+// the rest under SO_REUSEPORT and so costs nothing to keep to itself.
+// lane[s] is bound to writers[s] (listen.port+s) and carries
+// traffic encrypted with lane s's session; lane[0] is base, and the rest are
+// built on the first packet that picks them, since a routine that never sends on
+// a lane should not hold a batch for it.
+//
+// Which lane a packet rides comes from its own flow hash, not from this
+// routine's index. That is deliberate. Which routine reads a flow is the
+// kernel's decision: it hashes the flow to a tun queue, but it also *learns*
+// the queue we write that flow's inbound packets to, and prefers what it
+// learned. So if the lane followed the routine, a peer whose lanes were still
+// down — every peer, for the first moments of a tunnel — would write all of its
+// inbound traffic to queue 0, teaching both kernels to steer every flow to
+// queue 0, and every tunnel would collapse onto lane 0 and stay there for as
+// long as its flows kept busy. Hashing here makes lane spread independent of
+// tun steering entirely.
+//
+// Every batch borrows arena, so a routine holding a batch per lane still costs
+// one slab. The arena is reset by flush once every batch over it is drained.
+//
+// Under multiport several routines therefore write to one socket, which the
+// underlay serializes (see batchWriter). Per-flow wire order still holds: a flow
+// is hashed onto one lane and read by one routine, so nothing else is writing it.
 type txQueue struct {
-	laneSlot int
-	lane     *batch.SendBatch
-	base     *batch.SendBatch
+	base  *batch.SendBatch
+	lane  []*batch.SendBatch
+	arena *batch.Arena
+
+	// live is every batch built so far, in build order, so base is first: see
+	// flush. Kept as its own slice because lane is mostly nil holes and both
+	// full and flush walk this per read batch.
+	live []txBatch
 }
 
+// txBatch is a live batch and the socket it writes to, which for a lane batch is
+// the lane index.
+type txBatch struct {
+	sb   *batch.SendBatch
+	sock int
+}
+
+func (f *Interface) newTxQueue(q int) *txQueue {
+	baseSock := f.egressSock(q)
+	arena := batch.NewArena(batch.SendBatchCap * (udp.MTU + 32))
+	base := batch.NewSendBatchSharedArena(f.writers[baseSock], batch.SendBatchCap, arena)
+
+	tx := &txQueue{
+		base:  base,
+		arena: arena,
+		live:  []txBatch{{sb: base, sock: baseSock}},
+	}
+	if f.multiport && f.laneCount > 1 {
+		tx.lane = make([]*batch.SendBatch, f.laneCount)
+		tx.lane[0] = base
+	}
+	return tx
+}
+
+// laneBatch returns the batch for lane s, building it the first time this
+// routine sends on that lane. Lanes this queue doesn't cover fall back to base,
+// which is also lane 0's batch.
+func (tx *txQueue) laneBatch(f *Interface, s int) *batch.SendBatch {
+	if s <= 0 || s >= len(tx.lane) {
+		return tx.base
+	}
+	sb := tx.lane[s]
+	if sb == nil {
+		sb = batch.NewSendBatchSharedArena(f.writers[s], batch.SendBatchCap, tx.arena)
+		tx.lane[s] = sb
+		tx.live = append(tx.live, txBatch{sb: sb, sock: s})
+	}
+	return sb
+}
+
+// full reports a full sendmmsg worth of work queued across every lane, rather
+// than on any one of them: the arena is shared, so it is the total that bounds
+// how much is outstanding.
 func (tx *txQueue) full() bool {
-	if tx.lane.Len() >= batch.SendBatchCap {
-		return true
+	n := 0
+	for _, b := range tx.live {
+		n += b.sb.Len()
 	}
-	return tx.base != tx.lane && tx.base.Len() >= batch.SendBatchCap
+	return n >= batch.SendBatchCap
 }
 
-// flush drains base before lane so that when a flow moves from the base
+// flush drains base before the lanes so that when a flow moves from the base
 // session onto a freshly promoted lane mid-window, its packets still leave this
-// host in encryption order.
+// host in encryption order. Resetting the shared arena is this queue's job,
+// since no single batch's Flush can know the others are done with it.
 func (tx *txQueue) flush(f *Interface) {
-	if tx.base != tx.lane {
-		f.flushSendBatch(tx.base, 0)
+	for _, b := range tx.live {
+		if b.sb.Len() > 0 {
+			f.flushSendBatch(b.sb, b.sock)
+		}
 	}
-	f.flushSendBatch(tx.lane, tx.laneSlot)
-}
-
-// laneSlotFor maps a routine index to the lane its traffic rides. When
-// multiport.lanes is below routines, overflow routines share the configured
-// lanes round-robin instead of all falling back onto the base tunnel's
-// single underlay flow. Sharers use the lane's own socket, 4-tuple and
-// session, so this is vanilla-style same-flow sharing: no cross-path replay
-// skew, and per-flow ordering still holds (a flow stays pinned to one
-// routine).
-func (f *Interface) laneSlotFor(i int) int {
-	if f.multiport && f.laneCount > 0 {
-		return i % f.laneCount
-	}
-	return i
+	tx.arena.Reset()
 }
 
 func (f *Interface) listenIn(queue tio.Queue, i int) {
@@ -506,13 +563,7 @@ func (f *Interface) listenIn(queue tio.Queue, i int) {
 	}
 
 	rejectBuf := make([]byte, mtu)
-	arenaSize := batch.SendBatchCap * (udp.MTU + 32)
-	laneSlot := f.laneSlotFor(i)
-	sb := batch.NewSendBatch(f.writers[laneSlot], batch.SendBatchCap, arenaSize)
-	tx := &txQueue{laneSlot: laneSlot, lane: sb, base: sb}
-	if f.multiport && laneSlot != 0 {
-		tx.base = batch.NewSendBatch(f.writers[0], batch.SendBatchCap, arenaSize)
-	}
+	tx := f.newTxQueue(i)
 	fwPacket := &firewall.ParsedPacket{}
 	nb := make([]byte, 12, 12)
 

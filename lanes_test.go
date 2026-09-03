@@ -9,9 +9,9 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/header"
-	"github.com/slackhq/nebula/overlay/batch"
 	"github.com/slackhq/nebula/overlay/overlaytest"
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/test"
@@ -176,6 +176,14 @@ func TestNewLaneSetSizing(t *testing.T) {
 		assert.Nil(t, ls.sessions[s].Load(), "lane %d derived before anything needed it", s)
 	}
 
+	// Every lane starts demanded so the first traffic tick probes them all: a
+	// lane that only comes up after its flows do is a lane the flows never move
+	// onto, because the kernel has pinned them to the queue they started on.
+	ls = newTestLaneSet(t, initR, 4, 4, 4242, 4)
+	for s := 1; s < ls.txLanes; s++ {
+		assert.True(t, ls.demand[s].Load(), "lane %d not demanded at creation", s)
+	}
+
 	// Our tx lanes are clamped to the ports the peer actually bound: a lane
 	// aimed past the peer's range would land on some unrelated socket.
 	ls = newTestLaneSet(t, initR, 8, 3, 4242, 8)
@@ -256,9 +264,14 @@ func TestLaneSessionRxDerivation(t *testing.T) {
 func TestLaneTxGate(t *testing.T) {
 	initR, _ := runTestHandshake(t)
 	ls := newTestLaneSet(t, initR, 4, 4, 4242, 4)
+	for s := range ls.demand {
+		// Creation seeds demand on every lane; start from cold so this test can
+		// tell what the TX path itself raises.
+		ls.demand[s].Store(false)
+	}
 
 	// A down lane hands back nothing and raises demand, which is what gets it
-	// probed.
+	// re-probed after a demotion.
 	ci, addr := ls.txLane(1)
 	assert.Nil(t, ci)
 	assert.False(t, addr.IsValid())
@@ -389,7 +402,11 @@ func TestLaneProbeLifecycle(t *testing.T) {
 	now := time.Now()
 
 	// No demand: nothing is probed, so a peer we barely talk to costs nothing
-	// beyond its base tunnel.
+	// beyond its base tunnel. (Creation seeds demand on every lane, so clear it
+	// to get at the no-demand case.)
+	for s := range ls.demand {
+		ls.demand[s].Store(false)
+	}
 	ifce.probeLanes(hi, now, nb, out)
 	ls.mu.Lock()
 	for s := 1; s < 4; s++ {
@@ -580,123 +597,254 @@ func (c *recordingUdpConn) WriteTo(b []byte, addr netip.AddrPort) error {
 	return nil
 }
 
-// recordingBatchWriter satisfies batch's writer interface and records what
-// was flushed to it.
-type recordingBatchWriter struct {
+// recordingBatchConn is a udp.Conn that records the batches flushed to it, so a
+// test can see which socket a packet left on.
+type recordingBatchConn struct {
+	udp.NoopConn
 	bufs [][]byte
 	dsts []netip.AddrPort
 }
 
-func (w *recordingBatchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
+func (c *recordingBatchConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
 	for i := range bufs {
-		w.bufs = append(w.bufs, append([]byte(nil), bufs[i]...))
-		w.dsts = append(w.dsts, addrs[i])
+		c.bufs = append(c.bufs, append([]byte(nil), bufs[i]...))
+		c.dsts = append(c.dsts, addrs[i])
 	}
 	return len(bufs), nil
+}
+
+// laneOfFlow is what the TX path computes to pick a lane, without needing a
+// promoted lane to observe it.
+func laneOfFlow(ls *laneSet, p *firewall.Packet) int {
+	return int((laneFlowHash(p) + uint32(ls.laneBias)) % uint32(ls.txLanes))
+}
+
+func testFlow(port uint16) *firewall.Packet {
+	return &firewall.Packet{
+		LocalAddr:  testMyAddr,
+		RemoteAddr: testPeerAddr,
+		LocalPort:  port,
+		RemotePort: 443,
+		Protocol:   6,
+	}
+}
+
+// flowForLane finds a flow that hashes onto lane s, so a test can aim traffic at
+// a specific lane.
+func flowForLane(t *testing.T, ls *laneSet, s int) *firewall.Packet {
+	t.Helper()
+	for port := uint16(1024); port < 4096; port++ {
+		p := testFlow(port)
+		if laneOfFlow(ls, p) == s {
+			return p
+		}
+	}
+	t.Fatalf("no flow hashes onto lane %d", s)
+	return nil
 }
 
 func TestSendInsideMessageLaneSwap(t *testing.T) {
 	hostMap := newHostMap(test.NewLogger())
 	ifce := newLaneTestInterface(hostMap)
+	ifce.multiport = true
+	ifce.laneCount = 4
+
+	conns := []*recordingBatchConn{{}, {}, {}, {}}
+	ifce.writers = []udp.Conn{conns[0], conns[1], conns[2], conns[3]}
 
 	initR, respR := runTestHandshake(t)
 	ls := newTestLaneSet(t, initR, 4, 4, 5353, 4)
 	hi := newTestLaneHostInfo(t, initR, ls)
 	peerLS := newTestLaneSet(t, respR, 4, 4, 4242, 4)
 
-	baseWriter := &recordingBatchWriter{}
-	laneWriter := &recordingBatchWriter{}
-	newTx := func(laneSlot int) *txQueue {
-		return &txQueue{
-			laneSlot: laneSlot,
-			base:     batch.NewSendBatch(baseWriter, batch.SendBatchCap, 1<<16),
-			lane:     batch.NewSendBatch(laneWriter, batch.SendBatchCap, 1<<16),
-		}
-	}
-	tx1 := newTx(1)
-	tx2 := newTx(2)
-
+	tx := ifce.newTxQueue(1)
 	pkt := tio.Packet{Bytes: []byte{0x45, 0, 0, 4, 1, 2, 3, 4}}
 	nb := make([]byte, 12)
+	flow1 := flowForLane(t, ls, 1)
+	for s := range ls.demand {
+		ls.demand[s].Store(false)
+	}
 
 	// A down lane rides the base tunnel and asks for a probe.
-	ifce.sendInsideMessage(hi, pkt, nb, tx1)
-	tx1.flush(ifce)
-	require.Len(t, baseWriter.bufs, 1)
-	assert.Empty(t, laneWriter.bufs)
+	ifce.sendInsideMessage(hi, pkt, flow1, nb, tx)
+	tx.flush(ifce)
+	require.Len(t, conns[0].bufs, 1)
+	assert.Empty(t, conns[1].bufs)
 	assert.True(t, ls.demand[1].Load(), "a miss did not raise demand")
-	assert.False(t, ls.demand[2].Load(), "demand raised on an untouched lane")
+	assert.False(t, ls.demand[2].Load(), "demand raised on a lane nothing hashed onto")
 
 	h := &header.H{}
-	require.NoError(t, h.Parse(baseWriter.bufs[0]))
+	require.NoError(t, h.Parse(conns[0].bufs[0]))
 	assert.Equal(t, uint8(0), h.Lane())
 
-	// Once the lane is up, slot-1 traffic rides the lane session, the lane
-	// socket and the lane's destination, tagged with the lane index. Promotion
-	// normally happens on the ack of a probe, which is also what derived the
-	// session, so stand both up here.
+	// Once the lane is up, a flow hashing onto it rides the lane session, the
+	// lane socket and the lane's destination, tagged with the lane index.
+	// Promotion normally happens on the ack of a probe, which is also what
+	// derived the session, so stand both up here.
 	laneRemote := netip.MustParseAddrPort("192.0.2.1:5354")
 	laneSessionFor(t, ls, 1)
 	ls.txAddr[1].Store(&laneRemote)
 	ls.demand[1].Store(false)
-	ifce.sendInsideMessage(hi, pkt, nb, tx1)
-	tx1.flush(ifce)
-	require.Len(t, laneWriter.bufs, 1)
-	assert.Equal(t, laneRemote, laneWriter.dsts[0])
+	ifce.sendInsideMessage(hi, pkt, flow1, nb, tx)
+	tx.flush(ifce)
+	require.Len(t, conns[1].bufs, 1)
+	assert.Equal(t, laneRemote, conns[1].dsts[0])
 	assert.False(t, ls.demand[1].Load(), "a hit raised demand")
 
-	require.NoError(t, h.Parse(laneWriter.bufs[0]))
+	require.NoError(t, h.Parse(conns[1].bufs[0]))
 	assert.Equal(t, uint8(1), h.Lane())
 	assert.Equal(t, hi.remoteIndexId, h.RemoteIndex)
 
 	// And the peer's derived lane-1 session is what opens it.
-	pt, err := laneSessionFor(t, peerLS, 1).Decrypt(test.NewLogger(), h.MessageCounter, laneWriter.bufs[0], nb)
+	pt, err := laneSessionFor(t, peerLS, 1).Decrypt(test.NewLogger(), h.MessageCounter, conns[1].bufs[0], nb)
 	require.NoError(t, err)
 	assert.Equal(t, pkt.Bytes, pt)
 
-	// An overflow routine sharing slot 1 (multiport.lanes < routines) rides the
-	// same lane session.
-	tx1b := newTx(1)
-	ifce.sendInsideMessage(hi, pkt, nb, tx1b)
-	tx1b.flush(ifce)
-	require.Len(t, laneWriter.bufs, 2)
-	require.NoError(t, h.Parse(laneWriter.bufs[1]))
+	// Another routine sending the same flow rides the same lane socket and
+	// session: the lane follows the flow, not the routine.
+	tx2 := ifce.newTxQueue(2)
+	ifce.sendInsideMessage(hi, pkt, flow1, nb, tx2)
+	tx2.flush(ifce)
+	require.Len(t, conns[1].bufs, 2)
+	require.NoError(t, h.Parse(conns[1].bufs[1]))
 	assert.Equal(t, uint8(1), h.Lane())
 
-	// Slot 2's lane is still down: base tunnel, base batch, lane 0.
-	ifce.sendInsideMessage(hi, pkt, nb, tx2)
-	tx2.flush(ifce)
-	require.Len(t, baseWriter.bufs, 2)
-	assert.Equal(t, hi.GetRemote(), baseWriter.dsts[1])
-	require.NoError(t, h.Parse(baseWriter.bufs[1]))
+	// A flow that hashes onto lane 0 stays on the base tunnel even with lane 1
+	// up: a full share of flows belongs there.
+	ifce.sendInsideMessage(hi, pkt, flowForLane(t, ls, 0), nb, tx)
+	tx.flush(ifce)
+	require.Len(t, conns[0].bufs, 2)
+	assert.Equal(t, hi.GetRemote(), conns[0].dsts[1])
+	require.NoError(t, h.Parse(conns[0].bufs[1]))
 	assert.Equal(t, uint8(0), h.Lane())
 
 	// Demotion falls back to the base tunnel on the very next packet.
 	ls.txAddr[1].Store(nil)
-	ifce.sendInsideMessage(hi, pkt, nb, tx1)
-	tx1.flush(ifce)
-	require.Len(t, baseWriter.bufs, 3)
-	require.Len(t, laneWriter.bufs, 2)
+	ifce.sendInsideMessage(hi, pkt, flow1, nb, tx)
+	tx.flush(ifce)
+	require.Len(t, conns[0].bufs, 3)
+	require.Len(t, conns[1].bufs, 2)
 }
 
-func TestLaneSlotFor(t *testing.T) {
-	// Overflow routines wrap onto the configured lanes round-robin.
-	f := &Interface{multiport: true, laneCount: 2}
-	for i, want := range []int{0, 1, 0, 1, 0, 1} {
-		assert.Equal(t, want, f.laneSlotFor(i), "routine %d", i)
+// Without multiport nothing about the send path changes: every socket shares one
+// port under SO_REUSEPORT, so a routine keeps writing to its own, and there are
+// no lane batches at all. A peer that negotiated no lanes is the same story on a
+// node that does run multiport, except that base traffic owes its 4-tuple to
+// socket 0.
+func TestTxQueueWithoutLanes(t *testing.T) {
+	hostMap := newHostMap(test.NewLogger())
+	ifce := newLaneTestInterface(hostMap)
+	conns := []*recordingBatchConn{{}, {}, {}, {}}
+	ifce.writers = []udp.Conn{conns[0], conns[1], conns[2], conns[3]}
+
+	initR, _ := runTestHandshake(t)
+	hi := newTestLaneHostInfo(t, initR, nil)
+	pkt := tio.Packet{Bytes: []byte{0x45, 0, 0, 4, 1, 2, 3, 4}}
+	nb := make([]byte, 12)
+	flow := testFlow(1234)
+
+	tx := ifce.newTxQueue(2)
+	assert.Empty(t, tx.lane, "a queue with no lanes must not hold lane batches")
+	require.Len(t, tx.live, 1)
+
+	ifce.sendInsideMessage(hi, pkt, flow, nb, tx)
+	tx.flush(ifce)
+	assert.Len(t, conns[2].bufs, 1, "routine 2 did not send on its own socket")
+	assert.Empty(t, conns[0].bufs)
+
+	// Multiport on, but this peer has no lanes: socket 0, lane 0, one batch.
+	ifce.multiport = true
+	ifce.laneCount = 4
+	tx = ifce.newTxQueue(2)
+	require.Len(t, tx.live, 1)
+	ifce.sendInsideMessage(hi, pkt, flow, nb, tx)
+	tx.flush(ifce)
+	require.Len(t, conns[0].bufs, 1, "base traffic left a socket other than 0")
+	assert.Len(t, conns[2].bufs, 1)
+
+	h := &header.H{}
+	require.NoError(t, h.Parse(conns[0].bufs[0]))
+	assert.Equal(t, uint8(0), h.Lane())
+	assert.Len(t, tx.live, 1, "a lane batch was built for a peer with no lanes")
+}
+
+// One routine has to be able to reach every lane, since the kernel decides which
+// routine sees a flow and it may well hand one routine everything.
+func TestTxLaneForFlowSpread(t *testing.T) {
+	initR, _ := runTestHandshake(t)
+	ls := newTestLaneSet(t, initR, 4, 4, 5353, 4)
+
+	seen := map[int]int{}
+	for port := uint16(1024); port < 1224; port++ {
+		s := laneOfFlow(ls, testFlow(port))
+		require.Less(t, s, ls.txLanes)
+		seen[s]++
+	}
+	assert.Len(t, seen, 4, "200 flows did not reach all four lanes: %v", seen)
+	for s, n := range seen {
+		assert.Greater(t, n, 10, "lane %d got a negligible share of flows", s)
 	}
 
-	// Full lane count: identity mapping, one lane per routine.
-	f = &Interface{multiport: true, laneCount: 4}
-	for i := range 4 {
-		assert.Equal(t, i, f.laneSlotFor(i), "routine %d", i)
-	}
+	// A flow's lane is a function of its 5-tuple alone, so it never moves
+	// mid-flow.
+	p := testFlow(1234)
+	assert.Equal(t, laneOfFlow(ls, p), laneOfFlow(ls, p))
 
-	// Multiport off: identity, each routine keeps its own writer.
-	f = &Interface{multiport: false, laneCount: 0}
-	for i := range 4 {
-		assert.Equal(t, i, f.laneSlotFor(i), "routine %d", i)
+	// A tunnel with nothing but the base lane always answers lane 0.
+	one := newTestLaneSet(t, initR, 1, 1, 5353, 4)
+	s, ci, addr := one.txLaneForFlow(p)
+	assert.Zero(t, s)
+	assert.Nil(t, ci)
+	assert.False(t, addr.IsValid())
+	s, ci, _ = (*laneSet)(nil).txLaneForFlow(p)
+	assert.Zero(t, s)
+	assert.Nil(t, ci)
+}
+
+// The two ends of a flow have to pick partner lanes, or the flow's two
+// directions use unrelated 4-tuples instead of exact reverses and neither side's
+// traffic arrives through the conntrack entry the other's probe opened.
+func TestLaneFlowSymmetry(t *testing.T) {
+	initR, respR := runTestHandshake(t)
+
+	// Our side is the low address; the peer builds the same pair reversed.
+	const ourBase, peerBase = 4242, 5353
+	ourLS := newTestLaneSet(t, initR, 4, 4, peerBase, 4)
+	respR.PeerPortCount, respR.PeerBasePort, respR.PeerTxLanes = 4, ourBase, 4
+	peerLS := newLaneSet(respR, 4, testPeerAddr, testMyAddr)
+	require.NotNil(t, peerLS)
+	require.Equal(t, uint16(0), ourLS.laneBias, "the low address hashes straight")
+
+	partnered := 0
+	for port := uint16(1024); port < 1124; port++ {
+		p := testFlow(port)
+		reverse := &firewall.Packet{
+			LocalAddr: p.RemoteAddr, RemoteAddr: p.LocalAddr,
+			LocalPort: p.RemotePort, RemotePort: p.LocalPort,
+			Protocol: p.Protocol,
+		}
+
+		ours := laneOfFlow(ourLS, p)
+		theirs := laneOfFlow(peerLS, reverse)
+		require.Equal(t, (ours+int(ourLS.portOffset))%4, theirs,
+			"flow on port %d: our lane %d is not partnered with their lane %d", port, ours, theirs)
+
+		if ours == 0 || theirs == 0 {
+			// The lane that lands on the other side's base port has no partner
+			// lane; that flow rides one side's base tunnel. See lanePortOffset.
+			continue
+		}
+		partnered++
+
+		// Our source and destination ports are the reverse of theirs.
+		ourLS.mu.Lock()
+		peerLS.mu.Lock()
+		assert.Equal(t, uint16(peerBase+theirs), ourLS.laneTargetPortLocked(ours), "flow on port %d", port)
+		assert.Equal(t, uint16(ourBase+ours), peerLS.laneTargetPortLocked(theirs), "flow on port %d", port)
+		peerLS.mu.Unlock()
+		ourLS.mu.Unlock()
 	}
+	assert.Greater(t, partnered, 0, "no flow landed on a partnered lane")
 }
 
 // Regression: deleting a hostinfo whose pending entry is NOT the one recorded

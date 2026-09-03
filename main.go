@@ -149,9 +149,9 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	port := c.GetInt("listen.port", 0)
 
 	// Multiport lanes: bind `routines` consecutive UDP ports (listen.port+i)
-	// instead of SO_REUSEPORT sharing one, and negotiate one extra tunnel per
-	// routine with capable peers so each routine's traffic rides its own
-	// underlay 5-tuple. Defaults on, degrading gracefully when preconditions
+	// instead of SO_REUSEPORT sharing one, and derive one extra session per lane
+	// with capable peers so a tunnel's inside flows spread over several underlay
+	// 5-tuples instead of one. Defaults on, degrading gracefully when preconditions
 	// aren't met — managed deployments (dnclient) can't be hard-errored on
 	// config they don't control.
 	multiport := c.GetBool("multiport.enabled", true)
