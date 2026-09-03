@@ -1165,7 +1165,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 	if lhh.lh.myVpnAddrsTable.Contains(queryVpnAddr) {
 		if lhh.l.Enabled(context.Background(), slog.LevelDebug) {
 			lhh.l.Debug("Ignoring HostQuery for one of my own addresses",
-				"from", fromVpnAddrs,
+				"fromVpnAddrs", fromVpnAddrs,
 				"queryVpnAddr", queryVpnAddr,
 			)
 		}
