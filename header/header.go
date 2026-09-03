@@ -8,19 +8,28 @@ import (
 )
 
 //Version 1 header:
-// 0                                                                       31
-// |-----------------------------------------------------------------------|
-// | Version (uint4) | Type (uint4) |  Subtype (uint8) | Reserved (uint16) | 32
-// |-----------------------------------------------------------------------|
-// The low 8 bits of Reserved carry the multiport lane index (0 is the base
-// tunnel, which is what every non-multiport sender emits). The high 8 bits
-// remain reserved and are always sent as zero.
-// |                        Remote index (uint32)                          | 64
-// |-----------------------------------------------------------------------|
-// |                           Message counter                             | 96
-// |                               (uint64)                                | 128
-// |-----------------------------------------------------------------------|
-// |                               payload...                              |
+// 0                                                                                  31
+// |------------------------------------------------------------------------------------|
+// | Version (uint4) | Type (uint4) | Subtype (uint8) | Reserved (uint8) | Lane (uint8) | 32
+// |------------------------------------------------------------------------------------|
+// |                               Remote index (uint32)                                | 64
+// |------------------------------------------------------------------------------------|
+// |                                  Message counter                                   | 96
+// |                                      (uint64)                                      | 128
+// |------------------------------------------------------------------------------------|
+// |                                     payload...                                     |
+//
+// Lane is the multiport lane index, carved out of the low 8 bits of what was a
+// single Reserved (uint16) before multiport. Lane 0 is the base tunnel, which is
+// what every sender that does not know about lanes emits and what every non-lane
+// packet — handshakes, lighthouse, relays, close — carries, so the field is
+// compatible in both directions with a peer that has never heard of it. The
+// remaining 8 bits stay reserved and are always sent as zero. The H struct still
+// holds the pair as one Reserved field; use H.Lane and EncodeLane to reach the
+// low byte.
+//
+// Lane is part of the AEAD's associated data, so a lane index cannot be altered
+// in flight: a packet decrypts on the lane it claims or not at all.
 
 type m = map[string]any
 
