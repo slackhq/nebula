@@ -43,12 +43,17 @@ type InterfaceConfig struct {
 	DropLocalBroadcast bool
 	DropMulticast      bool
 	routines           int
-	// Multiport means writers[i] is bound to listen.port+i (not a shared
-	// SO_REUSEPORT port) and lane tunnels are negotiated with capable peers.
+	// Multiport means the sockets are spread over a range of ports
+	// (listen.port+slot) rather than all sharing listen.port, and that lane
+	// tunnels are negotiated with capable peers.
 	Multiport bool
+	// RoutinesPerPort is how many sockets share each port under multiport, and so
+	// the stride between port slots in writers: writers[s*RoutinesPerPort+r] is
+	// the r'th socket bound to listen.port+s. It is `routines` as configured,
+	// while routines above is that times the number of ports.
+	RoutinesPerPort int
 	// LaneCount is the number of lanes counting the base tunnel as lane 0
-	// (multiport.lanes, clamped to routines). Routines at or beyond it share
-	// the configured lanes round-robin.
+	// (multiport.lanes, clamped to the number of ports bound).
 	LaneCount      int
 	MessageMetrics *MessageMetrics
 	version        string
@@ -95,6 +100,7 @@ type Interface struct {
 	dropMulticast         bool
 	routines              int
 	multiport             bool
+	routinesPerPort       int
 	laneCount             int
 	disconnectInvalid     atomic.Bool
 	closed                atomic.Bool
@@ -227,6 +233,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		dropMulticast:         c.DropMulticast,
 		routines:              c.routines,
 		multiport:             c.Multiport,
+		routinesPerPort:       max(c.RoutinesPerPort, 1),
 		laneCount:             c.LaneCount,
 		version:               c.version,
 		writers:               make([]udp.Conn, c.routines),
@@ -453,15 +460,13 @@ func (f *Interface) pinThisThread(i int) {
 // txQueue is the per-routine TX state owned by one listenIn goroutine.
 //
 // base carries base-session data, relay carriers, and everything on a tunnel
-// without lanes. It goes out the socket egressSock picks for this routine: under
-// multiport that is socket 0, because base traffic must keep the base source port
-// or a vanilla peer would see per-routine source ports and roam-thrash, and
-// without multiport it is this routine's own socket, which shares one port with
-// the rest under SO_REUSEPORT and so costs nothing to keep to itself.
-// lane[s] is bound to writers[s] (listen.port+s) and carries
-// traffic encrypted with lane s's session; lane[0] is base, and the rest are
-// built on the first packet that picks them, since a routine that never sends on
-// a lane should not hold a batch for it.
+// without lanes. It goes out a socket on the base port — egressSock's pick — since
+// base traffic must keep the base source port or a vanilla peer would see it move
+// and roam-thrash. lane[s] goes out a socket on listen.port+s and carries traffic
+// encrypted with lane s's session; lane[0] is base, and the rest are built on the
+// first packet that picks them, since a routine that never sends on a lane should
+// not hold a batch for it. Both come from laneSock, so a routine writes to its own
+// share of each port's socket group.
 //
 // Which lane a packet rides comes from its own flow hash, not from this
 // routine's index. That is deliberate. Which routine reads a flow is the
@@ -477,10 +482,14 @@ func (f *Interface) pinThisThread(i int) {
 // Every batch borrows arena, so a routine holding a batch per lane still costs
 // one slab. The arena is reset by flush once every batch over it is drained.
 //
-// Under multiport several routines therefore write to one socket, which the
-// underlay serializes (see batchWriter). Per-flow wire order still holds: a flow
-// is hashed onto one lane and read by one routine, so nothing else is writing it.
+// Several routines can still write to one socket — the sockets on a port are
+// shared by the routines whose lane arithmetic lands on them — which the underlay
+// serializes (see batchWriter). Per-flow wire order still holds: a flow is hashed
+// onto one lane and read by one routine, so nothing else is writing it.
 type txQueue struct {
+	// q is the queue this state belongs to, which laneSock needs to resolve a lane
+	// to one of its port's sockets.
+	q     int
 	base  *batch.SendBatch
 	lane  []*batch.SendBatch
 	arena *batch.Arena
@@ -491,8 +500,7 @@ type txQueue struct {
 	live []txBatch
 }
 
-// txBatch is a live batch and the socket it writes to, which for a lane batch is
-// the lane index.
+// txBatch is a live batch and the index in writers of the socket it flushes to.
 type txBatch struct {
 	sb   *batch.SendBatch
 	sock int
@@ -504,6 +512,7 @@ func (f *Interface) newTxQueue(q int) *txQueue {
 	base := batch.NewSendBatchSharedArena(f.writers[baseSock], batch.SendBatchCap, arena)
 
 	tx := &txQueue{
+		q:     q,
 		base:  base,
 		arena: arena,
 		live:  []txBatch{{sb: base, sock: baseSock}},
@@ -524,9 +533,10 @@ func (tx *txQueue) laneBatch(f *Interface, s int) *batch.SendBatch {
 	}
 	sb := tx.lane[s]
 	if sb == nil {
-		sb = batch.NewSendBatchSharedArena(f.writers[s], batch.SendBatchCap, tx.arena)
+		sock := f.laneSock(tx.q, s)
+		sb = batch.NewSendBatchSharedArena(f.writers[sock], batch.SendBatchCap, tx.arena)
 		tx.lane[s] = sb
-		tx.live = append(tx.live, txBatch{sb: sb, sock: s})
+		tx.live = append(tx.live, txBatch{sb: sb, sock: sock})
 	}
 	return sb
 }

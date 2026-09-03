@@ -31,10 +31,10 @@ import (
 // and dies exactly when its base tunnel does. Which lane a packet belongs to
 // travels in the nebula header, inside the AEAD's associated data.
 //
-// Lane 0 is the base tunnel itself: HostInfo.ConnectionState, socket 0, and the
-// peer's real remote address, and it carries its share of flows like any other.
-// Lane s > 0 egresses writers[s] (bound to
-// listen.port+s) toward the peer's advertised port range. Receiving on a lane
+// Lane 0 is the base tunnel itself: HostInfo.ConnectionState, the base port, and
+// the peer's real remote address, and it carries its share of flows like any
+// other. Lane s > 0 egresses a socket on listen.port+s (see laneSock) toward the
+// peer's advertised port range. Receiving on a lane
 // needs no permission — the keys are derivable the moment the base handshake
 // completes — but sending on one needs proof the new 5-tuple actually works,
 // since nothing else would notice a middlebox quietly dropping it. So a lane
@@ -158,7 +158,9 @@ type laneProbeState struct {
 	// sentAt is when the outstanding probe went out, zero when none is pending.
 	sentAt time.Time
 
-	// target is where the outstanding probe went, promoted to txAddr on ack.
+	// target is where the outstanding probe went, promoted to txAddr on ack. It
+	// outlives the probe, which is what lets a demotion log the address that
+	// stopped answering.
 	target netip.AddrPort
 
 	// lastAck is when the lane was last confirmed usable, driving the keepalive.
@@ -294,9 +296,8 @@ func (f *Interface) emitLaneStats(up, tunnels metrics.Gauge) {
 // negates the result, so when port counts match the two sides' rotations
 // cancel: our lane s's 4-tuple stays the reverse of the peer's lane s, and each
 // side's probe opens the conntrack entry the other's arrives through. (The one
-// lane a nonzero rotation lands on the peer's base port has no partner lane;
-// behind a port-restricted NAT it may never come up, and its routine rides the
-// base tunnel — the standard lane fallback.)
+// lane a nonzero rotation lands on the peer's base port has no partner lane, so
+// behind a port-restricted NAT it is the one lane that may never come up.)
 func lanePortOffset(myAddr, peerAddr netip.Addr, peerPortCount uint16) uint16 {
 	if peerPortCount == 0 {
 		return 0
@@ -487,6 +488,18 @@ func (ls *laneSet) laneTargetPortLocked(s int) uint16 {
 	return ls.peerBasePort + uint16((s+int(ls.portOffset))%int(ls.peerPortCount))
 }
 
+// laneTargetLocked returns where lane s's probes go: the peer port this lane is
+// paired with, on the peer's current direct address.
+//
+// A lane only ever aims at its own port. There is no fallback to the peer's base
+// port when the lane port doesn't answer — a lane sharing the base port's
+// destination gains only a source port of its own, while costing the peer the
+// receive spread that is the whole point, so a lane that can't reach its port
+// stays down and its traffic rides the base tunnel.
+func (ls *laneSet) laneTargetLocked(s int, addr netip.Addr) netip.AddrPort {
+	return netip.AddrPortFrom(addr, ls.laneTargetPortLocked(s))
+}
+
 // laneRetryDelay is the backoff after fails consecutive probe failures.
 func laneRetryDelay(fails uint8) time.Duration {
 	d := laneRetryBase << min(fails, 4)
@@ -497,10 +510,11 @@ func laneRetryDelay(fails uint8) time.Duration {
 }
 
 // noteAck records an acked probe for lane s, promoting the lane if it was down.
-// gen must match the outstanding probe. Reports whether the lane was promoted.
-func (ls *laneSet) noteAck(s int, gen uint8, now time.Time) bool {
+// gen must match the outstanding probe. Reports the target the lane came up on,
+// and whether this ack is what promoted it.
+func (ls *laneSet) noteAck(s int, gen uint8, now time.Time) (netip.AddrPort, bool) {
 	if s <= 0 || s >= len(ls.probe) {
-		return false
+		return netip.AddrPort{}, false
 	}
 
 	ls.mu.Lock()
@@ -510,7 +524,7 @@ func (ls *laneSet) noteAck(s int, gen uint8, now time.Time) bool {
 	if p.sentAt.IsZero() || p.gen != gen {
 		// No probe outstanding, or an ack for a probe we have already given up
 		// on. Either way it says nothing about the lane's current path.
-		return false
+		return netip.AddrPort{}, false
 	}
 
 	p.sentAt = time.Time{}
@@ -518,14 +532,14 @@ func (ls *laneSet) noteAck(s int, gen uint8, now time.Time) bool {
 	p.fails = 0
 	p.retryAt = time.Time{}
 
+	target := p.target
 	if ls.txAddr[s].Load() != nil {
 		// Keepalive for a lane already up.
-		return false
+		return target, false
 	}
 
-	target := p.target
 	ls.txAddr[s].Store(&target)
-	return true
+	return target, true
 }
 
 // probeLanes runs one lane maintenance pass for a peer: it demotes lanes whose
@@ -577,7 +591,7 @@ func (f *Interface) probeLanes(hostinfo *HostInfo, now time.Time, nb, out []byte
 			p.retryAt = now.Add(laneRetryDelay(p.fails))
 			if up {
 				ls.txAddr[s].Store(nil)
-				hostinfo.logger(f.l).Info("Multiport lane demoted, probe unanswered", "lane", s)
+				hostinfo.logger(f.l).Info("Multiport lane demoted, probe unanswered", "lane", s, "udpAddr", p.target)
 			}
 			continue
 		}
@@ -591,7 +605,7 @@ func (f *Interface) probeLanes(hostinfo *HostInfo, now time.Time, nb, out []byte
 		}
 
 		p.gen++
-		p.target = netip.AddrPortFrom(remote.Addr(), ls.laneTargetPortLocked(s))
+		p.target = ls.laneTargetLocked(s, remote.Addr())
 		if f.sendLaneProbe(hostinfo, s, p.gen, p.target, nb, out) {
 			p.sentAt = now
 		} else {
@@ -615,11 +629,15 @@ func (ls *laneSet) resetLocked() {
 	}
 }
 
-// sendLaneProbe sends a probe on lane s to addr from writers[s]. The probe is an
-// ordinary Test packet encrypted with the lane's session, so an ack proves the
-// whole lane: our source port reached the peer, its reply reached us, and the
-// keys we derived for this lane match the ones it derived. Reports whether the
-// probe made it onto the wire.
+// sendLaneProbe sends a probe on lane s to addr from a socket on lane s's port.
+// The probe is an ordinary Test packet encrypted with the lane's session, so an
+// ack proves the whole lane: our source port reached the peer, its reply reached
+// us, and the keys we derived for this lane match the ones it derived. Reports
+// whether the probe made it onto the wire.
+//
+// It goes out the first socket on the port, since the connection manager runs
+// this and has no queue of its own; every socket on the port has the same address,
+// so the probe proves the path for whichever one the data plane picks.
 func (f *Interface) sendLaneProbe(hostinfo *HostInfo, s int, gen uint8, addr netip.AddrPort, nb, out []byte) bool {
 	// The first probe on a lane is what derives its session.
 	ci, err := hostinfo.lanes.session(s)
@@ -654,7 +672,7 @@ func (f *Interface) sendLaneProbe(hostinfo *HostInfo, s int, gen uint8, addr net
 	}
 
 	f.messageMetrics.Tx(header.Test, header.LaneProbe, 1)
-	if err := f.writers[s].WriteTo(b, addr); err != nil {
+	if err := f.writers[f.laneSock(0, s)].WriteTo(b, addr); err != nil {
 		hostinfo.logger(f.l).Error("Failed to send multiport lane probe", "error", err, "lane", s, "udpAddr", addr)
 		return false
 	}
@@ -687,7 +705,9 @@ func (f *Interface) handleLaneProbeAck(hostinfo *HostInfo, payload []byte) {
 		return
 	}
 
-	if ls.noteAck(int(payload[0]), payload[1], time.Now()) {
-		hostinfo.logger(f.l).Info("Multiport lane up", "lane", payload[0])
+	// The target is worth logging next to the demotion that names the same
+	// address, so a flapping lane can be read off the logs.
+	if target, promoted := ls.noteAck(int(payload[0]), payload[1], time.Now()); promoted {
+		hostinfo.logger(f.l).Info("Multiport lane up", "lane", payload[0], "udpAddr", target)
 	}
 }

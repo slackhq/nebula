@@ -374,7 +374,10 @@ func newLaneTestInterface(hostMap *HostMap) *Interface {
 		myVpnNetworksTable: new(bart.Lite),
 		messageMetrics:     newMessageMetricsOnlyRecvError(),
 		writers:            []udp.Conn{&udp.NoopConn{}, &udp.NoopConn{}, &udp.NoopConn{}, &udp.NoopConn{}},
-		l:                  l,
+		// One socket per port keeps writers indexed by lane, which is what most of
+		// these tests want; the tests that care about the group layout set their own.
+		routinesPerPort: 1,
+		l:               l,
 	}
 	ifce.pki.cs.Store(cs)
 
@@ -430,11 +433,14 @@ func TestLaneProbeLifecycle(t *testing.T) {
 	// The lane stays down until the ack lands, and a stale generation cannot
 	// bring it up.
 	assert.Nil(t, ls.txAddr[1].Load())
-	assert.False(t, ls.noteAck(1, gen+1, now), "an ack for a superseded probe promoted the lane")
+	_, promoted := ls.noteAck(1, gen+1, now)
+	assert.False(t, promoted, "an ack for a superseded probe promoted the lane")
 	assert.Nil(t, ls.txAddr[1].Load())
 
 	// The matching ack promotes it, and the destination is the probed target.
-	assert.True(t, ls.noteAck(1, gen, now))
+	ackTarget, promoted := ls.noteAck(1, gen, now)
+	assert.True(t, promoted)
+	assert.Equal(t, netip.AddrPortFrom(netip.MustParseAddr("192.0.2.1"), wantPort), ackTarget)
 	addr := ls.txAddr[1].Load()
 	require.NotNil(t, addr)
 	assert.Equal(t, netip.AddrPortFrom(netip.MustParseAddr("192.0.2.1"), wantPort), *addr)
@@ -443,7 +449,8 @@ func TestLaneProbeLifecycle(t *testing.T) {
 	ls.mu.Lock()
 	ls.probe[1].sentAt = now
 	ls.mu.Unlock()
-	assert.False(t, ls.noteAck(1, gen, now))
+	_, promoted = ls.noteAck(1, gen, now)
+	assert.False(t, promoted)
 	assert.NotNil(t, ls.txAddr[1].Load())
 
 	// An up lane is left alone until the keepalive comes due.
@@ -478,6 +485,82 @@ func TestLaneProbeLifecycle(t *testing.T) {
 	ls.mu.Unlock()
 }
 
+// A lane aims at its own peer port and nothing else. There is no fallback to the
+// peer's base port: sharing that destination would cost the peer the receive
+// spread lanes exist to create, so an unreachable lane port just means this lane
+// stays down and its flows ride the base tunnel.
+func TestLaneProbeAlwaysTargetsItsOwnPort(t *testing.T) {
+	hostMap := newHostMap(test.NewLogger())
+	ifce := newLaneTestInterface(hostMap)
+
+	initR, _ := runTestHandshake(t)
+	ls := newTestLaneSet(t, initR, 4, 4, 5353, 4)
+	hi := newTestLaneHostInfo(t, initR, ls)
+
+	nb := make([]byte, 12)
+	out := make([]byte, mtu)
+	now := time.Now()
+
+	ls.mu.Lock()
+	lanePort := ls.laneTargetPortLocked(1)
+	ls.mu.Unlock()
+	require.NotEqual(t, ls.peerBasePort, lanePort, "this test needs a lane that isn't aimed at the base port")
+
+	// Repeated failures never move the target off the lane's own port.
+	for i := 0; i < 4; i++ {
+		ls.demand[1].Store(true)
+		ifce.probeLanes(hi, now, nb, out)
+		ls.mu.Lock()
+		require.False(t, ls.probe[1].sentAt.IsZero(), "the lane was not probed")
+		assert.Equal(t, lanePort, ls.probe[1].target.Port(), "probe %d left the lane port", i)
+		gen := ls.probe[1].gen
+		ls.mu.Unlock()
+
+		// Age the probe out, then wait out the backoff for the next attempt.
+		now = now.Add(laneProbeTimeout + time.Second)
+		ifce.probeLanes(hi, now, nb, out)
+		require.Nil(t, ls.txAddr[1].Load())
+		assert.False(t, promotedByAck(ls, 1, gen, now), "an aged-out probe was still promotable")
+		now = now.Add(laneRetryMax + time.Second)
+	}
+
+	// It comes up on that port, and the keepalive re-proves the same one.
+	ls.demand[1].Store(true)
+	ifce.probeLanes(hi, now, nb, out)
+	ls.mu.Lock()
+	gen := ls.probe[1].gen
+	ls.mu.Unlock()
+	target, promoted := ls.noteAck(1, gen, now)
+	require.True(t, promoted)
+	assert.Equal(t, lanePort, target.Port())
+
+	now = now.Add(laneKeepalive + time.Second)
+	ifce.probeLanes(hi, now, nb, out)
+	ls.mu.Lock()
+	require.False(t, ls.probe[1].sentAt.IsZero(), "the keepalive did not probe")
+	assert.Equal(t, lanePort, ls.probe[1].target.Port(), "the keepalive left the lane port")
+	ls.mu.Unlock()
+
+	// And a demotion returns to probing that same port.
+	now = now.Add(laneProbeTimeout + time.Second)
+	ifce.probeLanes(hi, now, nb, out)
+	require.Nil(t, ls.txAddr[1].Load(), "the unanswered keepalive did not demote the lane")
+	now = now.Add(laneRetryMax + time.Second)
+	ls.demand[1].Store(true)
+	ifce.probeLanes(hi, now, nb, out)
+	ls.mu.Lock()
+	require.False(t, ls.probe[1].sentAt.IsZero(), "the lane was not retried")
+	assert.Equal(t, lanePort, ls.probe[1].target.Port())
+	ls.mu.Unlock()
+}
+
+// promotedByAck is noteAck's boolean alone, for assertions that only care whether
+// an ack could bring the lane up.
+func promotedByAck(ls *laneSet, s int, gen uint8, now time.Time) bool {
+	_, promoted := ls.noteAck(s, gen, now)
+	return promoted
+}
+
 // A roam is a new path with no derivable relationship to the old lane ports, so
 // every lane has to be rebuilt rather than moved.
 func TestLaneProbeRoamResets(t *testing.T) {
@@ -497,7 +580,8 @@ func TestLaneProbeRoamResets(t *testing.T) {
 	ls.mu.Lock()
 	gen := ls.probe[1].gen
 	ls.mu.Unlock()
-	require.True(t, ls.noteAck(1, gen, now))
+	_, promoted := ls.noteAck(1, gen, now)
+	require.True(t, promoted)
 	require.NotNil(t, ls.txAddr[1].Load())
 
 	// New remote address: the lane is taken down, not retargeted.
@@ -515,7 +599,8 @@ func TestLaneProbeRoamResets(t *testing.T) {
 	ls.mu.Lock()
 	gen = ls.probe[1].gen
 	ls.mu.Unlock()
-	require.True(t, ls.noteAck(1, gen, now))
+	_, promoted = ls.noteAck(1, gen, now)
+	require.True(t, promoted)
 	hi.SetRemote(netip.AddrPort{})
 	ifce.probeLanes(hi, now, nb, out)
 	assert.Nil(t, ls.txAddr[1].Load(), "lane survived losing the direct path")
@@ -766,6 +851,85 @@ func TestTxQueueWithoutLanes(t *testing.T) {
 	require.NoError(t, h.Parse(conns[0].bufs[0]))
 	assert.Equal(t, uint8(0), h.Lane())
 	assert.Len(t, tx.live, 1, "a lane batch was built for a peer with no lanes")
+}
+
+// `routines` is per port, so a port's sockets are a group sharing it through
+// SO_REUSEPORT and every routine has a sibling of its own on every port. Pin the
+// arithmetic that turns (queue, lane) into one of them.
+func TestLaneSockGroupLayout(t *testing.T) {
+	hostMap := newHostMap(test.NewLogger())
+	ifce := newLaneTestInterface(hostMap)
+
+	// Two routines per port over three ports: writers[s*2+r] is the r'th socket
+	// on port listen.port+s.
+	ifce.routinesPerPort = 2
+	ifce.routines = 6
+	ifce.laneCount = 3
+
+	// Off, every socket is on the one port, so a routine keeps writing to its own
+	// and any of them can carry any lane.
+	for q := 0; q < ifce.routines; q++ {
+		assert.Equal(t, q, ifce.egressSock(q))
+		for s := 0; s < ifce.laneCount; s++ {
+			assert.Equal(t, q, ifce.laneSock(q, s))
+		}
+	}
+
+	ifce.multiport = true
+	for q := 0; q < ifce.routines; q++ {
+		// Base traffic is lane 0's port, and each routine has its own socket
+		// there rather than sharing one with the other five.
+		assert.Equal(t, q%2, ifce.egressSock(q), "queue %d", q)
+		for s := 0; s < ifce.laneCount; s++ {
+			assert.Equal(t, s*2+q%2, ifce.laneSock(q, s), "queue %d lane %d", q, s)
+		}
+	}
+
+	// Sibling routines land on different sockets of the same port, so a lane's
+	// port is served by its whole group and not by one socket.
+	assert.NotEqual(t, ifce.laneSock(0, 2), ifce.laneSock(1, 2))
+	assert.Equal(t, ifce.laneSock(0, 2), ifce.laneSock(2, 2), "queues 0 and 2 share a group position")
+}
+
+// The lane batches a routine builds must flush to that routine's own sockets, not
+// to whatever socket happens to be indexed by the lane.
+func TestTxQueueLaneBatchesFollowTheGroup(t *testing.T) {
+	hostMap := newHostMap(test.NewLogger())
+	ifce := newLaneTestInterface(hostMap)
+	ifce.multiport = true
+	ifce.routinesPerPort = 2
+	ifce.routines = 4
+	ifce.laneCount = 2
+
+	conns := []*recordingBatchConn{{}, {}, {}, {}}
+	ifce.writers = []udp.Conn{conns[0], conns[1], conns[2], conns[3]}
+
+	initR, _ := runTestHandshake(t)
+	ls := newTestLaneSet(t, initR, 2, 2, 5353, 2)
+	hi := newTestLaneHostInfo(t, initR, ls)
+	laneSessionFor(t, ls, 1)
+	laneRemote := netip.MustParseAddrPort("192.0.2.1:5354")
+	ls.txAddr[1].Store(&laneRemote)
+
+	pkt := tio.Packet{Bytes: []byte{0x45, 0, 0, 4, 1, 2, 3, 4}}
+	nb := make([]byte, 12)
+	flow1 := flowForLane(t, ls, 1)
+
+	// Routine 1 is the second socket in each group, so its lane 1 traffic leaves
+	// writers[1*2+1].
+	tx := ifce.newTxQueue(1)
+	ifce.sendInsideMessage(hi, pkt, flow1, nb, tx)
+	tx.flush(ifce)
+	require.Len(t, conns[3].bufs, 1, "lane 1 did not leave routine 1's socket on the lane port")
+	assert.Equal(t, laneRemote, conns[3].dsts[0])
+	assert.Empty(t, conns[2].bufs)
+
+	// Routine 0 sends the same flow out the other socket on that same port.
+	tx0 := ifce.newTxQueue(0)
+	ifce.sendInsideMessage(hi, pkt, flow1, nb, tx0)
+	tx0.flush(ifce)
+	require.Len(t, conns[2].bufs, 1, "sibling routine shared a socket instead of its own")
+	assert.Len(t, conns[3].bufs, 1)
 }
 
 // One routine has to be able to reach every lane, since the kernel decides which

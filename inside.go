@@ -546,17 +546,35 @@ func (f *Interface) SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, noc
 
 // egressSock picks the socket a tunnel packet leaves from.
 //
-// With multiport, everything that is not lane data plane egresses socket 0: handshakes, keepalives, close packets,
-// rejects and relay carriers all belong to the base tunnel's 4-tuple, which is the only one a peer's spoof/roam checks
-// and a vanilla peer's expectations know about. Lane data is sent directly through writers[lane] and never comes here.
+// Everything that is not lane data plane leaves from the base port: handshakes, keepalives, close packets, rejects and
+// relay carriers all belong to the base tunnel's 4-tuple, which is the only one a peer's spoof/roam checks and a
+// vanilla peer's expectations know about. Lane data goes through laneSock instead and never comes here.
 //
-// Without multiport every socket shares one port under SO_REUSEPORT, so the source address is identical either way and
-// we keep q, the socket the triggering packet arrived on, to avoid contending on socket 0's fd.
+// Which socket on the base port doesn't matter — they share an address, so they produce identical packets — so keep to
+// this routine's own share of the group and leave the rest of it uncontended. Without multiport that is q itself, since
+// every socket is on the base port.
 func (f *Interface) egressSock(q int) int {
-	if f.multiport {
-		return 0
+	return f.laneSock(q, 0)
+}
+
+// laneSock returns the index in writers of a socket bound to lane s's port, for a
+// routine that reads queue q.
+//
+// Under multiport the sockets are laid out port-major — writers[s*routinesPerPort
+// + r] is the r'th socket on port listen.port+s — so every routine has a sibling
+// socket on every port and the arithmetic is a lane index away. Routines pick the
+// sibling matching their own position in their group, which spreads the writers
+// for one port over that port's whole group rather than funnelling them onto its
+// first socket. It is a pure function of (q, s), so a flow always leaves from the
+// same socket and cannot reorder itself across two of them.
+//
+// Without multiport there is one port and every socket is on it, so any lane
+// resolves to q's own socket.
+func (f *Interface) laneSock(q, s int) int {
+	if !f.multiport {
+		return q
 	}
-	return q
+	return s*f.routinesPerPort + q%f.routinesPerPort
 }
 
 func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb, out []byte, q int) {

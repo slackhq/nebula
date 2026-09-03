@@ -112,6 +112,105 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		l.Info("Using multiple routines", "routines", routines)
 	}
 
+	port := c.GetInt("listen.port", 0)
+
+	batchSize := c.GetInt("listen.batch", 64)
+	if batchSize < 1 {
+		oldBatch := batchSize
+		batchSize = 1
+		l.Warn("listen.batch size is invalid", "provided", oldBatch, "overridden to", batchSize)
+	}
+	offloads := c.GetBool("listen.udp_offloads", false)
+
+	var listenHost netip.Addr
+	if !configTest {
+		rawListenHost := c.GetString("listen.host", "0.0.0.0")
+		if rawListenHost == "[::]" {
+			// Old guidance was to provide the literal `[::]` in `listen.host` but that won't resolve.
+			listenHost = netip.IPv6Unspecified()
+
+		} else {
+			ips, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip", rawListenHost)
+			if err != nil {
+				return nil, util.ContextualizeIfNeeded("Failed to resolve listen.host", err)
+			}
+			if len(ips) == 0 {
+				return nil, util.ContextualizeIfNeeded("Failed to resolve listen.host", err)
+			}
+			listenHost = ips[0].Unmap()
+		}
+	}
+
+	// Multiport lanes: bind a range of consecutive UDP ports (listen.port+p)
+	// instead of SO_REUSEPORT-sharing one, and derive one extra session per lane
+	// with capable peers, so a tunnel's inside flows spread over several underlay
+	// 5-tuples instead of one. Defaults on, degrading gracefully when
+	// preconditions aren't met — managed deployments (dnclient) can't be
+	// hard-errored on config they don't control.
+	//
+	// `routines` is per port here rather than a total to divide up: every port
+	// gets its own full set, and a port's routines share it through SO_REUSEPORT
+	// so the kernel hashes each arriving 4-tuple onto one of them. That is what
+	// keeps a port from being served by a single core — the base port above all,
+	// since every handshake, every peer without multiport, and every tunnel whose
+	// lanes are down or firewalled arrives there. A routine still owns exactly one
+	// socket, which is what lets the read path own its state without locking, so
+	// the worker count is routines * ports and everything sized by routines from
+	// here down means that product.
+	routinesPerPort := routines
+	multiportPorts := 1
+	multiport := c.GetBool("multiport.enabled", true)
+	if multiport {
+		multiportPorts = c.GetInt("multiport.ports", 0)
+		if multiportPorts > header.MaxLane+1 {
+			// A lane index rides in one byte of the nebula header, so a port we
+			// could never address a lane on is a port we would never send from.
+			l.Warn("multiport.ports clamped to the lane header limit", "ports", multiportPorts, "limit", header.MaxLane+1)
+			multiportPorts = header.MaxLane + 1
+		}
+		if multiportPorts*routinesPerPort > maxRoutines {
+			clamped := max(maxRoutines/routinesPerPort, 1)
+			l.Warn("multiport.ports clamped to the routine limit",
+				"ports", multiportPorts, "clampedTo", clamped, "routinesPerPort", routinesPerPort, "limit", maxRoutines)
+			multiportPorts = clamped
+		}
+		if multiportPorts < 2 {
+			// A single port is a plain SO_REUSEPORT listener, which is what a node
+			// without multiport already runs. Say so rather than claiming lanes.
+			l.Info("multiport disabled: set multiport.ports > 1 to bind a lane port range")
+			multiport = false
+		}
+	}
+	if multiport && port != 0 && port+multiportPorts-1 > math.MaxUint16 {
+		l.Warn("multiport disabled: would bind ports beyond 65535", "listen.port", port, "ports", multiportPorts)
+		multiport = false
+	}
+	if multiport && !configTest {
+		// Every socket needs its own reader; a platform that can't run multiple
+		// readers would silently strand all but one of them as blackholes. Probe
+		// capability before sizing tun queues and routines to the port range.
+		probe, err := udp.NewListener(l, udp.Settings{
+			Listen: netip.AddrPortFrom(listenHost, 0),
+			Batch:  1,
+		})
+		if err != nil {
+			// We could not confirm support, so don't gamble a bound port range on it. The real bind below reports
+			// the underlying error if it is not transient.
+			l.Warn("multiport disabled: could not probe udp reader support", "error", err)
+			multiport = false
+		} else {
+			if !probe.SupportsMultipleReaders() {
+				l.Warn("multiport disabled: this platform does not support multiple udp readers")
+				multiport = false
+			}
+			_ = probe.Close()
+		}
+	}
+	if multiport {
+		routines = routinesPerPort * multiportPorts
+		l.Info("multiport routines", "ports", multiportPorts, "routinesPerPort", routinesPerPort, "routines", routines)
+	}
+
 	// EXPERIMENTAL
 	// Intentionally not documented yet while we do more testing and determine
 	// a good default value.
@@ -146,23 +245,6 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 
 	// set up our UDP listener
 	udpConns := make([]udp.Conn, routines)
-	port := c.GetInt("listen.port", 0)
-
-	// Multiport lanes: bind `routines` consecutive UDP ports (listen.port+i)
-	// instead of SO_REUSEPORT sharing one, and derive one extra session per lane
-	// with capable peers so a tunnel's inside flows spread over several underlay
-	// 5-tuples instead of one. Defaults on, degrading gracefully when preconditions
-	// aren't met — managed deployments (dnclient) can't be hard-errored on
-	// config they don't control.
-	multiport := c.GetBool("multiport.enabled", true)
-	if multiport && routines < 2 {
-		l.Info("multiport disabled: requires routines > 1")
-		multiport = false
-	}
-	if multiport && port != 0 && port+routines-1 > math.MaxUint16 {
-		l.Warn("multiport disabled: would bind ports beyond 65535", "listen.port", port, "routines", routines)
-		multiport = false
-	}
 
 	// Callers get no handle to these until the Control is returned, release them on any error.
 	defer func() {
@@ -176,70 +258,30 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	}()
 
 	if !configTest {
-		rawListenHost := c.GetString("listen.host", "0.0.0.0")
-		var listenHost netip.Addr
-		if rawListenHost == "[::]" {
-			// Old guidance was to provide the literal `[::]` in `listen.host` but that won't resolve.
-			listenHost = netip.IPv6Unspecified()
-
-		} else {
-			ips, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip", rawListenHost)
-			if err != nil {
-				return nil, util.ContextualizeIfNeeded("Failed to resolve listen.host", err)
-			}
-			if len(ips) == 0 {
-				return nil, util.ContextualizeIfNeeded("Failed to resolve listen.host", err)
-			}
-			listenHost = ips[0].Unmap()
-		}
-
-		batchSize := c.GetInt("listen.batch", 64)
-		if batchSize < 1 {
-			oldBatch := batchSize
-			batchSize = 1
-			l.Warn("listen.batch size is invalid", "provided", oldBatch, "overridden to", batchSize)
-		}
-		offloads := c.GetBool("listen.udp_offloads", false)
-
-		// Every lane socket needs its own reader; a platform that can't run
-		// multiple readers would silently strand sockets 1..n-1 as blackholes.
-		// Probe capability before committing to per-port binds.
-		if multiport {
-			probe, err := udp.NewListener(l, udp.Settings{
-				Listen: netip.AddrPortFrom(listenHost, 0),
-				Batch:  1,
-			})
-			if err != nil {
-				// We could not confirm support, so don't gamble a bound port range on it. The real bind below reports
-				// the underlying error if it is not transient.
-				l.Warn("multiport disabled: could not probe udp reader support", "error", err)
-				multiport = false
-			} else {
-				if !probe.SupportsMultipleReaders() {
-					l.Warn("multiport disabled: this platform does not support multiple udp readers")
-					multiport = false
-				}
-				_ = probe.Close()
-			}
-		}
-
-		// With a dynamic listen.port, multiport binds socket 0 dynamically and
-		// then claims the next routines-1 ports above it; if that range turns
-		// out to be partially occupied, re-roll with a fresh dynamic port.
+		// With a dynamic listen.port, multiport binds the first socket dynamically
+		// and then claims the next ports-1 above it; if that range turns out to be
+		// partially occupied, re-roll with a fresh dynamic port.
 		dynamic := port == 0
 		var bindErr error
 		for attempt := 0; attempt < 6; attempt++ {
 			bindErr = nil
 			for i := 0; i < routines; i++ {
-				lPort := port
+				// Routines are laid out port-major: routine i serves port slot
+				// i/routinesPerPort, so a port's routines are a contiguous run of
+				// indices and cpu pinning, which walks the index, spreads each
+				// port's group across the cores rather than stacking it on one.
+				slot := 0
 				if multiport {
-					lPort = port + i
+					slot = i / routinesPerPort
 				}
 				udpServer, err := udp.NewListener(l, udp.Settings{
-					Listen: netip.AddrPortFrom(listenHost, uint16(lPort)),
-					// Multiport gives every routine its own port, so SO_REUSEPORT sharing is neither needed nor wanted:
-					// the destination port alone must decide which socket, and therefore which routine, sees a flow.
-					Multi:    routines > 1 && !multiport,
+					Listen: netip.AddrPortFrom(listenHost, uint16(port+slot)),
+					// Under multiport the destination port narrows a packet to one
+					// port's routines and SO_REUSEPORT picks among them by 4-tuple
+					// hash, so both halves of the steering are load spreading: no
+					// port depends on a single core, and a lane still has a source
+					// port of its own to send from.
+					Multi:    routines > 1,
 					Batch:    batchSize,
 					Offloads: offloads,
 				})
@@ -258,16 +300,12 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 						return nil, util.NewContextualError("Failed to get listening port", nil, err)
 					}
 					port = int(uPort.Port())
-					if multiport && port+routines-1 > math.MaxUint16 {
+					if multiport && port+multiportPorts-1 > math.MaxUint16 {
 						bindErr = util.NewContextualError("multiport dynamic port too close to 65535", m{"port": port}, nil)
 						break
 					}
 				}
-				bound := port
-				if multiport {
-					bound = port + i
-				}
-				l.Info("listening", "addr", netip.AddrPortFrom(listenHost, uint16(bound)), "socket", i)
+				l.Info("listening", "addr", netip.AddrPortFrom(listenHost, uint16(port+slot)), "socket", i)
 			}
 			if bindErr == nil {
 				break
@@ -312,24 +350,23 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	}
 
 	if multiport {
+		// A lane needs a port to send from, so we can send on no more lanes than we
+		// bound ports. multiport.lanes below that sends on a subset of the range,
+		// which is only interesting for narrowing an experiment: the ports are bound
+		// and read either way.
 		lanes := c.GetInt("multiport.lanes", 0)
-		if lanes <= 0 || lanes > routines {
-			lanes = routines
-		}
-		if lanes > header.MaxLane+1 {
-			// The lane index rides in one byte of the nebula header, so lanes
-			// above that are unaddressable.
-			l.Warn("multiport.lanes clamped to header limit", "lanes", lanes, "limit", header.MaxLane+1)
-			lanes = header.MaxLane + 1
+		if lanes <= 0 || lanes > multiportPorts {
+			lanes = multiportPorts
 		}
 		handshakeConfig.laneCount = lanes
-		handshakeConfig.lanePortCount = uint16(routines)
+		handshakeConfig.lanePortCount = uint16(multiportPorts)
 		handshakeConfig.laneBasePort = uint16(port)
 
 		// Every other multiport log line is a reason it turned itself off, so say
 		// plainly when it is on and with what. A peer only gets lanes if it also
 		// advertises a port range, so this is our half of the negotiation.
-		l.Info("multiport enabled", "lanes", lanes, "basePort", port, "ports", routines)
+		l.Info("multiport enabled", "lanes", lanes, "basePort", port, "ports", multiportPorts,
+			"routinesPerPort", routinesPerPort)
 	}
 
 	handshakeManager := NewHandshakeManager(l, hostMap, lightHouse, udpConns[0], handshakeConfig)
@@ -388,6 +425,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		DropMulticast:         c.GetBool("tun.drop_multicast", false),
 		routines:              routines,
 		Multiport:             multiport,
+		RoutinesPerPort:       routinesPerPort,
 		LaneCount:             handshakeConfig.laneCount,
 		MessageMetrics:        messageMetrics,
 		version:               buildVersion,

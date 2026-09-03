@@ -179,17 +179,22 @@ listen:
 # Currently, this defaults to 1 which means we have 1 tun queue reader and 1
 # UDP queue reader. Setting this above one will set IFF_MULTI_QUEUE on the tun
 # device and SO_REUSEPORT on the UDP socket to allow multiple queues.
+# With multiport enabled this is the number of routines *per port*, so the total
+# is routines * multiport.ports.
 # This option is only supported on Linux.
 #routines: 1
 
 # EXPERIMENTAL: multiport lanes give each pair of hosts multiple underlay UDP
 # flows so overlay traffic is no longer bottlenecked by a single 5-tuple
-# (one ECMP path, one NIC RSS queue, one per-flow policer). Socket i binds
-# listen.port+i instead of sharing one port via SO_REUSEPORT, and one extra
-# tunnel ("lane") per routine is negotiated with capable peers: lane i
-# handshakes from local port listen.port+i to the peer's advertised
-# base+((i + pair_offset) mod peer_ports), where pair_offset is a per-pair
-# hash that spreads many small peers across a big peer's whole port range.
+# (one ECMP path, one NIC RSS queue, one per-flow policer). Instead of every
+# socket sharing listen.port, multiport.ports consecutive ports are bound and
+# each gets its own group of `routines` sockets sharing it via SO_REUSEPORT, so
+# no port (the base port above all, which carries every handshake and every
+# vanilla peer) depends on a single core. One extra tunnel ("lane") per port is
+# negotiated with capable peers: lane i handshakes from local port listen.port+i
+# to the peer's advertised base+((i + pair_offset) mod peer_ports), where
+# pair_offset is a per-pair hash that spreads many small peers across a big
+# peer's whole port range.
 # Each lane is a full Noise session with its own
 # keys, nonce counter and replay window, so flows taking different paths
 # never fight over shared replay state.
@@ -203,20 +208,23 @@ listen:
 # are kept alive with their own keepalives, and traffic falls back to the base
 # tunnel while a lane is down or not yet up.
 #
-# Requirements: routines > 1, Linux, and the port range
-# [listen.port, listen.port+routines-1] reachable through firewalls on both
-# sides (peers behind NAT fall back to the base tunnel). With listen.port 0
-# the base port is dynamic and the next routines-1 ports above it are
-# claimed. Enabled by default when the requirements hold; degrades to a
-# single port otherwise. Not reloadable.
+# Requirements: multiport.ports > 1, Linux, and the port range
+# [listen.port, listen.port+multiport.ports-1] reachable through firewalls on
+# both sides. A lane whose port is unreachable stays down and its traffic rides
+# the base tunnel. With listen.port 0 the base port is dynamic and the next
+# ports-1 ports above it are claimed. Degrades to a single port when the
+# requirements don't hold. Not reloadable.
 #multiport:
-  # Bind `routines` consecutive UDP ports and negotiate lanes with peers.
   #enabled: true
+  # How many consecutive UDP ports to bind, starting at listen.port. Must be
+  # greater than 1 for multiport to do anything; there is no default, since
+  # each port costs a full set of `routines` threads and sockets. Capped at 256
+  # (the lane header limit). 4-8 is plenty to escape a single ECMP path.
+  #ports: 0
   # How many lanes to run, counting the base tunnel as lane 0. 0 (default)
-  # means one per routine. Lowering this bounds how many extra tunnels each
-  # peer pair maintains (useful on a big server with many peers); routines
-  # beyond the lane count share the configured lanes round-robin, so TX still
-  # spreads across `lanes` underlay flows rather than piling onto the base.
+  # means one per bound port. Lowering this sends on a subset of the range,
+  # which bounds how many extra tunnels each peer pair maintains (useful on a
+  # big server with many peers); the ports are bound and read either way.
   #lanes: 0
 
 punchy:
