@@ -456,7 +456,7 @@ firewall:
   # The firewall is default deny. There is no way to write a deny rule.
   # Rules are comprised of a protocol, port, and one or more of host, group, or CIDR
   # Logical evaluation is roughly: port AND proto AND (ca_sha OR ca_name) AND (host OR group OR groups OR cidr) AND (local cidr)
-  # - port: Takes `0` or `any` as any, a single number `80`, a range `200-901`, or `fragment` to match second and further fragments of fragmented packets (since there is no port available).
+  # - port: Takes `0` or `any` as any, a single number `80`, a range `200-901`, `fragment` to match second and further fragments of fragmented packets (since there is no port available), or a list containing any combination of those values.
   #   proto: `any`, `tcp`, `udp`, or `icmp`
   #          a port specification is ignored if proto is `icmp`
   #   host: `any` or a literal hostname, ie `test-host`
@@ -482,8 +482,10 @@ firewall:
       proto: icmp
       host: any
 
-    # Allow tcp/443 from any host with BOTH laptop and home group
-    - port: 443
+    # Allow tcp/80 and tcp/443 from hosts with BOTH laptop and home groups
+    - port:
+        - 80
+        - 443
       proto: tcp
       groups:
         - laptop
