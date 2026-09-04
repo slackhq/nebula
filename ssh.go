@@ -686,6 +686,13 @@ func sshCreateTunnel(ifce *Interface, fs any, a []string, w sshd.StringWriter) e
 
 	hostInfo = ifce.handshakeManager.StartHandshake(vpnAddr, nil)
 	if addr.IsValid() {
+		// A freshly started handshake has no RemoteList yet (the handshake
+		// worker populates it lazily). Initialize it the same way the worker
+		// does before learning the operator-provided remote; otherwise
+		// SetRemote dereferences a nil hostInfo.remotes and panics.
+		if hostInfo.remotes == nil {
+			hostInfo.remotes = ifce.lightHouse.QueryCache([]netip.Addr{vpnAddr})
+		}
 		hostInfo.SetRemote(addr)
 	}
 
