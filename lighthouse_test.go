@@ -764,3 +764,123 @@ func TestLighthouse_DeletesWork(t *testing.T) {
 	out = lh.Query(testHost)
 	assert.Nil(t, out)
 }
+
+// newLHHostUpdateV2 sends a v2-style HostUpdateNotification where the sending tunnel carries
+// multiple vpn addrs (a dual-stack v2 cert). Details.VpnAddr is left blank like SendUpdate does.
+func newLHHostUpdateV2(fromAddr netip.AddrPort, vpnAddrs []netip.Addr, addrs []netip.AddrPort, lhh *LightHouseHandler) {
+	req := &NebulaMeta{
+		Type:    NebulaMeta_HostUpdateNotification,
+		Details: &NebulaMetaDetails{},
+	}
+	for _, v := range addrs {
+		if v.Addr().Is4() {
+			req.Details.V4AddrPorts = append(req.Details.V4AddrPorts, netAddrToProtoV4AddrPort(v.Addr(), v.Port()))
+		} else {
+			req.Details.V6AddrPorts = append(req.Details.V6AddrPorts, netAddrToProtoV6AddrPort(v.Addr(), v.Port()))
+		}
+	}
+	b, err := req.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	lhh.HandleRequest(fromAddr, vpnAddrs, b, &testEncWriter{})
+}
+
+func newIssue1868Lighthouse(t *testing.T) (*LightHouse, *LightHouseHandler) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	c.Settings["lighthouse"] = map[string]any{"am_lighthouse": true}
+	c.Settings["listen"] = map[string]any{"port": 4242}
+
+	myVpnNet4 := netip.MustParsePrefix("10.128.0.1/24")
+	myVpnNet6 := netip.MustParsePrefix("fd00::1/64")
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet4)
+	nt.Insert(myVpnNet6)
+	cs := &CertState{
+		myVpnNetworks:      []netip.Prefix{myVpnNet4, myVpnNet6},
+		myVpnNetworksTable: nt,
+	}
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, cs, nil, nil)
+	require.NoError(t, err)
+	lh.ifce = &mockEncWriter{}
+	return lh, lh.NewRequestHandler()
+}
+
+// Scenario A: host registers via v2 (both addrs), then a v1 handshake with the same host completes on
+// the lighthouse (rehandshake after cert renewal, relay-initiated handshake, traffic to the LH's v4
+// addr...). handshake_manager does QueryCache(vpnAddrs) + RefreshFromHandshake(vpnAddrs) with the v1
+// cert's single address, which truncates RemoteList.vpnAddrs.
+func TestLighthouse_Issue1868_V1HandshakeTruncatesVpnAddrs(t *testing.T) {
+	lh, lhh := newIssue1868Lighthouse(t)
+
+	hostV4 := netip.MustParseAddr("10.128.0.3")
+	hostV6 := netip.MustParseAddr("fd00::3")
+	hostUdp := netip.MustParseAddrPort("192.0.2.3:4242")
+	hostLan := netip.MustParseAddrPort("10.0.0.3:4242")
+
+	askerV4 := netip.MustParseAddr("10.128.0.2")
+	askerUdp := netip.MustParseAddrPort("192.0.2.2:4242")
+
+	// Boot: host handshakes with the LH using its v2 cert and sends an update
+	newLHHostUpdateV2(hostUdp, []netip.Addr{hostV4, hostV6}, []netip.AddrPort{hostLan}, lhh)
+
+	// Both addresses resolve
+	r := newLHHostRequest(askerUdp, askerV4, hostV4, lhh)
+	require.NotNil(t, r.msg, "v4 query should be answered")
+	assertIp4InArray(t, r.msg.Details.V4AddrPorts, hostLan)
+
+	r = newLHHostRequest(askerUdp, askerV4, hostV6, lhh)
+	require.NotNil(t, r.msg, "v6 query should be answered before the v1 handshake")
+	assertIp4InArray(t, r.msg.Details.V4AddrPorts, hostLan)
+
+	// Later: a v1 handshake with the same host completes on the LH. This is exactly what
+	// handshake_manager.go does on completion, with the v1 cert's single vpn addr.
+	rl := lh.QueryCache([]netip.Addr{hostV4})
+	rl.RefreshFromHandshake([]netip.Addr{hostV4}, cert.Version1)
+
+	// The host keeps sending v2 updates over its v2 tunnel too
+	newLHHostUpdateV2(hostUdp, []netip.Addr{hostV4, hostV6}, []netip.AddrPort{hostLan}, lhh)
+
+	r = newLHHostRequest(askerUdp, askerV4, hostV4, lhh)
+	require.NotNil(t, r.msg, "v4 query should still be answered")
+	assertIp4InArray(t, r.msg.Details.V4AddrPorts, hostLan)
+
+	r = newLHHostRequest(askerUdp, askerV4, hostV6, lhh)
+	if assert.NotNil(t, r.msg, "BUG: v6 query is silently dropped after a v1 handshake truncated RemoteList.vpnAddrs") {
+		assertIp4InArray(t, r.msg.Details.V4AddrPorts, hostLan)
+	}
+}
+
+// Scenario B: the LH first creates a RemoteList for the host keyed only by its v4 addr (a pending
+// LH-initiated v1 handshake does QueryCache([v4]) in handleOutbound), then the host arrives with v2.
+// unlockedGetRemoteList/QueryCache hit on allAddrs[0] and never add the v6 key to addrMap.
+func TestLighthouse_Issue1868_V4OnlyListNeverGainsV6Key(t *testing.T) {
+	lh, lhh := newIssue1868Lighthouse(t)
+
+	hostV4 := netip.MustParseAddr("10.128.0.3")
+	hostV6 := netip.MustParseAddr("fd00::3")
+	hostUdp := netip.MustParseAddrPort("192.0.2.3:4242")
+	hostLan := netip.MustParseAddrPort("10.0.0.3:4242")
+
+	askerV4 := netip.MustParseAddr("10.128.0.2")
+	askerUdp := netip.MustParseAddrPort("192.0.2.2:4242")
+
+	// LH is a relay and someone asked it to relay to hostV4 while the host was offline:
+	// StartHandshake(hostV4) -> handleOutbound -> QueryCache([hostV4]) creates a v4-only list.
+	_ = lh.QueryCache([]netip.Addr{hostV4})
+
+	// Host boots and handshakes v2 with the LH (responder path does QueryCache + RefreshFromHandshake)
+	rl := lh.QueryCache([]netip.Addr{hostV4, hostV6})
+	rl.RefreshFromHandshake([]netip.Addr{hostV4, hostV6}, cert.Version2)
+	newLHHostUpdateV2(hostUdp, []netip.Addr{hostV4, hostV6}, []netip.AddrPort{hostLan}, lhh)
+
+	r := newLHHostRequest(askerUdp, askerV4, hostV4, lhh)
+	require.NotNil(t, r.msg, "v4 query should be answered")
+	assertIp4InArray(t, r.msg.Details.V4AddrPorts, hostLan)
+
+	r = newLHHostRequest(askerUdp, askerV4, hostV6, lhh)
+	if assert.NotNil(t, r.msg, "BUG: v6 query is silently dropped, addrMap never got the v6 key") {
+		assertIp4InArray(t, r.msg.Details.V4AddrPorts, hostLan)
+	}
+}

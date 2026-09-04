@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/slackhq/nebula/cert"
 )
 
 // forEachFunc is used to benefit folks that want to do work inside the lock
@@ -408,11 +410,15 @@ func (r *RemoteList) CopyBlockedRemotes() []netip.AddrPort {
 }
 
 // RefreshFromHandshake locks and updates the RemoteList to account for data learned upon a completed handshake
-func (r *RemoteList) RefreshFromHandshake(vpnAddrs []netip.Addr) {
+func (r *RemoteList) RefreshFromHandshake(vpnAddrs []netip.Addr, v cert.Version) {
 	r.Lock()
 	r.badRemotes = nil
-	r.vpnAddrs = make([]netip.Addr, len(vpnAddrs))
-	copy(r.vpnAddrs, vpnAddrs)
+	if v != cert.Version1 {
+		// a handshake from a v1 cert can never expand our knowledge of the number of addresses a host has,
+		// and, because v2 certs exist, it can also never contract it. So, only update this for non-v1 certs.
+		r.vpnAddrs = make([]netip.Addr, len(vpnAddrs))
+		copy(r.vpnAddrs, vpnAddrs)
+	}
 	r.Unlock()
 }
 
