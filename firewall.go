@@ -329,7 +329,6 @@ func AddFirewallRulesFromConfig(l *slog.Logger, inbound bool, c *config.C, fw Fi
 	if r == nil {
 		return nil
 	}
-
 	rs, ok := r.([]any)
 	if !ok {
 		return fmt.Errorf("%s failed to parse, should be an array of rules", table)
@@ -341,47 +340,74 @@ func AddFirewallRulesFromConfig(l *slog.Logger, inbound bool, c *config.C, fw Fi
 			return fmt.Errorf("%s rule #%v; %s", table, i, err)
 		}
 
-		if r.Code != "" && r.Port != "" {
+		if r.Code != "" && r.Ports != nil {
 			return fmt.Errorf("%s rule #%v; only one of port or code should be provided", table, i)
+		}
+		if r.Ports != nil && len(r.Ports) == 0 {
+			return fmt.Errorf("%s rule #%v; port list cannot be empty", table, i)
 		}
 
 		if r.Host == "" && len(r.Groups) == 0 && r.Cidr == "" && r.LocalCidr == "" && r.CAName == "" && r.CASha == "" {
 			return fmt.Errorf("%s rule #%v; at least one of host, group, cidr, local_cidr, ca_name, or ca_sha must be provided", table, i)
 		}
 
-		var sPort, errPort string
+		var ports []string
+		var errPort string
 		if r.Code != "" {
 			errPort = "code"
-			sPort = r.Code
+			ports = []string{r.Code}
 		} else {
 			errPort = "port"
-			sPort = r.Port
+			ports = r.Ports
+			if r.Ports == nil {
+				ports = []string{""}
+			}
 		}
 
 		var proto uint8
-		var startPort, endPort int32
 		switch r.Proto {
 		case "any":
 			proto = firewall.ProtoAny
-			startPort, endPort, err = parsePort(sPort)
 		case "tcp":
 			proto = iputil.IPProtocolTCP
-			startPort, endPort, err = parsePort(sPort)
 		case "udp":
 			proto = iputil.IPProtocolUDP
-			startPort, endPort, err = parsePort(sPort)
 		case "icmp":
 			proto = iputil.IPProtocolICMP
-			startPort = firewall.PortAny
-			endPort = firewall.PortAny
-			if sPort != "" {
-				l.Warn("ignoring port specification for ICMP firewall rule", "port", sPort)
+			if r.Ports != nil || r.Code != "" {
+				l.Warn("ignoring port specification for ICMP firewall rule", "port", ports)
 			}
 		default:
 			return fmt.Errorf("%s rule #%v; proto was not understood; `%s`", table, i, r.Proto)
 		}
-		if err != nil {
-			return fmt.Errorf("%s rule #%v; %s %s", table, i, errPort, err)
+
+		type portRange struct {
+			start int32
+			end   int32
+		}
+
+		var portRanges []portRange
+		if proto == iputil.IPProtocolICMP {
+			portRanges = []portRange{{start: firewall.PortAny, end: firewall.PortAny}}
+		} else {
+			portRanges = make([]portRange, len(ports))
+			for j, port := range ports {
+				startPort, endPort, err := parsePort(port)
+				if err != nil {
+					if len(ports) == 1 {
+						return fmt.Errorf("%s rule #%v; %s %s", table, i, errPort, err)
+					}
+					return fmt.Errorf("%s rule #%v; %s #%v %s", table, i, errPort, j, err)
+				}
+				if startPort > endPort {
+					err = errors.New("start port was lower than end port")
+					if len(ports) == 1 {
+						return fmt.Errorf("%s rule #%v; `%s`", table, i, err)
+					}
+					return fmt.Errorf("%s rule #%v; %s #%v; `%s`", table, i, errPort, j, err)
+				}
+				portRanges[j] = portRange{start: startPort, end: endPort}
+			}
 		}
 
 		if r.Cidr != "" && r.Cidr != "any" {
@@ -406,9 +432,14 @@ func AddFirewallRulesFromConfig(l *slog.Logger, inbound bool, c *config.C, fw Fi
 			)
 		}
 
-		err = fw.AddRule(inbound, proto, startPort, endPort, r.Groups, r.Host, r.Cidr, r.LocalCidr, r.CAName, r.CASha)
-		if err != nil {
-			return fmt.Errorf("%s rule #%v; `%s`", table, i, err)
+		for j, portRange := range portRanges {
+			err = fw.AddRule(inbound, proto, portRange.start, portRange.end, r.Groups, r.Host, r.Cidr, r.LocalCidr, r.CAName, r.CASha)
+			if err != nil {
+				if len(portRanges) == 1 {
+					return fmt.Errorf("%s rule #%v; `%s`", table, i, err)
+				}
+				return fmt.Errorf("%s rule #%v; %s #%v; `%s`", table, i, errPort, j, err)
+			}
 		}
 	}
 
@@ -931,7 +962,7 @@ func (flc *firewallLocalCIDR) match(p firewall.Packet, c *cert.CachedCertificate
 }
 
 type rule struct {
-	Port      string
+	Ports     []string
 	Code      string
 	Proto     string
 	Host      string
@@ -940,6 +971,21 @@ type rule struct {
 	LocalCidr string
 	CAName    string
 	CASha     string
+}
+
+func stringifyValues(v any) []string {
+	switch v := v.(type) {
+	case []any:
+		values := make([]string, len(v))
+		for i, value := range v {
+			values[i] = fmt.Sprint(value)
+		}
+		return values
+	case []string:
+		return slices.Clone(v)
+	default:
+		return []string{fmt.Sprint(v)}
+	}
 }
 
 func convertRule(l *slog.Logger, p any, table string, i int) (rule, error) {
@@ -958,7 +1004,9 @@ func convertRule(l *slog.Logger, p any, table string, i int) (rule, error) {
 		return fmt.Sprintf("%v", v)
 	}
 
-	r.Port = toString("port", m)
+	if v, ok := m["port"]; ok {
+		r.Ports = stringifyValues(v)
+	}
 	r.Code = toString("code", m)
 	r.Proto = toString("proto", m)
 	r.Host = toString("host", m)

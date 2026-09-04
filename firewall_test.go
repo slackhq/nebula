@@ -1313,9 +1313,44 @@ func TestNewFirewallFromConfig(t *testing.T) {
 
 func TestAddFirewallRulesFromConfig(t *testing.T) {
 	l := test.NewLogger()
-	// Test adding tcp rule
 	conf := config.NewC(test.NewLogger())
 	mf := &mockFirewall{}
+	require.NoError(t, conf.LoadString(`
+firewall:
+  outbound:
+    - port: [22, 80-81, fragment]
+      proto: tcp
+      host: a
+`))
+	require.NoError(t, AddFirewallRulesFromConfig(l, false, conf, mf))
+	assert.Equal(t, []addRuleCall{
+		{incoming: false, proto: iputil.IPProtocolTCP, startPort: 22, endPort: 22, groups: nil, host: "a", ip: "", localIp: ""},
+		{incoming: false, proto: iputil.IPProtocolTCP, startPort: 80, endPort: 81, groups: nil, host: "a", ip: "", localIp: ""},
+		{incoming: false, proto: iputil.IPProtocolTCP, startPort: firewall.PortFragment, endPort: firewall.PortFragment, groups: nil, host: "a", ip: "", localIp: ""},
+	}, mf.calls)
+
+	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, &dummyCert{})
+	require.NoError(t, AddFirewallRulesFromConfig(l, false, conf, fw))
+	peerCert := &cert.CachedCertificate{Certificate: &dummyCert{name: "a"}}
+	caPool := cert.NewCAPool()
+	for _, port := range []uint16{22, 80, 81} {
+		assert.True(t, fw.OutRules.match(firewall.Packet{Protocol: iputil.IPProtocolTCP, RemotePort: port}, false, peerCert, caPool))
+	}
+	assert.False(t, fw.OutRules.match(firewall.Packet{Protocol: iputil.IPProtocolTCP, RemotePort: 23}, false, peerCert, caPool))
+	assert.True(t, fw.OutRules.match(firewall.Packet{Protocol: iputil.IPProtocolTCP, Fragment: true}, false, peerCert, caPool))
+
+	conf = config.NewC(test.NewLogger())
+	mf = &mockFirewall{}
+	conf.Settings["firewall"] = map[string]any{"outbound": []any{map[string]any{"port": []any{}, "proto": "tcp", "host": "a"}}}
+	require.EqualError(t, AddFirewallRulesFromConfig(l, false, conf, mf), "firewall.outbound rule #0; port list cannot be empty")
+
+	conf.Settings["firewall"] = map[string]any{"outbound": []any{map[string]any{"port": []any{22, "nope"}, "proto": "tcp", "host": "a"}}}
+	require.EqualError(t, AddFirewallRulesFromConfig(l, false, conf, mf), "firewall.outbound rule #0; port #1 was not a number; `nope`")
+	assert.Empty(t, mf.calls)
+
+	// Test adding tcp rule
+	conf = config.NewC(test.NewLogger())
+	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[string]any{"outbound": []any{map[string]any{"port": "1", "proto": "tcp", "host": "a"}}}
 	require.NoError(t, AddFirewallRulesFromConfig(l, false, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: false, proto: iputil.IPProtocolTCP, startPort: 1, endPort: 1, groups: nil, host: "a", ip: "", localIp: ""}, mf.lastCall)
@@ -1472,6 +1507,29 @@ func TestFirewall_convertRule(t *testing.T) {
 	r, err = convertRule(l, c, "test", 1)
 	assert.Empty(t, ob.String())
 	require.Error(t, err, "group should contain a single value, an array with more than one entry was provided")
+
+	c = map[string]any{
+		"port": []any{22, "80-81", "fragment"},
+	}
+	r, err = convertRule(l, c, "test", 1)
+	require.NoError(t, err)
+	assert.NotNil(t, r.Ports)
+	assert.Equal(t, []string{"22", "80-81", "fragment"}, r.Ports)
+
+	c = map[string]any{
+		"port": []string{"22", "80-81", "fragment"},
+	}
+	r, err = convertRule(l, c, "test", 1)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"22", "80-81", "fragment"}, r.Ports)
+
+	c = map[string]any{
+		"port": 443,
+	}
+	r, err = convertRule(l, c, "test", 1)
+	require.NoError(t, err)
+	assert.NotNil(t, r.Ports)
+	assert.Equal(t, []string{"443"}, r.Ports)
 
 	// Make sure a well formed group is alright
 	ob.Reset()
@@ -1718,6 +1776,7 @@ type addRuleCall struct {
 
 type mockFirewall struct {
 	lastCall       addRuleCall
+	calls          []addRuleCall
 	nextCallReturn error
 }
 
@@ -1734,6 +1793,7 @@ func (mf *mockFirewall) AddRule(incoming bool, proto uint8, startPort int32, end
 		caName:    caName,
 		caSha:     caSha,
 	}
+	mf.calls = append(mf.calls, mf.lastCall)
 
 	err := mf.nextCallReturn
 	mf.nextCallReturn = nil
