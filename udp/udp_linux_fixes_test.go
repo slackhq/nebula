@@ -107,7 +107,7 @@ func TestWriteBatchBadFamilyDeliversOthers(t *testing.T) {
 	got := map[string]bool{}
 	rx.SetReadDeadline(time.Now().Add(2 * time.Second))
 	buf := make([]byte, 64)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		n, _, rerr := rx.ReadFromUDPAddrPort(buf)
 		if rerr != nil {
 			t.Fatalf("expected 2 delivered packets, read #%d failed: %v", i+1, rerr)
@@ -161,7 +161,7 @@ func TestWriteBatchUnreachableDestDeliversOthers(t *testing.T) {
 	got := map[string]bool{}
 	rx.SetReadDeadline(time.Now().Add(2 * time.Second))
 	buf := make([]byte, 64)
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		n, _, rerr := rx.ReadFromUDPAddrPort(buf)
 		if rerr != nil {
 			t.Fatalf("expected 4 delivered packets, read #%d failed: %v (got so far: %v)", i+1, rerr, got)
@@ -691,7 +691,7 @@ func TestGSOEngagesOnLoopback(t *testing.T) {
 	// The kernel must deliver the original datagram boundaries and bytes.
 	_ = rx.SetReadDeadline(time.Now().Add(5 * time.Second))
 	got := make([]byte, pktLen+1)
-	for i := 0; i < numPkts; i++ {
+	for i := range numPkts {
 		n, _, err := rx.ReadFromUDP(got)
 		if err != nil {
 			t.Fatalf("rx read %d: %v", i, err)
@@ -699,7 +699,7 @@ func TestGSOEngagesOnLoopback(t *testing.T) {
 		if n != pktLen {
 			t.Fatalf("rx read %d: len=%d want %d (kernel segmented at wrong boundary)", i, n, pktLen)
 		}
-		for j := 0; j < n; j++ {
+		for j := range n {
 			if got[j] != byte(i) {
 				t.Fatalf("rx read %d: byte %d = %#x, want %#x", i, j, got[j], byte(i))
 			}

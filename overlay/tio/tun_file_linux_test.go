@@ -1,5 +1,4 @@
 //go:build linux && !android && !e2e_testing
-// +build linux,!android,!e2e_testing
 
 package tio
 
@@ -117,17 +116,15 @@ func TestPoll_ConcurrentWrite_NoRace(t *testing.T) {
 	}()
 
 	var wg sync.WaitGroup
-	for w := 0; w < writers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < perWriter; i++ {
+	for range writers {
+		wg.Go(func() {
+			for range perWriter {
 				if _, werr := p.Write(payload); werr != nil {
 					t.Errorf("write: %v", werr)
 					return
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

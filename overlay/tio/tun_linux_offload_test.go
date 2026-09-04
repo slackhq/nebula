@@ -1,5 +1,4 @@
 //go:build linux && !android && !e2e_testing
-// +build linux,!android,!e2e_testing
 
 package tio
 
@@ -137,7 +136,7 @@ func buildTSOv4(t *testing.T, payLen, mss int) ([]byte, virtio.Hdr) {
 	binary.BigEndian.PutUint16(pkt[34:36], 65535) // window
 
 	// payload
-	for i := 0; i < payLen; i++ {
+	for i := range payLen {
 		pkt[ipLen+tcpLen+i] = byte(i & 0xff)
 	}
 	return pkt, virtio.NewHeader(
@@ -257,7 +256,7 @@ func TestSegmentTCPv6(t *testing.T) {
 	pkt[53] = 0x19 // FIN | ACK | PSH — exercise FIN clearing too
 	binary.BigEndian.PutUint16(pkt[54:56], 65535)
 
-	for i := 0; i < payLen; i++ {
+	for i := range payLen {
 		pkt[ipLen+tcpLen+i] = byte(i)
 	}
 
@@ -361,7 +360,7 @@ func buildUSOv4(t *testing.T, payLen, gsoSize int) ([]byte, virtio.Hdr) {
 	binary.BigEndian.PutUint16(pkt[22:24], 53)                    // dport
 	binary.BigEndian.PutUint16(pkt[24:26], uint16(udpLen+payLen)) // superpacket length
 
-	for i := 0; i < payLen; i++ {
+	for i := range payLen {
 		pkt[ipLen+udpLen+i] = byte(i & 0xff)
 	}
 
@@ -473,7 +472,7 @@ func TestSegmentUDPv6(t *testing.T) {
 	// Superpacket-wide length, as the kernel supplies it; see buildUSOv4.
 	binary.BigEndian.PutUint16(pkt[44:46], uint16(udpLen+payLen))
 
-	for i := 0; i < payLen; i++ {
+	for i := range payLen {
 		pkt[ipLen+udpLen+i] = byte(i)
 	}
 
@@ -772,7 +771,7 @@ func buildTSOv6(payLen, gso int) []byte {
 	pkt[53] = 0x10 // ACK only
 	binary.BigEndian.PutUint16(pkt[54:56], 65535)
 
-	for i := 0; i < payLen; i++ {
+	for i := range payLen {
 		pkt[ipLen+tcpLen+i] = byte(i)
 	}
 	return pkt

@@ -79,13 +79,7 @@ func (b *Bits) clearRange(startPos, count uint64) uint64 {
 	// handle the potential partial word before pos becomes u64 aligned
 	word := pos >> 6
 	bit := pos & 63
-	take := uint64(64) - bit
-	if take > remaining {
-		take = remaining
-	}
-	if take > b.length-pos {
-		take = b.length - pos
-	}
+	take := min(min(uint64(64)-bit, remaining), b.length-pos)
 	var mask uint64
 	if take == 64 {
 		mask = math.MaxUint64
@@ -189,10 +183,7 @@ func (b *Bits) Update(l *slog.Logger, i uint64) bool {
 func (b *Bits) updateSlow(l *slog.Logger, i uint64) bool {
 	// If i is a jump, adjust the window, record lost, update current, and return true
 	if i > b.current {
-		end := i
-		if end > b.current+b.length {
-			end = b.current + b.length
-		}
+		end := min(i, b.current+b.length)
 		count := end - b.current
 		startPos := (b.current + 1) & b.lengthMask
 

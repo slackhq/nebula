@@ -129,7 +129,7 @@ func TestUDPCoalescerCoalescesEqualSized(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := newTestUDPCoalescer(t, w)
 	pay := make([]byte, 1200)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if err := c.Commit(buildUDPv4(1000, 53, pay)); err != nil {
 			t.Fatal(err)
 		}
@@ -259,7 +259,7 @@ func TestUDPCoalescerCapsAtMaxSegs(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := newTestUDPCoalescer(t, w)
 	pay := make([]byte, 100)
-	for i := 0; i < udpCoalesceMaxSegs+5; i++ {
+	for range udpCoalesceMaxSegs + 5 {
 		if err := c.Commit(buildUDPv4(1000, 53, pay)); err != nil {
 			t.Fatal(err)
 		}
@@ -317,7 +317,7 @@ func TestUDPCoalescerIPv6Coalesces(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := newTestUDPCoalescer(t, w)
 	pay := make([]byte, 1200)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if err := c.Commit(buildUDPv6(1000, 53, pay)); err != nil {
 			t.Fatal(err)
 		}

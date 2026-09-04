@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"os"
 	"os/signal"
@@ -154,9 +155,7 @@ func (c *C) ReloadConfig() {
 	defer c.reloadLock.Unlock()
 
 	c.oldSettings = make(map[string]any)
-	for k, v := range c.Settings {
-		c.oldSettings[k] = v
-	}
+	maps.Copy(c.oldSettings, c.Settings)
 
 	err := c.Load(c.path)
 	if err != nil {
@@ -177,9 +176,7 @@ func (c *C) ReloadConfigString(raw string) error {
 	defer c.reloadLock.Unlock()
 
 	c.oldSettings = make(map[string]any)
-	for k, v := range c.Settings {
-		c.oldSettings[k] = v
-	}
+	maps.Copy(c.oldSettings, c.Settings)
 
 	err := c.LoadString(raw)
 	if err != nil {
@@ -216,7 +213,7 @@ func (c *C) GetStringSlice(k string, d []string) []string {
 	}
 
 	v := make([]string, len(rv))
-	for i := 0; i < len(v); i++ {
+	for i := range v {
 		v[i] = fmt.Sprintf("%v", rv[i])
 	}
 
@@ -310,8 +307,8 @@ func (c *C) IsSet(k string) bool {
 }
 
 func (c *C) get(k string, v any) any {
-	parts := strings.Split(k, ".")
-	for _, p := range parts {
+	parts := strings.SplitSeq(k, ".")
+	for p := range parts {
 		m, ok := v.(map[string]any)
 		if !ok {
 			return nil

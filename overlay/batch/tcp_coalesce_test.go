@@ -540,7 +540,7 @@ func TestCoalescerCapBySegments(t *testing.T) {
 	c := newTestTCPCoalescer(t, w)
 	pay := make([]byte, 512)
 	seq := uint32(1000)
-	for i := 0; i < tcpCoalesceMaxSegs+5; i++ {
+	for range tcpCoalesceMaxSegs + 5 {
 		if err := c.Commit(buildTCPv4(seq, tcpAck, pay)); err != nil {
 			t.Fatal(err)
 		}

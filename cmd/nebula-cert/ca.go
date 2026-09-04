@@ -151,7 +151,7 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 
 	var groups []string
 	if *cf.groups != "" {
-		for _, rg := range strings.Split(*cf.groups, ",") {
+		for rg := range strings.SplitSeq(*cf.groups, ",") {
 			g := strings.TrimSpace(rg)
 			if g != "" {
 				groups = append(groups, g)
@@ -171,7 +171,7 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 	}
 
 	if *cf.networks != "" {
-		for _, rs := range strings.Split(*cf.networks, ",") {
+		for rs := range strings.SplitSeq(*cf.networks, ",") {
 			rs := strings.Trim(rs, " ")
 			if rs != "" {
 				n, err := netip.ParsePrefix(rs)
@@ -193,7 +193,7 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 	}
 
 	if *cf.unsafeNetworks != "" {
-		for _, rs := range strings.Split(*cf.unsafeNetworks, ",") {
+		for rs := range strings.SplitSeq(*cf.unsafeNetworks, ",") {
 			rs := strings.Trim(rs, " ")
 			if rs != "" {
 				n, err := netip.ParsePrefix(rs)
@@ -221,7 +221,7 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 	if !isP11 && *cf.encryption {
 		passphrase = []byte(os.Getenv("NEBULA_CA_PASSPHRASE"))
 		if len(passphrase) == 0 {
-			for i := 0; i < 5; i++ {
+			for range 5 {
 				errOut.Write([]byte("Enter passphrase: "))
 				passphrase, err = pr.ReadPassword()
 

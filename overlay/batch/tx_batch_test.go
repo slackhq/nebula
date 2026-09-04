@@ -28,7 +28,7 @@ func TestSendBatchReserveCommitFlush(t *testing.T) {
 	b := NewSendBatch(fw, 4, 32)
 
 	ap := netip.MustParseAddrPort("10.0.0.1:4242")
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		slot := b.Reserve(32)
 		if cap(slot) != 32 {
 			t.Fatalf("slot %d: cap=%d want 32", i, cap(slot))
@@ -72,7 +72,7 @@ func TestSendBatchSlotsDoNotOverlap(t *testing.T) {
 	b := NewSendBatch(fw, 3, 8)
 	ap := netip.MustParseAddrPort("10.0.0.1:80")
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		s := b.Reserve(8)
 		pkt := append(s[:0], byte(0xA0+i), byte(0xB0+i))
 		b.Commit(pkt, ap)

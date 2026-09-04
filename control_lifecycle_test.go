@@ -247,7 +247,7 @@ func TestControl_ConcurrentStopAndStart(t *testing.T) {
 	c, _, _ := newReadyControl(t)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		wg.Go(func() { c.Stop() })
 	}
 	wg.Go(func() { _ = c.Start() })
