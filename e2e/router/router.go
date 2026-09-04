@@ -981,18 +981,18 @@ func (r *R) formatUdpPacket(p *packet) string {
 
 	packet = gopacket.NewPacket(p.packet.Data, layers.LayerTypeIPv6, gopacket.Lazy)
 	if packet.ErrorLayer() == nil {
-		v6 := packet.Layer(layers.LayerTypeIPv6).(*layers.IPv6)
-		if v6 == nil {
-			panic("not an ipv6 packet")
+		v6, ok := packet.Layer(layers.LayerTypeIPv6).(*layers.IPv6)
+		if !ok {
+			return fmt.Sprintf("    %s: <not a valid ipv6 packet>", normalizeName(p.to.GetUDPAddr().String()))
 		}
 		srcAddr, _ = netip.AddrFromSlice(v6.SrcIP)
 	} else {
 		packet = gopacket.NewPacket(p.packet.Data, layers.LayerTypeIPv4, gopacket.Lazy)
-		v6 := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
-		if v6 == nil {
-			panic("not an ipv6 packet")
+		v4, ok := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+		if !ok {
+			return fmt.Sprintf("    %s: <not a valid ipv4 or ipv6 packet>", normalizeName(p.to.GetUDPAddr().String()))
 		}
-		srcAddr, _ = netip.AddrFromSlice(v6.SrcIP)
+		srcAddr, _ = netip.AddrFromSlice(v4.SrcIP)
 	}
 
 	from := "unknown"
@@ -1000,9 +1000,9 @@ func (r *R) formatUdpPacket(p *packet) string {
 		from = c.GetUDPAddr().String()
 	}
 
-	udpLayer := packet.Layer(layers.LayerTypeUDP).(*layers.UDP)
+	udpLayer, _ := packet.Layer(layers.LayerTypeUDP).(*layers.UDP)
 	if udpLayer == nil {
-		panic("not a udp packet")
+		return fmt.Sprintf("    %s: <not a udp packet>", normalizeName(p.to.GetUDPAddr().String()))
 	}
 
 	data := packet.ApplicationLayer()
