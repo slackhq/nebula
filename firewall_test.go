@@ -1144,7 +1144,10 @@ func BenchmarkLookup(b *testing.B) {
 }
 
 func Test_parsePort(t *testing.T) {
-	_, _, err := parsePort("")
+	_, _, err := parsePort("80,443")
+	require.EqualError(t, err, "contains a comma; use a YAML list such as `port: [80, 443]`; `80,443`")
+
+	_, _, err = parsePort("")
 	require.EqualError(t, err, "was not a number; ``")
 
 	_, _, err = parsePort("  ")
@@ -1346,6 +1349,10 @@ firewall:
 
 	conf.Settings["firewall"] = map[string]any{"outbound": []any{map[string]any{"port": []any{22, "nope"}, "proto": "tcp", "host": "a"}}}
 	require.EqualError(t, AddFirewallRulesFromConfig(l, false, conf, mf), "firewall.outbound rule #0; port #1 was not a number; `nope`")
+	assert.Empty(t, mf.calls)
+
+	conf.Settings["firewall"] = map[string]any{"outbound": []any{map[string]any{"port": "80,443", "proto": "tcp", "host": "a"}}}
+	require.EqualError(t, AddFirewallRulesFromConfig(l, false, conf, mf), "firewall.outbound rule #0; port contains a comma; use a YAML list such as `port: [80, 443]`; `80,443`")
 	assert.Empty(t, mf.calls)
 
 	// Test adding tcp rule

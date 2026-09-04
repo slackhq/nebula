@@ -1105,6 +1105,9 @@ func (r *rule) sanity() error {
 
 func parsePort(s string) (int32, int32, error) {
 	const notAPort int32 = -2
+	if strings.ContainsRune(s, ',') {
+		return notAPort, notAPort, fmt.Errorf("contains a comma; use a YAML list such as `port: [80, 443]`; `%s`", s)
+	}
 	if s == "any" {
 		return firewall.PortAny, firewall.PortAny, nil
 	}
