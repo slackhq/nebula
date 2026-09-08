@@ -217,7 +217,8 @@ func (t *winTun) addRoutes(logErrors bool) error {
 	return t.setMTU(luid, foundDefault4, carriesV6)
 }
 
-// setMTU applies tun.mtu per address family. The default route metric rides along on the v4 handle.
+// setMTU applies tun.mtu per address family. The default route metric rides along on the v4 handle, DAD and
+// router discovery come off with the v6 one.
 func (t *winTun) setMTU(luid winipcfg.LUID, foundDefault4, carriesV6 bool) error {
 	ipif, err := luid.IPInterface(windows.AF_INET)
 	if err != nil {
@@ -248,6 +249,11 @@ func (t *winTun) setMTU(luid winipcfg.LUID, foundDefault4, carriesV6 bool) error
 	}
 
 	ipif6.NLMTU = uint32(t.MTU)
+	// Nothing answers on the far side of this adapter but nebula, which drops the probes. DAD only holds the
+	// address tentative for a round it can never lose, and solicitations only invite RAs we would drop anyway.
+	// wireguard-windows turns both off on the same handle.
+	ipif6.DadTransmits = 0
+	ipif6.RouterDiscoveryBehavior = winipcfg.RouterDiscoveryDisabled
 	if err := ipif6.Set(); err != nil {
 		return fmt.Errorf("failed to set ipv6 interface: %w", err)
 	}
