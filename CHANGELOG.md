@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- New `nebula ctl <command>` subcommand, which runs any of the debug and administrative commands the sshd
+  block exposes without requiring an ssh server, a host key, or authorized keys. Nebula serves them over a
+  local unix socket, configured by the new `ctl` block and enabled by default at `/run/nebula/ctl.sock` on
+  Linux and `/var/run/nebula/ctl.sock` elsewhere. The socket lives in a `0700` directory so filesystem
+  permissions are the access control; failing to create it is logged and never prevents nebula from
+  starting. Packagers running nebula under systemd will want `RuntimeDirectory=nebula` in the unit so the
+  directory exists with the right ownership. Not supported on Windows yet, and never enabled on iOS or
+  Android. Reloadable.
+
+### Changed
+
+- The ssh console now reports a real exit status for `ssh <host> <command>` rather than always reporting
+  success, so commands run that way are scriptable.
+- The debug and administrative commands moved out of `ssh.go` into `commands.go` and are no longer tied to
+  ssh: both the ssh console and `nebula ctl` dispatch against one shared registry, so a command added in
+  one place is available over both. Embedders of the `sshd` package are affected: `sshd.NewSSHServer` now
+  takes a `*diag.Registry`, `sshd.SSHServer.RegisterCommand` is gone in favor of registering on that
+  registry directly, and the command types now live in the `diag` package rather than being re-exported
+  from `sshd`.
+
 ## [1.11.1] - 2026-08-21
 
 See the [v1.11.1](https://github.com/slackhq/nebula/milestone/30?closed=1) milestone for a complete list of changes.

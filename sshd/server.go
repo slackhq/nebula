@@ -9,8 +9,9 @@ import (
 	"net"
 	"sync"
 
-	"github.com/armon/go-radix"
 	"golang.org/x/crypto/ssh"
+
+	"github.com/slackhq/nebula/diag"
 )
 
 type SSHServer struct {
@@ -25,10 +26,9 @@ type SSHServer struct {
 	trustedKeys map[string]map[string]bool
 	trustedCAs  []ssh.PublicKey
 
-	// List of available commands
-	helpCommand *Command
-	commands    *radix.Tree
-	listener    net.Listener
+	// The commands this server serves. Shared with every other transport, see diag.Registry.
+	commands *diag.Registry
+	listener net.Listener
 
 	// ctx parents per-Run contexts. Cancelling it (e.g. via Control.Stop) tears the server down even
 	// across reloads, since each Run derives a fresh child rather than reusing this one directly.
@@ -38,11 +38,11 @@ type SSHServer struct {
 // NewSSHServer creates a new ssh server rigged with default commands and prepares to listen.
 // The ssh server's context is parented off the supplied ctx so cancelling it
 // (e.g. on Control.Stop) tears down active sessions and closes the listener.
-func NewSSHServer(ctx context.Context, l *slog.Logger) (*SSHServer, error) {
+func NewSSHServer(ctx context.Context, l *slog.Logger, commands *diag.Registry) (*SSHServer, error) {
 	s := &SSHServer{
 		trustedKeys: make(map[string]map[string]bool),
 		l:           l,
-		commands:    radix.New(),
+		commands:    commands,
 		ctx:         ctx,
 	}
 
@@ -89,14 +89,6 @@ func NewSSHServer(ctx context.Context, l *slog.Logger) (*SSHServer, error) {
 		PublicKeyCallback: cc.Authenticate,
 		ServerVersion:     fmt.Sprintf("SSH-2.0-Nebula???"),
 	}
-
-	s.RegisterCommand(&Command{
-		Name:             "help",
-		ShortDescription: "prints available commands or help <command> for specific usage info",
-		Callback: func(a any, args []string, w StringWriter) error {
-			return helpCallback(s.commands, args, w)
-		},
-	})
 
 	return s, nil
 }
@@ -158,11 +150,6 @@ func (s *SSHServer) AddAuthorizedKey(user, pubKey string) error {
 		"sshUser", user,
 	)
 	return nil
-}
-
-// RegisterCommand adds a command that can be run by a user, by default only `help` is available
-func (s *SSHServer) RegisterCommand(c *Command) {
-	s.commands.Insert(c.Name, c)
 }
 
 // Run begins listening and accepting connections. Each invocation derives a fresh per-Run context

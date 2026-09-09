@@ -236,6 +236,30 @@ punchy:
   # Overriding this to "" is the same as "/" and will allow overwriting any path on the host.
   #sandbox_dir: /var/tmp/nebula-debug
 
+# ctl exposes nebula's debug and administrative commands over a local unix socket, so that `nebula ctl <command>` can
+# reach the same commands the sshd block offers above without running an ssh server. Run `nebula ctl` on its own for the
+# list of commands. Anyone who can open the socket can do everything the ssh console can, including closing tunnels,
+# changing remotes, and writing profile data to disk, so the socket lives in a directory only the user nebula runs as
+# can enter. Enabled by default. Not supported on Windows yet, and never enabled on iOS or Android.
+#ctl:
+  # Toggles the feature. This setting is reloadable.
+  #enabled: true
+
+  # socket is the unix socket to listen on. The parent directory is created if it is missing and made readable only by
+  # the user nebula runs as, and a socket left behind by a crashed nebula is replaced. Defaults to /run/nebula/ctl.sock
+  # on Linux and /var/run/nebula/ctl.sock everywhere else; running nebula as a non-root user means picking a path it can
+  # write. Two nebulas on one host need two paths, the second to start will log that the socket is already being served
+  # and carry on without one. `nebula ctl` reads this value from the same config file when it is given -config, and
+  # otherwise assumes the default above. This setting is reloadable.
+  #socket: /run/nebula/ctl.sock
+
+  # sandbox_dir restricts the file paths the profiling commands (start-cpu-profile, save-heap-profile,
+  # save-mutex-profile) may write, exactly like sshd.sandbox_dir above, which it defaults to. Note that these paths are
+  # resolved by the nebula process and not by the shell running `nebula ctl`, so a relative path lands in this directory
+  # rather than in your working directory, and under a systemd unit with PrivateTmp=yes it lands somewhere your shell
+  # cannot see at all. The directory is NOT automatically created.
+  #sandbox_dir: /var/tmp/nebula-debug
+
 # EXPERIMENTAL: relay support for networks that can't establish direct connections.
 relay:
   # Relays are a list of Nebula IP's that peers can use to relay packets to me.

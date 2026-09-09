@@ -116,6 +116,9 @@ func newSimpleServerWithUdpAndUnsafeNetworks(v cert.Version, caCrt cert.Certific
 			"key":  string(myPrivKey),
 		},
 		//"tun": m{"disabled": true},
+		// Several tests bring up more than one nebula in this process, and they would all
+		// contend for the same default ctl socket path. None of them exercise it.
+		"ctl": m{"enabled": false},
 		"firewall": m{
 			"outbound": []m{{
 				"proto": "any",
@@ -213,6 +216,9 @@ func newServer(caCrt []cert.Certificate, certs []cert.Certificate, key []byte, o
 			"key":  string(key),
 		},
 		//"tun": m{"disabled": true},
+		// Several tests bring up more than one nebula in this process, and they would all
+		// contend for the same default ctl socket path. None of them exercise it.
+		"ctl": m{"enabled": false},
 		"firewall": m{
 			"outbound": []m{{
 				"proto": "any",

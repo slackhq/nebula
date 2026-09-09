@@ -1,4 +1,4 @@
-package sshd
+package diag
 
 import "io"
 
@@ -29,4 +29,10 @@ func (w *stringWriter) WriteBytes(b []byte) error {
 
 func (w *stringWriter) GetWriter() io.Writer {
 	return w.w
+}
+
+// NewWriter adapts an io.Writer to the StringWriter commands are handed. Transports
+// implement their own framing behind w; the commands never know the difference.
+func NewWriter(w io.Writer) StringWriter {
+	return &stringWriter{w: w}
 }

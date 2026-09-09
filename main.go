@@ -14,6 +14,7 @@ import (
 
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/cpupick"
+	"github.com/slackhq/nebula/diag"
 	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/sshd"
@@ -68,7 +69,9 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	}
 	l.Info("Firewall started", "firewallHashes", fw.GetRuleHashes())
 
-	ssh, err := sshd.NewSSHServer(ctx, l.With("subsystem", "sshd"))
+	commands := diag.NewRegistry()
+
+	ssh, err := sshd.NewSSHServer(ctx, l.With("subsystem", "sshd"), commands)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Error while creating SSH server", err)
 	}
@@ -322,13 +325,20 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		return nil, util.ContextualizeIfNeeded("Failed to start stats emitter", err)
 	}
 
+	// Built before the configTest return so that a bad ctl block fails `nebula -test`. It only
+	// holds the registry, which attachCommands populates below, and reads nothing until Start.
+	ctlServer, err := newCtlServerFromConfig(ctx, l.With("subsystem", "ctl"), c, commands)
+	if err != nil {
+		return nil, util.ContextualizeIfNeeded("Failed to configure the ctl socket", err)
+	}
+
 	if configTest {
 		return nil, nil
 	}
 
 	go ifce.emitStats(ctx, c.GetDuration("stats.interval", time.Second*10))
 
-	attachCommands(l, c, ssh, ifce)
+	attachCommands(l, c, commands, ifce)
 
 	networkChanges := udp.NewNetworkChangeMonitor(ctx, l, c)
 
@@ -339,6 +349,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		ctx:                    ctx,
 		cancel:                 cancel,
 		sshStart:               sshStart,
+		ctlStart:               ctlServer.Start,
 		statsStart:             stats.Start,
 		dnsStart:               ds.Start,
 		lighthouseStart:        lightHouse.StartUpdateWorker,

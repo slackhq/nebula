@@ -1,4 +1,4 @@
-package sshd
+package diag
 
 import (
 	"errors"
@@ -8,6 +8,17 @@ import (
 	"strings"
 
 	"github.com/armon/go-radix"
+)
+
+var (
+	// ErrUnknownCommand is returned by the Registry when the first argument names no
+	// registered command. The user has already been told so on their writer.
+	ErrUnknownCommand = errors.New("unknown command")
+
+	// ErrUsage wraps a flag parsing failure. The flag package has already written the
+	// details to the caller's writer by the time this is returned, so a transport should
+	// use it only to pick an exit status.
+	ErrUsage = errors.New("usage")
 )
 
 // CommandFlags is a function called before help or command execution to parse command line flags
@@ -44,8 +55,10 @@ func execCommand(c *Command, args []string, w StringWriter) error {
 			fl.SetOutput(w.GetWriter())
 			err := fl.Parse(args)
 			if err != nil {
-				// fl.Parse has dumped error information to the user via the w writer.
-				return err
+				// fl.Parse has dumped error information to the user via the w writer, so
+				// the wrapper exists purely so a transport can tell a usage problem from a
+				// command that ran and failed.
+				return fmt.Errorf("%w: %w", ErrUsage, err)
 			}
 			args = fl.Args()
 		}

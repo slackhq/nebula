@@ -32,10 +32,25 @@ func init() {
 }
 
 func main() {
+	// Subcommands are dispatched before flag.Parse, because flag.Parse stops at the first
+	// non-flag argument and everything after `ctl` has to reach the running nebula's own flag
+	// parser untouched. Nothing here looks at -json or a vpn address.
+	if len(os.Args) > 1 && os.Args[1] == "ctl" {
+		os.Exit(ctlMain(os.Args[2:]))
+	}
+
 	configPath := flag.String("config", "", "Path to either a file or directory to load configuration from")
 	configTest := flag.Bool("test", false, "Test the config and print the end result. Non zero exit indicates a faulty config")
 	printVersion := flag.Bool("version", false, "Print version")
 	printUsage := flag.Bool("help", false, "Print command line usage")
+
+	flag.Usage = func() {
+		out := flag.CommandLine.Output()
+		fmt.Fprintf(out, "Usage of %s:\n", os.Args[0])
+		flag.PrintDefaults()
+		fmt.Fprintf(out, "\nCommands:\n")
+		fmt.Fprintf(out, "  ctl [command]\n\tRun a debug command against the running nebula on this host.\n\tRun `nebula ctl` on its own for the list of commands.\n")
+	}
 
 	flag.Parse()
 

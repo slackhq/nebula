@@ -1,37 +1,38 @@
 package sshd
 
 import (
-	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
 
-	"github.com/anmitsu/go-shlex"
-	"github.com/armon/go-radix"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
+
+	"github.com/slackhq/nebula/diag"
 )
 
 type session struct {
 	l        *slog.Logger
 	c        *ssh.ServerConn
 	term     *term.Terminal
-	commands *radix.Tree
+	commands *diag.Registry
 	cancel   func()
 }
 
-func NewSession(commands *radix.Tree, conn *ssh.ServerConn, chans <-chan ssh.NewChannel, cancel func(), l *slog.Logger) *session {
+func NewSession(commands *diag.Registry, conn *ssh.ServerConn, chans <-chan ssh.NewChannel, cancel func(), l *slog.Logger) *session {
 	s := &session{
-		commands: radix.NewFromMap(commands.ToMap()),
+		// A copy, so the logout command this session adds for itself stays invisible to every
+		// other session and to `nebula ctl`.
+		commands: commands.Clone(),
 		l:        l,
 		c:        conn,
 		cancel:   cancel,
 	}
 
-	s.commands.Insert("logout", &Command{
+	s.commands.RegisterCommand(&diag.Command{
 		Name:             "logout",
 		ShortDescription: "Ends the current session",
-		Callback: func(a any, args []string, w StringWriter) error {
+		Callback: func(a any, args []string, w diag.StringWriter) error {
 			s.Close()
 			return nil
 		},
@@ -87,9 +88,11 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 			}
 
 			req.Reply(true, nil)
-			s.dispatchCommand(payload.Value, &stringWriter{channel})
+			dErr := s.commands.Dispatch(payload.Value, diag.NewWriter(channel))
 
-			status := struct{ Status uint32 }{uint32(0)}
+			// Report a real exit status rather than a hardcoded zero, so that
+			// `ssh nebula-host list-hostmap` is scriptable the same way `nebula ctl` is.
+			status := struct{ Status uint32 }{uint32(diag.StatusFor(dErr))}
 			channel.SendRequest("exit-status", false, ssh.Marshal(status))
 			channel.Close()
 			return
@@ -111,7 +114,7 @@ func (s *session) createTerm(channel ssh.Channel) *term.Terminal {
 	term.AutoCompleteCallback = func(line string, pos int, key rune) (newLine string, newPos int, ok bool) {
 		// key 9 is tab
 		if key == 9 {
-			cmds := matchCommand(s.commands, line)
+			cmds := s.commands.Match(line)
 			if len(cmds) == 1 {
 				return cmds[0] + " ", len(cmds[0]) + 1, true
 			}
@@ -128,47 +131,17 @@ func (s *session) createTerm(channel ssh.Channel) *term.Terminal {
 }
 
 func (s *session) handleInput() {
-	w := &stringWriter{w: s.term}
+	w := diag.NewWriter(s.term)
 	for {
 		line, err := s.term.ReadLine()
 		if err != nil {
 			break
 		}
 
-		s.dispatchCommand(line, w)
+		// The interactive console reports problems on the terminal the user is already
+		// looking at, so the error is nothing extra to say here.
+		_ = s.commands.Dispatch(line, w)
 	}
-}
-
-func (s *session) dispatchCommand(line string, w StringWriter) {
-	args, err := shlex.Split(line, true)
-	if err != nil {
-		return
-	}
-
-	if len(args) == 0 {
-		dumpCommands(s.commands, w)
-		return
-	}
-
-	c, err := lookupCommand(s.commands, args[0])
-	if err != nil {
-		return
-	}
-
-	if c == nil {
-		err := w.WriteLine(fmt.Sprintf("did not understand: %s", line))
-		_ = err
-
-		dumpCommands(s.commands, w)
-		return
-	}
-
-	if checkHelpArgs(args) {
-		s.dispatchCommand(fmt.Sprintf("%s %s", "help", c.Name), w)
-		return
-	}
-
-	_ = execCommand(c, args[1:], w)
 }
 
 func (s *session) Close() {
