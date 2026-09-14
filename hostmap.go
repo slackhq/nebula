@@ -868,19 +868,26 @@ func (i *HostInfo) logger(l *slog.Logger) *slog.Logger {
 
 // Utility functions
 
-func localAddrs(l *slog.Logger, allowList *LocalAllowList) ([]netip.Addr, error) {
-	return collectLocalAddrs(l, allowList, localInterfaces, localInterfaceAddrs)
+// localInterface is what localAddrs needs from a net.Interface, provided per platform by
+// localInterfaces. Addrs is deferred so platforms where address lookup is a separate kernel round
+// trip only pay for interfaces the allow list accepts.
+type localInterface struct {
+	Name  string
+	Addrs func() ([]net.Addr, error)
 }
 
-// collectLocalAddrs takes its enumerators as arguments so tests can drive the filtering and the
+func localAddrs(l *slog.Logger, allowList *LocalAllowList) ([]netip.Addr, error) {
+	return collectLocalAddrs(l, allowList, localInterfaces)
+}
+
+// collectLocalAddrs takes its enumerator as an argument so tests can drive the filtering and the
 // failure branches without depending on the addresses of whatever host they run on. It reports
 // failures to the caller rather than logging them, because it runs on every lighthouse update and
 // only the caller can tell a new failure from a repeat of the same one.
 func collectLocalAddrs(
 	l *slog.Logger,
 	allowList *LocalAllowList,
-	interfaces func() ([]net.Interface, error),
-	interfaceAddrs func(*net.Interface) ([]net.Addr, error),
+	interfaces func() ([]localInterface, error),
 ) ([]netip.Addr, error) {
 	//FIXME: This function is pretty garbage
 	var finalAddrs []netip.Addr
@@ -902,7 +909,7 @@ func collectLocalAddrs(
 		if !allow {
 			continue
 		}
-		addrs, err := interfaceAddrs(&i)
+		addrs, err := i.Addrs()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("failed to get addresses for %s: %w", i.Name, err))
 			continue

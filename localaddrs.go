@@ -4,10 +4,15 @@ package nebula
 
 import "net"
 
-func localInterfaces() ([]net.Interface, error) {
-	return net.Interfaces()
-}
+func localInterfaces() ([]localInterface, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
 
-func localInterfaceAddrs(i *net.Interface) ([]net.Addr, error) {
-	return i.Addrs()
+	out := make([]localInterface, len(ifaces))
+	for n, i := range ifaces {
+		out[n] = localInterface{Name: i.Name, Addrs: i.Addrs}
+	}
+	return out, nil
 }

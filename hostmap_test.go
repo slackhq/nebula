@@ -425,11 +425,24 @@ func TestCollectLocalAddrs(t *testing.T) {
 		},
 	}
 
-	enumerate := func() ([]net.Interface, error) { return ifaces, nil }
-	addrsFor := func(i *net.Interface) ([]net.Addr, error) { return addrs[i.Name], nil }
+	// enumerate wraps ifaces with the given address lookup.
+	enumerate := func(addrsFor func(name string) ([]net.Addr, error)) func() ([]localInterface, error) {
+		return func() ([]localInterface, error) {
+			out := make([]localInterface, 0, len(ifaces))
+			for _, i := range ifaces {
+				name := i.Name
+				out = append(out, localInterface{
+					Name:  name,
+					Addrs: func() ([]net.Addr, error) { return addrsFor(name) },
+				})
+			}
+			return out, nil
+		}
+	}
+	addrsFor := func(name string) ([]net.Addr, error) { return addrs[name], nil }
 
 	// Loopback and link local are dropped, everything else on every interface is kept.
-	out, err := collectLocalAddrs(test.NewLogger(), nil, enumerate, addrsFor)
+	out, err := collectLocalAddrs(test.NewLogger(), nil, enumerate(addrsFor))
 	require.NoError(t, err)
 	assert.Equal(t, []netip.Addr{
 		netip.MustParseAddr("10.0.0.5"),
@@ -446,11 +459,11 @@ func TestCollectLocalAddrs(t *testing.T) {
 	require.NoError(t, err)
 
 	asked := make(map[string]struct{})
-	countingAddrsFor := func(i *net.Interface) ([]net.Addr, error) {
-		asked[i.Name] = struct{}{}
-		return addrs[i.Name], nil
+	countingAddrsFor := func(name string) ([]net.Addr, error) {
+		asked[name] = struct{}{}
+		return addrs[name], nil
 	}
-	out, err = collectLocalAddrs(test.NewLogger(), al, enumerate, countingAddrsFor)
+	out, err = collectLocalAddrs(test.NewLogger(), al, enumerate(countingAddrsFor))
 	require.NoError(t, err)
 	assert.Equal(t, []netip.Addr{
 		netip.MustParseAddr("10.0.0.5"),
@@ -462,8 +475,7 @@ func TestCollectLocalAddrs(t *testing.T) {
 	out, err = collectLocalAddrs(
 		test.NewLogger(),
 		nil,
-		func() ([]net.Interface, error) { return nil, errors.New("netlinkrib: permission denied") },
-		addrsFor,
+		func() ([]localInterface, error) { return nil, errors.New("netlinkrib: permission denied") },
 	)
 	assert.Nil(t, out)
 	require.EqualError(t, err, "failed to enumerate local interfaces: netlinkrib: permission denied")
@@ -472,13 +484,12 @@ func TestCollectLocalAddrs(t *testing.T) {
 	out, err = collectLocalAddrs(
 		test.NewLogger(),
 		nil,
-		enumerate,
-		func(i *net.Interface) ([]net.Addr, error) {
-			if i.Name == "eth0" {
+		enumerate(func(name string) ([]net.Addr, error) {
+			if name == "eth0" {
 				return nil, errors.New("nope")
 			}
-			return addrs[i.Name], nil
-		},
+			return addrs[name], nil
+		}),
 	)
 	assert.Equal(t, []netip.Addr{netip.MustParseAddr("172.17.0.1")}, out)
 	require.EqualError(t, err, "failed to get addresses for eth0: nope")
