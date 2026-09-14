@@ -24,6 +24,9 @@ func (s *CipherStateChaChaPoly) EncryptDanger(out, ad, plaintext []byte, n uint6
 	if s == nil {
 		return nil, errors.New("no cipher state available to encrypt")
 	}
+	if n >= RejectAfterMessages {
+		return nil, ErrMessageCounterExhausted
+	}
 	nb[0] = 0
 	nb[1] = 0
 	nb[2] = 0

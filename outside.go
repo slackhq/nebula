@@ -8,11 +8,12 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/google/gopacket/layers"
 	"golang.org/x/net/ipv6"
 
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/overlay/batch"
 	"golang.org/x/net/ipv4"
 )
 
@@ -22,7 +23,11 @@ const (
 
 var ErrOutOfWindow = errors.New("out of window packet")
 
-func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
+// readOutsidePackets processes one received underlay packet.
+// Message payloads are decrypted IN PLACE, so packet must stay untouched
+// by the caller until the batcher for queue q has been flushed
+func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxContext) {
+	h := rxc.h
 	err := h.Parse(packet)
 	if err != nil {
 		// Hole punch packets are 0 or 1 byte big, so lets ignore printing those errors
@@ -90,7 +95,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 	if isMessageRelay {
 		hostinfo = f.hostMap.QueryRelayIndex(h.RemoteIndex)
 	} else {
-		hostinfo = f.hostMap.QueryIndex(h.RemoteIndex)
+		hostinfo = f.hostMap.QueryIndexCached(h.RemoteIndex, rxc.hostmapCache)
 	}
 
 	// At this point we should have a valid existing tunnel, verify and send
@@ -113,17 +118,18 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 	// All remaining packets are encrypted
 	if isMessageRelay {
 		// Relay packets are special, this branch should always early-return
-		if err = hostinfo.ConnectionState.VerifyRelay(f.l, h.MessageCounter, packet, nb); err != nil {
+		err = hostinfo.ConnectionState.VerifyRelay(f.l, h.MessageCounter, packet, rxc.nb)
+		if err != nil {
 			if f.l.Enabled(context.Background(), slog.LevelDebug) {
 				hostinfo.logger(f.l).Debug("Failed to verify relay packet", "error", err, "from", via, "header", h)
 			}
 			return
 		}
-		f.handleOutsideRelayPacket(hostinfo, via, out, packet, h, fwPacket, lhf, nb, q, localCache)
+		f.handleOutsideRelayPacket(hostinfo, via, packet, rxc)
 		return
 	}
 
-	out, err = hostinfo.ConnectionState.Decrypt(f.l, h.MessageCounter, out, packet, nb)
+	out, err := hostinfo.ConnectionState.Decrypt(f.l, h.MessageCounter, packet, rxc.nb)
 	if err != nil {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(f.l).Debug("Failed to decrypt packet", "error", err, "from", via, "header", h)
@@ -139,7 +145,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 	case header.Message:
 		switch h.Subtype {
 		case header.MessageNone:
-			f.handleOutsideMessagePacket(hostinfo, out, packet, fwPacket, nb, q, localCache)
+			f.handleOutsideMessagePacket(hostinfo, h.MessageCounter, out, rxc)
 		default:
 			hostinfo.logger(f.l).Error("IsValidSubType was true, but unexpected message subtype seen", "from", via, "header", h)
 			return
@@ -147,15 +153,23 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 
 	case header.LightHouse:
 		//TODO: assert via is not relayed
-		lhf.HandleRequest(via.UdpAddr, hostinfo.vpnAddrs, out, f)
+		rxc.lhh.HandleRequest(via.UdpAddr, hostinfo.vpnAddrs, out, f)
 
 	case header.Test:
 		switch h.Subtype {
 		case header.TestReply:
 			// No-op, useful for the Roaming and connectionManager side-effects above
 		case header.TestRequest:
-			//recycle the input packet ciphertext as our output buffer
-			f.send(header.Test, header.TestReply, hostinfo.ConnectionState, hostinfo, out, nb, packet)
+			const maxCipherOverhead = 16 //todo we use this too often, needs a real importable const
+			const maxOverhead = header.Len + header.Len + maxCipherOverhead + maxCipherOverhead
+			if maxOverhead+len(out) > len(rxc.scratch) {
+				// A reply that cannot fit in scratch is dropped no matter the log level.
+				if f.l.Enabled(context.Background(), slog.LevelDebug) {
+					hostinfo.logger(f.l).Debug("dropping oversized test request", "payloadLen", len(out), "from", via)
+				}
+				return
+			}
+			f.send(header.Test, header.TestReply, hostinfo.ConnectionState, hostinfo, out, rxc.nb, rxc.scratch[:0])
 		default:
 			hostinfo.logger(f.l).Error("IsValidSubType was true, but unexpected test subtype seen", "from", via, "header", h)
 			return
@@ -173,7 +187,8 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 	}
 }
 
-func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, packet []byte, rxc *rxContext) {
+	h := rxc.h
 	// Successfully validated the thing. Get rid of the Relay header and the AEAD tag
 	signedPayload := packet[header.Len : len(packet)-hostinfo.ConnectionState.dKey.Overhead()]
 	// Pull the Roaming parts up here, and return in all call paths.
@@ -186,9 +201,7 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 	if !ok {
 		// The only way this happens is if hostmap has an index to the correct HostInfo, but the HostInfo is missing
 		// its internal mapping. This should never happen.
-		hostinfo.logger(f.l).Error("HostInfo missing remote relay index",
-			"relayRemoteIndex", h.RemoteIndex,
-		)
+		hostinfo.logger(f.l).Error("HostInfo missing remote relay index", "relayRemoteIndex", h.RemoteIndex)
 		return
 	}
 
@@ -202,7 +215,7 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 			relay:     relay,
 			IsRelayed: true,
 		}
-		f.readOutsidePackets(via, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache)
+		f.readOutsidePackets(via, signedPayload, rxc)
 	case ForwardingType:
 		// Find the target HostInfo relay object
 		targetHI, targetRelay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relay.PeerAddr)
@@ -221,8 +234,9 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 			case ForwardingType:
 				// Forward this packet through the relay tunnel, rebuilding it in place.
 				// Encode overwrites the old outer header, and the new AEAD tag lands where the old one was
-				fwdBuf := packet[:0:len(packet)] // Cap to len(packet) to protect memory from a larger parent buffer
-				f.SendVia(targetHI, targetRelay, signedPayload, nb, fwdBuf, true)
+				fwdBuf := packet[:0]
+				//todo it would potentially be nice to batch these
+				f.SendVia(targetHI, targetRelay, signedPayload, rxc.nb, fwdBuf, true, rxc.q)
 			case TerminalType:
 				hostinfo.logger(f.l).Error("Unexpected Relay Type of Terminal")
 				return
@@ -299,11 +313,14 @@ var (
 	ErrIPv4InvalidHeaderLength = errors.New("invalid ipv4 header length")
 	ErrIPv4PacketTooShort      = errors.New("ipv4 packet is too short")
 	ErrIPv6PacketTooShort      = errors.New("ipv6 packet is too short")
-	ErrIPv6CouldNotFindPayload = errors.New("could not find payload in ipv6 packet")
 )
 
 // newPacket validates and parses the interesting bits for the firewall out of the ip and sub protocol headers
-func newPacket(data []byte, incoming bool, fp *firewall.Packet) error {
+func newPacket(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
+	// fp is reused across packets; reset the parse byproducts so an early-error return cannot
+	// leak the previous packet's offsets.
+	fp.IPHdrLen = 0
+	fp.FragAny = false
 	if len(data) < 1 {
 		return ErrPacketTooShort
 	}
@@ -318,7 +335,7 @@ func newPacket(data []byte, incoming bool, fp *firewall.Packet) error {
 	return ErrUnknownIPVersion
 }
 
-func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
+func parseV6(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 	dataLen := len(data)
 	if dataLen < ipv6.HeaderLen {
 		return ErrIPv6PacketTooShort
@@ -332,104 +349,64 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 		fp.RemoteAddr, _ = netip.AddrFromSlice(data[24:40])
 	}
 
-	protoAt := 6             // NextHeader is at 6 bytes into the ipv6 header
-	offset := ipv6.HeaderLen // Start at the end of the ipv6 header
-	next := 0
-	for {
-		if protoAt >= dataLen {
-			break
+	// Walk the extension header chain to the upper layer protocol. iputil.IPv6FindUpperProtocol is the single
+	// source of truth for which headers are extension headers, so this stays in lockstep with the reject path
+	// and cannot drift into misreading an unknown protocol (SCTP, GRE, etc.) as a forged transport.
+	proto, offset, isFragment, anyFragment, err := iputil.IPv6FindUpperProtocol(data)
+	if err != nil {
+		return ErrIPv6PacketTooShort
+	}
+
+	fp.Protocol = proto
+	fp.Fragment = isFragment
+	fp.FragAny = anyFragment
+	fp.IPHdrLen = offset
+	if isFragment {
+		// Non-first fragments carry no transport header, so we have no ports to read
+		fp.RemotePort = 0
+		fp.LocalPort = 0
+		return nil
+	}
+
+	switch proto {
+	case iputil.IPProtocolICMPv6:
+		// An ICMPv6 message is at least type, code and checksum, 4 bytes. Only echo carries more than we read.
+		if dataLen < offset+4 {
+			return ErrIPv6PacketTooShort
 		}
-		proto := layers.IPProtocol(data[protoAt])
-
-		switch proto {
-		case layers.IPProtocolESP, layers.IPProtocolNoNextHeader:
-			fp.Protocol = uint8(proto)
-			fp.RemotePort = 0
-			fp.LocalPort = 0
-			fp.Fragment = false
-			return nil
-
-		case layers.IPProtocolICMPv6:
+		fp.LocalPort = 0      //incoming vs outgoing doesn't matter for icmpv6
+		switch data[offset] { //icmp type
+		case iputil.ICMPv6TypeEchoRequest, iputil.ICMPv6TypeEchoReply:
 			if dataLen < offset+6 {
 				return ErrIPv6PacketTooShort
 			}
-			fp.Protocol = uint8(proto)
-			fp.LocalPort = 0 //incoming vs outgoing doesn't matter for icmpv6
-			icmptype := data[offset+1]
-			switch icmptype {
-			case layers.ICMPv6TypeEchoRequest, layers.ICMPv6TypeEchoReply:
-				fp.RemotePort = binary.BigEndian.Uint16(data[offset+4 : offset+6]) //identifier
-			default:
-				fp.RemotePort = 0
-			}
-			fp.Fragment = false
-			return nil
-
-		case layers.IPProtocolTCP, layers.IPProtocolUDP:
-			if dataLen < offset+4 {
-				return ErrIPv6PacketTooShort
-			}
-
-			fp.Protocol = uint8(proto)
-			if incoming {
-				fp.RemotePort = binary.BigEndian.Uint16(data[offset : offset+2])
-				fp.LocalPort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
-			} else {
-				fp.LocalPort = binary.BigEndian.Uint16(data[offset : offset+2])
-				fp.RemotePort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
-			}
-
-			fp.Fragment = false
-			return nil
-
-		case layers.IPProtocolIPv6Fragment:
-			// Fragment header is 8 bytes, need at least offset+4 to read the offset field
-			if dataLen < offset+8 {
-				return ErrIPv6PacketTooShort
-			}
-
-			// Check if this is the first fragment
-			fragmentOffset := binary.BigEndian.Uint16(data[offset+2:offset+4]) &^ uint16(0x7) // Remove the reserved and M flag bits
-			if fragmentOffset != 0 {
-				// Non-first fragment, use what we have now and stop processing
-				fp.Protocol = data[offset]
-				fp.Fragment = true
-				fp.RemotePort = 0
-				fp.LocalPort = 0
-				return nil
-			}
-
-			// The next loop should be the transport layer since we are the first fragment
-			next = 8 // Fragment headers are always 8 bytes
-
-		case layers.IPProtocolAH:
-			// Auth headers, used by IPSec, have a different meaning for header length
-			if dataLen <= offset+1 {
-				break
-			}
-			next = (int(data[offset+1]) + 2) << 2
-
+			fp.RemotePort = binary.BigEndian.Uint16(data[offset+4 : offset+6]) //identifier
 		default:
-			// Normal ipv6 header length processing
-			if dataLen <= offset+1 {
-				break
-			}
-			next = (int(data[offset+1]) + 1) << 3
+			fp.RemotePort = 0
 		}
 
-		if next <= 0 {
-			// Safety check, each ipv6 header has to be at least 8 bytes
-			next = 8
+	case iputil.IPProtocolTCP, iputil.IPProtocolUDP:
+		if dataLen < offset+4 {
+			return ErrIPv6PacketTooShort
+		}
+		if incoming {
+			fp.RemotePort = binary.BigEndian.Uint16(data[offset : offset+2])
+			fp.LocalPort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
+		} else {
+			fp.LocalPort = binary.BigEndian.Uint16(data[offset : offset+2])
+			fp.RemotePort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
 		}
 
-		protoAt = offset
-		offset = offset + next
+	default:
+		// don't set ports for protocols Nebula doesn't inspect
+		fp.RemotePort = 0
+		fp.LocalPort = 0
 	}
 
-	return ErrIPv6CouldNotFindPayload
+	return nil
 }
 
-func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
+func parseV4(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 	// Do we at least have an ipv4 header worth of data?
 	if len(data) < ipv4.HeaderLen {
 		return ErrIPv4PacketTooShort
@@ -446,6 +423,10 @@ func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
 	// Check if this is the second or further fragment of a fragmented packet.
 	flagsfrags := binary.BigEndian.Uint16(data[6:8])
 	fp.Fragment = (flagsfrags & 0x1FFF) != 0
+	// Any fragmentation at all (MF or offset): first fragments have readable ports for the
+	// firewall but must never be coalesced.
+	fp.FragAny = (flagsfrags & 0x3fff) != 0
+	fp.IPHdrLen = ihl
 
 	// Firewall handles protocol checks
 	fp.Protocol = data[9]
@@ -453,7 +434,7 @@ func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
 	// Accounting for a variable header length, do we have enough data for our src/dst tuples?
 	minLen := ihl
 	if !fp.Fragment {
-		if fp.Protocol == firewall.ProtoICMP {
+		if fp.Protocol == iputil.IPProtocolICMP {
 			minLen += minFwPacketLen + 2
 		} else {
 			minLen += minFwPacketLen
@@ -475,7 +456,7 @@ func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
 	if fp.Fragment {
 		fp.RemotePort = 0
 		fp.LocalPort = 0
-	} else if fp.Protocol == firewall.ProtoICMP { //note that orientation doesn't matter on ICMP
+	} else if fp.Protocol == iputil.IPProtocolICMP { //note that orientation doesn't matter on ICMP
 		fp.RemotePort = binary.BigEndian.Uint16(data[ihl+4 : ihl+6]) //identifier
 		fp.LocalPort = 0                                             //code would be uint16(data[ihl+1])
 	} else if incoming {
@@ -489,31 +470,23 @@ func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
 	return nil
 }
 
-func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache) {
-	err := newPacket(out, true, fwPacket)
+func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, messageCounter uint64, out []byte, rxc *rxContext) {
+	err := newPacket(out, true, rxc.fwPacket)
 	if err != nil {
-		hostinfo.logger(f.l).Warn("Error while validating inbound packet",
-			"error", err,
-			"packet", out,
-		)
+		hostinfo.logger(f.l).Warn("Error while validating inbound packet", "error", err, "packet", out)
 		return
 	}
 
-	dropReason := f.firewall.Drop(*fwPacket, true, hostinfo, f.pki.GetCAPool(), localCache)
+	dropReason := f.firewall.Drop(rxc.fwPacket.Packet, true, hostinfo, f.pki.GetCAPool(), rxc.ctCache.Get())
 	if dropReason != nil {
-		// NOTE: We give `packet` as the `out` here since we already decrypted from it and we don't need it anymore
-		// This gives us a buffer to build the reject packet in
-		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, nb, packet, q)
+		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, rxc.nb, rxc.scratch, rxc.q)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.logger(f.l).Debug("dropping inbound packet",
-				"fwPacket", fwPacket,
-				"reason", dropReason,
-			)
+			hostinfo.logger(f.l).Debug("dropping inbound packet", "fwPacket", rxc.fwPacket, "reason", dropReason)
 		}
 		return
 	}
 
-	_, err = f.readers[q].Write(out)
+	err = f.batchers[rxc.q].Commit(out, batch.SortKey{Epoch: hostinfo.ConnectionState.epoch, Counter: messageCounter}, rxc.fwPacket)
 	if err != nil {
 		f.l.Error("Failed to write to tun", "error", err)
 	}

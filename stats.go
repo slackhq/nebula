@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"context"
+	"crypto/fips140"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,7 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	graphite "github.com/cyberdelia/go-metrics-graphite"
 	mp "github.com/nbrownus/go-metrics-prometheus"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -253,7 +253,7 @@ func (s *statsServer) buildRuntime(cfg statsConfig) ([]func(), *http.Server) {
 		// loadStatsConfig already resolved and validated the address; re-parse
 		// the resolved form (no DNS lookup) to get a *net.TCPAddr.
 		addr, _ := net.ResolveTCPAddr(cfg.graphite.protocol, cfg.graphite.resolvedAddr)
-		gcfg := graphite.Config{
+		gcfg := graphiteConfigExport{
 			Addr:          addr,
 			Registry:      metrics.DefaultRegistry,
 			FlushInterval: cfg.interval,
@@ -262,7 +262,7 @@ func (s *statsServer) buildRuntime(cfg statsConfig) ([]func(), *http.Server) {
 			Percentiles:   []float64{0.5, 0.75, 0.95, 0.99, 0.999},
 		}
 		captureFns = append(captureFns, func() {
-			if err := graphite.Once(gcfg); err != nil {
+			if err := graphiteOnce(gcfg); err != nil {
 				s.l.Error("Graphite export failed", "error", err)
 			}
 		})
@@ -288,9 +288,12 @@ func (s *statsServer) buildRuntime(cfg statsConfig) ([]func(), *http.Server) {
 			Name:      "info",
 			Help:      "Version information for the Nebula binary",
 			ConstLabels: prometheus.Labels{
-				"version":      s.buildVersion,
-				"goversion":    runtime.Version(),
-				"boringcrypto": strconv.FormatBool(boringEnabled()),
+				"version":         s.buildVersion,
+				"goversion":       runtime.Version(),
+				"boringcrypto":    strconv.FormatBool(boringEnabled()),
+				"fips140Version":  fips140.Version(),
+				"fips140Enabled":  strconv.FormatBool(fips140.Enabled()),
+				"fips140Enforced": strconv.FormatBool(fips140.Enforced()),
 			},
 		})
 		pr.MustRegister(g)

@@ -73,8 +73,11 @@ jobs:
   build-darwin:
     name: Build Universal Darwin
     env:
-      HAS_SIGNING_CREDS: ${{ secrets.AC_USERNAME != '' }}
+      HAS_SIGNING_CREDS: ${{ secrets.APPLE_SIGNING_ROLE_ARN != '' }}
     runs-on: macos-latest
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v7
 
@@ -83,17 +86,68 @@ jobs:
           go-version: '1.26'
           check-latest: true
 
+      # GitHub holds ARNs, not credentials, and ARNs outlive a rotation
+      - name: Configure AWS credentials
+        if: env.HAS_SIGNING_CREDS == 'true'
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.APPLE_SIGNING_ROLE_ARN }}
+          aws-region: us-east-2
+
+      # parse-json-secrets unpacks into SIGNING_* and ASC_*, masked on the way in
+      - name: Fetch signing credentials
+        if: env.HAS_SIGNING_CREDS == 'true'
+        uses: aws-actions/aws-secretsmanager-get-secrets@v3
+        with:
+          parse-json-secrets: true
+          secret-ids: |
+            SIGNING,${{ secrets.APPLE_SIGNING_DEVELOPER_ID_ARN }}
+            ASC,${{ secrets.APPLE_NOTARY_KEY_ARN }}
+
       - name: Import certificates
         if: env.HAS_SIGNING_CREDS == 'true'
         uses: Apple-Actions/import-codesign-certs@v7
         with:
-          p12-file-base64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
-          p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
+          p12-file-base64: ${{ env.SIGNING_P12_BASE64 }}
+          p12-password: ${{ env.SIGNING_PASSWORD }}
+
+      # The action imports but does not check the chain validates, which is how a p12
+      # missing its intermediate reaches a failing codesign
+      - name: Check the identity is usable
+        if: env.HAS_SIGNING_CREDS == 'true'
+        run: |
+          : "${SIGNING_IDENTITY_SHA1:?empty, so the secret has no identity_sha1}"
+          identities=$(security find-identity -v -p codesigning signing_temp.keychain)
+          case "$identities" in
+          *"$SIGNING_IDENTITY_SHA1"*) ;;
+          *) printf '%s\n' "$identities" >&2; exit 1 ;;
+          esac
+
+      # notarytool wants the key as a file
+      - name: Write the App Store Connect key
+        if: env.HAS_SIGNING_CREDS == 'true'
+        run: |
+          mkdir -p ~/private_keys
+          chmod 700 ~/private_keys
+          key_path="$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          (umask 077; printf '%s\n' "$ASC_PRIVATE_KEY" > "$key_path")
+          echo "ASC_P8=$key_path" >> "$GITHUB_ENV"
+
+      - name: Drop the credentials from the environment
+        if: env.HAS_SIGNING_CREDS == 'true'
+        run: |
+          # The action's own inventory, so a new field in a secret is covered
+          python3 -c '
+          import json, os
+          raw = os.environ.get("SECRETS_LIST_CLEAN_UP")
+          if raw is None and os.environ.get("SIGNING_P12_BASE64"):
+              raise SystemExit("SECRETS_LIST_CLEAN_UP is gone, fetched secrets are not being scrubbed")
+          keep = {"SIGNING_IDENTITY_SHA1", "ASC_KEY_ID", "ASC_ISSUER_ID"}
+          names = [n for n in json.loads(raw or "[]") if n not in keep]
+          print("\n".join(f"{n}=" for n in dict.fromkeys(names)))
+          ' >> "$GITHUB_ENV"
 
       - name: Build, sign, and notarize
-        env:
-          AC_USERNAME: ${{ secrets.AC_USERNAME }}
-          AC_PASSWORD: ${{ secrets.AC_PASSWORD }}
         run: |
           rm -rf release
           mkdir release
@@ -102,16 +156,33 @@ jobs:
           lipo -create -output ./release/nebula ./build/darwin-amd64/nebula ./build/darwin-arm64/nebula
           lipo -create -output ./release/nebula-cert ./build/darwin-amd64/nebula-cert ./build/darwin-arm64/nebula-cert
 
-          if [ -n "$AC_USERNAME" ]; then
-            codesign -s "10BC1FDDEB6CE753550156C0669109FAC49E4D1E" -f -v --timestamp --options=runtime -i "net.defined.nebula" ./release/nebula
-            codesign -s "10BC1FDDEB6CE753550156C0669109FAC49E4D1E" -f -v --timestamp --options=runtime -i "net.defined.nebula-cert" ./release/nebula-cert
+          # Unset in a fork, which has no credentials to sign with
+          if [ -n "$SIGNING_IDENTITY_SHA1" ]; then
+            codesign -s "$SIGNING_IDENTITY_SHA1" -f -v --timestamp --options=runtime -i "net.defined.nebula" ./release/nebula
+            codesign -s "$SIGNING_IDENTITY_SHA1" -f -v --timestamp --options=runtime -i "net.defined.nebula-cert" ./release/nebula-cert
           fi
 
           zip -j release/nebula-darwin.zip release/nebula-cert release/nebula
 
-          if [ -n "$AC_USERNAME" ]; then
-            xcrun notarytool submit ./release/nebula-darwin.zip --team-id "576H3XS7FP" --apple-id "$AC_USERNAME" --password "$AC_PASSWORD" --wait
+          if [ -n "$ASC_P8" ]; then
+            xcrun notarytool submit ./release/nebula-darwin.zip --key "$ASC_P8" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" --wait
           fi
+
+      - name: Drop the signing key
+        if: always() && env.HAS_SIGNING_CREDS == 'true'
+        run: |
+          # Locked, not deleted: import-codesign-certs deletes it in its own post
+          # step and fails the job if it is already gone. Locked is unusable.
+          security lock-keychain signing_temp.keychain || true
+          rm -f "$ASC_P8"
+          # Nothing later in this job needs AWS
+          python3 -c '
+          import json, os
+          names = json.loads(os.environ.get("SECRETS_LIST_CLEAN_UP") or "[]")
+          names += ["ASC_P8", "SIGNING_IDENTITY_SHA1", "ASC_KEY_ID", "ASC_ISSUER_ID",
+                    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]
+          print("\n".join(f"{n}=" for n in dict.fromkeys(names)))
+          ' >> "$GITHUB_ENV"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7

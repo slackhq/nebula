@@ -749,8 +749,14 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		return
 	}
 
+	connState, err := newConnectionStateFromResult(result)
+	if err != nil {
+		f.l.Error("Discarding handshake with an invalid message index", "error", err, "vpnAddrs", vpnAddrs)
+		return
+	}
+
 	hostinfo := &HostInfo{
-		ConnectionState:   newConnectionStateFromResult(result),
+		ConnectionState:   connState,
 		localIndexId:      result.LocalIndex,
 		remoteIndexId:     result.RemoteIndex,
 		vpnAddrs:          vpnAddrs,
@@ -868,7 +874,13 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	}
 
 	// Handshake complete; build the ConnectionState now that we have keys and a verified peer cert.
-	hostinfo.ConnectionState = newConnectionStateFromResult(result)
+	cs, err := newConnectionStateFromResult(result)
+	if err != nil {
+		f.l.Error("Discarding handshake with an invalid message index", "error", err, "vpnAddrs", hostinfo.vpnAddrs)
+		hm.DeleteHostInfo(hostinfo)
+		return
+	}
+	hostinfo.ConnectionState = cs
 
 	remoteCert := result.RemoteCert
 	if remoteCert == nil {
@@ -975,6 +987,9 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		nb := make([]byte, 12, 12)
 		out := make([]byte, mtu)
 		for _, cp := range hh.packetStore {
+			// TODO: use a SendBatch here. Each callback lands in
+			// sendNoMetrics -> WriteTo: one syscall per cached packet,
+			// where one sendmmsg could flush the whole store.
 			cp.callback(cp.messageType, cp.messageSubType, hostinfo, cp.packet, nb, out)
 		}
 		f.cachedPacketMetrics.sent.Inc(int64(len(hh.packetStore)))
@@ -1086,7 +1101,7 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 		// We received a valid handshake on this relay, so make sure the relay
 		// state reflects that, in case it had been marked Disestablished.
 		via.relayHI.relayState.UpdateRelayForByIdxState(via.relay.LocalIndex, Established)
-		f.SendVia(via.relayHI, via.relay, msg, make([]byte, 12), make([]byte, mtu), false)
+		f.SendVia(via.relayHI, via.relay, msg, make([]byte, 12), make([]byte, mtu), false, 0)
 		f.l.Info("Handshake message sent", append(logFields, "relay", via.relayHI.vpnAddrs[0])...)
 	}
 }

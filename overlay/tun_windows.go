@@ -1,23 +1,23 @@
 //go:build !e2e_testing
-// +build !e2e_testing
 
 package overlay
 
 import (
 	"crypto"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	"github.com/slackhq/nebula/wintun"
@@ -45,6 +45,10 @@ type winTun struct {
 	l               *slog.Logger
 
 	tun *wintun.NativeTun
+}
+
+func (t *winTun) Read(b []byte) (int, error) {
+	return t.tun.Read(b, 0)
 }
 
 func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (Device, error) {
@@ -178,12 +182,16 @@ func (t *winTun) addRoutes(logErrors bool) error {
 	luid := winipcfg.LUID(t.tun.LUID())
 	routes := *t.Routes.Load()
 	foundDefault4 := false
+	carriesV6 := slices.ContainsFunc(t.vpnNetworks, func(p netip.Prefix) bool { return p.Addr().Is6() })
 
 	for _, r := range routes {
 		if len(r.Via) == 0 || !r.Install {
 			// We don't allow route MTUs so only install routes with a via
 			continue
 		}
+
+		// A v6 unsafe_route is legal under a v4-only cert; uninstalled ones put nothing on the adapter.
+		carriesV6 = carriesV6 || r.Cidr.Addr().Is6()
 
 		// Add our unsafe route as an on-link route to the nebula tun device.
 		err := luid.AddRoute(r.Cidr, unspecifiedNextHop(r.Cidr), uint32(r.Metric))
@@ -206,6 +214,11 @@ func (t *winTun) addRoutes(logErrors bool) error {
 		}
 	}
 
+	return t.setMTU(luid, foundDefault4, carriesV6)
+}
+
+// setMTU applies tun.mtu per address family. The default route metric rides along on the v4 handle.
+func (t *winTun) setMTU(luid winipcfg.LUID, foundDefault4, carriesV6 bool) error {
 	ipif, err := luid.IPInterface(windows.AF_INET)
 	if err != nil {
 		return fmt.Errorf("failed to get ip interface: %w", err)
@@ -220,6 +233,25 @@ func (t *winTun) addRoutes(logErrors bool) error {
 	if err := ipif.Set(); err != nil {
 		return fmt.Errorf("failed to set ip interface: %w", err)
 	}
+
+	// Windows tracks NLMTU per family and wintun sets neither, so v6 keeps the adapter default of 65535.
+	// Gated so a v4-only overlay under 1280 boots; a v6 one deliberately does not, as linux also refuses.
+	if !carriesV6 {
+		return nil
+	}
+
+	ipif6, err := luid.IPInterface(windows.AF_INET6)
+	if err != nil {
+		// No v6 on the adapter means there is no NLMTU to get wrong. A failed Set below is not the same thing.
+		t.l.Info("Skipping ipv6 MTU, no ipv6 interface on this adapter", "error", err)
+		return nil
+	}
+
+	ipif6.NLMTU = uint32(t.MTU)
+	if err := ipif6.Set(); err != nil {
+		return fmt.Errorf("failed to set ipv6 interface: %w", err)
+	}
+
 	return nil
 }
 
@@ -255,20 +287,12 @@ func (t *winTun) Name() string {
 	return t.Device
 }
 
-func (t *winTun) Read(b []byte) (int, error) {
-	return t.tun.Read(b, 0)
-}
-
 func (t *winTun) Write(b []byte) (int, error) {
 	return t.tun.Write(b, 0)
 }
 
-func (t *winTun) SupportsMultiqueue() bool {
-	return false
-}
-
-func (t *winTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented for windows")
+func (t *winTun) Queues(int) ([]tio.Queue, error) {
+	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}, nil
 }
 
 func (t *winTun) Close() error {

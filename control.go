@@ -115,7 +115,7 @@ func (c *Control) Start() error {
 		c.lighthouseStart()
 	}
 
-	c.f.triggerShutdown = c.Stop
+	c.f.triggerShutdown = func() { go c.Stop() }
 
 	// Start reading packets.
 	c.f.run()
@@ -212,7 +212,7 @@ func (c *Control) RebindUDPServer() {
 	c.f.lightHouse.SendUpdate()
 
 	// Let the main interface know that we rebound so that underlying tunnels know to trigger punches from their remotes
-	c.f.rebindCount++
+	c.f.rebindEpoch.Add(1)
 }
 
 // ListHostmapHosts returns details about the actual or pending (handshaking) hostmap by vpn ip

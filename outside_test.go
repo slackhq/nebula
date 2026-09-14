@@ -9,15 +9,17 @@ import (
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+	"github.com/slackhq/nebula/iputil"
 
 	"github.com/slackhq/nebula/firewall"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 )
 
 func Test_newPacket(t *testing.T) {
-	p := &firewall.Packet{}
+	p := &firewall.ParsedPacket{}
 
 	// length fails
 	err := newPacket([]byte{}, true, p)
@@ -57,7 +59,7 @@ func Test_newPacket(t *testing.T) {
 		Src:      net.IPv4(10, 0, 0, 1),
 		Dst:      net.IPv4(10, 0, 0, 2),
 		Options:  []byte{0, 1, 0, 2},
-		Protocol: firewall.ProtoTCP,
+		Protocol: iputil.IPProtocolTCP,
 	}
 
 	b, _ = h.Marshal()
@@ -65,7 +67,7 @@ func Test_newPacket(t *testing.T) {
 	err = newPacket(b, true, p)
 
 	require.NoError(t, err)
-	assert.Equal(t, uint8(firewall.ProtoTCP), p.Protocol)
+	assert.Equal(t, uint8(iputil.IPProtocolTCP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("10.0.0.2"), p.LocalAddr)
 	assert.Equal(t, netip.MustParseAddr("10.0.0.1"), p.RemoteAddr)
 	assert.Equal(t, uint16(3), p.RemotePort)
@@ -96,7 +98,7 @@ func Test_newPacket(t *testing.T) {
 }
 
 func Test_newPacket_v6(t *testing.T) {
-	p := &firewall.Packet{}
+	p := &firewall.ParsedPacket{}
 
 	// invalid ipv6
 	ip := layers.IPv6{
@@ -115,12 +117,12 @@ func Test_newPacket_v6(t *testing.T) {
 	require.NoError(t, err)
 
 	err = newPacket(buffer.Bytes(), true, p)
-	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
 
 	// A v6 packet with a hop-by-hop extension
 	// ICMPv6 Payload (Echo Request)
 	icmpLayer := layers.ICMPv6{
-		TypeCode: layers.ICMPv6TypeEchoRequest,
+		TypeCode: layers.CreateICMPv6TypeCode(layers.ICMPv6TypeEchoRequest, 0),
 	}
 	// Hop-by-Hop Extension Header
 	hopOption := layers.IPv6HopByHopOption{}
@@ -149,12 +151,12 @@ func Test_newPacket_v6(t *testing.T) {
 	// A full IPv6 header and 1 byte in the first extension, but missing
 	// the length byte.
 	err = newPacket(buffer.Bytes()[:41], true, p)
-	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
 
 	// A full IPv6 header plus 1 full extension, but only 1 byte of the
 	// next layer, missing length byte
 	err = newPacket(buffer.Bytes()[:49], true, p)
-	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
 	err = nil
 
 	// A good ICMP packet
@@ -167,7 +169,7 @@ func Test_newPacket_v6(t *testing.T) {
 	}
 
 	icmp := layers.ICMPv6{
-		TypeCode: layers.ICMPv6TypeEchoRequest,
+		TypeCode: layers.CreateICMPv6TypeCode(layers.ICMPv6TypeEchoRequest, 0),
 		Checksum: 0x1234,
 	}
 
@@ -186,6 +188,18 @@ func Test_newPacket_v6(t *testing.T) {
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
 	assert.Equal(t, uint16(0xabcd), p.RemotePort)
+	assert.Equal(t, uint16(0), p.LocalPort)
+	assert.False(t, p.Fragment)
+
+	// A minimal 4 byte non-echo ICMPv6 message (type, code, checksum), no identifier to read
+	icmpMin := make([]byte, ipv6.HeaderLen+4)
+	copy(icmpMin, buffer.Bytes()[:ipv6.HeaderLen])
+	icmpMin[6] = byte(layers.IPProtocolICMPv6)
+	icmpMin[ipv6.HeaderLen] = 1 // type 1, destination unreachable, not echo
+	err = newPacket(icmpMin, true, p)
+	require.NoError(t, err)
+	assert.Equal(t, uint8(layers.IPProtocolICMPv6), p.Protocol)
+	assert.Equal(t, uint16(0), p.RemotePort)
 	assert.Equal(t, uint16(0), p.LocalPort)
 	assert.False(t, p.Fragment)
 
@@ -213,16 +227,20 @@ func Test_newPacket_v6(t *testing.T) {
 	assert.Equal(t, uint16(0), p.LocalPort)
 	assert.False(t, p.Fragment)
 
-	// An unknown protocol packet
+	// An unknown protocol packet, we don't dissect it so we fail closed on its true protocol with no ports
 	b = buffer.Bytes()
 	b[6] = 255 // 255 is a reserved protocol number
 	err = newPacket(b, true, p)
-	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	require.NoError(t, err)
+	assert.Equal(t, uint8(255), p.Protocol)
+	assert.Equal(t, uint16(0), p.RemotePort)
+	assert.Equal(t, uint16(0), p.LocalPort)
+	assert.False(t, p.Fragment)
 
 	// A good UDP packet
 	ip = layers.IPv6{
 		Version:    6,
-		NextHeader: firewall.ProtoUDP,
+		NextHeader: iputil.IPProtocolUDP,
 		HopLimit:   128,
 		SrcIP:      net.IPv6linklocalallrouters,
 		DstIP:      net.IPv6linklocalallnodes,
@@ -245,7 +263,7 @@ func Test_newPacket_v6(t *testing.T) {
 	// incoming
 	err = newPacket(b, true, p)
 	require.NoError(t, err)
-	assert.Equal(t, uint8(firewall.ProtoUDP), p.Protocol)
+	assert.Equal(t, uint8(iputil.IPProtocolUDP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
 	assert.Equal(t, uint16(36123), p.RemotePort)
@@ -255,7 +273,7 @@ func Test_newPacket_v6(t *testing.T) {
 	// outgoing
 	err = newPacket(b, false, p)
 	require.NoError(t, err)
-	assert.Equal(t, uint8(firewall.ProtoUDP), p.Protocol)
+	assert.Equal(t, uint8(iputil.IPProtocolUDP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.LocalAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.RemoteAddr)
 	assert.Equal(t, uint16(36123), p.LocalPort)
@@ -272,7 +290,7 @@ func Test_newPacket_v6(t *testing.T) {
 	// incoming
 	err = newPacket(b, true, p)
 	require.NoError(t, err)
-	assert.Equal(t, uint8(firewall.ProtoTCP), p.Protocol)
+	assert.Equal(t, uint8(iputil.IPProtocolTCP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
 	assert.Equal(t, uint16(36123), p.RemotePort)
@@ -282,7 +300,7 @@ func Test_newPacket_v6(t *testing.T) {
 	// outgoing
 	err = newPacket(b, false, p)
 	require.NoError(t, err)
-	assert.Equal(t, uint8(firewall.ProtoTCP), p.Protocol)
+	assert.Equal(t, uint8(iputil.IPProtocolTCP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.LocalAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.RemoteAddr)
 	assert.Equal(t, uint16(36123), p.LocalPort)
@@ -327,25 +345,25 @@ func Test_newPacket_v6(t *testing.T) {
 
 	err = newPacket(b, true, p)
 	require.NoError(t, err)
-	assert.Equal(t, uint8(firewall.ProtoUDP), p.Protocol)
+	assert.Equal(t, uint8(iputil.IPProtocolUDP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
 	assert.Equal(t, uint16(36123), p.RemotePort)
 	assert.Equal(t, uint16(22), p.LocalPort)
 	assert.False(t, p.Fragment)
 
-	// Ensure buffer bounds checking during processing
+	// Ensure buffer bounds checking during processing, a truncated AH header can't reach the payload
 	err = newPacket(b[:41], true, p)
 	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
 
 	// Invalid AH header
 	b = buffer.Bytes()
 	err = newPacket(b, true, p)
-	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
 }
 
 func Test_newPacket_ipv6Fragment(t *testing.T) {
-	p := &firewall.Packet{}
+	p := &firewall.ParsedPacket{}
 
 	ip := &layers.IPv6{
 		Version:    6,
@@ -525,7 +543,7 @@ func BenchmarkParseV6(b *testing.B) {
 	secondFrag = append(secondFrag, fragHeader...)
 	secondFrag = append(secondFrag, []byte{0xde, 0xad, 0xbe, 0xef}...)
 
-	fp := &firewall.Packet{}
+	fp := &firewall.ParsedPacket{}
 
 	b.Run("Normal", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
@@ -649,7 +667,7 @@ func serializeAH(ah *layers.IPSecAH) []byte {
 // host OS parses the real header, a firewall port/proto bypass. The fix makes parseV6 land
 // on the same offset the host does.
 func Test_newPacket_v6ExtHeaderOverflow(t *testing.T) {
-	p := &firewall.Packet{}
+	p := &firewall.ParsedPacket{}
 
 	const (
 		hdrLen      = 40              // IPv6 header
@@ -661,7 +679,7 @@ func Test_newPacket_v6ExtHeaderOverflow(t *testing.T) {
 	pkt := make([]byte, realTCPAt+4)
 	pkt[0] = 0x60                                   // version 6
 	pkt[6] = byte(layers.IPProtocolIPv6Destination) // NextHeader -> Destination Options
-	pkt[40] = byte(firewall.ProtoTCP)               // Dest-Options NextHeader -> TCP
+	pkt[40] = byte(iputil.IPProtocolTCP)            // Dest-Options NextHeader -> TCP
 	pkt[41] = 255                                   // HdrExtLen = 255
 
 	// Forged transport header at the pre-fix (wrong) offset: dst port 443.
@@ -670,8 +688,156 @@ func Test_newPacket_v6ExtHeaderOverflow(t *testing.T) {
 	binary.BigEndian.PutUint16(pkt[realTCPAt+2:realTCPAt+4], 22)
 
 	require.NoError(t, newPacket(pkt, true, p))
-	assert.Equal(t, uint8(firewall.ProtoTCP), p.Protocol)
+	assert.Equal(t, uint8(iputil.IPProtocolTCP), p.Protocol)
 	// LocalPort is the destination port for incoming traffic. It must be the real port (22)
 	// the host delivers to, not the forged 443 at the overflowed offset.
 	assert.Equal(t, uint16(22), p.LocalPort, "firewall must parse the real transport header, not the overflowed offset")
+}
+
+// Test_newPacket_v6ExtHeaderPastBuffer is a regression test for an extension header whose declared length
+// advances the walk past the end of the packet. The upper layer protocol's header isn't actually present,
+// so parseV6 must drop the packet rather than classify it as the terminal protocol with no ports.
+func Test_newPacket_v6ExtHeaderPastBuffer(t *testing.T) {
+	p := &firewall.ParsedPacket{}
+
+	pkt := make([]byte, 48)
+	pkt[0] = 0x60
+	pkt[6] = byte(layers.IPProtocolIPv6Destination) // Destination Options
+	pkt[7] = 64                                     // hop limit
+	pkt[40] = byte(layers.IPProtocolSCTP)           // Dest Options next header = SCTP
+	pkt[41] = 255                                   // declared length (255+1)*8 = 2048, past the 48 byte buffer
+
+	require.ErrorIs(t, newPacket(pkt, true, p), ErrIPv6PacketTooShort)
+}
+
+// Test_newPacket_v6ExtHeaderConfusion is a regression test for parseV6 walking any unrecognized
+// Next Header as if it were an ipv6 extension header. A real upper layer protocol Nebula doesn't
+// dissect (SCTP here) is not walkable, so applying the (len+1)*8 formula marched into the SCTP
+// payload and landed on a byte that looked like UDP, forging a protocol/port pair the firewall
+// would trust while the host delivered the real SCTP datagram. The fix fails closed: the packet
+// is classified as its true protocol with no ports, so it only matches an `any` rule.
+func Test_newPacket_v6ExtHeaderConfusion(t *testing.T) {
+	p := &firewall.ParsedPacket{}
+
+	pkt := make([]byte, 52)
+	pkt[0] = 0x60                        // version 6
+	pkt[6] = byte(layers.IPProtocolSCTP) // NextHeader = SCTP, a real protocol, not an extension header
+	pkt[7] = 64                          // hop limit
+
+	// Real SCTP header at offset 40. Pre-fix parseV6 walked SCTP as an extension header: byte 41 (0x00, the
+	// low byte of the src port below) was read as the header length, giving next=(0+1)*8=8, which landed the
+	// walk on byte 40 (0x11), misread as NextHeader=UDP, then bytes 48-51 as ports.
+	binary.BigEndian.PutUint16(pkt[40:42], 0x1100) // SCTP src port; byte 40=0x11, byte 41=0x00
+	binary.BigEndian.PutUint16(pkt[42:44], 445)    // SCTP dst port, never read by parseV6
+	binary.BigEndian.PutUint16(pkt[48:50], 53)     // SCTP checksum bytes, pre-fix forged RemotePort
+	binary.BigEndian.PutUint16(pkt[50:52], 53)     // pre-fix forged LocalPort
+
+	require.NoError(t, newPacket(pkt, true, p))
+	assert.Equal(t, uint8(layers.IPProtocolSCTP), p.Protocol, "must classify as the true protocol, not the forged UDP")
+	assert.Equal(t, uint16(0), p.RemotePort)
+	assert.Equal(t, uint16(0), p.LocalPort)
+	assert.False(t, p.Fragment)
+
+	// Same confusion, but the unknown protocol sits after a real extension header. The HopByHop is walked
+	// correctly, then SCTP must still fail closed instead of being walked into its own payload. Protocol is
+	// the only assertion that discriminates the fix here, a regression that walked SCTP would misclassify it.
+	chained := make([]byte, 60)
+	chained[0] = 0x60                                  // version 6
+	chained[6] = byte(layers.IPProtocolIPv6HopByHop)   // NextHeader = HopByHop extension
+	chained[7] = 64                                    // hop limit
+	chained[40] = byte(layers.IPProtocolSCTP)          // HopByHop NextHeader = SCTP
+	chained[41] = 0                                    // HopByHop length 0 -> 8 bytes, SCTP begins at offset 48
+	binary.BigEndian.PutUint16(chained[48:50], 0x1100) // SCTP src port, pre-fix forged NextHeader/length bait
+	binary.BigEndian.PutUint16(chained[50:52], 445)    // SCTP dst port, never read by parseV6
+
+	require.NoError(t, newPacket(chained, true, p))
+	assert.Equal(t, uint8(layers.IPProtocolSCTP), p.Protocol, "must fail closed on the unknown protocol after the extension header")
+	assert.Equal(t, uint16(0), p.RemotePort)
+	assert.Equal(t, uint16(0), p.LocalPort)
+	assert.False(t, p.Fragment)
+}
+
+// Test_newPacket_parsedFields pins the ParsedPacket byproducts the RX
+// batcher consumes: IPHdrLen (the true L4 offset) and FragAny (any fragment
+// shape at all — unlike Packet.Fragment, which is port-oriented and true
+// only for non-first fragments).
+func Test_newPacket_parsedFields(t *testing.T) {
+	p := &firewall.ParsedPacket{}
+
+	// Plain IPv4 TCP, IHL 20: L4 offset 20, no fragment shape.
+	v4 := make([]byte, 28)
+	v4[0] = 0x45
+	v4[9] = iputil.IPProtocolTCP
+	binary.BigEndian.PutUint16(v4[6:8], 0x4000) // DF only
+	require.NoError(t, newPacket(v4, true, p))
+	assert.Equal(t, 20, p.IPHdrLen)
+	assert.False(t, p.FragAny)
+	assert.False(t, p.Fragment)
+
+	// IPv4 first fragment (MF set, offset 0): the firewall can read ports
+	// (Fragment false) but the coalescer must not touch it (FragAny true).
+	ff := make([]byte, 28)
+	ff[0] = 0x45
+	ff[9] = iputil.IPProtocolUDP
+	binary.BigEndian.PutUint16(ff[6:8], 0x2000) // MF, offset 0
+	require.NoError(t, newPacket(ff, true, p))
+	assert.False(t, p.Fragment)
+	assert.True(t, p.FragAny)
+	assert.Equal(t, 20, p.IPHdrLen)
+
+	// IPv4 non-first fragment (nonzero offset): both flags set.
+	nf := make([]byte, 28)
+	nf[0] = 0x45
+	nf[9] = iputil.IPProtocolUDP
+	binary.BigEndian.PutUint16(nf[6:8], 0x00b9)
+	require.NoError(t, newPacket(nf, true, p))
+	assert.True(t, p.Fragment)
+	assert.True(t, p.FragAny)
+
+	// IPv4 with options (IHL 24): IPHdrLen tracks the real L4 offset.
+	opts := make([]byte, 32)
+	opts[0] = 0x46
+	opts[9] = iputil.IPProtocolTCP
+	binary.BigEndian.PutUint16(opts[6:8], 0x4000)
+	require.NoError(t, newPacket(opts, true, p))
+	assert.Equal(t, 24, p.IPHdrLen)
+	assert.False(t, p.FragAny)
+
+	// Plain IPv6 TCP: L4 at 40.
+	v6 := make([]byte, 60)
+	v6[0] = 0x60
+	v6[6] = iputil.IPProtocolTCP
+	require.NoError(t, newPacket(v6, true, p))
+	assert.Equal(t, 40, p.IPHdrLen)
+	assert.False(t, p.FragAny)
+
+	// IPv6 hop-by-hop then TCP: IPHdrLen lands past the extension header.
+	hbh := make([]byte, 60)
+	hbh[0] = 0x60
+	hbh[6] = 0 // hop-by-hop
+	hbh[40] = iputil.IPProtocolTCP
+	hbh[41] = 0 // HdrExtLen 0 -> 8-byte header
+	require.NoError(t, newPacket(hbh, true, p))
+	assert.Equal(t, 48, p.IPHdrLen)
+	assert.False(t, p.FragAny)
+
+	// IPv6 first fragment: terminal proto resolved, FragAny set, Fragment not.
+	f6 := make([]byte, 60)
+	f6[0] = 0x60
+	f6[6] = 44 // fragment extension header
+	f6[40] = iputil.IPProtocolUDP
+	require.NoError(t, newPacket(f6, true, p))
+	assert.True(t, p.FragAny)
+	assert.False(t, p.Fragment)
+	assert.Equal(t, uint8(iputil.IPProtocolUDP), p.Protocol)
+
+	// IPv6 non-first fragment: both set, walk stops at the fragment header.
+	f6n := make([]byte, 60)
+	f6n[0] = 0x60
+	f6n[6] = 44
+	f6n[40] = iputil.IPProtocolUDP
+	binary.BigEndian.PutUint16(f6n[42:44], 0x0008)
+	require.NoError(t, newPacket(f6n, true, p))
+	assert.True(t, p.Fragment)
+	assert.True(t, p.FragAny)
 }

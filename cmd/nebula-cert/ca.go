@@ -3,11 +3,14 @@ package main
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/fips140"
 	"crypto/rand"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"math"
+	"math/bits"
 	"net/netip"
 	"os"
 	"strings"
@@ -43,7 +46,28 @@ type caFlags struct {
 	subnets *string
 }
 
+func defaultCurve() string {
+	if fips140.Enforced() {
+		return "P256"
+	}
+	return "25519"
+}
+
 func newCaFlags() *caFlags {
+	// prevent running out of memory on 32-bit systems by defaulting to
+	// RFC9106's recommendation for memory-constrained environments
+	var (
+		defaultArgonMemory     uint
+		defaultArgonIterations uint
+	)
+	if bits.UintSize == 32 {
+		defaultArgonMemory = 64 * 1024
+		defaultArgonIterations = 3
+	} else {
+		defaultArgonMemory = 2 * 1024 * 1024
+		defaultArgonIterations = 1
+	}
+
 	cf := caFlags{set: flag.NewFlagSet("ca", flag.ContinueOnError)}
 	cf.set.Usage = func() {}
 	cf.name = cf.set.String("name", "", "Required: name of the certificate authority")
@@ -55,11 +79,11 @@ func newCaFlags() *caFlags {
 	cf.groups = cf.set.String("groups", "", "Optional: comma separated list of groups. This will limit which groups subordinate certs can use")
 	cf.networks = cf.set.String("networks", "", "Optional: comma separated list of ip address and network in CIDR notation. This will limit which ip addresses and networks subordinate certs can use in networks")
 	cf.unsafeNetworks = cf.set.String("unsafe-networks", "", "Optional: comma separated list of ip address and network in CIDR notation. This will limit which ip addresses and networks subordinate certs can use in unsafe networks")
-	cf.argonMemory = cf.set.Uint("argon-memory", 2*1024*1024, "Optional: Argon2 memory parameter (in KiB) used for encrypted private key passphrase")
+	cf.argonMemory = cf.set.Uint("argon-memory", defaultArgonMemory, "Optional: Argon2 memory parameter (in KiB) used for encrypted private key passphrase")
 	cf.argonParallelism = cf.set.Uint("argon-parallelism", 4, "Optional: Argon2 parallelism parameter used for encrypted private key passphrase")
-	cf.argonIterations = cf.set.Uint("argon-iterations", 1, "Optional: Argon2 iterations parameter used for encrypted private key passphrase")
+	cf.argonIterations = cf.set.Uint("argon-iterations", defaultArgonIterations, "Optional: Argon2 iterations parameter used for encrypted private key passphrase")
 	cf.encryption = cf.set.Bool("encrypt", false, "Optional: prompt for passphrase and write out-key in an encrypted format")
-	cf.curve = cf.set.String("curve", "25519", "EdDSA/ECDSA Curve (25519, P256)")
+	cf.curve = cf.set.String("curve", defaultCurve(), "EdDSA/ECDSA Curve (25519, P256)")
 	cf.p11url = p11Flag(cf.set)
 
 	cf.ips = cf.set.String("ips", "", "Deprecated, see -networks")
@@ -127,7 +151,7 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 
 	var groups []string
 	if *cf.groups != "" {
-		for _, rg := range strings.Split(*cf.groups, ",") {
+		for rg := range strings.SplitSeq(*cf.groups, ",") {
 			g := strings.TrimSpace(rg)
 			if g != "" {
 				groups = append(groups, g)
@@ -147,7 +171,7 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 	}
 
 	if *cf.networks != "" {
-		for _, rs := range strings.Split(*cf.networks, ",") {
+		for rs := range strings.SplitSeq(*cf.networks, ",") {
 			rs := strings.Trim(rs, " ")
 			if rs != "" {
 				n, err := netip.ParsePrefix(rs)
@@ -169,7 +193,7 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 	}
 
 	if *cf.unsafeNetworks != "" {
-		for _, rs := range strings.Split(*cf.unsafeNetworks, ",") {
+		for rs := range strings.SplitSeq(*cf.unsafeNetworks, ",") {
 			rs := strings.Trim(rs, " ")
 			if rs != "" {
 				n, err := netip.ParsePrefix(rs)
@@ -197,7 +221,7 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 	if !isP11 && *cf.encryption {
 		passphrase = []byte(os.Getenv("NEBULA_CA_PASSPHRASE"))
 		if len(passphrase) == 0 {
-			for i := 0; i < 5; i++ {
+			for range 5 {
 				errOut.Write([]byte("Enter passphrase: "))
 				passphrase, err = pr.ReadPassword()
 
@@ -244,6 +268,9 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 	} else {
 		switch *cf.curve {
 		case "25519", "X25519", "Curve25519", "CURVE25519":
+			if fips140.Enforced() {
+				return errors.New("use of Curve25519 is not allowed in FIPS 140-only mode")
+			}
 			curve = cert.Curve_CURVE25519
 			pub, rawPriv, err = ed25519.GenerateKey(rand.Reader)
 			if err != nil {

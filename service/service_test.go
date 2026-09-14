@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"testing"
@@ -89,7 +91,23 @@ func newSimpleService(caCrt cert.Certificate, caKey []byte, name string, udpIp n
 	return s
 }
 
+// ephemeralUDPPort reserves a free UDP port by binding port 0, then releases
+// it for the caller to use. A fixed port would collide with concurrent test
+// runs or an unrelated process (say, a real nebula) already listening on it.
+func ephemeralUDPPort(t *testing.T) int {
+	t.Helper()
+	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := pc.LocalAddr().(*net.UDPAddr).Port
+	_ = pc.Close()
+	return port
+}
+
 func TestService(t *testing.T) {
+	lighthousePort := ephemeralUDPPort(t)
+
 	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
 	a := newSimpleService(ca, caKey, "a", netip.MustParseAddr("10.0.0.1"), m{
 		"static_host_map": m{},
@@ -98,12 +116,12 @@ func TestService(t *testing.T) {
 		},
 		"listen": m{
 			"host": "0.0.0.0",
-			"port": 4243,
+			"port": lighthousePort,
 		},
 	})
 	b := newSimpleService(ca, caKey, "b", netip.MustParseAddr("10.0.0.2"), m{
 		"static_host_map": m{
-			"10.0.0.1": []string{"localhost:4243"},
+			"10.0.0.1": []string{fmt.Sprintf("localhost:%d", lighthousePort)},
 		},
 		"lighthouse": m{
 			"hosts":    []string{"10.0.0.1"},

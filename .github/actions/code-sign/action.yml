@@ -43,8 +43,15 @@ runs:
       with:
         role-to-assume: ${{ inputs.role }}
         aws-region: ${{ inputs.region }}
-        # Default is 12 retries to ride out IAM trust-policy propagation; once
-        # the role is stable we want a real misconfiguration to fail fast.
+        # An STS secret key with special characters does not survive the
+        # pwsh -> make -> MSYS sh -> aws.exe chain, and SigV4 then signs with a
+        # key that no longer matches, so the first S3 upload fails with
+        # SignatureDoesNotMatch. Retries the assume until it comes back clean.
+        # Same fix as DefinedNet/dnclient#867.
+        special-characters-workaround: true
+        # Overridden by the workaround above and kept for whenever that goes:
+        # the default 12 rides out IAM trust-policy propagation, and once the
+        # role is stable a real misconfiguration should fail fast.
         retry-max-attempts: 5
 
     - name: Sign .exe files

@@ -51,15 +51,19 @@ wsl -d $Distro -- bash -c "rm -rf $WslDir && mkdir -p $WslDir" | Out-Null
 $DevName = 'nebula-smoke'
 $Ip1 = '192.168.241.1'
 $Ip2 = '192.168.241.2'
+# Dual stack on purpose: a v4-only overlay never exercises the v6 side of tun.mtu.
+$Ip6_1 = 'fd42:4242:241::1'
+$Ip6_2 = 'fd42:4242:241::2'
+$Mtu = 1300
 $Port = 4242
 
 & $NebulaCert ca -name 'smoke-ca' -out-crt "$WorkDir\ca.crt" -out-key "$WorkDir\ca.key"
 if ($LASTEXITCODE -ne 0) { throw "nebula-cert ca failed (exit $LASTEXITCODE)" }
 
-& $NebulaCert sign -name 'lighthouse' -networks "$Ip1/24" -ca-crt "$WorkDir\ca.crt" -ca-key "$WorkDir\ca.key" -out-crt "$WorkDir\lighthouse.crt" -out-key "$WorkDir\lighthouse.key"
+& $NebulaCert sign -name 'lighthouse' -networks "$Ip1/24,$Ip6_1/64" -ca-crt "$WorkDir\ca.crt" -ca-key "$WorkDir\ca.key" -out-crt "$WorkDir\lighthouse.crt" -out-key "$WorkDir\lighthouse.key"
 if ($LASTEXITCODE -ne 0) { throw "nebula-cert sign lighthouse failed (exit $LASTEXITCODE)" }
 
-& $NebulaCert sign -name 'peer' -networks "$Ip2/24" -ca-crt "$WorkDir\ca.crt" -ca-key "$WorkDir\ca.key" -out-crt "$WorkDir\peer.crt" -out-key "$WorkDir\peer.key"
+& $NebulaCert sign -name 'peer' -networks "$Ip2/24,$Ip6_2/64" -ca-crt "$WorkDir\ca.crt" -ca-key "$WorkDir\ca.key" -out-crt "$WorkDir\peer.crt" -out-key "$WorkDir\peer.key"
 if ($LASTEXITCODE -ne 0) { throw "nebula-cert sign peer failed (exit $LASTEXITCODE)" }
 
 # Windows lighthouse config.
@@ -82,7 +86,7 @@ tun:
   drop_local_broadcast: false
   drop_multicast: false
   tx_queue: 500
-  mtu: 1300
+  mtu: $Mtu
   network_category: private
 logging:
   level: info
@@ -126,7 +130,7 @@ tun:
   drop_local_broadcast: false
   drop_multicast: false
   tx_queue: 500
-  mtu: 1300
+  mtu: $Mtu
 logging:
   level: info
   format: text
@@ -169,7 +173,7 @@ Write-Host '=== WSL diagnostic ==='
 wsl --version 2>&1 | Out-Host
 wsl --list --verbose 2>&1 | Out-Host
 wsl -d $Distro -u root -- uname -a | Out-Host
-wsl -d $Distro -u root -- bash -c "modprobe tun 2>&1 || true; mkdir -p /dev/net; [ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200; chmod 600 /dev/net/tun; ls -l /dev/net/tun"
+wsl -d $Distro -u root -- bash -c "modprobe tun 2>&1 || true; mkdir -p /dev/net; [ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200; chmod 600 /dev/net/tun; { echo 0 > /proc/sys/net/ipv6/conf/all/disable_ipv6; echo 0 > /proc/sys/net/ipv6/conf/default/disable_ipv6; } 2>/dev/null || true; ls -l /dev/net/tun"
 if ($LASTEXITCODE -ne 0) { throw "failed to prepare /dev/net/tun in WSL (TUN support missing?)" }
 
 # Deliberately no New-NetFirewallRule calls here -- nebula's windows_bypass_wdf
@@ -214,12 +218,29 @@ try {
     }
     Write-Host "OK: $DevName NetworkCategory=Private"
 
+    # v6 silently kept the adapter default of 65535 while v4 was correct.
+    foreach ($family in @('IPv4', 'IPv6')) {
+        Wait-Until -TimeoutSec 30 -What "$DevName $family NlMtu=$Mtu" -Predicate {
+            if ($lhProc.HasExited) { throw "lighthouse exited (code $($lhProc.ExitCode)) before $family mtu was set" }
+            $rows = @(Get-NetIPInterface -InterfaceAlias $DevName -AddressFamily $family -ErrorAction SilentlyContinue)
+            $rows.Count -gt 0 -and -not ($rows | Where-Object { $_.NlMtu -ne $Mtu })
+        }
+        Write-Host "OK: $DevName $family NlMtu=$Mtu"
+    }
+
     Wait-Until -TimeoutSec 30 -What "WSL nebula1 with $Ip2" -Predicate {
         if ($peerProc.HasExited) { throw "peer exited (code $($peerProc.ExitCode)) before tun was ready" }
         $r = wsl -d $Distro -u root -- bash -c "ip -o addr show nebula1 2>/dev/null | grep -q 'inet $Ip2' && echo yes"
         ("$r").Trim() -eq 'yes'
     }
     Write-Host "OK: WSL nebula1 has $Ip2"
+
+    Wait-Until -TimeoutSec 30 -What "WSL nebula1 with $Ip6_2" -Predicate {
+        if ($peerProc.HasExited) { throw "peer exited (code $($peerProc.ExitCode)) before the v6 address was up" }
+        $r = wsl -d $Distro -u root -- bash -c "ip -o addr show nebula1 2>/dev/null | grep -q 'inet6 $Ip6_2' && echo yes"
+        ("$r").Trim() -eq 'yes'
+    }
+    Write-Host "OK: WSL nebula1 has $Ip6_2"
 
     Wait-Until -TimeoutSec 30 -What "ping from WSL peer to windows lighthouse ($Ip1)" -Predicate {
         if ($peerProc.HasExited) { throw "peer exited (code $($peerProc.ExitCode)) before ping succeeded" }
@@ -233,6 +254,14 @@ try {
         $LASTEXITCODE -eq 0
     }
     Write-Host "OK: windows lighthouse -> WSL peer"
+
+    # Otherwise the v6 networks only prove the interface exists, not that it forwards.
+    Wait-Until -TimeoutSec 30 -What "v6 ping from WSL peer to windows lighthouse ($Ip6_1)" -Predicate {
+        if ($peerProc.HasExited) { throw "peer exited (code $($peerProc.ExitCode)) before the v6 ping succeeded" }
+        $r = wsl -d $Distro -u root -- bash -c "ping -6 -c1 -W1 $Ip6_1 >/dev/null 2>&1 && echo OK"
+        ("$r").Trim() -eq 'OK'
+    }
+    Write-Host "OK: WSL peer -> windows lighthouse over v6"
 
     Write-Host ''
     Write-Host 'All smoke checks passed.'

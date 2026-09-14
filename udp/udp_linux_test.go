@@ -5,10 +5,8 @@ package udp
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/netip"
-	"os"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -17,16 +15,18 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func testLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-}
-
 // TestShutdownWakesAfterRx_Mechanism exercises the kernel quirk our teardown
 // relies on: once a socket has received a packet, shutdown(2) wakes a blocked
 // recvmmsg with n>=1/Len==0 (not n==0). recvmmsg must turn that into net.ErrClosed
 // once Close set closed, so a parked reader exits instead of spinning.
 func TestShutdownWakesAfterRx_Mechanism(t *testing.T) {
-	c, err := NewListener(testLogger(), netip.MustParseAddr("127.0.0.1"), 0, true, 64)
+	udpSettings := Settings{
+		Listen:   netip.MustParseAddrPort("127.0.0.1:0"),
+		Multi:    true,
+		Batch:    64,
+		Offloads: true,
+	}
+	c, err := NewListener(testLogger(), udpSettings)
 	if err != nil {
 		t.Fatalf("NewListener: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestShutdownWakesAfterRx_Mechanism(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LocalAddr: %v", err)
 	}
-	msgs, _, _ := sc.PrepareRawMessages(sc.batch)
+	msgs, _, _, _ := prepareRawMessages(sc.batch, 0xffff, 16)
 
 	// Receive a real packet so the socket has carried data.
 	send, err := net.Dial("udp", addr.String())
@@ -109,8 +109,8 @@ func TestListenOutTeardown_TrafficPatterns(t *testing.T) {
 		}},
 	}
 
-	// batch 1 exercises the recvmsg path, batch 64 the recvmmsg path; both must
-	// tear down cleanly.
+	// batch 1 exercises single-message reads, batch 64 a full recvmmsg batch;
+	// both must tear down cleanly.
 	for _, batch := range []int{1, 64} {
 		for _, tc := range cases {
 			t.Run(fmt.Sprintf("batch%d/%s", batch, tc.name), func(t *testing.T) {
@@ -121,7 +121,13 @@ func TestListenOutTeardown_TrafficPatterns(t *testing.T) {
 }
 
 func runTeardownCase(t *testing.T, batch int, name string, traffic func(send net.Conn, stop <-chan struct{})) {
-	c, err := NewListener(testLogger(), netip.MustParseAddr("127.0.0.1"), 0, true, batch)
+	udpSettings := Settings{
+		Listen:   netip.MustParseAddrPort("127.0.0.1:0"),
+		Multi:    true,
+		Batch:    batch,
+		Offloads: true,
+	}
+	c, err := NewListener(testLogger(), udpSettings)
 	if err != nil {
 		t.Fatalf("NewListener: %v", err)
 	}
@@ -136,7 +142,7 @@ func runTeardownCase(t *testing.T, batch int, name string, traffic func(send net
 	go func() {
 		loopDone <- sc.ListenOut(func(netip.AddrPort, []byte) {
 			received.Add(1)
-		})
+		}, func() {})
 	}()
 
 	send, err := net.Dial("udp", addr.String())
