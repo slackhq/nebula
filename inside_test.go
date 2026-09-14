@@ -43,6 +43,7 @@ func newSelfForwardInterface(myAddrs ...netip.Addr) (*Interface, *capturingTun) 
 		l:                     test.NewLogger(),
 		myVpnAddrsTable:       vpnAddrs,
 		myBroadcastAddrsTable: &bart.Lite{},
+		readers:               []io.ReadWriteCloser{tun},
 	}, tun
 }
 
