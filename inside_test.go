@@ -8,7 +8,6 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/firewall"
-	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,8 +24,8 @@ type capturingTun struct {
 	writes [][]byte
 }
 
-func (c *capturingTun) Read() ([]tio.Packet, error) { return nil, io.EOF }
-func (c *capturingTun) Close() error                { return nil }
+func (c *capturingTun) Read([]byte) (int, error) { return 0, io.EOF }
+func (c *capturingTun) Close() error             { return nil }
 
 func (c *capturingTun) Write(b []byte) (int, error) {
 	c.writes = append(c.writes, append([]byte(nil), b...))
@@ -44,12 +43,11 @@ func newSelfForwardInterface(myAddrs ...netip.Addr) (*Interface, *capturingTun) 
 		l:                     test.NewLogger(),
 		myVpnAddrsTable:       vpnAddrs,
 		myBroadcastAddrsTable: &bart.Lite{},
-		queues:                []tio.Queue{tun},
 	}, tun
 }
 
 func consumeInside(f *Interface, packet []byte) {
-	f.consumeInsidePacket(tio.Packet{Bytes: packet}, &firewall.ParsedPacket{}, make([]byte, 12), nil, make([]byte, mtu), 0, nil)
+	f.consumeInsidePacket(packet, &firewall.Packet{}, make([]byte, 12), make([]byte, mtu), 0, nil)
 }
 
 // l4Proto describes one upper-layer header for these tests: its IP next-header
