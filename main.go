@@ -248,6 +248,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		// distinct across instances sharing a box, stable across restarts.
 		// A nil result keeps listenIn's stock allowed[i] fallback.
 		key := uint64(os.Getpid())
+		usePort := false
 		pinKeyStr := strings.ToLower(c.GetString("tun.pin_threads_key", ""))
 		switch pinKeyStr {
 		case "":
@@ -256,12 +257,20 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 			l.Debug("tun.pin_threads_key is PID")
 		case "port":
 			l.Info("tun.pin_threads_key is port number")
+			usePort = true
 		default:
 			l.Warn("tun.pin_threads_key is invalid, using PID")
 		}
 
-		if ap, err := udpConns[0].LocalAddr(); err == nil && ap.Port() != 0 {
-			key = uint64(ap.Port())
+		if usePort {
+			// Keying on the bound port keeps the choice stable across restarts,
+			// which the PID key can't do. Fall back to the PID when the port is
+			// unknown or dynamic-and-unassigned.
+			if ap, err := udpConns[0].LocalAddr(); err == nil && ap.Port() != 0 {
+				key = uint64(ap.Port())
+			} else {
+				l.Warn("tun.pin_threads_key is port but no port is bound, using PID")
+			}
 		}
 		cpuAffinity = cpupick.Default(routines, key, l)
 	}
