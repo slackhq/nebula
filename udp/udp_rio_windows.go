@@ -1,5 +1,4 @@
 //go:build !e2e_testing
-// +build !e2e_testing
 
 // Inspired by https://git.zx2c4.com/wireguard-go/tree/conn/bind_windows.go
 

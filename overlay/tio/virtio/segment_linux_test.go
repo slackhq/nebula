@@ -1,5 +1,4 @@
 //go:build linux && !android
-// +build linux,!android
 
 package virtio
 
@@ -58,7 +57,7 @@ func buildTCPv4Super(payLen int) (pkt []byte, hdrLen, csumStart uint16) {
 	pkt[33] = 0x18                                // ACK | PSH
 	binary.BigEndian.PutUint16(pkt[34:36], 65535) // window
 
-	for i := 0; i < payLen; i++ {
+	for i := range payLen {
 		pkt[ipLen+tcpLen+i] = byte(i & 0xff)
 	}
 	return pkt, ipLen + tcpLen, ipLen
@@ -82,7 +81,7 @@ func buildUDPv4Super(payLen int) (pkt []byte, hdrLen, csumStart uint16) {
 	binary.BigEndian.PutUint16(pkt[20:22], 12345) // sport
 	binary.BigEndian.PutUint16(pkt[22:24], 53)    // dport
 
-	for i := 0; i < payLen; i++ {
+	for i := range payLen {
 		pkt[ipLen+udpLen+i] = byte(i & 0xff)
 	}
 	return pkt, ipLen + udpLen, ipLen
@@ -188,7 +187,7 @@ func TestSegmentTCPHeaderNotCorrupted(t *testing.T) {
 				// Payload bytes must be the original contiguous slice.
 				segPayLen := len(seg) - int(hdrLen)
 				wantPay := make([]byte, segPayLen)
-				for k := 0; k < segPayLen; k++ {
+				for k := range segPayLen {
 					wantPay[k] = byte((off + k) & 0xff)
 				}
 				if !bytes.Equal(seg[hdrLen:], wantPay) {
@@ -317,7 +316,7 @@ func TestSegmentUDPHeaderNotCorrupted(t *testing.T) {
 				}
 
 				wantPay := make([]byte, segPayLen)
-				for k := 0; k < segPayLen; k++ {
+				for k := range segPayLen {
 					wantPay[k] = byte((off + k) & 0xff)
 				}
 				if !bytes.Equal(seg[hdrLen:], wantPay) {
@@ -365,7 +364,7 @@ func buildUDPv4Single(payload []byte) (pkt []byte, hdr Hdr) {
 // 0xffff, because all-zero is the reserved "no checksum" encoding that IPv6 rejects outright.
 func TestFinishChecksumUDPZeroStoresAllOnes(t *testing.T) {
 	var payload []byte
-	for i := 0; i < 0x10000; i++ {
+	for i := range 0x10000 {
 		p := []byte{byte(i >> 8), byte(i)}
 		pkt, hdr := buildUDPv4Single(p)
 		cs, co := int(hdr.CsumStart), int(hdr.CsumOffset)
@@ -544,7 +543,7 @@ func TestBaseSumsMatchZeroingReference(t *testing.T) {
 
 	t.Run("ipv4", func(t *testing.T) {
 		for ihl := ipv4HeaderMinLen; ihl <= ipv4HeaderMaxLen; ihl += 4 {
-			for iter := 0; iter < 5000; iter++ {
+			for range 5000 {
 				pkt := make([]byte, ihl)
 				for i := range pkt {
 					pkt[i] = randByte(&state)
@@ -574,7 +573,7 @@ func TestBaseSumsMatchZeroingReference(t *testing.T) {
 		for dataOff := 5; dataOff <= 15; dataOff++ {
 			tcpLen := dataOff * 4
 			headerLen := csumStart + tcpLen
-			for iter := 0; iter < 5000; iter++ {
+			for range 5000 {
 				pkt := make([]byte, headerLen+64)
 				for i := range pkt {
 					pkt[i] = randByte(&state)

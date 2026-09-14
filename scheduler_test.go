@@ -1,21 +1,19 @@
 package nebula
 
 import (
-	"context"
 	"testing"
 	"time"
 )
 
 func TestScheduler_PooledReuse(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	s := NewScheduler[int](16)
 	delivered := make(chan int, 256)
 	go s.Run(ctx, func(item int) { delivered <- item })
 
 	const N = 100
-	for i := 0; i < N; i++ {
+	for i := range N {
 		s.Schedule(ctx, i, time.Millisecond)
 	}
 
@@ -34,8 +32,7 @@ func TestScheduler_PooledReuse(t *testing.T) {
 // BenchmarkScheduler_Schedule reports allocations per Schedule call.
 // In steady state the Scheduler's sync.Pool means we should see zero allocs per op once the pool warms up.
 func BenchmarkScheduler_Schedule(b *testing.B) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := b.Context()
 
 	s := NewScheduler[int](b.N)
 	go s.Run(ctx, func(int) {})
@@ -51,8 +48,7 @@ func BenchmarkScheduler_Schedule(b *testing.B) {
 // What we'd pay per Schedule if Punchy called time.AfterFunc directly without the pooled Scheduler.
 // Allocates a *time.Timer plus a closure each call.
 func BenchmarkBareAfterFunc(b *testing.B) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := b.Context()
 
 	queue := make(chan int, b.N)
 	go func() {

@@ -151,7 +151,7 @@ func TestChecksumTailPaths(t *testing.T) {
 			offsets := []int{0, 1, 3, 7, 15} // mix of aligned and odd starts
 
 			for k := 0; k <= maxK; k++ {
-				for tail := 0; tail < 64; tail++ {
+				for tail := range 64 {
 					length := 64*k + tail
 					for _, seed := range seeds {
 						for _, off := range offsets {

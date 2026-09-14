@@ -294,10 +294,7 @@ func deliverSegments(r EncReader, from netip.AddrPort, payload []byte, segSize i
 		return
 	}
 	for off := 0; off < len(payload); off += segSize {
-		end := off + segSize
-		if end > len(payload) {
-			end = len(payload)
-		}
+		end := min(off+segSize, len(payload))
 		r(from, payload[off:end:end])
 	}
 }
@@ -479,7 +476,7 @@ func NewUDPStatsEmitter(udpConns []Conn) func() {
 	return func() {
 		for i, gauges := range udpGauges {
 			if err := udpConns[i].(*StdConn).getMemInfo(&meminfo); err == nil {
-				for j := 0; j < unix.SK_MEMINFO_VARS; j++ {
+				for j := range unix.SK_MEMINFO_VARS {
 					gauges[j].Update(int64(meminfo[j]))
 				}
 			}
