@@ -335,7 +335,7 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 	// Walk the extension header chain to the upper layer protocol. iputil.IPv6FindUpperProtocol is the single
 	// source of truth for which headers are extension headers, so this stays in lockstep with the reject path
 	// and cannot drift into misreading an unknown protocol (SCTP, GRE, etc.) as a forged transport.
-	proto, offset, isFragment, err := iputil.IPv6FindUpperProtocol(data)
+	proto, offset, isFragment, _, err := iputil.IPv6FindUpperProtocol(data)
 	if err != nil {
 		return ErrIPv6PacketTooShort
 	}

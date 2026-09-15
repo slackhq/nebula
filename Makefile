@@ -275,10 +275,13 @@ smoke-docker-race: BUILD_ARGS = -race
 smoke-docker-race: CGO_ENABLED = 1
 smoke-docker-race: smoke-docker
 
+smoke-self: bin
+	cd .github/workflows/smoke/ && ./smoke-self.sh
+
 smoke-vagrant/%: bin-docker build/%/nebula
 	cd .github/workflows/smoke/ && ./build.sh $*
 	cd .github/workflows/smoke/ && ./smoke-vagrant.sh $*
 
 .FORCE:
-.PHONY: all all-linux all-freebsd all-openbsd all-netbsd all-darwin all-windows all-cross-linux all-cross-linux-arm all-cross-linux-mips all-cross-linux-other all-cross-darwin all-cross-windows bench bench-cpu bench-cpu-long bin build-test-mobile e2e e2ev e2evv e2evvv e2evvvv proto release service smoke-docker smoke-docker-race test test-cov-html smoke-vagrant/%
+.PHONY: all all-linux all-freebsd all-openbsd all-netbsd all-darwin all-windows all-cross-linux all-cross-linux-arm all-cross-linux-mips all-cross-linux-other all-cross-darwin all-cross-windows bench bench-cpu bench-cpu-long bin build-test-mobile e2e e2ev e2evv e2evvv e2evvvv proto release service smoke-docker smoke-docker-race smoke-self test test-cov-html smoke-vagrant/%
 .DEFAULT_GOAL := bin
