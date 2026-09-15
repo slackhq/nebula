@@ -15,12 +15,12 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/DefinedNet/netlink"
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
-	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
 
