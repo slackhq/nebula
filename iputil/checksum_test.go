@@ -154,7 +154,7 @@ func TestSetTransportChecksum(t *testing.T) {
 	// Two bytes short, so a transport header survives whole and the minimum
 	// length check cannot stand in for the bounds check.
 	cutV6 := truncate(serialize(t, ip6tcp, tcp(ip6tcp), payload), 62)
-	// fragment := [8]byte{0, 0, 0, 1, 0, 0, 0, 1} // next header, reserved, offset 0 with M set, id
+	fragment := [8]byte{0, 0, 0, 1, 0, 0, 0, 1} // next header, reserved, offset 0 with M set, id
 	overrun4 := serialize(t, ip4udp, udp(ip4udp), payload)
 	binary.BigEndian.PutUint16(overrun4[24:26], uint16(len(overrun4)-20+1)) // one byte past what ip delivered
 	overrun6 := serialize(t, ip6udp, udp(ip6udp), payload)
@@ -176,7 +176,7 @@ func TestSetTransportChecksum(t *testing.T) {
 		{"v4 truncated below its total length", truncate(serialize(t, ip4tcp, tcp(ip4tcp), payload), 30), -1},
 		{"v4 tcp header cut short", cutTCP, 20 + 16},
 		{"v4 udp header cut short", cutUDP, -1},
-		// {"v6 fragment", withExtensionHeader(serialize(t, ip6tcp, tcp(ip6tcp), payload), layers.IPProtocolIPv6Fragment, fragment), 48 + 16},
+		{"v6 fragment", withExtensionHeader(serialize(t, ip6tcp, tcp(ip6tcp), payload), layers.IPProtocolIPv6Fragment, fragment), 48 + 16},
 		{"v6 truncated below its payload length", truncate(serialize(t, ip6tcp, tcp(ip6tcp), payload), 50), -1},
 		{"v6 truncated with a whole transport header still present", cutV6, 40 + 16},
 		{"v6 extension header chain longer than the walk", extChain(9, 0), 112 + 16},
