@@ -19,6 +19,7 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/logging"
+	"github.com/slackhq/nebula/nicfinder"
 	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
 )
@@ -41,6 +42,10 @@ type LightHouse struct {
 	// localAddrsFn enumerates the underlay addresses we advertise. It is a field so tests can supply simulated
 	// addresses rather than whatever this machine's NICs happen to be. Set it before Start.
 	localAddrsFn func(*LocalAllowList) []netip.Addr
+
+	// lastLocalAddrsErr is the previous localAddrsFn failure. Enumeration runs on every update, so an
+	// unchanged failure is demoted to Debug rather than warning every lighthouse.interval forever.
+	lastLocalAddrsErr atomic.Pointer[string]
 
 	// Local cache of answers from light houses
 	// map of vpn addr to answers
@@ -115,7 +120,9 @@ func NewLightHouseFromConfig(ctx context.Context, l *slog.Logger, c *config.C, c
 		l:                  l,
 	}
 	h.localAddrsFn = func(al *LocalAllowList) []netip.Addr {
-		return localAddrs(h.l, al)
+		addrs, err := nicfinder.Find(ctx, h.l, al)
+		h.logLocalAddrsErr(err)
+		return addrs
 	}
 
 	lighthouses := make([]netip.Addr, 0)
@@ -914,6 +921,26 @@ func (lh *LightHouse) TriggerUpdate() {
 	case lh.updateTrigger <- struct{}{}:
 	default:
 	}
+}
+
+// logLocalAddrsErr reports a localAddrs failure at Warn the first time it is seen and at Debug while
+// it persists unchanged, so a permanent failure does not warn on every update forever.
+func (lh *LightHouse) logLocalAddrsErr(err error) {
+	if err == nil {
+		lh.lastLocalAddrsErr.Store(nil)
+		return
+	}
+
+	msg := err.Error()
+	prev := lh.lastLocalAddrsErr.Swap(&msg)
+	if prev != nil && *prev == msg {
+		if lh.l.Enabled(context.Background(), slog.LevelDebug) {
+			lh.l.Debug("Failed to collect local addresses to advertise", "error", err)
+		}
+		return
+	}
+
+	lh.l.Warn("Failed to collect local addresses to advertise", "error", err)
 }
 
 func (lh *LightHouse) SendUpdate() {

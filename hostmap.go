@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/netip"
 	"slices"
 	"sync"
@@ -18,7 +17,6 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
-	"github.com/slackhq/nebula/logging"
 )
 
 const defaultPromoteEvery = 1000       // Count of packets sent before we try moving a tunnel to a preferred underlay ip address
@@ -929,60 +927,4 @@ func (i *HostInfo) logger(l *slog.Logger) *slog.Logger {
 	}
 
 	return li
-}
-
-// Utility functions
-
-func localAddrs(l *slog.Logger, allowList *LocalAllowList) []netip.Addr {
-	//FIXME: This function is pretty garbage
-	var finalAddrs []netip.Addr
-	ifaces, _ := net.Interfaces()
-	for _, i := range ifaces {
-		allow := allowList.AllowName(i.Name)
-		if l.Enabled(context.Background(), logging.LevelTrace) {
-			l.Log(context.Background(), logging.LevelTrace, "localAllowList.AllowName",
-				"interfaceName", i.Name,
-				"allow", allow,
-			)
-		}
-
-		if !allow {
-			continue
-		}
-		addrs, _ := i.Addrs()
-		for _, rawAddr := range addrs {
-			var addr netip.Addr
-			switch v := rawAddr.(type) {
-			case *net.IPNet:
-				//continue
-				addr, _ = netip.AddrFromSlice(v.IP)
-			case *net.IPAddr:
-				addr, _ = netip.AddrFromSlice(v.IP)
-			}
-
-			if !addr.IsValid() {
-				if l.Enabled(context.Background(), slog.LevelDebug) {
-					l.Debug("addr was invalid", "localAddr", rawAddr)
-				}
-				continue
-			}
-			addr = addr.Unmap()
-
-			if addr.IsLoopback() == false && addr.IsLinkLocalUnicast() == false {
-				isAllowed := allowList.Allow(addr)
-				if l.Enabled(context.Background(), logging.LevelTrace) {
-					l.Log(context.Background(), logging.LevelTrace, "localAllowList.Allow",
-						"localAddr", addr,
-						"allowed", isAllowed,
-					)
-				}
-				if !isAllowed {
-					continue
-				}
-
-				finalAddrs = append(finalAddrs, addr)
-			}
-		}
-	}
-	return finalAddrs
 }

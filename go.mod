@@ -47,3 +47,5 @@ require (
 	github.com/vishvananda/netns v0.0.5 // indirect
 	golang.org/x/time v0.5.0 // indirect
 )
+
+replace github.com/vishvananda/netlink => github.com/DefinedNet/netlink v0.0.0-20260915175302-69de5ea5c182
