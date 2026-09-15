@@ -73,8 +73,8 @@ func setTransportChecksum6(packet []byte) {
 	// An unknown extension header hides where the transport header starts. A
 	// chain longer than the walk's budget ends it early, at an offset that was
 	// never checked against the packet.
-	proto, offset, isFragment, err := IPv6FindUpperProtocol(packet[:end])
-	if err != nil || isFragment || offset >= end {
+	proto, offset, _, anyFragment, err := IPv6FindUpperProtocol(packet[:end])
+	if err != nil || anyFragment || offset >= end {
 		return
 	}
 
