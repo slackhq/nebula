@@ -2,14 +2,13 @@ package noiseutil
 
 import (
 	"bytes"
+	"crypto/aes"
 	"crypto/cipher"
 	"crypto/fips140"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"reflect"
 	"runtime"
-	"unsafe"
 
 	// unsafe needed for go:linkname
 	_ "crypto/tls"
@@ -17,16 +16,6 @@ import (
 
 	"github.com/flynn/noise"
 )
-
-// TODO: Use NewGCMWithCounterNonce or NewGCMForQUIC once available:
-// - https://github.com/golang/go/issues/73110
-// - https://github.com/golang/go/issues/79219
-// Using tls.aeadAESGCMTLS13 gives us the TLS 1.3 GCM, which also verifies
-// that the nonce is strictly increasing. This works for both boringcrypto
-// and fips140.
-//
-//go:linkname aeadAESGCMTLS13 crypto/tls.aeadAESGCMTLS13
-func aeadAESGCMTLS13(key, noncePrefix []byte) cipher.AEAD
 
 type cipherFn struct {
 	fn   func([32]byte) noise.Cipher
@@ -43,8 +32,14 @@ var CipherAESGCMFIPS140 noise.CipherFunc = cipherFn{cipherAESGCMFIPS140, "AESGCM
 var emptyNonce = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 
 func cipherAESGCMFIPS140(k [32]byte) noise.Cipher {
-	gcm := aeadAESGCMTLS13(k[:], emptyNonce)
-	gcm = extractFIPSAEAD(gcm)
+	c, err := aes.NewCipher(k[:])
+	if err != nil {
+		panic(err)
+	}
+	gcm, err := cipher.NewGCMWithCounterNonce(c)
+	if err != nil {
+		panic(err)
+	}
 	return &aeadGCMFIPS140Cipher{
 		AEAD: gcm,
 	}
@@ -52,57 +47,6 @@ func cipherAESGCMFIPS140(k [32]byte) noise.Cipher {
 
 type aeadGCMFIPS140Cipher struct {
 	cipher.AEAD
-	ready bool
-}
-
-// Extract the internal FIPS GCM implementation from the tls wrapper. The TLS
-// wrapper is not thread safe around Open, so instead of locking around it we
-// can grab the internal implementation that is thread safe. This is the FIPS
-// module implementation: `crypto/internal/fips140/aes/gcm.GCMWithXORCounterNonce`
-//
-// - https://github.com/golang/go/blob/go1.26.4/src/crypto/internal/fips140/aes/gcm/gcm_nonces.go#L212-L287
-//
-// The wrapper is struct `crypto/tls.xorNonceAEAD` , with field `aead`:
-//
-// - https://github.com/golang/go/blob/go1.26.4/src/crypto/tls/cipher_suites.go#L482-L487
-//
-// This can be cleaned up once these FIPS implementations are exposed directly:
-//
-// - https://github.com/golang/go/issues/73110
-func extractFIPSAEAD(xorNonceAEAD cipher.AEAD) cipher.AEAD {
-	r := reflect.ValueOf(xorNonceAEAD)
-	v := r.Elem().FieldByName("aead")
-	if !v.IsValid() {
-		// The internal crypto/tls.xorNonceAEAD struct no longer has an `aead`
-		// field. This can only happen on a Go version this code was not built
-		// against; the package init() self-test guards against ever reaching
-		// this at runtime, so this is a defensive fail-fast.
-		panic(fmt.Sprintf("noiseutil: could not extract FIPS AEAD from %T on %s: no `aead` field (incompatible Go version)", xorNonceAEAD, runtime.Version()))
-	}
-	v2 := reflect.NewAt(v.Type(), unsafe.Pointer(v.UnsafeAddr())).Elem()
-	aead, ok := v2.Interface().(cipher.AEAD)
-	if !ok {
-		panic(fmt.Sprintf("noiseutil: extracted FIPS `aead` field is %s, not a cipher.AEAD, on %s (incompatible Go version)", v2.Type(), runtime.Version()))
-	}
-	return aead
-}
-
-func (c *aeadGCMFIPS140Cipher) init(nonce []byte) {
-	// GCMWithXORCounterNonce expects that the first call to Seal
-	// is with a counter of `0`, this is how it extracts the nonce mask.
-	// We can clean this up in the future when NewGCMWithCounterNonce or
-	// NewGCMForQUIC are available:
-	if !bytes.Equal(emptyNonce, nonce) {
-		c.AEAD.Seal([]byte{}, emptyNonce, []byte{}, []byte{})
-	}
-	c.ready = true
-}
-
-func (c *aeadGCMFIPS140Cipher) Seal(dst, nonce, plaintext, additionalData []byte) []byte {
-	if !c.ready {
-		c.init(nonce)
-	}
-	return c.AEAD.Seal(dst, nonce, plaintext, additionalData)
 }
 
 func (c *aeadGCMFIPS140Cipher) Encrypt(out []byte, n uint64, ad, plaintext []byte) []byte {
@@ -133,15 +77,8 @@ func (c *aeadGCMFIPS140Cipher) DecryptDanger(out, ad, ciphertext []byte, n uint6
 	return c.Open(out, nb, ciphertext, ad)
 }
 
-func (c *aeadGCMFIPS140Cipher) Overhead() int {
-	if c == nil {
-		return 0
-	}
-	return c.AEAD.Overhead()
-}
-
 func aeadGCMFIPS140CipherNonce(n uint64) []byte {
-	// GCMWithXORCounterNonce uses a 4 byte static prefix and an 8 byte nonce
+	// GCMWithCounterNonce uses a 4 byte static prefix and an 8 byte nonce
 	var nonce [12]byte
 	binary.BigEndian.PutUint64(nonce[4:], n)
 	return nonce[:]
