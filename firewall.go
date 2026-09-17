@@ -21,6 +21,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
+	"github.com/slackhq/nebula/iputil"
 )
 
 type FirewallInterface interface {
@@ -262,11 +263,11 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 	}
 
 	switch proto {
-	case firewall.ProtoTCP:
+	case iputil.IPProtocolTCP:
 		fp = ft.TCP
-	case firewall.ProtoUDP:
+	case iputil.IPProtocolUDP:
 		fp = ft.UDP
-	case firewall.ProtoICMP, firewall.ProtoICMPv6:
+	case iputil.IPProtocolICMP, iputil.IPProtocolICMPv6:
 		//ICMP traffic doesn't have ports, so we always coerce to "any", even if a value is provided
 		if startPort != firewall.PortAny {
 			f.l.Warn("ignoring port specification for ICMP firewall rule", "startPort", startPort)
@@ -364,13 +365,13 @@ func AddFirewallRulesFromConfig(l *slog.Logger, inbound bool, c *config.C, fw Fi
 			proto = firewall.ProtoAny
 			startPort, endPort, err = parsePort(sPort)
 		case "tcp":
-			proto = firewall.ProtoTCP
+			proto = iputil.IPProtocolTCP
 			startPort, endPort, err = parsePort(sPort)
 		case "udp":
-			proto = firewall.ProtoUDP
+			proto = iputil.IPProtocolUDP
 			startPort, endPort, err = parsePort(sPort)
 		case "icmp":
-			proto = firewall.ProtoICMP
+			proto = iputil.IPProtocolICMP
 			startPort = firewall.PortAny
 			endPort = firewall.PortAny
 			if sPort != "" {
@@ -560,9 +561,9 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 	}
 
 	switch fp.Protocol {
-	case firewall.ProtoTCP:
+	case iputil.IPProtocolTCP:
 		c.Expires = time.Now().Add(f.TCPTimeout)
-	case firewall.ProtoUDP:
+	case iputil.IPProtocolUDP:
 		c.Expires = time.Now().Add(f.UDPTimeout)
 	default:
 		c.Expires = time.Now().Add(f.DefaultTimeout)
@@ -582,9 +583,9 @@ func (f *Firewall) addConn(fp firewall.Packet, incoming bool) {
 	c := &conn{}
 
 	switch fp.Protocol {
-	case firewall.ProtoTCP:
+	case iputil.IPProtocolTCP:
 		timeout = f.TCPTimeout
-	case firewall.ProtoUDP:
+	case iputil.IPProtocolUDP:
 		timeout = f.UDPTimeout
 	default:
 		timeout = f.DefaultTimeout
@@ -635,15 +636,15 @@ func (ft *FirewallTable) match(p firewall.Packet, incoming bool, c *cert.CachedC
 	}
 
 	switch p.Protocol {
-	case firewall.ProtoTCP:
+	case iputil.IPProtocolTCP:
 		if ft.TCP.match(p, incoming, c, caPool) {
 			return true
 		}
-	case firewall.ProtoUDP:
+	case iputil.IPProtocolUDP:
 		if ft.UDP.match(p, incoming, c, caPool) {
 			return true
 		}
-	case firewall.ProtoICMP, firewall.ProtoICMPv6:
+	case iputil.IPProtocolICMP, iputil.IPProtocolICMPv6:
 		if ft.ICMP.match(p, incoming, c, caPool) {
 			return true
 		}
@@ -680,7 +681,7 @@ func (fp firewallPort) match(p firewall.Packet, incoming bool, c *cert.CachedCer
 	}
 
 	// this branch is here to catch traffic from FirewallTable.Any.match and FirewallTable.ICMP.match
-	if p.Protocol == firewall.ProtoICMP || p.Protocol == firewall.ProtoICMPv6 {
+	if p.Protocol == iputil.IPProtocolICMP || p.Protocol == iputil.IPProtocolICMPv6 {
 		// port numbers are re-used for connection tracking of ICMP,
 		// but we don't want to actually filter on them.
 		return fp[firewall.PortAny].match(p, c, caPool)

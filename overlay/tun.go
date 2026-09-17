@@ -93,14 +93,14 @@ func prefixToMask(prefix netip.Prefix) netip.Addr {
 }
 
 func flipBytes(b []byte) []byte {
-	for i := 0; i < len(b); i++ {
+	for i := range b {
 		b[i] ^= 0xFF
 	}
 	return b
 }
 func orBytes(a []byte, b []byte) []byte {
 	ret := make([]byte, len(a))
-	for i := 0; i < len(a); i++ {
+	for i := range a {
 		ret[i] = a[i] | b[i]
 	}
 	return ret

@@ -120,7 +120,7 @@ func TestCertificate_SignP256_AlwaysNormalized(t *testing.T) {
 	pub := elliptic.Marshal(elliptic.P256(), priv.PublicKey.X, priv.PublicKey.Y)
 	rawPriv := priv.D.FillBytes(make([]byte, 32))
 
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		if i&1 == 1 {
 			tbs.Version = Version1
 		} else {

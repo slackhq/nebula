@@ -127,7 +127,7 @@ func TestPseudoSumIPv6MatchesReference(t *testing.T) {
 func TestIPv4HdrChecksumMatchesReference(t *testing.T) {
 	rng := rand.New(rand.NewSource(0x1791))
 	for _, hdrLen := range []int{20, 24, 40, 60} {
-		for trial := 0; trial < 200; trial++ {
+		for trial := range 200 {
 			hdr := make([]byte, hdrLen)
 			rng.Read(hdr)
 			hdr[0] = 0x40 | byte(hdrLen/4)
@@ -156,7 +156,7 @@ func TestIPv4HdrChecksumMatchesReference(t *testing.T) {
 // the way a receiver does (pseudo-header + L4 must sum to all-ones).
 func TestChecksumSeedReceiverAcceptance(t *testing.T) {
 	rng := rand.New(rand.NewSource(0x1826))
-	for trial := 0; trial < 200; trial++ {
+	for trial := range 200 {
 		src := [4]byte{byte(rng.Intn(256)), byte(rng.Intn(256)), byte(rng.Intn(256)), byte(rng.Intn(256))}
 		dst := [4]byte{byte(rng.Intn(256)), byte(rng.Intn(256)), byte(rng.Intn(256)), byte(rng.Intn(256))}
 		payLen := rng.Intn(1500)

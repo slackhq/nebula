@@ -27,7 +27,7 @@ func TestPacketsAreBalancedEqually(t *testing.T) {
 	gw3count := 0
 
 	iterationCount := uint16(65535)
-	for i := uint16(0); i < iterationCount; i++ {
+	for i := range iterationCount {
 		packet := firewall.Packet{
 			LocalAddr:  netip.MustParseAddr("192.168.1.1"),
 			RemoteAddr: netip.MustParseAddr("10.0.0.1"),
@@ -74,7 +74,7 @@ func TestPacketsAreBalancedByPriority(t *testing.T) {
 	gw2count := 0
 
 	iterationCount := uint16(65535)
-	for i := uint16(0); i < iterationCount; i++ {
+	for i := range iterationCount {
 		packet := firewall.Packet{
 			LocalAddr:  netip.MustParseAddr("192.168.1.1"),
 			RemoteAddr: netip.MustParseAddr("10.0.0.1"),
@@ -115,7 +115,7 @@ func TestBalancePacketDistributsRandomlyAndReturnsFalseIfBucketsNotCalculated(t 
 	gw1count := 0
 	gw2count := 0
 
-	for i := uint16(0); i < iterationCount; i++ {
+	for i := range iterationCount {
 		packet := firewall.Packet{
 			LocalAddr:  netip.MustParseAddr("192.168.1.1"),
 			RemoteAddr: netip.MustParseAddr("10.0.0.1"),

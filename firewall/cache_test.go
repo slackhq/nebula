@@ -22,7 +22,7 @@ func newFixedTicker(t *testing.T, l *slog.Logger, cacheLen int) *ConntrackCacheT
 		l:     l,
 		cache: make(ConntrackCache, cacheLen),
 	}
-	for i := 0; i < cacheLen; i++ {
+	for i := range cacheLen {
 		c.cache[Packet{LocalPort: uint16(i) + 1}] = struct{}{}
 	}
 	c.cacheTick.Store(1) // cacheV starts at 0, so Get() takes the reset path

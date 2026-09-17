@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"context"
+	"crypto/fips140"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -106,8 +107,8 @@ type Interface struct {
 	sendRecvErrorConfig   recvErrorConfig
 	acceptRecvErrorConfig recvErrorConfig
 
-	// rebindCount is used to decide if an active tunnel should trigger a punch notification through a lighthouse
-	rebindCount int8
+	// Bumped on every udp rebind, tunnels compare it to decide they need a punch from the far side
+	rebindEpoch atomic.Uint32
 	version     string
 
 	conntrackCacheTimeout time.Duration
@@ -270,6 +271,9 @@ func (f *Interface) activate() error {
 		"build", f.version,
 		"udpAddr", addr,
 		"boringcrypto", boringEnabled(),
+		"fips140Version", fips140.Version(),
+		"fips140Enabled", fips140.Enabled(),
+		"fips140Enforced", fips140.Enforced(),
 	)
 
 	if f.routines > 1 && !f.outside.SupportsMultipleReaders() {

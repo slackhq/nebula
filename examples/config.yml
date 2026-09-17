@@ -173,7 +173,7 @@ listen:
   # This setting is reloadable.
   #so_mark: 0
   # the udp_offloads setting controls if Nebula will attempt to enable GSO and GRO for its UDP socket(s). Linux only, not reloadable.
-  # udp_offloads: true
+  # udp_offloads: false
 
 # Routines is the number of thread pairs to run that consume from the tun and UDP queues.
 # Currently, this defaults to 1 which means we have 1 tun queue reader and 1
@@ -268,7 +268,7 @@ tun:
   mtu: 1300
 
   # the use_offloads setting controls if Nebula will attempt to enable GSO and GRO for the tun device. Linux only, not reloadable.
-  #use_offloads: true
+  #use_offloads: false
 
   # Linux only. pin_threads pins each tun reader/encrypt OS thread to a single CPU. This keeps every goroutine's
   # batched sends flowing through one XPS-selected NIC TX ring, so packets within a flow stay ordered on the wire

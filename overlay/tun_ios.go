@@ -1,5 +1,4 @@
 //go:build ios && !e2e_testing
-// +build ios,!e2e_testing
 
 package overlay
 

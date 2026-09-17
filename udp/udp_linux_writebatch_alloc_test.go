@@ -64,13 +64,13 @@ func TestWriteBatchNoAllocs(t *testing.T) {
 				addrs = append(addrs, dst)
 			}
 			// GSO-eligible run with a short tail.
-			for k := 0; k < 8; k++ {
+			for range 8 {
 				add(payload, dstA)
 			}
 			add(short, dstA)
 			add(payload, dstA)
 			// Alternating destinations defeat coalescing entirely.
-			for k := 0; k < 4; k++ {
+			for k := range 4 {
 				dst := dstA
 				if k%2 == 0 {
 					dst = dstB

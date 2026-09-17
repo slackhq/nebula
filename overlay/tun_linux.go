@@ -1,5 +1,4 @@
 //go:build !android && !e2e_testing
-// +build !android,!e2e_testing
 
 package overlay
 
@@ -133,7 +132,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue 
 		baseFlags |= unix.IFF_MULTI_QUEUE
 	}
 	nameStr := c.GetString("tun.dev", "")
-	useOffloads := c.GetBool("tun.use_offloads", true)
+	useOffloads := c.GetBool("tun.use_offloads", false)
 
 	var fd int
 	var name string
@@ -548,7 +547,7 @@ func (t *tun) setDefaultRoute(cidr netip.Prefix) error {
 	if err != nil {
 		t.l.Warn("Failed to set default route MTU, retrying", "error", err, "cidr", cidr)
 		//retry twice more -- on some systems there appears to be a race condition where if we set routes too soon, netlink says `invalid argument`
-		for i := 0; i < 2; i++ {
+		for range 2 {
 			time.Sleep(100 * time.Millisecond)
 			err = netlink.RouteReplace(&nr)
 			if err == nil {

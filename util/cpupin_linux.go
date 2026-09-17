@@ -40,7 +40,7 @@ func AllowedCPUs() ([]int, error) {
 		return nil, err
 	}
 	cpus := make([]int, 0, set.Count())
-	for cpu := 0; cpu < len(set)*64; cpu++ {
+	for cpu := range len(set) * 64 {
 		if set.IsSet(cpu) {
 			cpus = append(cpus, cpu)
 		}

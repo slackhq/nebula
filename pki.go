@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"crypto/fips140"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -237,10 +238,17 @@ func (cs *CertState) getCertificate(v cert.Version) cert.Certificate {
 	return nil
 }
 
-func newCipherSuite(curve cert.Curve, pkcs11backed bool, cipher string) (noise.CipherSuite, error) {
+// newCipherSuite builds the noise.CipherSuite for the given curve and cipher.
+// When fips140Enforced is true (FIPS 140-only mode), non-approved algorithms
+// (Curve25519 and ChaChaPoly) are rejected with an error. Callers pass
+// fips140.Enforced() for fips140Enforced.
+func newCipherSuite(curve cert.Curve, pkcs11backed bool, cipher string, fips140Enforced bool) (noise.CipherSuite, error) {
 	var dhFunc noise.DHFunc
 	switch curve {
 	case cert.Curve_CURVE25519:
+		if fips140Enforced {
+			return nil, errors.New("pki: use of Curve25519 is not allowed in FIPS 140-only mode")
+		}
 		dhFunc = noise.DH25519
 	case cert.Curve_P256:
 		if pkcs11backed {
@@ -253,6 +261,9 @@ func newCipherSuite(curve cert.Curve, pkcs11backed bool, cipher string) (noise.C
 	}
 
 	if cipher == "chachapoly" {
+		if fips140Enforced {
+			return nil, errors.New("pki: use of ChaChaPoly is not allowed in FIPS 140-only mode")
+		}
 		return noise.NewCipherSuite(dhFunc, noise.CipherChaChaPoly, noise.HashSHA256), nil
 	}
 	return noise.NewCipherSuite(dhFunc, noiseutil.CipherAESGCM, noise.HashSHA256), nil
@@ -324,6 +335,10 @@ func newCertStateFromConfig(c *config.C, cipher string) (*CertState, error) {
 		crt, rawCert, err = loadCertificate(rawCert)
 		if err != nil {
 			return nil, err
+		}
+
+		if fips140.Enforced() && crt.Curve() != cert.Curve_P256 {
+			return nil, fmt.Errorf("pki: use of %s is not allowed in FIPS 140-only mode", crt.Curve())
 		}
 
 		switch crt.Version() {
@@ -405,7 +420,7 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 			//NOTE: We do not currently have a method to verify a public private key pair when the private key is in an hsm
 		} else {
 			if err := v1.VerifyPrivateKey(privateKeyCurve, privateKey); err != nil {
-				return nil, fmt.Errorf("private key is not a pair with public key in nebula cert")
+				return nil, fmt.Errorf("private key is not a pair with public key in nebula cert: %w", err)
 			}
 		}
 
@@ -413,7 +428,7 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 		if err != nil {
 			return nil, fmt.Errorf("error marshalling v1 certificate for handshake: %w", err)
 		}
-		ncs, err := newCipherSuite(v1.Curve(), pkcs11backed, cipher)
+		ncs, err := newCipherSuite(v1.Curve(), pkcs11backed, cipher, fips140.Enforced())
 		if err != nil {
 			return nil, err
 		}
@@ -430,7 +445,7 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 			//NOTE: We do not currently have a method to verify a public private key pair when the private key is in an hsm
 		} else {
 			if err := v2.VerifyPrivateKey(privateKeyCurve, privateKey); err != nil {
-				return nil, fmt.Errorf("private key is not a pair with public key in nebula cert")
+				return nil, fmt.Errorf("private key is not a pair with public key in nebula cert: %w", err)
 			}
 		}
 
@@ -438,7 +453,7 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 		if err != nil {
 			return nil, fmt.Errorf("error marshalling v2 certificate for handshake: %w", err)
 		}
-		ncs, err := newCipherSuite(v2.Curve(), pkcs11backed, cipher)
+		ncs, err := newCipherSuite(v2.Curve(), pkcs11backed, cipher, fips140.Enforced())
 		if err != nil {
 			return nil, err
 		}
