@@ -22,14 +22,15 @@ import (
 // addresses over a netlink socket that is never bound and names each index with SIOCGIFNAME, the
 // same operations Bionic's getifaddrs uses for app UIDs, which the sandbox permits.
 func localAddrs(ctx context.Context, l *slog.Logger, filter Filter) ([]netip.Addr, error) {
-	addrs, dumpErr := netlinkAddrList()
-	if dumpErr != nil {
-		if !errors.Is(dumpErr, netlink.ErrDumpInterrupted) {
-			return nil, fmt.Errorf("failed to enumerate local interfaces: %w", dumpErr)
+	var errs []error
+	addrs, err := netlinkAddrList()
+	if err != nil {
+		if !errors.Is(err, netlink.ErrDumpInterrupted) {
+			return nil, fmt.Errorf("failed to enumerate local interfaces: %w", err)
 		}
 		// The address table kept changing under the dump and netlink gave up retrying. What it
 		// returned is still worth advertising.
-		dumpErr = fmt.Errorf("local addresses may be incomplete: %w", dumpErr)
+		errs = append(errs, fmt.Errorf("local addresses may be incomplete: %w", err))
 	}
 
 	// Any socket will do for SIOCGIFNAME.
@@ -52,10 +53,11 @@ func localAddrs(ctx context.Context, l *slog.Logger, filter Filter) ([]netip.Add
 		}
 		if !named {
 			name, err := interfaceNameByIndex(sfd, a.LinkIndex)
+			// ENODEV means the interface went away after the dump. Any other failure is reported
+			// and the interface skipped, so the rest are still returned.
 			if err != nil && !errors.Is(err, unix.ENODEV) {
-				return nil, fmt.Errorf("failed to resolve name of interface %d: %w", a.LinkIndex, err)
+				errs = append(errs, fmt.Errorf("failed to resolve name of interface %d: %w", a.LinkIndex, err))
 			}
-			// ENODEV means the interface went away after the dump.
 			allow = err == nil && allowName(ctx, l, filter, name)
 			nameAllowed[a.LinkIndex] = allow
 		}
@@ -63,7 +65,7 @@ func localAddrs(ctx context.Context, l *slog.Logger, filter Filter) ([]netip.Add
 			out = append(out, addr)
 		}
 	}
-	return out, dumpErr
+	return out, errors.Join(errs...)
 }
 
 // netlinkAddrList is netlink.AddrList over a socket that is never bound. The kernel autobinds it
