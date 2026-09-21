@@ -1,7 +1,9 @@
 package nebula
 
 import (
+	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net/netip"
 	"testing"
@@ -737,4 +739,33 @@ func TestLighthouse_DeletesWork(t *testing.T) {
 	//verify
 	out = lh.Query(testHost)
 	assert.Nil(t, out)
+}
+
+func TestLightHouse_logLocalAddrsErr(t *testing.T) {
+	out := &bytes.Buffer{}
+	lh := &LightHouse{l: test.NewLoggerWithOutput(out)}
+
+	// The first sighting of a failure warns.
+	lh.logLocalAddrsErr(errors.New("permission denied"))
+	assert.Contains(t, out.String(), "level=WARN")
+	assert.Contains(t, out.String(), "permission denied")
+
+	// Repeating unchanged does not warn again, which is what keeps a permanent failure from warning
+	// on every lighthouse.interval for the life of the process.
+	out.Reset()
+	lh.logLocalAddrsErr(errors.New("permission denied"))
+	assert.NotContains(t, out.String(), "level=WARN")
+
+	// A different failure is a new event and warns.
+	out.Reset()
+	lh.logLocalAddrsErr(errors.New("something else"))
+	assert.Contains(t, out.String(), "level=WARN")
+	assert.Contains(t, out.String(), "something else")
+
+	// Recovering resets, so the same failure returning later warns again.
+	out.Reset()
+	lh.logLocalAddrsErr(nil)
+	assert.Empty(t, out.String())
+	lh.logLocalAddrsErr(errors.New("something else"))
+	assert.Contains(t, out.String(), "level=WARN")
 }

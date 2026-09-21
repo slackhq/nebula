@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	dario.cat/mergo v1.0.2
 	filippo.io/bigmod v0.1.0
+	github.com/DefinedNet/netlink v1.3.2-dn.1
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
 	github.com/armon/go-radix v1.0.0
 	github.com/flynn/noise v1.1.0
@@ -20,7 +21,6 @@ require (
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/stefanberger/go-pkcs11uri v0.0.0-20230803200340-78284954bff6
 	github.com/stretchr/testify v1.11.1
-	github.com/vishvananda/netlink v1.3.1
 	go.uber.org/goleak v1.3.0
 	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/crypto v0.54.0
