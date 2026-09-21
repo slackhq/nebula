@@ -222,11 +222,14 @@ test-cov-html:
 	go test -coverprofile=coverage.out
 	go tool cover -html=coverage.out
 
+# The package builds only compile. The final line links an android binary so a linker-only failure
+# cannot pass CI.
 build-test-mobile:
 	GOARCH=amd64 GOOS=ios go build $(shell go list ./... | grep -v '/cmd/\|/examples/')
 	GOARCH=arm64 GOOS=ios go build $(shell go list ./... | grep -v '/cmd/\|/examples/')
 	GOARCH=amd64 GOOS=android go build $(shell go list ./... | grep -v '/cmd/\|/examples/')
 	GOARCH=arm64 GOOS=android go build $(shell go list ./... | grep -v '/cmd/\|/examples/')
+	GOARCH=arm64 GOOS=android go build -o /dev/null ${NEBULA_CMD_PATH}
 
 bench:
 	go test -bench=.
