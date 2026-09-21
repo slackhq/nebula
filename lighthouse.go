@@ -516,17 +516,15 @@ func (lh *LightHouse) QueryServer(vpnAddr netip.Addr) {
 }
 
 func (lh *LightHouse) QueryCache(vpnAddrs []netip.Addr) *RemoteList {
-	lh.RLock()
-	if v, ok := lh.addrMap[vpnAddrs[0]]; ok {
-		lh.RUnlock()
-		return v
+	rl, ok := lh.findRemoteList(vpnAddrs)
+	if ok {
+		return rl
 	}
-	lh.RUnlock()
 
 	lh.Lock()
 	defer lh.Unlock()
 	// Add an entry if we don't already have one
-	return lh.unlockedGetRemoteList(vpnAddrs) //todo CERT-V2 this contains addrmap lookups we could potentially skip
+	return lh.unlockedGetRemoteList(vpnAddrs) //todo this re-calls unlockedFindRemoteList
 }
 
 // queryAndPrepMessage is a lock helper on RemoteList, assisting the caller to build a lighthouse message containing
@@ -672,23 +670,58 @@ func (lh *LightHouse) addCalculatedRemotes(vpnAddr netip.Addr) bool {
 	return len(calculatedV4) > 0 || len(calculatedV6) > 0
 }
 
+func (lh *LightHouse) findRemoteList(vpnAddrs []netip.Addr) (*RemoteList, bool) {
+	lh.RLock()
+	defer lh.RUnlock()
+	return lh.unlockedFindRemoteList(vpnAddrs)
+}
+
+// unlockedFindRemoteList checks addrMap for each of vpnAddrs. It returns the first RemoteList found,
+// and true if that RemoteList is present for all vpnAddrs.
+// If false, it means the addrMap, and possibly the RemoteList, need to be corrected.
+func (lh *LightHouse) unlockedFindRemoteList(vpnAddrs []netip.Addr) (*RemoteList, bool) {
+	var am *RemoteList
+	//todo: if a host with addresses A and B is "split", so it only has address A and a new host has only address B
+	//todo: we don't handly that correctly, I'm pretty sure.
+	missingOrDifferent := false
+	for _, addr := range vpnAddrs {
+		found, ok := lh.addrMap[addr]
+		if !ok {
+			missingOrDifferent = true
+		} else if am == nil {
+			am = found //the first list we find wins
+		} else if am != found {
+			missingOrDifferent = true
+		}
+	}
+	return am, !missingOrDifferent
+}
+
 // unlockedGetRemoteList assumes you have the lh lock
 func (lh *LightHouse) unlockedGetRemoteList(allAddrs []netip.Addr) *RemoteList {
 	// before we go and make a new remotelist, we need to make sure we don't have one for any of this set of vpnaddrs yet
-	for i, addr := range allAddrs {
-		am, ok := lh.addrMap[addr]
-		if ok {
-			if i != 0 {
-				lh.addrMap[allAddrs[0]] = am
-			}
-			return am
+	am, ok := lh.unlockedFindRemoteList(allAddrs)
+
+	// we failed to find any RemoteLists: make a new one, fill out the addrMap
+	if am == nil {
+		am = NewRemoteList(allAddrs, lh.shouldAdd)
+		for _, addr := range allAddrs {
+			lh.addrMap[addr] = am
+		}
+		return am
+	}
+
+	// we found one! Do we need to fix it?
+	if !ok {
+		am.Lock()
+		am.vpnAddrs = make([]netip.Addr, len(allAddrs))
+		copy(am.vpnAddrs, allAddrs)
+		am.Unlock()
+		for _, addr := range allAddrs {
+			lh.addrMap[addr] = am
 		}
 	}
 
-	am := NewRemoteList(allAddrs, lh.shouldAdd)
-	for _, addr := range allAddrs {
-		lh.addrMap[addr] = am
-	}
 	return am
 }
 
