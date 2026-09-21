@@ -529,6 +529,17 @@ func Test_IPv6FindUpperProtocol(t *testing.T) {
 	firstFragToUDP := []byte{17, 0, 0, 1, 0, 0, 0, 1} // frag offset 0, M=1, next = UDP
 	nonFirstFrag := []byte{17, 0, 0, 9, 0, 0, 0, 1}   // frag offset non-zero, next = UDP
 	transport := []byte{0, 80, 1, 187, 0, 0, 0, 0}    // stand-in bytes, IPv6FindUpperProtocol never reads ports
+	extToHbH := []byte{0, 0, 0, 0, 0, 0, 0, 0}        // len 0 -> 8 bytes, next = Hop-by-Hop
+
+	// 8 walked headers spend the budget before the 9th slot's terminal is ever classified. This is the
+	// report 4040546 shape: without failing closed the walk hands back offset 104, and a caller reads ports
+	// from the attacker's bytes there.
+	var budgetChain []byte
+	for i := 0; i < 7; i++ {
+		budgetChain = append(budgetChain, extToHbH...)
+	}
+	budgetChain = append(budgetChain, extToTCP...)
+	budgetChain = append(budgetChain, transport...)
 
 	tests := []struct {
 		name         string
@@ -552,6 +563,7 @@ func Test_IPv6FindUpperProtocol(t *testing.T) {
 		{"truncated extension header", 0, nil, 0, ipv6.HeaderLen, false, false, ErrIPv6CouldNotFindPayload},
 		// Destination Options with a declared length (255+1)*8 = 2048 that runs past the 48 byte buffer, next = SCTP
 		{"extension length past buffer", 60, []byte{132, 255, 0, 0, 0, 0, 0, 0}, 132, ipv6.HeaderLen + 2048, false, false, ErrIPv6CouldNotFindPayload},
+		{"budget exhausted fails closed", 0, budgetChain, 0, 0, false, false, ErrIPv6CouldNotFindPayload},
 	}
 
 	for _, tt := range tests {
