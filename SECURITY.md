@@ -10,4 +10,4 @@ fix valid issues.
 
 For critical reports, if you are interested in a bug bounty: You can submit your report on [HackerOne](https://hackerone.com/slack).
 
-For other reports: You can [submit a report via GitHub](https://github.com/slackhq/nebula/security/advisories/new)
+For other reports: You can [submit a report via GitHub](https://github.com/slackhq/nebula/security/advisories/new).
