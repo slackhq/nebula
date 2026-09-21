@@ -351,8 +351,8 @@ func ipv6CreateRejectTCPPacket(packet []byte, out []byte, offset int) []byte {
 // 253/254, and real upper layer protocols like SCTP or GRE, is terminal. Walking those as extension headers
 // is a firewall bypass, so they fail closed. For a non-first fragment the returned protocol is the fragmented
 // protocol and offset points at the fragment header, there is no transport header to locate. Returns
-// ErrIPv6CouldNotFindPayload if packet is smaller than an ipv6 header or the chain is truncated before a
-// terminal protocol is reached.
+// ErrIPv6CouldNotFindPayload if packet is smaller than an ipv6 header, or the chain is truncated or longer
+// than the walk's budget before a terminal protocol is reached.
 func IPv6FindUpperProtocol(packet []byte) (nextHeader uint8, offset int, isFragment bool, anyFragment bool, err error) {
 	const maxIPv6ExtHeaders = 8
 	if len(packet) < ipv6.HeaderLen {
@@ -398,7 +398,9 @@ func IPv6FindUpperProtocol(packet []byte) (nextHeader uint8, offset int, isFragm
 			return nextHeader, offset, isFragment, anyFragment, nil
 		}
 	}
-	return nextHeader, offset, isFragment, anyFragment, nil
+	// Budget spent without reaching a terminal protocol. We don't know where the transport starts, so fail
+	// closed instead of handing back a mid-chain offset a caller would read ports from.
+	return nextHeader, offset, isFragment, anyFragment, ErrIPv6CouldNotFindPayload
 }
 
 func CreateICMPEchoResponse(packet, out []byte) []byte {
