@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.2] - 2026-09-21
+
+See the [v1.11.2](https://github.com/slackhq/nebula/milestone/31?closed=1) milestone for a complete list of changes.
+
+### Fixed
+
+- Windows tracks NLMTU per address family and Nebula only ever set it for `AF_INET`, so the IPv6 MTU on every
+  Windows adapter sat at the adapter default of 65535 regardless of `tun.mtu` and the stack could hand Nebula
+  packets far larger than configured. An IPv6 enabled overlay with `tun.mtu` under 1280 now refuses to start,
+  matching the other platforms. (#1871)
+- Android 11+ denies `bind()` on netlink route sockets inside the app sandbox, so local address discovery
+  failed and an Android node advertised no underlay addresses, leaving peers on the same LAN to reach it only
+  at the address a lighthouse observed. (#1881)
+- Recompute the transport checksum on packets a host sends to its own overlay address. On macOS the kernel
+  leaves the checksum unfinished for hardware offload, which does not survive the trip through userspace, so
+  TCP and UDP to a host's own IPv6 overlay address were dropped as corrupt. (#1862)
+
 ## [1.11.1] - 2026-08-21
 
 See the [v1.11.1](https://github.com/slackhq/nebula/milestone/30?closed=1) milestone for a complete list of changes.
@@ -895,7 +912,8 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.11.1...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.11.2...HEAD
+[1.11.2]: https://github.com/slackhq/nebula/releases/tag/v1.11.2
 [1.11.1]: https://github.com/slackhq/nebula/releases/tag/v1.11.1
 [1.11.0]: https://github.com/slackhq/nebula/releases/tag/v1.11.0
 [1.10.3]: https://github.com/slackhq/nebula/releases/tag/v1.10.3
