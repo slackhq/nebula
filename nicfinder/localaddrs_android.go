@@ -3,11 +3,12 @@
 package nicfinder
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"net"
+	"log/slog"
+	"net/netip"
 	"os"
-	"slices"
 
 	"github.com/DefinedNet/netlink"
 	"github.com/DefinedNet/netlink/nl"
@@ -20,7 +21,7 @@ import (
 // localInterfaces returns every interface that has an address, with its addresses. It lists
 // addresses over a netlink socket that is never bound and names each index with SIOCGIFNAME, the
 // same operations Bionic's getifaddrs uses for app UIDs, which the sandbox permits.
-func localInterfaces() ([]localInterface, error) {
+func localAddrs(ctx context.Context, l *slog.Logger, filter Filter) ([]netip.Addr, error) {
 	addrs, dumpErr := netlinkAddrList()
 	if dumpErr != nil {
 		if !errors.Is(dumpErr, netlink.ErrDumpInterrupted) {
@@ -38,40 +39,29 @@ func localInterfaces() ([]localInterface, error) {
 	}
 	defer unix.Close(sfd)
 
-	type iface struct {
-		index int
-		name  string
-		addrs []net.Addr
-	}
-	var ifaces []*iface
-	byIndex := make(map[int]*iface) // nil marks an index that vanished before we could name it
+	var out []netip.Addr
+	nameAllowed := make(map[int]bool) // by interface index, once named
 	for _, a := range addrs {
-		i, seen := byIndex[a.LinkIndex]
-		if !seen {
+		allow, named := nameAllowed[a.LinkIndex]
+		if (named && !allow) || a.IPNet == nil {
+			continue
+		}
+		addr, ok := allowedAddr(ctx, l, filter, a.IPNet)
+		if !ok {
+			continue
+		}
+		if !named {
 			name, err := interfaceNameByIndex(sfd, a.LinkIndex)
 			if err != nil && !errors.Is(err, unix.ENODEV) {
 				return nil, fmt.Errorf("failed to resolve name of interface %d: %w", a.LinkIndex, err)
 			}
-			if err == nil {
-				i = &iface{index: a.LinkIndex, name: name}
-				ifaces = append(ifaces, i)
-			}
-			byIndex[a.LinkIndex] = i
+			// ENODEV means the interface went away after the dump.
+			allow = err == nil && allowName(ctx, l, filter, name)
+			nameAllowed[a.LinkIndex] = allow
 		}
-		if i == nil {
-			// The interface went away between the dump and the ioctl.
-			continue
+		if allow {
+			out = append(out, addr)
 		}
-		if a.IPNet != nil {
-			i.addrs = append(i.addrs, a.IPNet)
-		}
-	}
-
-	// The dump is grouped by address family. Sort by index to match net.Interfaces.
-	slices.SortFunc(ifaces, func(a, b *iface) int { return a.index - b.index })
-	out := make([]localInterface, 0, len(ifaces))
-	for _, i := range ifaces {
-		out = append(out, localInterface{Name: i.name, Addrs: netipAddrs(i.addrs)})
 	}
 	return out, dumpErr
 }
