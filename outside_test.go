@@ -117,7 +117,7 @@ func Test_newPacket_v6(t *testing.T) {
 	require.NoError(t, err)
 
 	err = newPacket(buffer.Bytes(), true, p)
-	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
+	require.ErrorIs(t, err, iputil.ErrIPv6CouldNotFindPayload)
 
 	// A v6 packet with a hop-by-hop extension
 	// ICMPv6 Payload (Echo Request)
@@ -151,12 +151,12 @@ func Test_newPacket_v6(t *testing.T) {
 	// A full IPv6 header and 1 byte in the first extension, but missing
 	// the length byte.
 	err = newPacket(buffer.Bytes()[:41], true, p)
-	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
+	require.ErrorIs(t, err, iputil.ErrIPv6CouldNotFindPayload)
 
 	// A full IPv6 header plus 1 full extension, but only 1 byte of the
 	// next layer, missing length byte
 	err = newPacket(buffer.Bytes()[:49], true, p)
-	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
+	require.ErrorIs(t, err, iputil.ErrIPv6CouldNotFindPayload)
 	err = nil
 
 	// A good ICMP packet
@@ -354,12 +354,12 @@ func Test_newPacket_v6(t *testing.T) {
 
 	// Ensure buffer bounds checking during processing, a truncated AH header can't reach the payload
 	err = newPacket(b[:41], true, p)
-	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
+	require.ErrorIs(t, err, iputil.ErrIPv6CouldNotFindPayload)
 
 	// Invalid AH header
 	b = buffer.Bytes()
 	err = newPacket(b, true, p)
-	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
+	require.ErrorIs(t, err, iputil.ErrIPv6CouldNotFindPayload)
 }
 
 func Test_newPacket_ipv6Fragment(t *testing.T) {
@@ -466,7 +466,7 @@ func Test_newPacket_ipv6Fragment(t *testing.T) {
 
 	// Too short of a fragment packet
 	err = newPacket(secondFrag[:len(secondFrag)-10], false, p)
-	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
+	require.ErrorIs(t, err, iputil.ErrIPv6CouldNotFindPayload)
 }
 
 func BenchmarkParseV6(b *testing.B) {
@@ -707,7 +707,7 @@ func Test_newPacket_v6ExtHeaderPastBuffer(t *testing.T) {
 	pkt[40] = byte(layers.IPProtocolSCTP)           // Dest Options next header = SCTP
 	pkt[41] = 255                                   // declared length (255+1)*8 = 2048, past the 48 byte buffer
 
-	require.ErrorIs(t, newPacket(pkt, true, p), ErrIPv6PacketTooShort)
+	require.ErrorIs(t, newPacket(pkt, true, p), iputil.ErrIPv6CouldNotFindPayload)
 }
 
 // Test_newPacket_v6ExtHeaderConfusion is a regression test for parseV6 walking any unrecognized

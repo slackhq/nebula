@@ -45,8 +45,7 @@ func setTransportChecksum4(packet []byte) {
 	if ihl < ipv4.HeaderLen || end < ihl || end > len(packet) {
 		return
 	}
-	// The checksum covers the whole datagram, which a fragment (MF set or a
-	// non-zero offset) does not carry.
+	// do not attempt to set checksums for fragments
 	if binary.BigEndian.Uint16(packet[6:8])&0x3fff != 0 {
 		return
 	}
@@ -68,10 +67,7 @@ func setTransportChecksum6(packet []byte) {
 		return
 	}
 
-	// The checksum covers the whole datagram, which a fragment does not carry.
-	// An unknown extension header hides where the transport header starts. A
-	// chain longer than the walk's budget ends it early, at an offset that was
-	// never checked against the packet.
+	// we must find the transport header in order to write a checksum
 	proto, offset, _, anyFragment, err := IPv6FindUpperProtocol(packet[:end])
 	if err != nil || anyFragment || offset >= end {
 		return
@@ -109,8 +105,7 @@ func transportExtent(transport []byte, proto uint8) ([]byte, bool) {
 // writeTransportChecksum stores the checksum of transport, taken over the
 // pseudo-header sum csum, in the header's checksum field. A UDP checksum that
 // computes to zero goes on the wire as 0xffff: zero means no checksum was
-// computed (RFC 768), and over IPv6 the checksum is mandatory (RFC 8200
-// section 8.1).
+// computed (RFC 768), and over IPv6 the checksum is mandatory (RFC 8200 section 8.1).
 func writeTransportChecksum(transport []byte, proto uint8, csum uint32) {
 	var at, minLen int
 	switch proto {
@@ -133,11 +128,6 @@ func writeTransportChecksum(transport []byte, proto uint8, csum uint32) {
 	binary.BigEndian.PutUint16(transport[at:], sum)
 }
 
-// fold reduces a pseudo-header sum to the 16 bit seed Checksum takes. Carrying
-// the high half back into the low half is what keeps the reduction lossless, so
-// the seed sums exactly as the wider value would; 0xffff is its fixed point.
-// Every term of that sum comes from a 16 bit field, so it stays far below the
-// width at which the accumulator would wrap.
 func fold(csum uint32) uint16 {
 	for csum > 0xffff {
 		csum = (csum >> 16) + (csum & 0xffff)

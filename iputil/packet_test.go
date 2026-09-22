@@ -535,7 +535,7 @@ func Test_IPv6FindUpperProtocol(t *testing.T) {
 	// report 4040546 shape: without failing closed the walk hands back offset 104, and a caller reads ports
 	// from the attacker's bytes there.
 	var budgetChain []byte
-	for i := 0; i < 7; i++ {
+	for range 7 {
 		budgetChain = append(budgetChain, extToHbH...)
 	}
 	budgetChain = append(budgetChain, extToTCP...)
@@ -560,9 +560,9 @@ func Test_IPv6FindUpperProtocol(t *testing.T) {
 		{"first fragment walks to transport", 44, append(firstFragToUDP, transport...), 17, ipv6.HeaderLen + 8, false, true, nil},
 		{"non-first fragment stops", 44, append(nonFirstFrag, transport...), 17, ipv6.HeaderLen, true, true, nil},
 		{"unknown protocol is terminal", 132, transport, 132, ipv6.HeaderLen, false, false, nil}, // SCTP
-		{"truncated extension header", 0, nil, 0, ipv6.HeaderLen, false, false, ErrIPv6CouldNotFindPayload},
+		{"truncated extension header", 0, nil, 0, 0, false, false, ErrIPv6CouldNotFindPayload},
 		// Destination Options with a declared length (255+1)*8 = 2048 that runs past the 48 byte buffer, next = SCTP
-		{"extension length past buffer", 60, []byte{132, 255, 0, 0, 0, 0, 0, 0}, 132, ipv6.HeaderLen + 2048, false, false, ErrIPv6CouldNotFindPayload},
+		{"extension length past buffer", 0, []byte{132, 255, 0, 0, 0, 0, 0, 0}, 0, 0, false, false, ErrIPv6CouldNotFindPayload},
 		{"budget exhausted fails closed", 0, budgetChain, 0, 0, false, false, ErrIPv6CouldNotFindPayload},
 	}
 
@@ -571,10 +571,10 @@ func Test_IPv6FindUpperProtocol(t *testing.T) {
 			packet := makeIPv6Packet(src, dst, tt.nextHeader, tt.payload)
 			proto, offset, isFragment, anyFragment, err := IPv6FindUpperProtocol(packet)
 			if tt.wantErr != nil {
-				assert.ErrorIs(t, err, tt.wantErr)
-				return
+				require.ErrorIs(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
 			}
-			require.NoError(t, err)
 			assert.Equal(t, tt.wantProto, proto)
 			assert.Equal(t, tt.wantOffset, offset)
 			assert.Equal(t, tt.wantFragment, isFragment)

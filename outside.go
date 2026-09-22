@@ -354,7 +354,7 @@ func parseV6(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 	// and cannot drift into misreading an unknown protocol (SCTP, GRE, etc.) as a forged transport.
 	proto, offset, isFragment, anyFragment, err := iputil.IPv6FindUpperProtocol(data)
 	if err != nil {
-		return ErrIPv6PacketTooShort
+		return err
 	}
 
 	fp.Protocol = proto
