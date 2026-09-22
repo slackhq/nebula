@@ -571,7 +571,7 @@ func Test_IPv6FindUpperProtocol(t *testing.T) {
 			packet := makeIPv6Packet(src, dst, tt.nextHeader, tt.payload)
 			proto, offset, isFragment, anyFragment, err := IPv6FindUpperProtocol(packet)
 			if tt.wantErr != nil {
-				assert.ErrorIs(t, err, tt.wantErr)
+				require.ErrorIs(t, err, tt.wantErr)
 			} else {
 				require.NoError(t, err)
 			}
