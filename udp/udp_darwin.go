@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 
@@ -22,6 +23,9 @@ type StdConn struct {
 	isV4  bool
 	sysFd uintptr
 	l     *slog.Logger
+
+	noSendmsgX atomic.Bool
+	sb         *sendScratch
 }
 
 var _ Conn = &StdConn{}
@@ -139,11 +143,138 @@ func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
 	}
 }
 
+// sendBatch is how many datagrams one sendmsg_x call may carry.
+const sendBatch = 64
+
+// sendScratch is WriteBatch's scratch. The kernel reads every entry in place.
+type sendScratch struct {
+	names [sendBatch]unix.RawSockaddrInet6
+	iovs  [sendBatch]unix.Iovec
+	hdrs  [sendBatch]msghdrX
+	// idx maps each entry back to its index in WriteBatch's bufs.
+	idx [sendBatch]int
+}
+
+// WriteBatch sends bufs with sendmsg_x, darwin's private batched sendmsg, so one syscall carries up to
+// sendBatch datagrams. On this unconnected socket xnu still runs each message through sendit, so the
+// saving is the syscall crossings, not the per-send policy checks.
+//
+// xnu's per-message loop stops at the first message that fails. For the errors in sentNothing it reports
+// how many went out; for any other it returns only the errno, with the messages before it already sent.
+// Each call therefore carries one run of datagrams to the same destination: a destination the kernel
+// refuses fails on its first datagram, so a failed call costs that run and nothing else, and no datagram
+// is ever resent after the kernel may have taken it.
+//
+// TODO: WriteTo maps EWOULDBLOCK to an error, so a full send buffer
+// silently drops the rest of a burst (linux blocks instead). Poll for
+// writability on EAGAIN before giving up on the remainder.
 func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
-	// An un-sendable destination costs its own packet, never the ones behind it in the batch.
-	// TODO: WriteTo maps EWOULDBLOCK to an error, so a full send buffer
-	// silently drops the rest of a burst (linux blocks instead). Poll for
-	// writability on EAGAIN before giving up on the remainder.
+	if u.noSendmsgX.Load() {
+		return u.writeEach(bufs, addrs), nil
+	}
+	if u.sb == nil {
+		u.sb = new(sendScratch)
+	}
+	b := u.sb
+	written := 0
+	for i := 0; i < len(bufs); {
+		n := 0
+		for ; i < len(bufs) && n < sendBatch; i++ {
+			namelen, err := u.putSockaddr(&b.names[n], addrs[i])
+			if err != nil {
+				u.l.Debug("failed to write packet in batch", "udpAddr", addrs[i], "error", err)
+				continue
+			}
+			b.iovs[n] = unix.Iovec{}
+			if len(bufs[i]) > 0 {
+				b.iovs[n].Base = &bufs[i][0]
+				b.iovs[n].SetLen(len(bufs[i]))
+			}
+			b.hdrs[n] = msghdrX{Name: (*byte)(unsafe.Pointer(&b.names[n])), Namelen: namelen, Iov: &b.iovs[n], Iovlen: 1}
+			b.idx[n] = i
+			n++
+		}
+
+		for off := 0; off < n; {
+			dst := addrs[b.idx[off]]
+			end := off + 1
+			for end < n && addrs[b.idx[end]] == dst {
+				end++
+			}
+			sent, errno := u.sendmsgX(off, end)
+			switch {
+			case errno == 0 && sent > 0:
+				written += sent
+				off += sent
+				continue
+			case sentNothing(errno):
+				// The datagram at off failed on its own account. sendto delivers or reports it, as without
+				// batching, and the rest of the run goes back to sendmsg_x.
+				j := b.idx[off]
+				written += u.writeEach(bufs[j:j+1], addrs[j:j+1])
+				off++
+				continue
+			case errno == 0:
+			case errno == unix.ENOSYS || errno == unix.EOPNOTSUPP:
+				u.fallBack(errno)
+			case errno == unix.EPERM || errno == unix.EINVAL:
+				// Either can refuse one destination, but a datagram that sendto delivers was refused by
+				// sendmsg_x itself, as a sandbox or an older kernel would.
+				j := b.idx[off]
+				if u.writeEach(bufs[j:j+1], addrs[j:j+1]) == 0 {
+					off = end
+					continue
+				}
+				written++
+				off++
+				u.fallBack(errno)
+			default:
+				u.l.Debug("failed to write packets in batch", "udpAddr", dst, "packets", end-off, "error", errno)
+				off = end
+				continue
+			}
+			// The kernel took nothing from this call, so the rest can go out one datagram at a time.
+			for _, j := range b.idx[off:n] {
+				written += u.writeEach(bufs[j:j+1], addrs[j:j+1])
+			}
+			off = n
+			if u.noSendmsgX.Load() {
+				clear(b.iovs[:n])
+				return written + u.writeEach(bufs[i:], addrs[i:]), nil
+			}
+		}
+		clear(b.iovs[:n])
+	}
+	return written, nil
+}
+
+// sendmsgX hands entries off through end-1 of u.sb to sendmsg_x and returns how many the kernel took.
+// The socket is non-blocking, so a full send buffer returns EAGAIN rather than waiting.
+func (u *StdConn) sendmsgX(off, end int) (int, syscall.Errno) {
+	for {
+		r0, _, errno := unix.Syscall6(unix.SYS_SENDMSG_X, u.sysFd, uintptr(unsafe.Pointer(&u.sb.hdrs[off])), uintptr(end-off), 0, 0, 0)
+		if errno == unix.EINTR {
+			continue
+		}
+		return int(r0), errno
+	}
+}
+
+// sentNothing reports whether sendmsg_x failing with errno means no datagram went out: once any has, xnu
+// turns these errors into a short count instead.
+func sentNothing(errno syscall.Errno) bool {
+	return errno == unix.EWOULDBLOCK || errno == unix.ENOBUFS || errno == unix.EMSGSIZE
+}
+
+// fallBack switches WriteBatch to one sendto per datagram for the life of the socket.
+func (u *StdConn) fallBack(errno syscall.Errno) {
+	if u.noSendmsgX.CompareAndSwap(false, true) {
+		u.l.Warn("sendmsg_x unavailable, sending one datagram per syscall", "error", errno)
+	}
+}
+
+// writeEach sends bufs one at a time with WriteTo and returns how many were written.
+func (u *StdConn) writeEach(bufs [][]byte, addrs []netip.AddrPort) int {
 	written := 0
 	for i, b := range bufs {
 		if err := u.WriteTo(b, addrs[i]); err == nil {
@@ -152,7 +283,23 @@ func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error)
 			u.l.Debug("failed to write packet in batch", "udpAddr", addrs[i], "error", err)
 		}
 	}
-	return written, nil
+	return written
+}
+
+// putSockaddr writes ap into sa in the socket's address family, as WriteTo would, and returns its length.
+func (u *StdConn) putSockaddr(sa *unix.RawSockaddrInet6, ap netip.AddrPort) (uint32, error) {
+	if u.isV4 {
+		if ap.Addr().Is6() {
+			return 0, ErrInvalidIPv6RemoteForSocket
+		}
+		sa4 := (*unix.RawSockaddrInet4)(unsafe.Pointer(sa))
+		*sa4 = unix.RawSockaddrInet4{Family: unix.AF_INET, Addr: ap.Addr().As4()}
+		binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&sa4.Port))[:], ap.Port())
+		return unix.SizeofSockaddrInet4, nil
+	}
+	*sa = unix.RawSockaddrInet6{Family: unix.AF_INET6, Addr: ap.Addr().As16()}
+	binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&sa.Port))[:], ap.Port())
+	return unix.SizeofSockaddrInet6, nil
 }
 
 func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
@@ -198,8 +345,7 @@ type msghdrX struct {
 }
 
 // ListenOut drains the socket with recvmsg_x, darwin's private batched recvmsg, so one syscall reads
-// up to recvBatch datagrams instead of one. Sends stay on sendto: xnu batches sendmsg_x through
-// the stack only on connected sockets, and on this unconnected one it loops sendit per message.
+// up to recvBatch datagrams instead of one.
 func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 	rc, err := u.UDPConn.SyscallConn()
 	if err != nil {
