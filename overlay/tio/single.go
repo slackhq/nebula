@@ -15,9 +15,13 @@ type singleQueue struct {
 
 // NewSingleQueue wraps a one-datagram-per-Read ReadWriteCloser (a legacy tun device) into a Queue.
 // bufSize is the per-queue read scratch size and must be at least the largest datagram the source can return.
-// Close closes rwc.
+// Close closes rwc. The Queue implements BatchWriter when rwc does.
 func NewSingleQueue(rwc io.ReadWriteCloser, bufSize int) Queue {
-	return &singleQueue{rw: rwc, closer: rwc, buf: make([]byte, bufSize)}
+	q := &singleQueue{rw: rwc, closer: rwc, buf: make([]byte, bufSize)}
+	if bw, ok := rwc.(BatchWriter); ok {
+		return &batchSingleQueue{singleQueue: q, bw: bw}
+	}
+	return q
 }
 
 // NewSingleQueueNoClose is NewSingleQueue for a source owned by someone else,
@@ -46,4 +50,15 @@ func (q *singleQueue) Close() error {
 		return nil
 	}
 	return q.closer.Close()
+}
+
+// batchSingleQueue is a singleQueue whose source also implements BatchWriter.
+// It is a separate type so a plain singleQueue never advertises WriteBatch.
+type batchSingleQueue struct {
+	*singleQueue
+	bw BatchWriter
+}
+
+func (q *batchSingleQueue) WriteBatch(pkts [][]byte) error {
+	return q.bw.WriteBatch(pkts)
 }

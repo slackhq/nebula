@@ -185,6 +185,7 @@ const recvBatch = 64
 
 // msghdrX mirrors xnu's struct msghdr_x (bsd/sys/socket_private.h). recvmsg_x reports each
 // datagram's length in Datalen rather than in its return value.
+// Keep in sync with msghdrX in overlay/tun_darwin.go.
 type msghdrX struct {
 	Name       *byte
 	Namelen    uint32

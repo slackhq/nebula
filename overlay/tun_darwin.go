@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"os"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
@@ -33,6 +34,35 @@ type tun struct {
 	// and routes for it. NEPacketTunnelProvider on darwin does this.
 	hostOwned bool
 	l         *slog.Logger
+
+	// noSendmsgX is set once sendmsg_x is refused; WriteBatch then writes one packet at a time.
+	noSendmsgX atomic.Bool
+	batchMu    sync.Mutex
+	batch      tunBatch
+}
+
+// tunWriteBatch is how many packets one sendmsg_x call may carry.
+const tunWriteBatch = 64
+
+// tunBatch is WriteBatch's scratch, guarded by tun.batchMu. The kernel reads every entry in place.
+type tunBatch struct {
+	heads [tunWriteBatch][4]byte
+	iovs  [tunWriteBatch][2]unix.Iovec
+	hdrs  [tunWriteBatch]msghdrX
+	pkts  [tunWriteBatch][]byte
+}
+
+// msghdrX mirrors xnu's struct msghdr_x (bsd/sys/socket_private.h).
+// Keep in sync with msghdrX in udp/udp_darwin.go.
+type msghdrX struct {
+	Name       *byte
+	Namelen    uint32
+	Iov        *unix.Iovec
+	Iovlen     int32
+	Control    *byte
+	Controllen uint32
+	Flags      int32
+	Datalen    uint64
 }
 
 type ifReq struct {
@@ -615,16 +645,12 @@ func (t *tun) Write(from []byte) (int, error) {
 		return 0, syscall.EIO
 	}
 
-	ipVer := from[0] >> 4
 	var head [4]byte
-	switch ipVer {
-	case 4:
-		head[3] = syscall.AF_INET
-	case 6:
-		head[3] = syscall.AF_INET6
-	default:
-		return 0, fmt.Errorf("unable to determine IP version from packet")
+	af, err := tunAF(from)
+	if err != nil {
+		return 0, err
 	}
+	head[3] = af
 
 	// Grab rc as a local so the compiler can devirtualize the call and keep the closure on the stack.
 	rc, err := t.f.SyscallConn()
@@ -655,6 +681,147 @@ func (t *tun) Write(from []byte) (int, error) {
 	}
 
 	return n - 4, nil
+}
+
+// tunAF returns the utun address-family prefix byte for an IP packet.
+func tunAF(pkt []byte) (byte, error) {
+	switch pkt[0] >> 4 {
+	case 4:
+		return syscall.AF_INET, nil
+	case 6:
+		return syscall.AF_INET6, nil
+	default:
+		return 0, fmt.Errorf("unable to determine IP version from packet")
+	}
+}
+
+// WriteBatch writes pkts to the utun device with sendmsg_x, xnu's private batched sendmsg, up to
+// tunWriteBatch packets per syscall. The kernel still hands each packet to utun on its own, so this
+// saves syscalls, not per-packet kernel work. Safe for concurrent use.
+//
+// An empty packet or one with no IP version is skipped and reported, as Write would. Any other
+// error from sendmsg_x means the kernel took an unknown prefix of that call and dropped the rest, so
+// it is reported rather than retried, which could deliver packets twice.
+//
+// Under mbuf exhaustion, sendmsg_x silently drops packets that writev would have delivered: the
+// kernel counts each packet as sent once it is copied in, and when a later allocation fails it
+// frees that prefix unsent and returns its length as a short count, which is indistinguishable
+// from a real one.
+func (t *tun) WriteBatch(pkts [][]byte) error {
+	if t.noSendmsgX.Load() {
+		return t.writeEach(pkts)
+	}
+
+	t.batchMu.Lock()
+	defer t.batchMu.Unlock()
+	b := &t.batch
+	var firstErr error
+	for len(pkts) > 0 {
+		n := 0
+		for len(pkts) > 0 && n < tunWriteBatch {
+			p := pkts[0]
+			pkts = pkts[1:]
+			var af byte
+			err := error(syscall.EIO)
+			if len(p) > 0 {
+				af, err = tunAF(p)
+			}
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			b.heads[n] = [4]byte{3: af}
+			b.iovs[n] = [2]unix.Iovec{
+				{Base: &b.heads[n][0], Len: 4},
+				{Base: &p[0], Len: uint64(len(p))},
+			}
+			b.hdrs[n] = msghdrX{Iov: &b.iovs[n][0], Iovlen: 2}
+			b.pkts[n] = p
+			n++
+		}
+		if n == 0 {
+			continue
+		}
+
+		for off := 0; off < n; {
+			sent, err := t.sendmsgX(off, n)
+			switch {
+			case err == nil && sent > 0:
+				// The kernel stops early without an error on a packet larger than the socket's send
+				// buffer, or when sending a later packet fails with ENOBUFS; resend the remainder.
+				off += sent
+			case err == nil:
+				if werr := t.writeEach(b.pkts[off:n]); werr != nil && firstErr == nil {
+					firstErr = werr
+				}
+				off = n
+			case err == unix.EMSGSIZE:
+				// Only the first packet being larger than the socket's send buffer fails the whole call,
+				// before the kernel takes any; Write reports that one and the rest go out in the next call.
+				if werr := t.writeEach(b.pkts[off : off+1]); werr != nil && firstErr == nil {
+					firstErr = werr
+				}
+				off++
+			case err == unix.ENOSYS || err == unix.EPERM || err == unix.EOPNOTSUPP:
+				// sendmsg_x is private API: fall back to writev if a kernel or sandbox refuses it.
+				if t.noSendmsgX.CompareAndSwap(false, true) {
+					t.l.Warn("sendmsg_x unavailable on the tun device, writing one packet per syscall", "error", err)
+				}
+				if werr := t.writeEach(b.pkts[off:n]); werr != nil && firstErr == nil {
+					firstErr = werr
+				}
+				clear(b.iovs[:n])
+				clear(b.pkts[:n])
+				if werr := t.writeEach(pkts); werr != nil && firstErr == nil {
+					firstErr = werr
+				}
+				return firstErr
+			default:
+				if firstErr == nil {
+					firstErr = err
+				}
+				off = n
+			}
+		}
+		clear(b.iovs[:n])
+		clear(b.pkts[:n])
+	}
+	return firstErr
+}
+
+// sendmsgX hands entries off through n-1 of t.batch to sendmsg_x and returns how many the kernel took.
+func (t *tun) sendmsgX(off, n int) (int, error) {
+	rc, err := t.f.SyscallConn()
+	if err != nil {
+		return 0, err
+	}
+	var sent uintptr
+	var errno syscall.Errno
+	err = rc.Write(func(fd uintptr) bool {
+		sent, _, errno = unix.Syscall6(unix.SYS_SENDMSG_X, fd, uintptr(unsafe.Pointer(&t.batch.hdrs[off])), uintptr(n-off), 0, 0, 0)
+		// sendmsg_x reports EAGAIN only when it took nothing; a partial batch returns its count.
+		return !errno.Temporary()
+	})
+	if err != nil {
+		return 0, err
+	}
+	if errno != 0 {
+		return 0, errno
+	}
+	return int(sent), nil
+}
+
+// writeEach writes pkts one at a time with Write.
+func (t *tun) writeEach(pkts [][]byte) error {
+	var firstErr error
+	for _, p := range pkts {
+		if _, err := t.Write(p); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func (t *tun) Networks() []netip.Prefix {

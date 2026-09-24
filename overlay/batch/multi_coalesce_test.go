@@ -435,3 +435,65 @@ func testPP(pkt []byte) *firewall.ParsedPacket {
 	}
 	return pp
 }
+
+// fakeTunBatchWriter records each WriteBatch call and each plain Write separately.
+type fakeTunBatchWriter struct {
+	writes  [][]byte
+	batches [][][]byte
+}
+
+func (w *fakeTunBatchWriter) Write(p []byte) (int, error) {
+	w.writes = append(w.writes, bytes.Clone(p))
+	return len(p), nil
+}
+
+func (w *fakeTunBatchWriter) WriteBatch(pkts [][]byte) error {
+	var b [][]byte
+	for _, p := range pkts {
+		b = append(b, bytes.Clone(p))
+	}
+	w.batches = append(w.batches, b)
+	return nil
+}
+
+// TestPassthroughUsesWriteBatch pins that a writer implementing tio.BatchWriter gets the whole
+// passthrough lane in one WriteBatch per Flush, in order, and no plain Writes; an empty Flush
+// makes no call.
+func TestPassthroughUsesWriteBatch(t *testing.T) {
+	w := &fakeTunBatchWriter{}
+	m := newTestMultiCoalescer(t, w)
+	k := &keySeq{epoch: 1}
+
+	var want [][]byte
+	for i := range 5 {
+		icmp := make([]byte, 28)
+		icmp[0] = 0x45
+		icmp[3] = 28
+		icmp[9] = 1
+		icmp[20] = byte(i)
+		want = append(want, icmp)
+		if err := m.Commit(icmp, k.next(), testPP(icmp)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := m.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.writes) != 0 {
+		t.Fatalf("got %d plain Writes, want 0", len(w.writes))
+	}
+	if len(w.batches) != 1 {
+		t.Fatalf("got %d WriteBatch calls, want 1", len(w.batches))
+	}
+	for i, p := range w.batches[0] {
+		if !bytes.Equal(p, want[i]) {
+			t.Fatalf("packet %d: got % x, want % x", i, p, want[i])
+		}
+	}
+	if len(w.batches[0]) != len(want) {
+		t.Fatalf("got %d packets, want %d", len(w.batches[0]), len(want))
+	}
+}
