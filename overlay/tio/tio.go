@@ -145,3 +145,14 @@ func SupportsGSO(w io.Writer, want GSOProto) (GSOWriter, bool) {
 		return gw, false
 	}
 }
+
+// BatchWriter is implemented by Queues that can emit several already-segmented packets in one call.
+// Backends without a batched write do not implement it and callers loop over Write.
+//
+// pkts are borrowed: WriteBatch must not retain them past its return.
+// A returned error doesn't say which packets were delivered, so callers must not retry the batch.
+// Safe for concurrent use, like Write.
+type BatchWriter interface {
+	io.Writer
+	WriteBatch(pkts [][]byte) error
+}
