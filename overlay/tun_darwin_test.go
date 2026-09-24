@@ -151,3 +151,51 @@ func TestTunWriteBatchOversize(t *testing.T) {
 		})
 	}
 }
+
+// TestTunQueueReadDrains pins that Read hands back every queued packet, AF prefix stripped and in
+// order, capped at tunReadBatch per call, and doesn't wait for more once the queue is empty.
+func TestTunQueueReadDrains(t *testing.T) {
+	tn, w := newSocketpairTun(t, 1<<20)
+	// An AF_UNIX datagram send is bounded by the receiver's buffer, here the tun's end.
+	rc, err := tn.f.SyscallConn()
+	require.NoError(t, err)
+	require.NoError(t, rc.Control(func(fd uintptr) {
+		require.NoError(t, unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_RCVBUF, 1<<20))
+	}))
+	q := &tunQueue{t: tn, buf: make([]byte, tunReadArena)}
+	total := tunReadBatch + 3
+	var want [][]byte
+	for i := range total {
+		pkt, wire := testTunPkt(i, 60+i)
+		_, err := unix.Write(w, wire)
+		require.NoError(t, err)
+		want = append(want, pkt)
+	}
+
+	var got [][]byte
+	for _, size := range []int{tunReadBatch, 3} {
+		pkts, err := q.Read()
+		require.NoError(t, err)
+		require.Len(t, pkts, size)
+		for _, p := range pkts {
+			got = append(got, p.Clone().Bytes)
+		}
+	}
+	assert.Equal(t, want, got)
+}
+
+// TestTunQueueReadClipsPackets pins that each returned packet's capacity ends at its own bytes, so
+// appending to one can't overwrite the next.
+func TestTunQueueReadClipsPackets(t *testing.T) {
+	tn, w := newSocketpairTun(t, 1<<20)
+	q := &tunQueue{t: tn, buf: make([]byte, tunReadArena)}
+	for i := range 2 {
+		_, wire := testTunPkt(i, 100)
+		_, err := unix.Write(w, wire)
+		require.NoError(t, err)
+	}
+	pkts, err := q.Read()
+	require.NoError(t, err)
+	require.Len(t, pkts, 2)
+	assert.Equal(t, len(pkts[0].Bytes), cap(pkts[0].Bytes))
+}
