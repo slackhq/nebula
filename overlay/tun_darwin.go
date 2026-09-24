@@ -607,6 +607,72 @@ func (t *tun) Read(to []byte) (int, error) {
 	return n - 4, nil
 }
 
+// tunReadBatch is the most packets one tunQueue.Read returns.
+const tunReadBatch = 64
+
+// tunReadArena is tunQueue's receive buffer. Draining stops once less than defaultBatchBufSize of it
+// is left, so every readv has room for the largest packet utun can return at any device MTU.
+const tunReadArena = 4 * defaultBatchBufSize
+
+// tunQueue is the darwin tun's Queue. Read drains every packet already queued on the utun, up to
+// tunReadBatch, so the caller encrypts and sends them as one batch rather than one per wakeup.
+type tunQueue struct {
+	t    *tun
+	buf  []byte
+	pkts [tunReadBatch]tio.Packet
+}
+
+// Read waits for the utun to become readable, then reads packets until it would block. An error after
+// at least one packet is dropped in favor of returning those packets; a persistent one recurs on the
+// next Read.
+func (q *tunQueue) Read() ([]tio.Packet, error) {
+	rc, err := q.t.f.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+
+	var head [4]byte
+	n, off := 0, 0
+	var callErr error
+	err = rc.Read(func(fd uintptr) bool {
+		for n < tunReadBatch && len(q.buf)-off >= defaultBatchBufSize {
+			iovecs := [2]unix.Iovec{
+				{Base: &head[0], Len: 4},
+				{Base: &q.buf[off], Len: uint64(len(q.buf) - off)},
+			}
+			l, e := tunReadv(int(fd), iovecs[:])
+			if e != nil {
+				if errno, ok := e.(syscall.Errno); ok && errno.Temporary() {
+					// Park on the poller only while there is nothing to hand back.
+					return n > 0
+				}
+				callErr = e
+				return true
+			}
+			if l < 4 {
+				// A datagram too short to carry the AF prefix, or end of file; stop rather than spin on it.
+				return true
+			}
+			end := off + l - 4
+			q.pkts[n] = tio.Packet{Bytes: q.buf[off:end:end]}
+			n++
+			off = end
+		}
+		return true
+	})
+	if n > 0 {
+		return q.pkts[:n], nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nil, callErr
+}
+
+func (q *tunQueue) Write(p []byte) (int, error) { return q.t.Write(p) }
+
+func (q *tunQueue) Close() error { return q.t.Close() }
+
 // Write pushes one IP packet onto the utun device. Safe for concurrent use:
 // the AF prefix and iovecs are per-call stack state, and the fd write itself
 // serializes on the runtime's fd mutex (see the Queue contract in tio.go).
@@ -666,5 +732,5 @@ func (t *tun) Name() string {
 }
 
 func (t *tun) Queues(int) ([]tio.Queue, error) {
-	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}, nil
+	return []tio.Queue{&tunQueue{t: t, buf: make([]byte, tunReadArena)}}, nil
 }
