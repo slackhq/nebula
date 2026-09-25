@@ -9,8 +9,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
-	"unsafe"
+	_ "unsafe" // for go:linkname
 
+	"github.com/slackhq/nebula/internal/msgx"
 	"golang.org/x/sys/unix"
 )
 
@@ -40,7 +41,7 @@ type Utun struct {
 	readBuf []byte
 	readRet [tunReadBatch]Packet
 
-	// noSendmsgX is set once sendmsg_x is refused; WriteBatch then writes one packet at a time.
+	// noSendmsgX is set when libSystem lacks sendmsg_x or the kernel refuses it; WriteBatch then writes one packet at a time.
 	noSendmsgX atomic.Bool
 	batchMu    sync.Mutex
 	batch      tunBatch
@@ -50,21 +51,8 @@ type Utun struct {
 type tunBatch struct {
 	heads [tunWriteBatch][4]byte
 	iovs  [tunWriteBatch][2]unix.Iovec
-	hdrs  [tunWriteBatch]msghdrX
+	hdrs  [tunWriteBatch]msgx.Hdr
 	pkts  [tunWriteBatch][]byte
-}
-
-// msghdrX mirrors xnu's struct msghdr_x (bsd/sys/socket_private.h).
-// Keep in sync with msghdrX in udp/udp_darwin.go.
-type msghdrX struct {
-	Name       *byte
-	Namelen    uint32
-	Iov        *unix.Iovec
-	Iovlen     int32
-	Control    *byte
-	Controllen uint32
-	Flags      int32
-	Datalen    uint64
 }
 
 // NewUtun wraps a utun control socket fd and makes it non-blocking.
@@ -74,11 +62,13 @@ func NewUtun(fd int, l *slog.Logger) (*Utun, error) {
 	if err := unix.SetNonblock(fd, true); err != nil {
 		return nil, fmt.Errorf("failed to set the tun fd to non-blocking mode: %w", err)
 	}
-	return &Utun{
+	u := &Utun{
 		f:       os.NewFile(uintptr(fd), "utun"),
 		l:       l,
 		readBuf: make([]byte, tunReadArena),
-	}, nil
+	}
+	u.noSendmsgX.Store(!msgx.Available())
+	return u, nil
 }
 
 // tunWritev and tunReadv are linkname'd to x/sys/unix's libc-routed writev/readv stubs so the
@@ -246,7 +236,7 @@ func (u *Utun) WriteBatch(pkts [][]byte) error {
 				{Base: &b.heads[n][0], Len: 4},
 				{Base: &p[0], Len: uint64(len(p))},
 			}
-			b.hdrs[n] = msghdrX{Iov: &b.iovs[n][0], Iovlen: 2}
+			b.hdrs[n] = msgx.Hdr{Iov: &b.iovs[n][0], Iovlen: 2}
 			b.pkts[n] = p
 			n++
 		}
@@ -306,10 +296,10 @@ func (u *Utun) sendmsgX(off, n int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	var sent uintptr
+	var sent int
 	var errno syscall.Errno
 	err = rc.Write(func(fd uintptr) bool {
-		sent, _, errno = unix.Syscall6(unix.SYS_SENDMSG_X, fd, uintptr(unsafe.Pointer(&u.batch.hdrs[off])), uintptr(n-off), 0, 0, 0)
+		sent, errno = msgx.Send(fd, u.batch.hdrs[off:n], 0)
 		// sendmsg_x reports EAGAIN only when it took nothing; a partial batch returns its count.
 		return !errno.Temporary()
 	})
@@ -319,7 +309,7 @@ func (u *Utun) sendmsgX(off, n int) (int, error) {
 	if errno != 0 {
 		return 0, errno
 	}
-	return int(sent), nil
+	return sent, nil
 }
 
 // writeEach writes pkts one at a time with Write.
