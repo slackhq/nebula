@@ -27,12 +27,17 @@ var (
 
 // newTestLaneSet builds a lane set from a real handshake result so the sessions
 // it derives hold usable keys.
+// testLaneEpoch stands in for the base session's epoch. It is deliberately not a
+// value sessionEpoch would hand out early in a test run, so a lane session that
+// went back to drawing its own cannot match it by accident.
+const testLaneEpoch = uint64(0xe90c)
+
 func newTestLaneSet(t *testing.T, r *handshake.Result, myLanes int, peerPorts, peerBase, peerTxLanes uint32) *laneSet {
 	t.Helper()
 	r.PeerPortCount = peerPorts
 	r.PeerBasePort = peerBase
 	r.PeerTxLanes = peerTxLanes
-	return newLaneSet(r, myLanes, testMyAddr, testPeerAddr)
+	return newLaneSet(r, myLanes, testLaneEpoch, testMyAddr, testPeerAddr)
 }
 
 // laneSessionFor derives lane s's session and installs it, standing in for the
@@ -153,10 +158,10 @@ func TestNewLaneSetSizing(t *testing.T) {
 	initR, _ := runTestHandshake(t)
 
 	// A peer with no multiport advert gets no lanes at all.
-	assert.Nil(t, newLaneSet(&handshake.Result{}, 4, testMyAddr, testPeerAddr))
+	assert.Nil(t, newLaneSet(&handshake.Result{}, 4, testLaneEpoch, testMyAddr, testPeerAddr))
 
 	// One lane means only the base tunnel, which is not a lane set.
-	assert.Nil(t, newLaneSet(&handshake.Result{PeerPortCount: 4, PeerTxLanes: 1}, 1, testMyAddr, testPeerAddr))
+	assert.Nil(t, newLaneSet(&handshake.Result{PeerPortCount: 4, PeerTxLanes: 1}, 1, testLaneEpoch, testMyAddr, testPeerAddr))
 
 	// Sessions cover both directions: enough for everything the peer may send,
 	// even though we may only send on a few.
@@ -260,6 +265,26 @@ func TestLaneSessionRxDerivation(t *testing.T) {
 	assert.Same(t, ci, respLS.sessions[2].Load())
 	assert.False(t, ci.window.Check(test.NewLogger(), 7),
 		"the loser's counter was not carried to the surviving window")
+}
+
+// Every session on a tunnel reports the tunnel's epoch. The RX staging sort keys
+// off (epoch, counter) and lanes derive lazily, so a lane drawing its own ordinal
+// would be ordered by when its first packet landed: during a rehandshake cutover
+// a late-derived lane of the *old* tunnel would outrank the new tunnel and sort
+// its packets last, the exact inversion the epoch exists to prevent.
+func TestLaneSessionsShareTheTunnelEpoch(t *testing.T) {
+	initR, _ := runTestHandshake(t)
+	ls := newTestLaneSet(t, initR, 4, 4, 4242, 4)
+
+	for s := 1; s < 4; s++ {
+		// Move the global on between derivations, so a session that drew its own
+		// would land on a different value for every lane.
+		sessionEpoch.Add(1)
+
+		cs, err := ls.session(s)
+		require.NoError(t, err)
+		assert.Equal(t, testLaneEpoch, cs.epoch, "lane %d did not inherit the tunnel's epoch", s)
+	}
 }
 
 func TestLaneTxGate(t *testing.T) {
@@ -976,7 +1001,7 @@ func TestLaneFlowSymmetry(t *testing.T) {
 	const ourBase, peerBase = 4242, 5353
 	ourLS := newTestLaneSet(t, initR, 4, 4, peerBase, 4)
 	respR.PeerPortCount, respR.PeerBasePort, respR.PeerTxLanes = 4, ourBase, 4
-	peerLS := newLaneSet(respR, 4, testPeerAddr, testMyAddr)
+	peerLS := newLaneSet(respR, 4, testLaneEpoch, testPeerAddr, testMyAddr)
 	require.NotNil(t, peerLS)
 	require.Equal(t, uint16(0), ourLS.laneBias, "the low address hashes straight")
 

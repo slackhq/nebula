@@ -145,6 +145,7 @@ type laneMaterial struct {
 	myCert     cert.Certificate
 	peerCert   *cert.CachedCertificate
 	initiator  bool
+	epoch      uint64
 }
 
 type laneProbeState struct {
@@ -174,7 +175,9 @@ type laneProbeState struct {
 // returns nil when the pair has no lane beyond the base tunnel, which is the
 // normal answer for a peer running without multiport. No session is derived
 // here; each is derived on the first packet that needs it.
-func newLaneSet(r *handshake.Result, myLanes int, myAddr, peerAddr netip.Addr) *laneSet {
+//
+// epoch is the base session's, which every lane session will share.
+func newLaneSet(r *handshake.Result, myLanes int, epoch uint64, myAddr, peerAddr netip.Addr) *laneSet {
 	// PeerPortCount and PeerBasePort are already bounded to uint16 by the
 	// handshake payload parser. A zero port count is a peer that did not
 	// advertise multiport at all, so there is no lane to be had in either
@@ -218,6 +221,7 @@ func newLaneSet(r *handshake.Result, myLanes int, myAddr, peerAddr netip.Addr) *
 			myCert:    r.MyCert,
 			peerCert:  r.RemoteCert,
 			initiator: r.Initiator,
+			epoch:     epoch,
 		},
 		txAddr:        make([]atomic.Pointer[netip.AddrPort], txLanes),
 		demand:        make([]atomic.Bool, txLanes),

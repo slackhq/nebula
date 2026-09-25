@@ -733,7 +733,7 @@ func (hm *HandshakeManager) maybeAllocLanes(hostinfo *HostInfo, result *handshak
 		return
 	}
 
-	hostinfo.lanes = newLaneSet(result, hm.config.laneCount, hm.f.myVpnAddrs[0], hostinfo.vpnAddrs[0])
+	hostinfo.lanes = newLaneSet(result, hm.config.laneCount, hostinfo.ConnectionState.epoch, hm.f.myVpnAddrs[0], hostinfo.vpnAddrs[0])
 }
 
 // beginHandshake handles an incoming handshake packet that doesn't match any

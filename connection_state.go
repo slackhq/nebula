@@ -29,12 +29,15 @@ const (
 // RehandshakeAfterMessages must stay below RejectAfterMessages so tunnels roll before the hard send stop.
 const _ = RejectAfterMessages - RehandshakeAfterMessages
 
-// sessionEpoch hands out a receiver-local ordinal to every ConnectionState at creation. The RX
+// sessionEpoch hands out a receiver-local ordinal to every tunnel at creation. The RX
 // staging sort (overlay/batch) orders packets by (epoch, message counter). A re-handshake never
 // rekeys an existing tunnel; it brings up a new hostinfo and ConnectionState with a counter space
 // starting near zero, while the old tunnel keeps decrypting until torn down. During that cutover
 // one flush batch can hold packets from both tunnels, and the epoch keeps the old tunnel's
 // packets sorted first.
+//
+// It is drawn once per tunnel, by the base session: a tunnel's multiport lane sessions copy it
+// rather than draw their own.
 var sessionEpoch atomic.Uint64
 
 type ConnectionState struct {
@@ -85,7 +88,7 @@ func newConnectionStateFromResult(r *handshake.Result) (*ConnectionState, error)
 //
 // The lane gets its own counter and replay window starting from zero. No
 // handshake messages were spent on it, so unlike the base session there is
-// nothing to seed.
+// nothing to seed. The epoch is the tunnel's, not the lane's; see sessionEpoch.
 func newLaneConnectionState(m *laneMaterial, lane uint8) (*ConnectionState, error) {
 	if lane == 0 {
 		return nil, fmt.Errorf("lane 0 is the base session")
@@ -107,7 +110,7 @@ func newLaneConnectionState(m *laneMaterial, lane uint8) (*ConnectionState, erro
 		eKey:      noiseutil.NewCipherStateFromKey(eKey, m.cipher),
 		dKey:      noiseutil.NewCipherStateFromKey(dKey, m.cipher),
 		window:    NewBits(ReplayWindow),
-		epoch:     sessionEpoch.Add(1),
+		epoch:     m.epoch,
 	}, nil
 }
 
