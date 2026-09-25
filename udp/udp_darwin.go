@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 
@@ -22,6 +24,20 @@ type StdConn struct {
 	isV4  bool
 	sysFd uintptr
 	l     *slog.Logger
+
+	// listenHost and port are the configured address and the bound port, which a lane shares.
+	listenHost netip.Addr
+	port       uint16
+	lanes      lanes
+	// reader is ListenOut's reader, which lane readers share; readMu serializes them, since an EncReader
+	// isn't safe for concurrent use.
+	reader atomic.Pointer[readerPair]
+	readMu sync.Mutex
+}
+
+type readerPair struct {
+	r     EncReader
+	flush func()
 }
 
 var _ Conn = &StdConn{}
@@ -34,7 +50,8 @@ func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 	}
 
 	if uc, ok := pc.(*net.UDPConn); ok {
-		c := &StdConn{UDPConn: uc, l: l}
+		c := &StdConn{UDPConn: uc, l: l, listenHost: s.Listen.Addr()}
+		c.lanes.cfg = laneConfigFromEnv()
 
 		rc, err := uc.SyscallConn()
 		if err != nil {
@@ -53,6 +70,14 @@ func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 			return nil, err
 		}
 		c.isV4 = la.Addr().Is4()
+		c.port = la.Port()
+		if c.lanes.cfg.max > 0 && !c.listenHost.IsUnspecified() && !s.Multi {
+			// A lane on a specific listen.host binds the listener's own address, which xnu allows only when
+			// both sockets set SO_REUSEPORT, and a listener with it lets another uid bind a dual-stack
+			// wildcard on the port.
+			c.lanes.off.Store(true)
+			l.Debug("lanes: off for a specific listen.host", "addr", s.Listen)
+		}
 
 		return c, nil
 	}
@@ -89,6 +114,27 @@ func NewListenConfig(multi bool) net.ListenConfig {
 func sendto(s int, buf []byte, flags int, to unsafe.Pointer, addrlen int32) (err error)
 
 func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
+	ln := u.laneFor(ap)
+	if ln == nil && len(b) >= laneMinLen {
+		ln = u.maybeOpenLane(ap, 1)
+	}
+	if ln != nil {
+		sent, errno, closed := u.laneWrite(ln, [][]byte{b})
+		switch {
+		case sent == 1:
+			return nil
+		case laneDead(errno):
+			u.releaseLane(ln, errno.Error(), true)
+		case !closed:
+			return &net.OpError{Op: "write", Err: errno}
+		}
+		// A closed or dead lane leaves b to the listener.
+	}
+	return u.writeTo(b, ap)
+}
+
+// writeTo sends b through the listener.
+func (u *StdConn) writeTo(b []byte, ap netip.AddrPort) error {
 	var sa unsafe.Pointer
 	var addrLen int32
 
@@ -141,15 +187,49 @@ func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
 
 func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
 	// An un-sendable destination costs its own packet, never the ones behind it in the batch.
-	// TODO: WriteTo maps EWOULDBLOCK to an error, so a full send buffer
-	// silently drops the rest of a burst (linux blocks instead). Poll for
-	// writability on EAGAIN before giving up on the remainder.
+	// TODO: writeTo maps EWOULDBLOCK to an error, so a full listener send buffer
+	// silently drops those packets (linux blocks instead). Poll for
+	// writability on EAGAIN before giving up on them.
 	written := 0
-	for i, b := range bufs {
-		if err := u.WriteTo(b, addrs[i]); err == nil {
-			written++
-		} else {
-			u.l.Debug("failed to write packet in batch", "udpAddr", addrs[i], "error", err)
+	for off := 0; off < len(bufs); {
+		// A run of datagrams to one peer goes out together, on its lane if it has or earns one.
+		dst := addrs[off]
+		end := off + 1
+		for end < len(bufs) && addrs[end] == dst {
+			end++
+		}
+		ln := u.laneFor(dst)
+		if ln == nil {
+			n := 0
+			for _, b := range bufs[off:end] {
+				if len(b) >= laneMinLen {
+					n++
+				}
+			}
+			ln = u.maybeOpenLane(dst, n)
+		}
+		if ln != nil {
+			sent, errno, closed := u.laneWrite(ln, bufs[off:end])
+			written += sent
+			off += sent
+			switch {
+			case off == end:
+				continue
+			case laneDead(errno):
+				u.releaseLane(ln, errno.Error(), true)
+			case !closed:
+				u.l.Debug("failed to write packet in batch", "udpAddr", dst, "error", errno)
+				off++
+				continue
+			}
+			// A closed or dead lane leaves the rest of the run to the listener.
+		}
+		for ; off < end; off++ {
+			if err := u.writeTo(bufs[off], dst); err == nil {
+				written++
+			} else {
+				u.l.Debug("failed to write packet in batch", "udpAddr", dst, "error", err)
+			}
 		}
 	}
 	return written, nil
@@ -182,6 +262,8 @@ func NewUDPStatsEmitter(udpConns []Conn) func() {
 
 func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 	buffer := make([]byte, MTU)
+	u.reader.Store(&readerPair{r: r, flush: flush})
+	u.startLanes()
 
 	for {
 		// Just read one packet at a time
@@ -194,9 +276,17 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 			continue
 		}
 
+		u.readMu.Lock()
 		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n:n])
 		flush()
+		u.readMu.Unlock()
 	}
+}
+
+// Close closes the lanes, then the listener.
+func (u *StdConn) Close() error {
+	u.closeLanes()
+	return u.UDPConn.Close()
 }
 
 func (u *StdConn) SupportsMultipleReaders() bool {
@@ -205,7 +295,8 @@ func (u *StdConn) SupportsMultipleReaders() bool {
 
 // Rebind clears the interface the kernel scoped this socket to, so that sends are routed against the current
 // routing table instead of the interface we happened to be on when the socket was created. Darwin pins sockets
-// this way on its own, which is what strands us after the underlying network changes.
+// this way on its own, which is what strands us after the underlying network changes. Lanes are closed after
+// the listener is cleared, and later ones copy its cleared scope and pick their source addresses afresh.
 func (u *StdConn) Rebind() error {
 	var err error
 	if u.isV4 {
@@ -213,6 +304,6 @@ func (u *StdConn) Rebind() error {
 	} else {
 		err = syscall.SetsockoptInt(int(u.sysFd), syscall.IPPROTO_IPV6, syscall.IPV6_BOUND_IF, 0)
 	}
-
+	u.releaseLanes("rebind")
 	return err
 }
