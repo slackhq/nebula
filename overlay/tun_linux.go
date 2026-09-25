@@ -267,7 +267,7 @@ func (t *tun) reload(c *config.C, initial bool) error {
 
 	oldDefaultMTU := t.DefaultMTU
 	oldMaxMTU := t.MaxMTU
-	newDefaultMTU := c.GetInt("tun.mtu", DefaultMTU)
+	newDefaultMTU := getMTU(c)
 	newMaxMTU := newDefaultMTU
 	for i, r := range routes {
 		if r.MTU == 0 {

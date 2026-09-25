@@ -6,8 +6,10 @@ import (
 	"testing"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/test"
+	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -401,4 +403,45 @@ func Test_makeMultipathUnsafeRouteTree(t *testing.T) {
 
 	routing.CalculateBucketsForGateways(expectedGateways)
 	assert.ElementsMatch(t, expectedGateways, r)
+}
+
+func Test_getMTU(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+
+	// unset
+	assert.Equal(t, DefaultMTU, getMTU(c))
+
+	// the largest a relayed packet can carry in one underlay buffer
+	require.Equal(t, udp.MTU, MaxMTU+header.MaxOverhead)
+	c.Settings["tun"] = map[string]any{"mtu": MaxMTU}
+	assert.Equal(t, MaxMTU, getMTU(c))
+
+	// too big is capped
+	c.Settings["tun"] = map[string]any{"mtu": 9000}
+	assert.Equal(t, MaxMTU, getMTU(c))
+}
+
+func Test_getAllRoutesFromConfigCapsMTU(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	c.Settings["tun"] = map[string]any{
+		"routes": []any{
+			map[string]any{"mtu": "9000", "route": "10.0.0.0/29"},
+			map[string]any{"mtu": "1300", "route": "10.0.0.8/29"},
+		},
+		"unsafe_routes": []any{
+			map[string]any{"via": "127.0.0.1", "mtu": "9000", "route": "1.0.0.0/29"},
+		},
+	}
+
+	changed, routes, err := getAllRoutesFromConfig(c, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")}, true)
+	require.NoError(t, err)
+	assert.True(t, changed)
+
+	mtus := map[string]int{}
+	for _, r := range routes {
+		mtus[r.Cidr.String()] = r.MTU
+	}
+	assert.Equal(t, map[string]int{"10.0.0.0/29": MaxMTU, "10.0.0.8/29": 1300, "1.0.0.0/29": MaxMTU}, mtus)
 }
