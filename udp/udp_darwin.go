@@ -15,6 +15,7 @@ import (
 	"unsafe"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/internal/msgx"
 	"golang.org/x/sys/unix"
 )
 
@@ -39,6 +40,7 @@ func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 
 	if uc, ok := pc.(*net.UDPConn); ok {
 		c := &StdConn{UDPConn: uc, l: l}
+		c.noSendmsgX.Store(!msgx.Available())
 
 		rc, err := uc.SyscallConn()
 		if err != nil {
@@ -150,7 +152,7 @@ const sendBatch = 64
 type sendScratch struct {
 	names [sendBatch]unix.RawSockaddrInet6
 	iovs  [sendBatch]unix.Iovec
-	hdrs  [sendBatch]msghdrX
+	hdrs  [sendBatch]msgx.Hdr
 	// idx maps each entry back to its index in WriteBatch's bufs.
 	idx [sendBatch]int
 }
@@ -190,7 +192,7 @@ func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error)
 				b.iovs[n].Base = &bufs[i][0]
 				b.iovs[n].SetLen(len(bufs[i]))
 			}
-			b.hdrs[n] = msghdrX{Name: (*byte)(unsafe.Pointer(&b.names[n])), Namelen: namelen, Iov: &b.iovs[n], Iovlen: 1}
+			b.hdrs[n] = msgx.Hdr{Name: (*byte)(unsafe.Pointer(&b.names[n])), Namelen: namelen, Iov: &b.iovs[n], Iovlen: 1}
 			b.idx[n] = i
 			n++
 		}
@@ -252,11 +254,11 @@ func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error)
 // The socket is non-blocking, so a full send buffer returns EAGAIN rather than waiting.
 func (u *StdConn) sendmsgX(off, end int) (int, syscall.Errno) {
 	for {
-		r0, _, errno := unix.Syscall6(unix.SYS_SENDMSG_X, u.sysFd, uintptr(unsafe.Pointer(&u.sb.hdrs[off])), uintptr(end-off), 0, 0, 0)
+		sent, errno := msgx.Send(u.sysFd, u.sb.hdrs[off:end], 0)
 		if errno == unix.EINTR {
 			continue
 		}
-		return int(r0), errno
+		return sent, errno
 	}
 }
 
@@ -330,23 +332,12 @@ func NewUDPStatsEmitter(udpConns []Conn) func() {
 // recvBatch is how many datagrams one recvmsg_x call may return.
 const recvBatch = 64
 
-// msghdrX mirrors xnu's struct msghdr_x (bsd/sys/socket_private.h). recvmsg_x reports each
-// datagram's length in Datalen rather than in its return value.
-// Keep in sync with msghdrX in overlay/tun_darwin.go.
-type msghdrX struct {
-	Name       *byte
-	Namelen    uint32
-	Iov        *unix.Iovec
-	Iovlen     int32
-	Control    *byte
-	Controllen uint32
-	Flags      int32
-	Datalen    uint64
-}
-
 // ListenOut drains the socket with recvmsg_x, darwin's private batched recvmsg, so one syscall reads
 // up to recvBatch datagrams instead of one.
 func (u *StdConn) ListenOut(r EncReader, flush func()) error {
+	if !msgx.Available() {
+		return u.listenOutSingle(r, flush)
+	}
 	rc, err := u.UDPConn.SyscallConn()
 	if err != nil {
 		return err
@@ -355,7 +346,7 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 	bufs := make([][]byte, recvBatch)
 	names := make([]unix.RawSockaddrInet6, recvBatch)
 	iovs := make([]unix.Iovec, recvBatch)
-	hdrs := make([]msghdrX, recvBatch)
+	hdrs := make([]msgx.Hdr, recvBatch)
 	for i := range hdrs {
 		bufs[i] = make([]byte, MTU)
 		iovs[i].Base = &bufs[i][0]
@@ -374,12 +365,8 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 				hdrs[i].Flags = 0
 				hdrs[i].Datalen = 0
 			}
-			r0, _, e := unix.Syscall6(unix.SYS_RECVMSG_X, fd, uintptr(unsafe.Pointer(&hdrs[0])), recvBatch, 0, 0, 0)
-			if e == unix.EAGAIN {
-				return false
-			}
-			n, errno = int(r0), e
-			return true
+			n, errno = msgx.Recv(fd, hdrs, 0)
+			return errno != unix.EAGAIN
 		})
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
@@ -389,7 +376,7 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 			continue
 		}
 		if errno == unix.ENOSYS || errno == unix.EPERM || errno == unix.EOPNOTSUPP {
-			// recvmsg_x is private, so a kernel or sandbox (such as an iOS extension's) may refuse it.
+			// recvmsg_x is private, so a kernel or sandbox may refuse it.
 			u.l.Warn("recvmsg_x unavailable, reading one datagram per syscall", "error", errno)
 			return u.listenOutSingle(r, flush)
 		}
@@ -419,7 +406,7 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 
 // checkMsghdrX rejects a recvmsg_x result that intact msghdr_x entries can't produce, which is how a change
 // to xnu's private struct layout would show up.
-func checkMsghdrX(hdrs []msghdrX, names []unix.RawSockaddrInet6, n int) error {
+func checkMsghdrX(hdrs []msgx.Hdr, names []unix.RawSockaddrInet6, n int) error {
 	if n > len(hdrs) {
 		return fmt.Errorf("returned %d datagrams for %d headers", n, len(hdrs))
 	}

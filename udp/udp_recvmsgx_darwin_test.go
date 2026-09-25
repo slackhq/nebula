@@ -14,6 +14,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/slackhq/nebula/internal/msgx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
@@ -81,7 +82,7 @@ func TestListenOutBatchesBurst(t *testing.T) {
 	}
 }
 
-// msghdrX round-trips through xnu's recvmsg_x on a loopback socket, v4 and v6. The kernel reads Name, Namelen,
+// msgx.Hdr round-trips through xnu's recvmsg_x on a loopback socket, v4 and v6. The kernel reads Name, Namelen,
 // Iov and Iovlen from each entry and writes Namelen, Flags and Datalen back, so a field at the wrong offset or a
 // wrong stride between entries shows up as a wrong length, sender, or payload.
 // TestListenOutSingleFallback pins the path ListenOut takes when the kernel refuses recvmsg_x.
@@ -134,8 +135,8 @@ func TestListenOutSingleFallback(t *testing.T) {
 }
 
 func TestCheckMsghdrX(t *testing.T) {
-	valid := func() ([]msghdrX, []unix.RawSockaddrInet6) {
-		hdrs := make([]msghdrX, 2)
+	valid := func() ([]msgx.Hdr, []unix.RawSockaddrInet6) {
+		hdrs := make([]msgx.Hdr, 2)
 		names := make([]unix.RawSockaddrInet6, 2)
 		hdrs[0].Namelen, hdrs[0].Datalen = unix.SizeofSockaddrInet4, 1
 		names[0].Family = unix.AF_INET
@@ -151,12 +152,12 @@ func TestCheckMsghdrX(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		n      int
-		mutate func([]msghdrX, []unix.RawSockaddrInet6)
+		mutate func([]msgx.Hdr, []unix.RawSockaddrInet6)
 	}{
-		{"count past headers", 3, func([]msghdrX, []unix.RawSockaddrInet6) {}},
-		{"datalen past buffer", 2, func(h []msghdrX, _ []unix.RawSockaddrInet6) { h[1].Datalen = MTU + 1 }},
-		{"unknown family", 2, func(_ []msghdrX, a []unix.RawSockaddrInet6) { a[0].Family = unix.AF_UNIX }},
-		{"family and length disagree", 2, func(h []msghdrX, _ []unix.RawSockaddrInet6) { h[0].Namelen = unix.SizeofSockaddrInet6 }},
+		{"count past headers", 3, func([]msgx.Hdr, []unix.RawSockaddrInet6) {}},
+		{"datalen past buffer", 2, func(h []msgx.Hdr, _ []unix.RawSockaddrInet6) { h[1].Datalen = MTU + 1 }},
+		{"unknown family", 2, func(_ []msgx.Hdr, a []unix.RawSockaddrInet6) { a[0].Family = unix.AF_UNIX }},
+		{"family and length disagree", 2, func(h []msgx.Hdr, _ []unix.RawSockaddrInet6) { h[0].Namelen = unix.SizeofSockaddrInet6 }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			hdrs, names := valid()
@@ -238,7 +239,7 @@ func recvmsgXRoundTrip(t *testing.T, v6 bool, lens []int, nh int, settle time.Du
 	bufs := make([][]byte, nh)
 	names := make([]unix.RawSockaddrInet6, nh)
 	iovs := make([]unix.Iovec, nh)
-	hdrs := make([]msghdrX, nh)
+	hdrs := make([]msgx.Hdr, nh)
 	for i := range hdrs {
 		bufs[i] = make([]byte, MTU)
 		iovs[i].Base = &bufs[i][0]
@@ -253,7 +254,7 @@ func recvmsgXRoundTrip(t *testing.T, v6 bool, lens []int, nh int, settle time.Du
 	for next := 0; next < len(lens); {
 		for i := range hdrs {
 			clear(bufs[i])
-			hdrs[i] = msghdrX{
+			hdrs[i] = msgx.Hdr{
 				Name:    (*byte)(unsafe.Pointer(&names[i])),
 				Namelen: unix.SizeofSockaddrInet6,
 				Iov:     &iovs[i],
@@ -265,9 +266,8 @@ func recvmsgXRoundTrip(t *testing.T, v6 bool, lens []int, nh int, settle time.Du
 		var n int
 		var errno syscall.Errno
 		require.NoError(t, rc.Read(func(fd uintptr) bool {
-			r0, _, e := unix.Syscall6(unix.SYS_RECVMSG_X, fd, uintptr(unsafe.Pointer(&hdrs[0])), uintptr(nh), 0, 0, 0)
-			n, errno = int(r0), e
-			return e != unix.EAGAIN
+			n, errno = msgx.Recv(fd, hdrs[:nh], 0)
+			return errno != unix.EAGAIN
 		}), "received %d of %d datagrams", next, len(lens))
 		require.Zero(t, errno)
 		require.Positive(t, n)

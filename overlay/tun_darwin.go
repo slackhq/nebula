@@ -7,10 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
-	"os"
-	"sync"
 	"sync/atomic"
-	"syscall"
 	"unsafe"
 
 	"github.com/gaissmai/bart"
@@ -23,7 +20,7 @@ import (
 )
 
 type tun struct {
-	f           *os.File
+	queue       *tio.Utun
 	Device      string
 	vpnNetworks []netip.Prefix
 	DefaultMTU  int
@@ -34,35 +31,6 @@ type tun struct {
 	// and routes for it. NEPacketTunnelProvider on darwin does this.
 	hostOwned bool
 	l         *slog.Logger
-
-	// noSendmsgX is set once sendmsg_x is refused; WriteBatch then writes one packet at a time.
-	noSendmsgX atomic.Bool
-	batchMu    sync.Mutex
-	batch      tunBatch
-}
-
-// tunWriteBatch is how many packets one sendmsg_x call may carry.
-const tunWriteBatch = 64
-
-// tunBatch is WriteBatch's scratch, guarded by tun.batchMu. The kernel reads every entry in place.
-type tunBatch struct {
-	heads [tunWriteBatch][4]byte
-	iovs  [tunWriteBatch][2]unix.Iovec
-	hdrs  [tunWriteBatch]msghdrX
-	pkts  [tunWriteBatch][]byte
-}
-
-// msghdrX mirrors xnu's struct msghdr_x (bsd/sys/socket_private.h).
-// Keep in sync with msghdrX in udp/udp_darwin.go.
-type msghdrX struct {
-	Name       *byte
-	Namelen    uint32
-	Iov        *unix.Iovec
-	Iovlen     int32
-	Control    *byte
-	Controllen uint32
-	Flags      int32
-	Datalen    uint64
 }
 
 type ifReq struct {
@@ -147,13 +115,13 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 		return nil, fmt.Errorf("failed to retrieve tun name: %w", err)
 	}
 
-	err = unix.SetNonblock(fd, true)
+	queue, err := tio.NewUtun(fd, l)
 	if err != nil {
-		return nil, fmt.Errorf("SetNonblock: %v", err)
+		return nil, err
 	}
 
 	t := &tun{
-		f:           os.NewFile(uintptr(fd), ""),
+		queue:       queue,
 		Device:      name,
 		vpnNetworks: vpnNetworks,
 		DefaultMTU:  c.GetInt("tun.mtu", DefaultMTU),
@@ -186,15 +154,15 @@ func (t *tun) deviceBytes() (o [16]byte) {
 // network extension is handed its device. Everything about moving packets is shared with newTun,
 // only the setup differs: the host owns addressing and routing here.
 func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
-	if err := unix.SetNonblock(deviceFd, true); err != nil {
+	queue, err := tio.NewUtun(deviceFd, l)
+	if err != nil {
 		// We own the fd from the moment it is handed to us
 		_ = unix.Close(deviceFd)
-		return nil, fmt.Errorf("failed to set the tun fd to non-blocking mode: %w", err)
+		return nil, err
 	}
 
-	file := os.NewFile(uintptr(deviceFd), "/dev/tun")
 	t := &tun{
-		f:           file,
+		queue:       queue,
 		Device:      utunNameFromFd(deviceFd),
 		vpnNetworks: vpnNetworks,
 		DefaultMTU:  c.GetInt("tun.mtu", DefaultMTU),
@@ -203,7 +171,7 @@ func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip
 	}
 
 	if err := t.reload(c, true); err != nil {
-		_ = file.Close()
+		_ = queue.Close()
 		return nil, err
 	}
 
@@ -227,8 +195,8 @@ func utunNameFromFd(fd int) string {
 }
 
 func (t *tun) Close() error {
-	if t.f != nil {
-		return t.f.Close()
+	if t.queue != nil {
+		return t.queue.Close()
 	}
 	return nil
 }
@@ -586,312 +554,6 @@ func delRoute(prefix netip.Prefix, gateway netroute.Addr) error {
 	return nil
 }
 
-// tunWritev and tunReadv are linkname'd to x/sys/unix's libc-routed writev/readv stubs so the
-// calls go through libSystem's pinned trampoline. A raw syscall.Syscall(SYS_WRITEV/SYS_READV, ...)
-// on darwin/arm64 emits an SVC #0x80 trap (see $GOROOT/src/syscall/asm_darwin_arm64.s), the path
-// Apple keeps warning they will eventually disallow. We pull the low-level stubs instead of calling
-// unix.Writev/unix.Readv because those take [][]byte and rebuild the []Iovec every call, which
-// heap-allocates the header; linkname'ing the stubs lets us hand them our own stack-allocated
-// iovecs. See golang/go#78049.
-
-//go:linkname tunWritev golang.org/x/sys/unix.writev
-//go:noescape
-func tunWritev(fd int, iovecs []unix.Iovec) (n int, err error)
-
-//go:linkname tunReadv golang.org/x/sys/unix.readv
-//go:noescape
-func tunReadv(fd int, iovecs []unix.Iovec) (n int, err error)
-
-// Read pulls one IP packet off the utun device, scattering the 4 byte protocol header away from
-// the packet so the payload lands directly in to.
-func (t *tun) Read(to []byte) (int, error) {
-	var head [4]byte
-
-	rc, err := t.f.SyscallConn()
-	if err != nil {
-		return 0, err
-	}
-
-	var n int
-	var callErr error
-	err = rc.Read(func(fd uintptr) bool {
-		iovecs := []unix.Iovec{
-			{Base: &head[0], Len: 4},
-			{Base: &to[0], Len: uint64(len(to))},
-		}
-		n, callErr = tunReadv(int(fd), iovecs)
-		if errno, ok := callErr.(syscall.Errno); ok && errno.Temporary() {
-			return false
-		}
-		return true
-	})
-	if err != nil {
-		return 0, err
-	}
-	if callErr != nil {
-		return 0, callErr
-	}
-	if n < 4 {
-		return 0, nil
-	}
-	return n - 4, nil
-}
-
-// tunReadBatch is the most packets one tunQueue.Read returns.
-const tunReadBatch = 64
-
-// tunReadArena is tunQueue's receive buffer. Draining stops once less than defaultBatchBufSize of it
-// is left, so every readv has room for the largest packet utun can return at any device MTU.
-const tunReadArena = 4 * defaultBatchBufSize
-
-// tunQueue is the darwin tun's Queue. Read drains every packet already queued on the utun, up to
-// tunReadBatch, so the caller encrypts and sends them as one batch rather than one per wakeup.
-type tunQueue struct {
-	t    *tun
-	buf  []byte
-	pkts [tunReadBatch]tio.Packet
-}
-
-// Read waits for the utun to become readable, then reads packets until it would block. An error after
-// at least one packet is dropped in favor of returning those packets; a persistent one recurs on the
-// next Read.
-func (q *tunQueue) Read() ([]tio.Packet, error) {
-	rc, err := q.t.f.SyscallConn()
-	if err != nil {
-		return nil, err
-	}
-
-	var head [4]byte
-	n, off := 0, 0
-	var callErr error
-	err = rc.Read(func(fd uintptr) bool {
-		for n < tunReadBatch && len(q.buf)-off >= defaultBatchBufSize {
-			iovecs := [2]unix.Iovec{
-				{Base: &head[0], Len: 4},
-				{Base: &q.buf[off], Len: uint64(len(q.buf) - off)},
-			}
-			l, e := tunReadv(int(fd), iovecs[:])
-			if e != nil {
-				if errno, ok := e.(syscall.Errno); ok && errno.Temporary() {
-					// Park on the poller only while there is nothing to hand back.
-					return n > 0
-				}
-				callErr = e
-				return true
-			}
-			if l < 4 {
-				// A datagram too short to carry the AF prefix, or end of file; stop rather than spin on it.
-				return true
-			}
-			end := off + l - 4
-			q.pkts[n] = tio.Packet{Bytes: q.buf[off:end:end]}
-			n++
-			off = end
-		}
-		return true
-	})
-	if n > 0 {
-		return q.pkts[:n], nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return nil, callErr
-}
-
-func (q *tunQueue) Write(p []byte) (int, error) { return q.t.Write(p) }
-
-func (q *tunQueue) WriteBatch(pkts [][]byte) error { return q.t.WriteBatch(pkts) }
-
-func (q *tunQueue) Close() error { return q.t.Close() }
-
-// Write pushes one IP packet onto the utun device. Safe for concurrent use:
-// the AF prefix and iovecs are per-call stack state, and the fd write itself
-// serializes on the runtime's fd mutex (see the Queue contract in tio.go).
-func (t *tun) Write(from []byte) (int, error) {
-	if len(from) == 0 {
-		return 0, syscall.EIO
-	}
-
-	var head [4]byte
-	af, err := tunAF(from)
-	if err != nil {
-		return 0, err
-	}
-	head[3] = af
-
-	// Grab rc as a local so the compiler can devirtualize the call and keep the closure on the stack.
-	rc, err := t.f.SyscallConn()
-	if err != nil {
-		return 0, err
-	}
-
-	var n int
-	var callErr error
-	err = rc.Write(func(fd uintptr) bool {
-		iovecs := []unix.Iovec{
-			{Base: &head[0], Len: 4},
-			{Base: &from[0], Len: uint64(len(from))},
-		}
-		n, callErr = tunWritev(int(fd), iovecs)
-		// Type-assert to syscall.Errno so the EAGAIN/EWOULDBLOCK/EINTR check doesn't box the errno
-		// constants into error interfaces on every call.
-		if errno, ok := callErr.(syscall.Errno); ok && errno.Temporary() {
-			return false
-		}
-		return true
-	})
-	if err != nil {
-		return 0, err
-	}
-	if callErr != nil {
-		return 0, callErr
-	}
-
-	return n - 4, nil
-}
-
-// tunAF returns the utun address-family prefix byte for an IP packet.
-func tunAF(pkt []byte) (byte, error) {
-	switch pkt[0] >> 4 {
-	case 4:
-		return syscall.AF_INET, nil
-	case 6:
-		return syscall.AF_INET6, nil
-	default:
-		return 0, fmt.Errorf("unable to determine IP version from packet")
-	}
-}
-
-// WriteBatch writes pkts to the utun device with sendmsg_x, xnu's private batched sendmsg, up to
-// tunWriteBatch packets per syscall. The kernel still hands each packet to utun on its own, so this
-// saves syscalls, not per-packet kernel work. Safe for concurrent use.
-//
-// An empty packet or one with no IP version is skipped and reported, as Write would. Any other
-// error from sendmsg_x means the kernel took an unknown prefix of that call and dropped the rest, so
-// it is reported rather than retried, which could deliver packets twice.
-//
-// Under mbuf exhaustion, sendmsg_x silently drops packets that writev would have delivered: the
-// kernel counts each packet as sent once it is copied in, and when a later allocation fails it
-// frees that prefix unsent and returns its length as a short count, which is indistinguishable
-// from a real one.
-func (t *tun) WriteBatch(pkts [][]byte) error {
-	if t.noSendmsgX.Load() {
-		return t.writeEach(pkts)
-	}
-
-	t.batchMu.Lock()
-	defer t.batchMu.Unlock()
-	b := &t.batch
-	var firstErr error
-	for len(pkts) > 0 {
-		n := 0
-		for len(pkts) > 0 && n < tunWriteBatch {
-			p := pkts[0]
-			pkts = pkts[1:]
-			var af byte
-			err := error(syscall.EIO)
-			if len(p) > 0 {
-				af, err = tunAF(p)
-			}
-			if err != nil {
-				if firstErr == nil {
-					firstErr = err
-				}
-				continue
-			}
-			b.heads[n] = [4]byte{3: af}
-			b.iovs[n] = [2]unix.Iovec{
-				{Base: &b.heads[n][0], Len: 4},
-				{Base: &p[0], Len: uint64(len(p))},
-			}
-			b.hdrs[n] = msghdrX{Iov: &b.iovs[n][0], Iovlen: 2}
-			b.pkts[n] = p
-			n++
-		}
-		if n == 0 {
-			continue
-		}
-
-		for off := 0; off < n; {
-			sent, err := t.sendmsgX(off, n)
-			switch {
-			case err == nil && sent > 0:
-				// The kernel stops early without an error on a packet larger than the socket's send
-				// buffer, or when sending a later packet fails with ENOBUFS; resend the remainder.
-				off += sent
-			case err == nil:
-				if werr := t.writeEach(b.pkts[off:n]); werr != nil && firstErr == nil {
-					firstErr = werr
-				}
-				off = n
-			case err == unix.EMSGSIZE:
-				// Only the first packet being larger than the socket's send buffer fails the whole call,
-				// before the kernel takes any; Write reports that one and the rest go out in the next call.
-				if werr := t.writeEach(b.pkts[off : off+1]); werr != nil && firstErr == nil {
-					firstErr = werr
-				}
-				off++
-			case err == unix.ENOSYS || err == unix.EPERM || err == unix.EOPNOTSUPP:
-				// sendmsg_x is private API: fall back to writev if a kernel or sandbox refuses it.
-				if t.noSendmsgX.CompareAndSwap(false, true) {
-					t.l.Warn("sendmsg_x unavailable on the tun device, writing one packet per syscall", "error", err)
-				}
-				if werr := t.writeEach(b.pkts[off:n]); werr != nil && firstErr == nil {
-					firstErr = werr
-				}
-				clear(b.iovs[:n])
-				clear(b.pkts[:n])
-				if werr := t.writeEach(pkts); werr != nil && firstErr == nil {
-					firstErr = werr
-				}
-				return firstErr
-			default:
-				if firstErr == nil {
-					firstErr = err
-				}
-				off = n
-			}
-		}
-		clear(b.iovs[:n])
-		clear(b.pkts[:n])
-	}
-	return firstErr
-}
-
-// sendmsgX hands entries off through n-1 of t.batch to sendmsg_x and returns how many the kernel took.
-func (t *tun) sendmsgX(off, n int) (int, error) {
-	rc, err := t.f.SyscallConn()
-	if err != nil {
-		return 0, err
-	}
-	var sent uintptr
-	var errno syscall.Errno
-	err = rc.Write(func(fd uintptr) bool {
-		sent, _, errno = unix.Syscall6(unix.SYS_SENDMSG_X, fd, uintptr(unsafe.Pointer(&t.batch.hdrs[off])), uintptr(n-off), 0, 0, 0)
-		// sendmsg_x reports EAGAIN only when it took nothing; a partial batch returns its count.
-		return !errno.Temporary()
-	})
-	if err != nil {
-		return 0, err
-	}
-	if errno != 0 {
-		return 0, errno
-	}
-	return int(sent), nil
-}
-
-// writeEach writes pkts one at a time with Write.
-func (t *tun) writeEach(pkts [][]byte) error {
-	var firstErr error
-	for _, p := range pkts {
-		if _, err := t.Write(p); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
-}
-
 func (t *tun) Networks() []netip.Prefix {
 	return t.vpnNetworks
 }
@@ -901,5 +563,5 @@ func (t *tun) Name() string {
 }
 
 func (t *tun) Queues(int) ([]tio.Queue, error) {
-	return []tio.Queue{&tunQueue{t: t, buf: make([]byte, tunReadArena)}}, nil
+	return []tio.Queue{t.queue}, nil
 }
