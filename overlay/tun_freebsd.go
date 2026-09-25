@@ -370,7 +370,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 	t := &tun{
 		Device:      deviceName,
 		vpnNetworks: vpnNetworks,
-		MTU:         c.GetInt("tun.mtu", DefaultMTU),
+		MTU:         getMTU(c),
 		l:           l,
 		fd:          fd,
 		shutdownR:   shutdownR,

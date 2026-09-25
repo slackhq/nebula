@@ -2,6 +2,8 @@ package nebula
 
 import (
 	"net/netip"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	ct "github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
@@ -145,6 +148,122 @@ func TestSendNoMetricsCloseTunnelKeepsRebindEpoch(t *testing.T) {
 
 	// markOut at the new epoch still reports the move, so the edge was preserved.
 	assert.True(t, hostinfo.markOut(1), "a CloseTunnel send must not consume the rebind epoch")
+}
+
+// capturingConn is a udp.Conn that records every WriteTo.
+type capturingConn struct {
+	udp.NoopConn
+	writes [][]byte
+	addrs  []netip.AddrPort
+}
+
+func (c *capturingConn) WriteTo(b []byte, addr netip.AddrPort) error {
+	c.writes = append(c.writes, append([]byte(nil), b...))
+	c.addrs = append(c.addrs, addr)
+	return nil
+}
+
+// TestSendNoMetricsViaRelay sends through a relay from the mtu sized buffer the cached packet flush uses. Payloads up
+// to overlay.MaxMTU go out intact, anything bigger is dropped rather than outgrowing the buffer, which once panicked.
+func TestSendNoMetricsViaRelay(t *testing.T) {
+	tests := []struct {
+		n    int
+		sent bool
+	}{
+		{0, true},
+		{1300, true},
+		{overlay.MaxMTU, true},
+		{overlay.MaxMTU + 1, false}, // too big for the relay's tag
+		{mtu - 47, false},           // too big for the inner tag, this panicked
+		{9000, false},               // a full packet at tun.mtu 9000
+	}
+	for _, tt := range tests {
+		t.Run(strconv.Itoa(tt.n), func(t *testing.T) {
+			// One tunnel to the target, carried end to end, and one to the relay that wraps it
+			targetInit, targetResp := runTestHandshake(t)
+			relayInit, relayResp := runTestHandshake(t)
+			ci, err := newConnectionStateFromResult(targetInit)
+			require.NoError(t, err)
+			relayCI, err := newConnectionStateFromResult(relayInit)
+			require.NoError(t, err)
+
+			targetAddr := netip.MustParseAddr("10.0.0.2")
+			relayAddr := netip.MustParseAddr("10.0.0.3")
+			relayRemote := netip.MustParseAddrPort("192.0.2.1:4242")
+
+			relay := &Relay{Type: TerminalType, State: Established, LocalIndex: 5, RemoteIndex: 6, PeerAddr: targetAddr}
+			relayHI := &HostInfo{
+				vpnAddrs:        []netip.Addr{relayAddr},
+				ConnectionState: relayCI,
+				relayState: RelayState{
+					relayForByAddr: map[netip.Addr]*Relay{targetAddr: relay},
+					relayForByIdx:  map[uint32]*Relay{relay.LocalIndex: relay},
+				},
+			}
+			relayHI.remote.Store(&relayRemote)
+
+			// No remote of its own, so the send has to go via the relay
+			hostinfo := &HostInfo{
+				vpnAddrs:        []netip.Addr{targetAddr},
+				ConnectionState: ci,
+				remoteIndexId:   7,
+				relayState: RelayState{
+					relays:         []netip.Addr{relayAddr},
+					relayForByAddr: map[netip.Addr]*Relay{},
+					relayForByIdx:  map[uint32]*Relay{},
+				},
+			}
+
+			l := test.NewLogger()
+			hm := newHostMap(l)
+			hm.Hosts[relayAddr] = relayHI
+			conn := &capturingConn{}
+			f := &Interface{
+				l:              l,
+				hostMap:        hm,
+				messageMetrics: &MessageMetrics{txExhausted: metrics.NewCounter()},
+				writers:        []udp.Conn{conn},
+			}
+			f.connectionManager = &connectionManager{intf: f, relayUsed: map[uint32]struct{}{}, relayUsedLock: &sync.RWMutex{}}
+
+			payload := make([]byte, tt.n)
+			for i := range payload {
+				payload[i] = byte(i)
+			}
+			counter := ci.messageCounter.Load()
+			f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, payload, make([]byte, 12), make([]byte, mtu), 0)
+
+			if !tt.sent {
+				assert.Empty(t, conn.writes)
+				assert.Equal(t, counter, ci.messageCounter.Load(), "a dropped packet must not spend a counter")
+				return
+			}
+			require.Len(t, conn.writes, 1)
+			assert.Equal(t, relayRemote, conn.addrs[0])
+			pkt := conn.writes[0]
+
+			// The relay authenticates the whole packet under its own header
+			outer := &header.H{}
+			require.NoError(t, outer.Parse(pkt))
+			assert.Equal(t, header.MessageRelay, outer.Subtype)
+			assert.Equal(t, relay.RemoteIndex, outer.RemoteIndex)
+			relayPeer, err := newConnectionStateFromResult(relayResp)
+			require.NoError(t, err)
+			require.NoError(t, relayPeer.VerifyRelay(l, outer.MessageCounter, pkt, make([]byte, 12)))
+
+			// Inside it, the target decrypts the end to end packet back to the payload
+			inner := pkt[header.Len : len(pkt)-relayPeer.dKey.Overhead()]
+			h := &header.H{}
+			require.NoError(t, h.Parse(inner))
+			assert.Equal(t, header.Message, h.Type)
+			assert.Equal(t, hostinfo.remoteIndexId, h.RemoteIndex)
+			targetPeer, err := newConnectionStateFromResult(targetResp)
+			require.NoError(t, err)
+			got, err := targetPeer.Decrypt(l, h.MessageCounter, inner, make([]byte, 12))
+			require.NoError(t, err)
+			assert.Equal(t, payload, got)
+		})
+	}
 }
 
 func TestNewConnectionStateFromResult(t *testing.T) {
