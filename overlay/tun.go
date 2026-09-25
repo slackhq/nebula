@@ -7,10 +7,26 @@ import (
 	"net/netip"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
 )
 
 const DefaultMTU = 1300
+
+// MaxMTU is the largest tun.mtu, or route mtu, the underlay can carry.
+// Every underlay buffer is udp.MTU bytes, and a relayed packet adds header.MaxOverhead to its plaintext.
+const MaxMTU = udp.MTU - header.MaxOverhead
+
+// getMTU reads tun.mtu, capping a value too big for the underlay to carry.
+func getMTU(c *config.C) int {
+	mtu := c.GetInt("tun.mtu", DefaultMTU)
+	if mtu > MaxMTU {
+		c.Logger().Warn("tun.mtu is too big for the underlay to carry, capping it", "mtu", mtu, "maxMTU", MaxMTU)
+		return MaxMTU
+	}
+	return mtu
+}
 
 type NameError struct {
 	Name       string
@@ -57,6 +73,12 @@ func getAllRoutesFromConfig(c *config.C, vpnNetworks []netip.Prefix, initial boo
 	}
 
 	routes = append(routes, unsafeRoutes...)
+	for i, r := range routes {
+		if r.MTU > MaxMTU {
+			c.Logger().Warn("route mtu is too big for the underlay to carry, capping it", "route", r.Cidr, "mtu", r.MTU, "maxMTU", MaxMTU)
+			routes[i].MTU = MaxMTU
+		}
+	}
 	return true, routes, nil
 }
 
