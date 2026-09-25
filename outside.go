@@ -175,9 +175,8 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxCont
 	}
 
 	if !laneCached {
-		// The packet decrypted, so the peer really is using this lane and the
-		// session we derived for it is worth keeping.
-		hostinfo.lanes.installSession(f.l, lane, ci, h.MessageCounter)
+		// The packet decrypted, so the peer really is using this lane and the session we derived for it is valid
+		ci = hostinfo.lanes.installSession(f.l, lane, ci, h.MessageCounter)
 	}
 
 	// Roam before we respond, but only on the base tunnel: a lane's source
@@ -192,7 +191,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxCont
 	case header.Message:
 		switch h.Subtype {
 		case header.MessageNone:
-			f.handleOutsideMessagePacket(hostinfo, ci, h.MessageCounter, out, rxc)
+			f.handleOutsideMessagePacket(hostinfo, h.MessageCounter, out, rxc)
 		default:
 			hostinfo.logger(f.l).Error("IsValidSubType was true, but unexpected message subtype seen", "from", via, "header", h)
 			return
@@ -522,7 +521,7 @@ func parseV4(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 	return nil
 }
 
-func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, ci *ConnectionState, messageCounter uint64, out []byte, rxc *rxContext) {
+func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, messageCounter uint64, out []byte, rxc *rxContext) {
 	err := newPacket(out, true, rxc.fwPacket)
 	if err != nil {
 		hostinfo.logger(f.l).Warn("Error while validating inbound packet", "error", err, "packet", out)
@@ -540,7 +539,7 @@ func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, ci *Connectio
 		return
 	}
 
-	err = f.batchers[rxc.q].Commit(out, batch.SortKey{Epoch: ci.epoch, Counter: messageCounter}, rxc.fwPacket)
+	err = f.batchers[rxc.q].Commit(out, batch.SortKey{Epoch: hostinfo.ConnectionState.epoch, Counter: messageCounter}, rxc.fwPacket)
 	if err != nil {
 		f.l.Error("Failed to write to tun", "error", err)
 	}

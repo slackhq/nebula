@@ -238,7 +238,7 @@ func TestLaneSessionRxDerivation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []byte("real lane traffic"), pt)
 
-	respLS.installSession(test.NewLogger(), 2, ci, 1)
+	assert.Same(t, ci, respLS.installSession(test.NewLogger(), 2, ci, 1))
 	assert.Same(t, ci, respLS.sessions[2].Load())
 
 	// Now it is a hit, and the replay window the decrypt above advanced is the
@@ -255,7 +255,8 @@ func TestLaneSessionRxDerivation(t *testing.T) {
 	other, err := newLaneConnectionState(&respLS.material, 2)
 	require.NoError(t, err)
 	require.True(t, ci.window.Check(test.NewLogger(), 7), "counter 7 seen before the race")
-	respLS.installSession(test.NewLogger(), 2, other, 7)
+	assert.Same(t, ci, respLS.installSession(test.NewLogger(), 2, other, 7),
+		"the loser must be handed the installed session, never left holding its own")
 	assert.Same(t, ci, respLS.sessions[2].Load())
 	assert.False(t, ci.window.Check(test.NewLogger(), 7),
 		"the loser's counter was not carried to the surviving window")
