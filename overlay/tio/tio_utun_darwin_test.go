@@ -1,37 +1,42 @@
-//go:build !ios && !e2e_testing
+//go:build darwin && !ios
 
-package overlay
+package tio
 
 import (
 	"bytes"
-	"os"
+	"log/slog"
 	"syscall"
 	"testing"
 
-	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
 
-// newSocketpairTun returns a tun writing to one end of a connected AF_UNIX datagram socketpair, which
-// takes sendmsg_x the way a utun control socket does, and the other end's fd for reading back.
-// sndbuf is the writer's send buffer, which caps the largest datagram it accepts.
-func newSocketpairTun(t *testing.T, sndbuf int) (*tun, int) {
+// newSocketpairUtun returns a Utun over one end of a connected AF_UNIX datagram socketpair, which
+// takes sendmsg_x the way a utun control socket does, and the other end's fd for the test to use.
+// sndbuf is the Utun's send buffer, which caps the largest datagram it accepts.
+func newSocketpairUtun(t *testing.T, sndbuf int) (*Utun, int) {
 	t.Helper()
 	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_DGRAM, 0)
 	require.NoError(t, err)
 	require.NoError(t, unix.SetsockoptInt(fds[0], unix.SOL_SOCKET, unix.SO_SNDBUF, sndbuf))
+	// An AF_UNIX datagram send is bounded by the receiver's buffer, so size both ends' for the tests.
+	require.NoError(t, unix.SetsockoptInt(fds[0], unix.SOL_SOCKET, unix.SO_RCVBUF, 1<<20))
 	require.NoError(t, unix.SetsockoptInt(fds[1], unix.SOL_SOCKET, unix.SO_RCVBUF, 1<<20))
 	// A dropped datagram fails the read-back instead of hanging it.
 	require.NoError(t, unix.SetsockoptTimeval(fds[1], unix.SOL_SOCKET, unix.SO_RCVTIMEO, &unix.Timeval{Sec: 2}))
-	require.NoError(t, unix.SetNonblock(fds[0], true))
-	f := os.NewFile(uintptr(fds[0]), "socketpair")
+	u, err := NewUtun(fds[0], slog.New(slog.DiscardHandler))
+	if err != nil {
+		_ = unix.Close(fds[0])
+		_ = unix.Close(fds[1])
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
-		_ = f.Close()
+		_ = u.Close()
 		_ = unix.Close(fds[1])
 	})
-	return &tun{f: f, l: test.NewLogger()}, fds[1]
+	return u, fds[1]
 }
 
 // testTunPkt returns packet i of size bytes, alternating IPv4 and IPv6, and the datagram the utun
@@ -75,12 +80,12 @@ func forEachTunWritePath(t *testing.T, fn func(t *testing.T, fallback bool)) {
 	}
 }
 
-// TestTunWriteBatch pins that WriteBatch delivers every packet whole, in order and behind the right
+// TestUtunWriteBatch pins that WriteBatch delivers every packet whole, in order and behind the right
 // utun AF prefix, across several sendmsg_x calls, and returns nil.
-func TestTunWriteBatch(t *testing.T) {
+func TestUtunWriteBatch(t *testing.T) {
 	forEachTunWritePath(t, func(t *testing.T, fallback bool) {
-		tn, r := newSocketpairTun(t, 1<<20)
-		tn.noSendmsgX.Store(fallback)
+		u, r := newSocketpairUtun(t, 1<<20)
+		u.noSendmsgX.Store(fallback)
 
 		var pkts, want [][]byte
 		for i := range 3*tunWriteBatch + 5 {
@@ -88,18 +93,18 @@ func TestTunWriteBatch(t *testing.T) {
 			pkts = append(pkts, p)
 			want = append(want, w)
 		}
-		require.NoError(t, tn.WriteBatch(pkts))
-		assert.Equal(t, fallback, tn.noSendmsgX.Load())
+		require.NoError(t, u.WriteBatch(pkts))
+		assert.Equal(t, fallback, u.noSendmsgX.Load())
 		readTunBack(t, r, want)
 	})
 }
 
-// TestTunWriteBatchSkipsInvalid pins that an empty packet or one with no IP version is skipped
+// TestUtunWriteBatchSkipsInvalid pins that an empty packet or one with no IP version is skipped
 // without shifting the packets after it, and that the first such error is the one reported.
-func TestTunWriteBatchSkipsInvalid(t *testing.T) {
+func TestUtunWriteBatchSkipsInvalid(t *testing.T) {
 	forEachTunWritePath(t, func(t *testing.T, fallback bool) {
-		tn, r := newSocketpairTun(t, 1<<20)
-		tn.noSendmsgX.Store(fallback)
+		u, r := newSocketpairUtun(t, 1<<20)
+		u.noSendmsgX.Store(fallback)
 
 		var pkts, want [][]byte
 		for i := range 20 {
@@ -109,16 +114,16 @@ func TestTunWriteBatchSkipsInvalid(t *testing.T) {
 		}
 		pkts = append(pkts[:10], append([][]byte{{0x10, 1, 2}, {}}, pkts[10:]...)...)
 
-		err := tn.WriteBatch(pkts)
+		err := u.WriteBatch(pkts)
 		assert.ErrorContains(t, err, "IP version")
 		readTunBack(t, r, want)
 	})
 }
 
-// TestTunWriteBatchOversize pins that a packet larger than the socket's send buffer drops only
+// TestUtunWriteBatchOversize pins that a packet larger than the socket's send buffer drops only
 // itself and is reported, whether sendmsg_x reaches it mid-call (a short count) or first (EMSGSIZE
 // for the whole call). The send buffer is 1024 bytes and the oversize packet 2000.
-func TestTunWriteBatchOversize(t *testing.T) {
+func TestUtunWriteBatchOversize(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		at   int
@@ -128,8 +133,8 @@ func TestTunWriteBatchOversize(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			forEachTunWritePath(t, func(t *testing.T, fallback bool) {
-				tn, r := newSocketpairTun(t, 1024)
-				tn.noSendmsgX.Store(fallback)
+				u, r := newSocketpairUtun(t, 1024)
+				u.noSendmsgX.Store(fallback)
 
 				var pkts, want [][]byte
 				for i := range 2*tunWriteBatch + 10 {
@@ -143,26 +148,19 @@ func TestTunWriteBatchOversize(t *testing.T) {
 						want = append(want, w)
 					}
 				}
-				err := tn.WriteBatch(pkts)
+				err := u.WriteBatch(pkts)
 				assert.ErrorIs(t, err, unix.EMSGSIZE)
-				assert.Equal(t, fallback, tn.noSendmsgX.Load())
+				assert.Equal(t, fallback, u.noSendmsgX.Load())
 				readTunBack(t, r, want)
 			})
 		})
 	}
 }
 
-// TestTunQueueReadDrains pins that Read hands back every queued packet, AF prefix stripped and in
+// TestUtunReadDrains pins that Read hands back every queued packet, AF prefix stripped and in
 // order, capped at tunReadBatch per call, and doesn't wait for more once the queue is empty.
-func TestTunQueueReadDrains(t *testing.T) {
-	tn, w := newSocketpairTun(t, 1<<20)
-	// An AF_UNIX datagram send is bounded by the receiver's buffer, here the tun's end.
-	rc, err := tn.f.SyscallConn()
-	require.NoError(t, err)
-	require.NoError(t, rc.Control(func(fd uintptr) {
-		require.NoError(t, unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_RCVBUF, 1<<20))
-	}))
-	q := &tunQueue{t: tn, buf: make([]byte, tunReadArena)}
+func TestUtunReadDrains(t *testing.T) {
+	u, w := newSocketpairUtun(t, 1<<20)
 	total := tunReadBatch + 3
 	var want [][]byte
 	for i := range total {
@@ -174,7 +172,7 @@ func TestTunQueueReadDrains(t *testing.T) {
 
 	var got [][]byte
 	for _, size := range []int{tunReadBatch, 3} {
-		pkts, err := q.Read()
+		pkts, err := u.Read()
 		require.NoError(t, err)
 		require.Len(t, pkts, size)
 		for _, p := range pkts {
@@ -184,17 +182,16 @@ func TestTunQueueReadDrains(t *testing.T) {
 	assert.Equal(t, want, got)
 }
 
-// TestTunQueueReadClipsPackets pins that each returned packet's capacity ends at its own bytes, so
+// TestUtunReadClipsPackets pins that each returned packet's capacity ends at its own bytes, so
 // appending to one can't overwrite the next.
-func TestTunQueueReadClipsPackets(t *testing.T) {
-	tn, w := newSocketpairTun(t, 1<<20)
-	q := &tunQueue{t: tn, buf: make([]byte, tunReadArena)}
+func TestUtunReadClipsPackets(t *testing.T) {
+	u, w := newSocketpairUtun(t, 1<<20)
 	for i := range 2 {
 		_, wire := testTunPkt(i, 100)
 		_, err := unix.Write(w, wire)
 		require.NoError(t, err)
 	}
-	pkts, err := q.Read()
+	pkts, err := u.Read()
 	require.NoError(t, err)
 	require.Len(t, pkts, 2)
 	assert.Equal(t, len(pkts[0].Bytes), cap(pkts[0].Bytes))
