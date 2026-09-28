@@ -33,6 +33,11 @@ type tun struct {
 	// and routes for it. NEPacketTunnelProvider on darwin does this.
 	hostOwned bool
 	l         *slog.Logger
+
+	// readHead receives the 4 byte protocol header Read scatters away from the packet. It lives here
+	// rather than on Read's stack because unix.Readv leaks its [][]byte contents, which would move a
+	// local header to the heap on every packet. Its contents are never looked at.
+	readHead [4]byte
 }
 
 type ifReq struct {
@@ -556,27 +561,17 @@ func delRoute(prefix netip.Prefix, gateway netroute.Addr) error {
 	return nil
 }
 
-// tunWritev and tunReadv are linkname'd to x/sys/unix's libc-routed writev/readv stubs so the
-// calls go through libSystem's pinned trampoline. A raw syscall.Syscall(SYS_WRITEV/SYS_READV, ...)
-// on darwin/arm64 emits an SVC #0x80 trap (see $GOROOT/src/syscall/asm_darwin_arm64.s), the path
-// Apple keeps warning they will eventually disallow. We pull the low-level stubs instead of calling
-// unix.Writev/unix.Readv because those take [][]byte and rebuild the []Iovec every call, which
-// heap-allocates the header; linkname'ing the stubs lets us hand them our own stack-allocated
-// iovecs. See golang/go#78049.
-
-//go:linkname tunWritev golang.org/x/sys/unix.writev
-//go:noescape
-func tunWritev(fd int, iovecs []unix.Iovec) (n int, err error)
-
-//go:linkname tunReadv golang.org/x/sys/unix.readv
-//go:noescape
-func tunReadv(fd int, iovecs []unix.Iovec) (n int, err error)
+// tunHeadInet4 and tunHeadInet6 are the 4 byte protocol headers Write prepends to each packet. They
+// are package level, and only ever read, so that handing them to unix.Writev doesn't heap-allocate a
+// header per packet the way a stack local would.
+var (
+	tunHeadInet4 = [4]byte{3: syscall.AF_INET}
+	tunHeadInet6 = [4]byte{3: syscall.AF_INET6}
+)
 
 // Read pulls one IP packet off the utun device, scattering the 4 byte protocol header away from
 // the packet so the payload lands directly in to.
 func (t *tun) Read(to []byte) (int, error) {
-	var head [4]byte
-
 	rc, err := t.f.SyscallConn()
 	if err != nil {
 		return 0, err
@@ -585,11 +580,7 @@ func (t *tun) Read(to []byte) (int, error) {
 	var n int
 	var callErr error
 	err = rc.Read(func(fd uintptr) bool {
-		iovecs := []unix.Iovec{
-			{Base: &head[0], Len: 4},
-			{Base: &to[0], Len: uint64(len(to))},
-		}
-		n, callErr = tunReadv(int(fd), iovecs)
+		n, callErr = unix.Readv(int(fd), [][]byte{t.readHead[:], to})
 		if errno, ok := callErr.(syscall.Errno); ok && errno.Temporary() {
 			return false
 		}
@@ -615,13 +606,12 @@ func (t *tun) Write(from []byte) (int, error) {
 		return 0, syscall.EIO
 	}
 
-	ipVer := from[0] >> 4
-	var head [4]byte
-	switch ipVer {
+	var head []byte
+	switch from[0] >> 4 {
 	case 4:
-		head[3] = syscall.AF_INET
+		head = tunHeadInet4[:]
 	case 6:
-		head[3] = syscall.AF_INET6
+		head = tunHeadInet6[:]
 	default:
 		return 0, fmt.Errorf("unable to determine IP version from packet")
 	}
@@ -635,11 +625,7 @@ func (t *tun) Write(from []byte) (int, error) {
 	var n int
 	var callErr error
 	err = rc.Write(func(fd uintptr) bool {
-		iovecs := []unix.Iovec{
-			{Base: &head[0], Len: 4},
-			{Base: &from[0], Len: uint64(len(from))},
-		}
-		n, callErr = tunWritev(int(fd), iovecs)
+		n, callErr = unix.Writev(int(fd), [][]byte{head, from})
 		// Type-assert to syscall.Errno so the EAGAIN/EWOULDBLOCK/EINTR check doesn't box the errno
 		// constants into error interfaces on every call.
 		if errno, ok := callErr.(syscall.Errno); ok && errno.Temporary() {

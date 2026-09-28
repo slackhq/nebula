@@ -84,6 +84,11 @@ func NewListenConfig(multi bool) net.ListenConfig {
 	}
 }
 
+// sendto is linkname'd to x/sys/unix's libSystem-routed stub instead of calling unix.Sendto (or
+// syscall.Sendto) because those take a Sockaddr interface, which heap-allocates the address on every
+// packet. A raw syscall.Syscall6(SYS_SENDTO, ...) avoids the allocation but traps straight into the
+// kernel on darwin, bypassing libSystem.
+//
 //go:linkname sendto golang.org/x/sys/unix.sendto
 //go:noescape
 func sendto(s int, buf []byte, flags int, to unsafe.Pointer, addrlen int32) (err error)
