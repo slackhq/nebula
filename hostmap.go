@@ -69,7 +69,9 @@ type HostMap struct {
 	Hosts           map[netip.Addr]*HostInfo
 	moreHosts       map[netip.Addr][]*HostInfo
 	preferredRanges atomic.Pointer[[]netip.Prefix]
-	l               *slog.Logger
+	// established hears about each hostinfo that joins or leaves the hostmap; nil when no conn wants to know.
+	established *establishedRemotes
+	l           *slog.Logger
 }
 
 // For synchronization, treat the pointed-to Relay struct as immutable. To edit the Relay
@@ -276,6 +278,11 @@ type HostInfo struct {
 	// This value will be behind against actual tunnel utilization in the hot path.
 	// This should only be used by the ConnectionManagers ticker routine.
 	lastUsed time.Time
+
+	// establishedIn is set while the hostinfo is in a main hostmap whose conns track established remotes, and
+	// establishedRemote is the remote it holds a reference on there, guarded by establishedIn's mu.
+	establishedIn     atomic.Pointer[establishedRemotes]
+	establishedRemote netip.AddrPort
 }
 
 type ViaSender struct {
@@ -516,6 +523,7 @@ func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) bool {
 	if len(hm.Indexes) == 0 {
 		hm.Indexes = map[uint32]*HostInfo{}
 	}
+	hm.established.remove(hostinfo)
 
 	if hm.l.Enabled(context.Background(), slog.LevelDebug) {
 		hm.l.Debug("Hostmap hostInfo deleted",
@@ -662,6 +670,7 @@ func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 
 	hm.Indexes[hostinfo.localIndexId] = hostinfo
 	hm.RemoteIndexes[hostinfo.remoteIndexId] = hostinfo
+	hm.established.add(hostinfo)
 
 	hostinfo.markOut(f.rebindEpoch.Load())
 	if f.connectionManager != nil { // f.connectionManager is only nil in some unit tests
@@ -842,6 +851,13 @@ func (i *HostInfo) SetRemote(remote netip.AddrPort) {
 	if i.GetRemote() != remote {
 		i.remote.Store(&remote)
 		i.remotes.LearnRemote(i.vpnAddrs[0], remote)
+		if e := i.establishedIn.Load(); e != nil {
+			e.mu.Lock()
+			if i.establishedIn.Load() == e {
+				e.syncLocked(i)
+			}
+			e.mu.Unlock()
+		}
 	}
 }
 
