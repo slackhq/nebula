@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 
@@ -22,9 +24,26 @@ type StdConn struct {
 	isV4  bool
 	sysFd uintptr
 	l     *slog.Logger
+
+	// listenHost and port are the configured address and the bound port, which a connected socket shares.
+	listenHost netip.Addr
+	port       uint16
+	// rc reaches the listener's descriptor for another listen routine's Rebind.
+	rc    syscall.RawConn
+	socks *connSocks
+	// reader is ListenOut's reader, which connected socket readers share; readMu serializes them, since an
+	// EncReader isn't safe for concurrent use.
+	reader atomic.Pointer[readerPair]
+	readMu sync.Mutex
+}
+
+type readerPair struct {
+	r     EncReader
+	flush func()
 }
 
 var _ Conn = &StdConn{}
+var _ EstablishedPeerConn = &StdConn{}
 
 func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 	lc := NewListenConfig(s.Multi)
@@ -34,12 +53,13 @@ func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 	}
 
 	if uc, ok := pc.(*net.UDPConn); ok {
-		c := &StdConn{UDPConn: uc, l: l}
+		c := &StdConn{UDPConn: uc, l: l, listenHost: s.Listen.Addr()}
 
 		rc, err := uc.SyscallConn()
 		if err != nil {
 			return nil, fmt.Errorf("failed to open udp socket: %w", err)
 		}
+		c.rc = rc
 
 		err = rc.Control(func(fd uintptr) {
 			c.sysFd = fd
@@ -53,6 +73,8 @@ func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 			return nil, err
 		}
 		c.isV4 = la.Addr().Is4()
+		c.port = la.Port()
+		c.socks = joinConnSocks(c, la, s)
 
 		return c, nil
 	}
@@ -89,6 +111,19 @@ func NewListenConfig(multi bool) net.ListenConfig {
 func sendto(s int, buf []byte, flags int, to unsafe.Pointer, addrlen int32) (err error)
 
 func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
+	if t := u.socks.table.Load(); t != nil {
+		if p := (*t)[ap]; p != nil {
+			bufs := [1][]byte{b}
+			if sent, err := u.connSockRun(p, ap, bufs[:]); sent == 1 || err != nil {
+				return err
+			}
+		}
+	}
+	return u.writeTo(b, ap)
+}
+
+// writeTo sends b through the listener.
+func (u *StdConn) writeTo(b []byte, ap netip.AddrPort) error {
 	var sa unsafe.Pointer
 	var addrLen int32
 
@@ -141,15 +176,47 @@ func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
 
 func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
 	// An un-sendable destination costs its own packet, never the ones behind it in the batch.
-	// TODO: WriteTo maps EWOULDBLOCK to an error, so a full send buffer
-	// silently drops the rest of a burst (linux blocks instead). Poll for
-	// writability on EAGAIN before giving up on the remainder.
+	// TODO: writeTo maps EWOULDBLOCK to an error, so a full listener send buffer
+	// silently drops those packets (linux blocks instead). Poll for
+	// writability on EAGAIN before giving up on them.
 	written := 0
-	for i, b := range bufs {
-		if err := u.WriteTo(b, addrs[i]); err == nil {
-			written++
-		} else {
-			u.l.Debug("failed to write packet in batch", "udpAddr", addrs[i], "error", err)
+	t := u.socks.table.Load()
+	if t == nil {
+		for i, b := range bufs {
+			if err := u.writeTo(b, addrs[i]); err == nil {
+				written++
+			} else {
+				u.l.Debug("failed to write packet in batch", "udpAddr", addrs[i], "error", err)
+			}
+		}
+		return written, nil
+	}
+	for off := 0; off < len(bufs); {
+		// A run of datagrams to one peer goes out together, on its connected socket if it has or earns one.
+		dst := addrs[off]
+		end := off + 1
+		for end < len(bufs) && addrs[end] == dst {
+			end++
+		}
+		if p := (*t)[dst]; p != nil {
+			for off < end {
+				sent, err := u.connSockRun(p, dst, bufs[off:end])
+				written += sent
+				off += sent
+				if err == nil {
+					break
+				}
+				u.l.Debug("failed to write packet in batch", "udpAddr", dst, "error", err)
+				off++
+			}
+		}
+		// The listener sends what no connected socket took.
+		for ; off < end; off++ {
+			if err := u.writeTo(bufs[off], dst); err == nil {
+				written++
+			} else {
+				u.l.Debug("failed to write packet in batch", "udpAddr", dst, "error", err)
+			}
 		}
 	}
 	return written, nil
@@ -182,6 +249,8 @@ func NewUDPStatsEmitter(udpConns []Conn) func() {
 
 func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 	buffer := make([]byte, MTU)
+	u.reader.Store(&readerPair{r: r, flush: flush})
+	u.startConnSocks()
 
 	for {
 		// Just read one packet at a time
@@ -194,9 +263,17 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 			continue
 		}
 
+		u.readMu.Lock()
 		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n:n])
 		flush()
+		u.readMu.Unlock()
 	}
+}
+
+// Close closes the connected sockets of every listen routine, then the listener.
+func (u *StdConn) Close() error {
+	u.stopConnSocks()
+	return u.UDPConn.Close()
 }
 
 func (u *StdConn) SupportsMultipleReaders() bool {
@@ -205,7 +282,10 @@ func (u *StdConn) SupportsMultipleReaders() bool {
 
 // Rebind clears the interface the kernel scoped this socket to, so that sends are routed against the current
 // routing table instead of the interface we happened to be on when the socket was created. Darwin pins sockets
-// this way on its own, which is what strands us after the underlying network changes.
+// this way on its own, which is what strands us after the underlying network changes. Control.RebindUDPServer
+// rebinds only the first writer, so this clears the other listen routines' listeners too. Connected sockets are
+// closed after the listeners are cleared, and later ones copy the cleared scope and pick their source addresses
+// afresh.
 func (u *StdConn) Rebind() error {
 	var err error
 	if u.isV4 {
@@ -213,6 +293,23 @@ func (u *StdConn) Rebind() error {
 	} else {
 		err = syscall.SetsockoptInt(int(u.sysFd), syscall.IPPROTO_IPV6, syscall.IPV6_BOUND_IF, 0)
 	}
-
+	for _, m := range u.socks.siblings(u) {
+		err = errors.Join(err, m.clearBoundIf())
+	}
+	u.closeConnSocks("rebind")
 	return err
+}
+
+// clearBoundIf clears the interface the listener is scoped to through its RawConn, which fails on a listener that
+// closed concurrently instead of reaching whatever reused its descriptor number.
+func (u *StdConn) clearBoundIf() error {
+	level, opt := syscall.IPPROTO_IPV6, syscall.IPV6_BOUND_IF
+	if u.isV4 {
+		level, opt = syscall.IPPROTO_IP, syscall.IP_BOUND_IF
+	}
+	var serr error
+	if err := u.rc.Control(func(fd uintptr) { serr = syscall.SetsockoptInt(int(fd), level, opt, 0) }); err != nil {
+		return err
+	}
+	return serr
 }
