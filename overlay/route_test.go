@@ -53,6 +53,11 @@ func Test_parseRoutes(t *testing.T) {
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.mtu in tun.routes is not an integer: strconv.Atoi: parsing \"nope\": invalid syntax")
 
+	c.Settings["tun"] = map[string]any{"routes": []any{map[string]any{"mtu": true}}}
+	routes, err = parseRoutes(c, []netip.Prefix{n})
+	assert.Nil(t, routes)
+	require.EqualError(t, err, "entry 1.mtu in tun.routes is not an integer: strconv.Atoi: parsing \"true\": invalid syntax")
+
 	// low mtu
 	c.Settings["tun"] = map[string]any{"routes": []any{map[string]any{"mtu": "499"}}}
 	routes, err = parseRoutes(c, []netip.Prefix{n})
@@ -192,6 +197,36 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry .weight in tun.unsafe_routes[1].via[1] is not an integer")
 
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"mtu": "500", "via": []any{map[string]any{"gateway": "10.0.0.1", "weight": 1.5}}}}}
+	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
+	assert.Nil(t, routes)
+	require.EqualError(t, err, "entry .weight in tun.unsafe_routes[1].via[1] is not an integer")
+
+	// quoted metric and weight
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"route": "1.0.0.0/8", "metric": "1234", "via": []any{map[string]any{"gateway": "10.0.0.1", "weight": "5"}}}}}
+	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
+	require.NoError(t, err)
+	require.Len(t, routes, 1)
+	assert.Equal(t, 1234, routes[0].Metric)
+	assert.Equal(t, routing.Gateways{routing.NewGateway(netip.MustParseAddr("10.0.0.1"), 5)}, routes[0].Via)
+
+	// quoted metric out of range
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": "127.0.0.1", "route": "1.0.0.0/8", "metric": "-1"}}}
+	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
+	assert.Nil(t, routes)
+	require.EqualError(t, err, "entry 1.metric in tun.unsafe_routes is not in range (0-2147483647) : -1")
+
+	// bool and nil metric
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": "127.0.0.1", "route": "1.0.0.0/8", "metric": true}}}
+	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
+	assert.Nil(t, routes)
+	require.EqualError(t, err, "entry 1.metric in tun.unsafe_routes is not an integer: strconv.Atoi: parsing \"true\": invalid syntax")
+
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": "127.0.0.1", "route": "1.0.0.0/8", "metric": nil}}}
+	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
+	assert.Nil(t, routes)
+	require.EqualError(t, err, "entry 1.metric in tun.unsafe_routes is not an integer: strconv.Atoi: parsing \"<nil>\": invalid syntax")
+
 	// missing route
 	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": "127.0.0.1", "mtu": "500"}}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
@@ -233,6 +268,11 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.mtu in tun.unsafe_routes is not an integer: strconv.Atoi: parsing \"nope\": invalid syntax")
+
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": "127.0.0.1", "mtu": 1.5}}}
+	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
+	assert.Nil(t, routes)
+	require.EqualError(t, err, "entry 1.mtu in tun.unsafe_routes is not an integer: strconv.Atoi: parsing \"1.5\": invalid syntax")
 
 	// low mtu
 	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": "127.0.0.1", "mtu": "499"}}}
