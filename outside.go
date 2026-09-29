@@ -456,15 +456,27 @@ func parseV4(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 	if fp.Fragment {
 		fp.RemotePort = 0
 		fp.LocalPort = 0
-	} else if fp.Protocol == iputil.IPProtocolICMP { //note that orientation doesn't matter on ICMP
+		return nil
+	}
+
+	switch fp.Protocol {
+	case iputil.IPProtocolICMP: //note that orientation doesn't matter on ICMP
 		fp.RemotePort = binary.BigEndian.Uint16(data[ihl+4 : ihl+6]) //identifier
 		fp.LocalPort = 0                                             //code would be uint16(data[ihl+1])
-	} else if incoming {
-		fp.RemotePort = binary.BigEndian.Uint16(data[ihl : ihl+2])  //src port
-		fp.LocalPort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4]) //dst port
-	} else {
-		fp.LocalPort = binary.BigEndian.Uint16(data[ihl : ihl+2])    //src port
-		fp.RemotePort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4]) //dst port
+
+	case iputil.IPProtocolTCP, iputil.IPProtocolUDP:
+		if incoming {
+			fp.RemotePort = binary.BigEndian.Uint16(data[ihl : ihl+2])  //src port
+			fp.LocalPort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4]) //dst port
+		} else {
+			fp.LocalPort = binary.BigEndian.Uint16(data[ihl : ihl+2])    //src port
+			fp.RemotePort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4]) //dst port
+		}
+
+	default:
+		// don't set ports for protocols Nebula doesn't inspect, the first 4 bytes of GRE, IPIP, AH, etc. are not ports
+		fp.RemotePort = 0
+		fp.LocalPort = 0
 	}
 
 	return nil

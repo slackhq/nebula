@@ -459,6 +459,7 @@ firewall:
   # - port: Takes `0` or `any` as any, a single number `80`, a range `200-901`, or `fragment` to match second and further fragments of fragmented packets (since there is no port available).
   #   proto: `any`, `tcp`, `udp`, or `icmp`
   #          a port specification is ignored if proto is `icmp`
+  #          only tcp and udp packets have ports, packets of any other protocol only match port `any` or `fragment`
   #   host: `any` or a literal hostname, ie `test-host`
   #   group: `any` or a literal group name, ie `default-group`
   #   groups: Same as group but accepts a list of values. Multiple values are AND'd together and a certificate would have to contain all groups to pass
