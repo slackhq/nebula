@@ -11,6 +11,8 @@ import (
 // ErrIPv6CouldNotFindPayload is returned when the ipv6 extension header chain is truncated before a terminal
 // upper layer protocol is reached.
 var ErrIPv6CouldNotFindPayload = errors.New("could not find payload in ipv6 packet")
+var ErrIPv6FragmentHeadersNotTransport = errors.New("non-transport header after fragment header in packet")
+var ErrIPv6HopByHopHeadersMustBeFirst = errors.New("hop-by-hop header must be first extension header")
 
 const (
 	// MaxIPv4RejectPacketSize is the largest IPv4 reject packet:
@@ -27,6 +29,13 @@ const (
 	maxIPv6RejectPacketSize = ipv6.HeaderLen + 8 + 1000
 
 	MaxRejectPacketSize = maxIPv6RejectPacketSize
+
+	IPv6HeaderHopByHop       = 0
+	IPv6HeaderRouting        = 43
+	IPv6HeaderFragment       = 44
+	IPv6NoNextHeader         = 59
+	IPv6HeaderDestination    = 60
+	IPv6HeaderAuthentication = 51
 
 	IPProtocolICMP        = 1
 	IPProtocolICMPv6      = 58
@@ -345,6 +354,15 @@ func ipv6CreateRejectTCPPacket(packet []byte, out []byte, offset int) []byte {
 	return out
 }
 
+func nextHeaderIsTransport(nextHeader uint8) error {
+	switch nextHeader {
+	case IPProtocolTCP, IPProtocolUDP, IPProtocolICMPv6, IPProtocolICMP:
+		return nil
+	default:
+		return ErrIPv6FragmentHeadersNotTransport
+	}
+}
+
 // IPv6FindUpperProtocol walks the ipv6 extension header chain and returns the upper layer protocol, the offset it begins at, and whether the packet is a non-first fragment.
 // Only the RFC 8200 and IANA extension headers below are walked.
 // Everything else, including Mobility (135), HIP (139), Shim6 (140), experimental 253/254, and real upper layer protocols like SCTP or GRE, is terminal.
@@ -360,26 +378,51 @@ func IPv6FindUpperProtocol(packet []byte) (nextHeader uint8, offset int, isFragm
 
 	for range maxIPv6ExtHeaders {
 		switch nextHeader {
-		case 0, 43, 60: // Hop-by-Hop, Routing, Destination
+		case IPv6HeaderHopByHop, IPv6HeaderRouting, IPv6HeaderDestination:
 			if len(packet) < offset+2 {
 				return 0, 0, false, false, ErrIPv6CouldNotFindPayload
 			}
+
+			if nextHeader == IPv6HeaderHopByHop && offset != ipv6.HeaderLen {
+				//hop-by-hop must appear first, and only once, if it exists.
+				return 0, 0, false, false, ErrIPv6HopByHopHeadersMustBeFirst
+			}
+
 			nextHeader = packet[offset]
 			offset += (int(packet[offset+1]) + 1) << 3
 
-		case 44: // Fragment
+		case IPv6HeaderFragment:
 			if len(packet) < offset+8 {
 				return 0, 0, false, false, ErrIPv6CouldNotFindPayload
 			}
-			anyFragment = true
-			// Non-first fragments carry no transport header, report the fragmented protocol and stop
-			if packet[offset+2] != 0 || packet[offset+3]&0xf8 != 0 {
-				return packet[offset], offset, true, anyFragment, nil
-			}
-			nextHeader = packet[offset]
-			offset += 8
 
-		case 51: // AH
+			anyFragment = true
+			nextHeader = packet[offset]
+
+			//because all these branches are terminal, we reject multiple fragment headers as well
+
+			// we always require a transport-layer header to follow a fragment header:
+			if err = nextHeaderIsTransport(nextHeader); err != nil {
+				return 0, 0, false, false, err
+			}
+			if packet[offset+2] == 0 && packet[offset+3]&0xf8 == 0 {
+				// This is a first-fragment
+				offset += 8
+
+				if offset > len(packet) {
+					// one more sanity check for length
+					return 0, 0, false, false, ErrIPv6CouldNotFindPayload
+				}
+				return nextHeader, offset, isFragment, anyFragment, nil
+			}
+			// Non-first fragments carry no transport header, and are terminal.
+			// However, per RFC 8200 §4.5, the "next header" of a non-first-fragment is not actually consulted during reassembly
+
+			// todo nextHeader is constrained to ICMP/TCP/UDP by nextHeaderIsTransport
+			// todo but should we make "fragment" a firewall-level protocol?
+			return nextHeader, offset, true, anyFragment, nil
+
+		case IPv6HeaderAuthentication: // AH
 			if len(packet) < offset+2 {
 				return 0, 0, false, false, ErrIPv6CouldNotFindPayload
 			}
