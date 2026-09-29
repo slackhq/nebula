@@ -302,7 +302,7 @@ func Test_convertRule(t *testing.T) {
 		"group": []any{"group1"},
 	}
 
-	r, err := convertRule(l, c, "test", 1)
+	r, err := yamlToConfigRule(l, c, "test", 1)
 	assert.Contains(t, ob.String(), "group was an array with a single value, converting to simple value")
 	assert.Contains(t, ob.String(), "table=test")
 	assert.Contains(t, ob.String(), "rule=1")
@@ -315,7 +315,7 @@ func Test_convertRule(t *testing.T) {
 		"group": []any{"group1", "group2"},
 	}
 
-	r, err = convertRule(l, c, "test", 1)
+	r, err = yamlToConfigRule(l, c, "test", 1)
 	assert.Empty(t, ob.String())
 	require.Error(t, err, "group should contain a single value, an array with more than one entry was provided")
 
@@ -325,7 +325,7 @@ func Test_convertRule(t *testing.T) {
 		"group": "group1",
 	}
 
-	r, err = convertRule(l, c, "test", 1)
+	r, err = yamlToConfigRule(l, c, "test", 1)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"group1"}, r.Groups)
 }
@@ -345,7 +345,7 @@ func Test_convertRuleSanity(t *testing.T) {
 		{"groups": []any{"group2"}, "cidr": "1.1.1.1/1", "host": "bob"},
 	}
 	for _, c := range noWarningPlease {
-		r, err := convertRule(l, c, "test", 1)
+		r, err := yamlToConfigRule(l, c, "test", 1)
 		require.NoError(t, err)
 		require.NoError(t, r.sanity(), "should not generate a sanity warning, %+v", c)
 	}
@@ -361,7 +361,7 @@ func Test_convertRuleSanity(t *testing.T) {
 	}
 	for _, c := range yesWarningPlease {
 		c["host"] = "any"
-		r, err := convertRule(l, c, "test", 1)
+		r, err := yamlToConfigRule(l, c, "test", 1)
 		require.NoError(t, err)
 		err = r.sanity()
 		require.Error(t, err, "I wanted a warning: %+v", c)
@@ -377,7 +377,7 @@ func Test_convertRuleSanity(t *testing.T) {
 		{"groups": []any{"group2"}, "cidr": "1.1.1.1/1", "host": "bob"},
 	}
 	for _, c := range yesWarningPlease {
-		r, err := convertRule(l, c, "test", 1)
+		r, err := yamlToConfigRule(l, c, "test", 1)
 		require.NoError(t, err)
 		r.Groups = append(r.Groups, "any")
 		err = r.sanity()

@@ -53,7 +53,7 @@ func addRulesFromConfig(l *slog.Logger, inbound bool, c *config.C, ra ruleAdder)
 	}
 
 	for i, t := range rs {
-		r, err := convertRule(l, t, table, i)
+		r, err := yamlToConfigRule(l, t, table, i)
 		if err != nil {
 			return fmt.Errorf("%s rule #%v; %s", table, i, err)
 		}
@@ -157,7 +157,7 @@ type configRule struct {
 	CASha     string
 }
 
-func convertRule(l *slog.Logger, p any, table string, i int) (configRule, error) {
+func yamlToConfigRule(l *slog.Logger, p any, table string, i int) (configRule, error) {
 	r := configRule{}
 
 	m, ok := p.(map[string]any)
