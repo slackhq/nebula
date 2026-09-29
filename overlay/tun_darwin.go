@@ -585,11 +585,7 @@ func (t *tun) Read(to []byte) (int, error) {
 	var n int
 	var callErr error
 	err = rc.Read(func(fd uintptr) bool {
-		iovecs := []unix.Iovec{
-			{Base: &head[0], Len: 4},
-			{Base: &to[0], Len: uint64(len(to))},
-		}
-		n, callErr = tunReadv(int(fd), iovecs)
+		n, callErr = unix.Readv(int(fd), [][]byte{head[:], to})
 		if errno, ok := callErr.(syscall.Errno); ok && errno.Temporary() {
 			return false
 		}
@@ -635,11 +631,7 @@ func (t *tun) Write(from []byte) (int, error) {
 	var n int
 	var callErr error
 	err = rc.Write(func(fd uintptr) bool {
-		iovecs := []unix.Iovec{
-			{Base: &head[0], Len: 4},
-			{Base: &from[0], Len: uint64(len(from))},
-		}
-		n, callErr = tunWritev(int(fd), iovecs)
+		n, callErr = unix.Writev(int(fd), [][]byte{head[:], from})
 		// Type-assert to syscall.Errno so the EAGAIN/EWOULDBLOCK/EINTR check doesn't box the errno
 		// constants into error interfaces on every call.
 		if errno, ok := callErr.(syscall.Errno); ok && errno.Temporary() {
