@@ -348,15 +348,14 @@ func TestFirewall_DropV6(t *testing.T) {
 func BenchmarkFirewallTable_match(b *testing.B) {
 	f := &Firewall{}
 	ft := FirewallTable{}
-	tcp := ft.protoPorts(iputil.IPProtocolTCP)
 
 	pfix := netip.MustParsePrefix("172.1.1.1/32")
-	_ = tcp.addRule(f, 10, 10, []string{"good-group"}, "good-host", pfix.String(), "", "", "")
-	_ = tcp.addRule(f, 100, 100, []string{"good-group"}, "good-host", "", pfix.String(), "", "")
+	_ = ft.addRule(f, iputil.IPProtocolTCP, firewallPortRule{startPort: 10, endPort: 10, groups: []string{"good-group"}, host: "good-host", cidr: pfix.String()})
+	_ = ft.addRule(f, iputil.IPProtocolTCP, firewallPortRule{startPort: 100, endPort: 100, groups: []string{"good-group"}, host: "good-host", localCidr: pfix.String()})
 
 	pfix6 := netip.MustParsePrefix("fd11::11/128")
-	_ = tcp.addRule(f, 10, 10, []string{"good-group"}, "good-host", pfix6.String(), "", "", "")
-	_ = tcp.addRule(f, 100, 100, []string{"good-group"}, "good-host", "", pfix6.String(), "", "")
+	_ = ft.addRule(f, iputil.IPProtocolTCP, firewallPortRule{startPort: 10, endPort: 10, groups: []string{"good-group"}, host: "good-host", cidr: pfix6.String()})
+	_ = ft.addRule(f, iputil.IPProtocolTCP, firewallPortRule{startPort: 100, endPort: 100, groups: []string{"good-group"}, host: "good-host", localCidr: pfix6.String()})
 	cp := cert.NewCAPool()
 
 	b.Run("fail on proto", func(b *testing.B) {
@@ -958,6 +957,64 @@ func TestFirewall_ProtocolRules(t *testing.T) {
 		require.NoError(t, fw.Drop(pkt(iputil.IPProtocolICMPv6), true, &h, cp, nil), "rule %d", ruleProto)
 		assert.Equal(t, ErrNoMatchingRule, fw.Drop(pkt(47), true, &h, cp, nil), "rule %d", ruleProto)
 	}
+
+	// proto `any` rules apply to protocols with rules of their own, whichever rule was added first
+	for _, anyFirst := range []bool{true, false} {
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
+		addAny := func() {
+			require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 80, 80, []string{"any"}, "", "", "", "", ""))
+		}
+		if anyFirst {
+			addAny()
+		}
+		require.NoError(t, fw.AddRule(true, iputil.IPProtocolTCP, 22, 22, []string{"any"}, "", "", "", "", ""))
+		if !anyFirst {
+			addAny()
+		}
+
+		for _, tc := range []struct {
+			proto uint8
+			port  uint16
+			want  error
+		}{
+			{iputil.IPProtocolTCP, 22, nil},
+			{iputil.IPProtocolTCP, 80, nil},
+			{iputil.IPProtocolTCP, 23, ErrNoMatchingRule},
+			{iputil.IPProtocolUDP, 80, nil},
+			{iputil.IPProtocolUDP, 22, ErrNoMatchingRule},
+		} {
+			p := pkt(tc.proto)
+			p.LocalPort = tc.port
+			assert.Equal(t, tc.want, fw.Drop(p, true, &h, cp, nil), "anyFirst %v, proto %d, port %d", anyFirst, tc.proto, tc.port)
+		}
+	}
+
+	// ICMP and ICMPv6 share one copy of each proto `any` rule, whichever rule was added first
+	for _, anyFirst := range []bool{true, false} {
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
+		addAny := func() {
+			require.NoError(t, fw.AddRule(true, firewall.ProtoAny, firewall.PortAny, firewall.PortAny, []string{"default-group"}, "", "", "", "", ""))
+		}
+		if anyFirst {
+			addAny()
+		}
+		require.NoError(t, fw.AddRule(true, iputil.IPProtocolICMPv6, firewall.PortAny, firewall.PortAny, []string{"nope"}, "", "", "", "", ""))
+		if !anyFirst {
+			addAny()
+		}
+
+		require.NoError(t, fw.Drop(pkt(iputil.IPProtocolICMP), true, &h, cp, nil), "anyFirst %v", anyFirst)
+		require.NoError(t, fw.Drop(pkt(iputil.IPProtocolICMPv6), true, &h, cp, nil), "anyFirst %v", anyFirst)
+		assert.Len(t, fw.InRules.Protos[iputil.IPProtocolICMP][firewall.PortAny].Any.Groups, 2, "anyFirst %v", anyFirst)
+	}
+
+	// Protocols without rules of their own have no rules to check until there is a proto `any` rule to share
+	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
+	require.NoError(t, fw.AddRule(true, iputil.IPProtocolTCP, 22, 22, []string{"any"}, "", "", "", "", ""))
+	assert.Nil(t, fw.InRules.Protos[47])
+	assert.Equal(t, ErrNoMatchingRule, fw.Drop(pkt(47), true, &h, cp, nil))
+	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, firewall.PortAny, firewall.PortAny, []string{"any"}, "", "", "", "", ""))
+	require.NoError(t, fw.Drop(pkt(47), true, &h, cp, nil))
 }
 
 func TestFirewall_DropIPSpoofing(t *testing.T) {

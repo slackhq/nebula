@@ -89,31 +89,88 @@ type FirewallConntrack struct {
 // FirewallTable is the entry point for a rule, the evaluation order is:
 // Proto AND port AND (CA SHA or CA name) AND local CIDR AND (group OR groups OR name OR remote CIDR)
 type FirewallTable struct {
-	// Protos holds the rules for each IP protocol number, nil for protocols without rules.
+	// Protos holds the rules for each IP protocol number, so a packet is only checked against one set of rules.
+	// A protocol with rules of its own also holds a copy of every proto `any` rule, the rest share AnyProto.
 	// ICMP and ICMPv6 share one set of rules.
-	Protos   [256]firewallPort
+	Protos [256]firewallPort
+
+	// AnyProto holds the proto `any` rules, nil until there is one
 	AnyProto firewallPort
+
+	// own marks the protocols in Protos with rules of their own
+	own [256]bool
+
+	// anyRules are the proto `any` rules, kept to copy into protocols that get rules of their own later
+	anyRules []firewallPortRule
+}
+
+// firewallPortRule holds the arguments to firewallPort.addRule
+type firewallPortRule struct {
+	startPort, endPort                   int32
+	groups                               []string
+	host, cidr, localCidr, caName, caSha string
+}
+
+func (r firewallPortRule) addTo(f *Firewall, fp firewallPort) error {
+	return fp.addRule(f, r.startPort, r.endPort, r.groups, r.host, r.cidr, r.localCidr, r.caName, r.caSha)
 }
 
 func newFirewallTable() *FirewallTable {
-	return &FirewallTable{
-		AnyProto: firewallPort{},
-	}
+	return &FirewallTable{}
 }
 
-// protoPorts returns the rules for proto, creating them on first use.
-func (ft *FirewallTable) protoPorts(proto uint8) firewallPort {
-	if ft.Protos[proto] == nil {
+// addRule adds r to the rules for proto, or to the rules for every protocol when proto is firewall.ProtoAny
+func (ft *FirewallTable) addRule(f *Firewall, proto uint8, r firewallPortRule) error {
+	if proto == firewall.ProtoAny {
+		return ft.addAnyProtoRule(f, r)
+	}
+
+	if !ft.own[proto] {
 		fp := firewallPort{}
+		for _, ar := range ft.anyRules {
+			if err := ar.addTo(f, fp); err != nil {
+				return err
+			}
+		}
+
 		ft.Protos[proto] = fp
+		ft.own[proto] = true
 		switch proto {
 		case iputil.IPProtocolICMP:
 			ft.Protos[iputil.IPProtocolICMPv6] = fp
+			ft.own[iputil.IPProtocolICMPv6] = true
 		case iputil.IPProtocolICMPv6:
 			ft.Protos[iputil.IPProtocolICMP] = fp
+			ft.own[iputil.IPProtocolICMP] = true
 		}
 	}
-	return ft.Protos[proto]
+
+	return r.addTo(f, ft.Protos[proto])
+}
+
+func (ft *FirewallTable) addAnyProtoRule(f *Firewall, r firewallPortRule) error {
+	if ft.AnyProto == nil {
+		ft.AnyProto = firewallPort{}
+	}
+	if err := r.addTo(f, ft.AnyProto); err != nil {
+		return err
+	}
+	ft.anyRules = append(ft.anyRules, r)
+
+	for proto := range ft.Protos {
+		switch {
+		case !ft.own[proto]:
+			ft.Protos[proto] = ft.AnyProto
+		case proto == iputil.IPProtocolICMPv6:
+			// Shares its rules with ICMP, which gets the copy
+		default:
+			if err := r.addTo(f, ft.Protos[proto]); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 type FirewallCA struct {
@@ -263,30 +320,20 @@ func NewFirewallFromConfig(l *slog.Logger, cs *CertState, c *config.C) (*Firewal
 
 // AddRule properly creates the in memory rule structure for a firewall table.
 func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, cidr, localCidr, caName string, caSha string) error {
-	var (
-		ft *FirewallTable
-		fp firewallPort
-	)
-
+	var ft *FirewallTable
 	if incoming {
 		ft = f.InRules
 	} else {
 		ft = f.OutRules
 	}
 
-	switch proto {
-	case iputil.IPProtocolICMP, iputil.IPProtocolICMPv6:
+	if proto == iputil.IPProtocolICMP || proto == iputil.IPProtocolICMPv6 {
 		//ICMP traffic doesn't have ports, so we always coerce to "any", even if a value is provided
 		if startPort != firewall.PortAny {
 			f.l.Warn("ignoring port specification for ICMP firewall rule", "startPort", startPort)
 		}
 		startPort = firewall.PortAny
 		endPort = firewall.PortAny
-		fp = ft.protoPorts(proto)
-	case firewall.ProtoAny:
-		fp = ft.AnyProto
-	default:
-		fp = ft.protoPorts(proto)
 	}
 
 	// We need this rule string because we generate a hash. Removing this will break firewall reload.
@@ -304,7 +351,16 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 		"firewallRule", m{"direction": direction, "proto": proto, "startPort": startPort, "endPort": endPort, "groups": groups, "host": host, "cidr": cidr, "localCidr": localCidr, "caName": caName, "caSha": caSha},
 	)
 
-	return fp.addRule(f, startPort, endPort, groups, host, cidr, localCidr, caName, caSha)
+	return ft.addRule(f, proto, firewallPortRule{
+		startPort: startPort,
+		endPort:   endPort,
+		groups:    groups,
+		host:      host,
+		cidr:      cidr,
+		localCidr: localCidr,
+		caName:    caName,
+		caSha:     caSha,
+	})
 }
 
 // GetRuleHash returns a hash representation of all inbound and outbound rules
@@ -652,10 +708,6 @@ func (f *Firewall) evict(p firewall.Packet) {
 }
 
 func (ft *FirewallTable) match(p *firewall.Packet, incoming bool, c *cert.CachedCertificate, caPool *cert.CAPool) bool {
-	if ft.AnyProto.match(p, incoming, c, caPool) {
-		return true
-	}
-
 	return ft.Protos[p.Protocol].match(p, incoming, c, caPool)
 }
 
@@ -686,7 +738,7 @@ func (fp firewallPort) match(p *firewall.Packet, incoming bool, c *cert.CachedCe
 		return false
 	}
 
-	// this branch is here to catch ICMP traffic from FirewallTable.AnyProto.match and the ICMP rules
+	// ICMP has no ports, only the port `any` rules apply, including the ones copied in from proto `any` rules
 	if p.Protocol == iputil.IPProtocolICMP || p.Protocol == iputil.IPProtocolICMPv6 {
 		// port numbers are re-used for connection tracking of ICMP,
 		// but we don't want to actually filter on them.
