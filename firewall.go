@@ -755,7 +755,8 @@ func (fp firewallPort) match(p *firewall.Packet, incoming bool, c *cert.CachedCe
 		port = int32(p.RemotePort)
 	}
 
-	if fp[port].match(p, c, caPool) {
+	// Packets without ports (gre, esp, etc) have port 0, which is PortAny, don't check those rules twice
+	if port != firewall.PortAny && fp[port].match(p, c, caPool) {
 		return true
 	}
 
