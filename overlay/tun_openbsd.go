@@ -136,6 +136,7 @@ var (
 
 // Read pulls one IP packet off the tun device, scattering the 4 byte protocol header away from
 // the packet so the payload lands directly in to.
+// Not safe for concurrent use: every call scatters the header into t.readHead.
 func (t *tun) Read(to []byte) (int, error) {
 	rc, err := t.f.SyscallConn()
 	if err != nil {

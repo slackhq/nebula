@@ -571,6 +571,7 @@ var (
 
 // Read pulls one IP packet off the utun device, scattering the 4 byte protocol header away from
 // the packet so the payload lands directly in to.
+// Not safe for concurrent use: every call scatters the header into t.readHead.
 func (t *tun) Read(to []byte) (int, error) {
 	rc, err := t.f.SyscallConn()
 	if err != nil {
@@ -599,7 +600,7 @@ func (t *tun) Read(to []byte) (int, error) {
 }
 
 // Write pushes one IP packet onto the utun device. Safe for concurrent use:
-// the AF prefix and iovecs are per-call stack state, and the fd write itself
+// the AF prefix is a read-only package level array, and the fd write itself
 // serializes on the runtime's fd mutex (see the Queue contract in tio.go).
 func (t *tun) Write(from []byte) (int, error) {
 	if len(from) == 0 {
