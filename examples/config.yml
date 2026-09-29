@@ -457,6 +457,9 @@ firewall:
   # Rules are comprised of a protocol, port, and one or more of host, group, or CIDR
   # Logical evaluation is roughly: port AND proto AND (ca_sha OR ca_name) AND (host OR group OR groups OR cidr) AND (local cidr)
   # - port: Takes `0` or `any` as any, a single number `80`, a range `200-901`, or `fragment` to match second and further fragments of fragmented packets (since there is no port available).
+  #         For IPv6, Nebula can't tell which protocol a second or further fragment belongs to. Any rule that allows them (port `any` or `fragment`,
+  #         and every icmp rule, since icmp ignores ports) allows them for every protocol, not just the rule's. The first fragment, which carries
+  #         the ports, is always checked against its real protocol and port, so this never opens a port the rules don't allow.
   #   proto: `any`, `tcp`, `udp`, or `icmp`
   #          a port specification is ignored if proto is `icmp`
   #   host: `any` or a literal hostname, ie `test-host`
