@@ -637,14 +637,7 @@ func (f *Firewall) inConns(fp *firewall.Packet, h *HostInfo, caPool *cert.CAPool
 		c.rulesVersion = f.rulesVersion
 	}
 
-	switch fp.Protocol {
-	case iputil.IPProtocolTCP:
-		c.Expires = time.Now().Add(f.TCPTimeout)
-	case iputil.IPProtocolUDP:
-		c.Expires = time.Now().Add(f.UDPTimeout)
-	default:
-		c.Expires = time.Now().Add(f.DefaultTimeout)
-	}
+	c.Expires = time.Now().Add(f.conntrackTimeout(fp.Protocol))
 
 	conntrack.Unlock()
 
@@ -655,18 +648,22 @@ func (f *Firewall) inConns(fp *firewall.Packet, h *HostInfo, caPool *cert.CAPool
 	return true
 }
 
-func (f *Firewall) addConn(fp *firewall.Packet, incoming bool) {
-	var timeout time.Duration
-	c := &conn{}
-
-	switch fp.Protocol {
-	case iputil.IPProtocolTCP:
-		timeout = f.TCPTimeout
-	case iputil.IPProtocolUDP:
-		timeout = f.UDPTimeout
+// conntrackTimeout returns how long a conntrack entry for proto lives without traffic.
+// Connection oriented protocols share the tcp timeout, datagram protocols share the udp timeout.
+func (f *Firewall) conntrackTimeout(proto uint8) time.Duration {
+	switch proto {
+	case iputil.IPProtocolTCP, iputil.IPProtocolSCTP, iputil.IPProtocolDCCP:
+		return f.TCPTimeout
+	case iputil.IPProtocolUDP, iputil.IPProtocolUDPLite:
+		return f.UDPTimeout
 	default:
-		timeout = f.DefaultTimeout
+		return f.DefaultTimeout
 	}
+}
+
+func (f *Firewall) addConn(fp *firewall.Packet, incoming bool) {
+	timeout := f.conntrackTimeout(fp.Protocol)
+	c := &conn{}
 
 	conntrack := f.Conntrack
 	conntrack.Lock()

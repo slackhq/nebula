@@ -97,13 +97,13 @@ func Test_newPacket(t *testing.T) {
 	assert.False(t, p.Fragment)
 }
 
-// Test_newPacket_v4NoPorts ensures only TCP and UDP report ports. The first 4 bytes of other protocols are not ports,
+// Test_newPacket_v4NoPorts ensures only protocols that lead with src/dst ports report them. The first 4 bytes of other protocols are not ports,
 // and are often chosen by the sender: a GRE header's protocol type, an IPIP inner total length, a 6in4 flow label.
 // Reading them as ports would let a `proto: any` rule with a port match tunneled traffic.
 func Test_newPacket_v4NoPorts(t *testing.T) {
 	p := &firewall.ParsedPacket{}
 
-	for _, proto := range []uint8{4, 41, 47, 50, 51, 132} { // IPIP, 6in4, GRE, ESP, AH, SCTP
+	for _, proto := range []uint8{4, 41, 47, 50, 51} { // IPIP, 6in4, GRE, ESP, AH
 		h := ipv4.Header{
 			Version:  4,
 			Len:      ipv4.HeaderLen,
@@ -121,6 +121,43 @@ func Test_newPacket_v4NoPorts(t *testing.T) {
 			assert.Equal(t, uint16(0), p.RemotePort)
 			assert.Equal(t, uint16(0), p.LocalPort)
 			assert.False(t, p.Fragment)
+		}
+	}
+}
+
+// Test_newPacket_portedProtocols ensures UDP-Lite, DCCP, and SCTP report ports from the same leading
+// src/dst port words as TCP and UDP, oriented the same way.
+func Test_newPacket_portedProtocols(t *testing.T) {
+	p := &firewall.ParsedPacket{}
+	ports := []byte{0x13, 0x88, 0x00, 0x50} // src 5000, dst 80
+
+	for _, proto := range []uint8{iputil.IPProtocolUDPLite, iputil.IPProtocolDCCP, iputil.IPProtocolSCTP} {
+		h := ipv4.Header{
+			Version:  4,
+			Len:      ipv4.HeaderLen,
+			Protocol: int(proto),
+			Src:      net.IPv4(10, 0, 0, 1),
+			Dst:      net.IPv4(10, 0, 0, 2),
+		}
+		v4, err := h.Marshal()
+		require.NoError(t, err)
+		v4 = append(v4, ports...)
+
+		v6 := make([]byte, 40, 44)
+		v6[0] = 0x60
+		v6[6] = proto
+		v6[7] = 64
+		v6 = append(v6, ports...)
+
+		for _, b := range [][]byte{v4, v6} {
+			require.NoError(t, newPacket(b, true, p))
+			assert.Equal(t, proto, p.Protocol)
+			assert.Equal(t, uint16(5000), p.RemotePort)
+			assert.Equal(t, uint16(80), p.LocalPort)
+
+			require.NoError(t, newPacket(b, false, p))
+			assert.Equal(t, uint16(5000), p.LocalPort)
+			assert.Equal(t, uint16(80), p.RemotePort)
 		}
 	}
 }
@@ -740,46 +777,46 @@ func Test_newPacket_v6ExtHeaderPastBuffer(t *testing.T) {
 
 // Test_newPacket_v6ExtHeaderConfusion is a regression test for parseV6 walking any unrecognized
 // Next Header as if it were an ipv6 extension header. A real upper layer protocol Nebula doesn't
-// dissect (SCTP here) is not walkable, so applying the (len+1)*8 formula marched into the SCTP
+// dissect (GRE here) is not walkable, so applying the (len+1)*8 formula marched into the GRE
 // payload and landed on a byte that looked like UDP, forging a protocol/port pair the firewall
-// would trust while the host delivered the real SCTP datagram. The fix fails closed: the packet
+// would trust while the host delivered the real GRE packet. The fix fails closed: the packet
 // is classified as its true protocol with no ports, so it only matches an `any` rule.
 func Test_newPacket_v6ExtHeaderConfusion(t *testing.T) {
 	p := &firewall.ParsedPacket{}
 
 	pkt := make([]byte, 52)
-	pkt[0] = 0x60                        // version 6
-	pkt[6] = byte(layers.IPProtocolSCTP) // NextHeader = SCTP, a real protocol, not an extension header
-	pkt[7] = 64                          // hop limit
+	pkt[0] = 0x60                       // version 6
+	pkt[6] = byte(layers.IPProtocolGRE) // NextHeader = GRE, a real protocol, not an extension header
+	pkt[7] = 64                         // hop limit
 
-	// Real SCTP header at offset 40. Pre-fix parseV6 walked SCTP as an extension header: byte 41 (0x00, the
-	// low byte of the src port below) was read as the header length, giving next=(0+1)*8=8, which landed the
-	// walk on byte 40 (0x11), misread as NextHeader=UDP, then bytes 48-51 as ports.
-	binary.BigEndian.PutUint16(pkt[40:42], 0x1100) // SCTP src port; byte 40=0x11, byte 41=0x00
-	binary.BigEndian.PutUint16(pkt[42:44], 445)    // SCTP dst port, never read by parseV6
-	binary.BigEndian.PutUint16(pkt[48:50], 53)     // SCTP checksum bytes, pre-fix forged RemotePort
+	// Real GRE header at offset 40. Pre-fix parseV6 walked GRE as an extension header: byte 41 (0x00, the
+	// low byte of the flags/version word below) was read as the header length, giving next=(0+1)*8=8, which
+	// landed the walk on byte 40 (0x11), misread as NextHeader=UDP, then bytes 48-51 as ports.
+	binary.BigEndian.PutUint16(pkt[40:42], 0x1100) // GRE flags/version; byte 40=0x11, byte 41=0x00
+	binary.BigEndian.PutUint16(pkt[42:44], 0x86dd) // GRE protocol type, never read by parseV6
+	binary.BigEndian.PutUint16(pkt[48:50], 53)     // GRE payload, pre-fix forged RemotePort
 	binary.BigEndian.PutUint16(pkt[50:52], 53)     // pre-fix forged LocalPort
 
 	require.NoError(t, newPacket(pkt, true, p))
-	assert.Equal(t, uint8(layers.IPProtocolSCTP), p.Protocol, "must classify as the true protocol, not the forged UDP")
+	assert.Equal(t, uint8(layers.IPProtocolGRE), p.Protocol, "must classify as the true protocol, not the forged UDP")
 	assert.Equal(t, uint16(0), p.RemotePort)
 	assert.Equal(t, uint16(0), p.LocalPort)
 	assert.False(t, p.Fragment)
 
 	// Same confusion, but the unknown protocol sits after a real extension header. The HopByHop is walked
-	// correctly, then SCTP must still fail closed instead of being walked into its own payload. Protocol is
-	// the only assertion that discriminates the fix here, a regression that walked SCTP would misclassify it.
+	// correctly, then GRE must still fail closed instead of being walked into its own payload. Protocol is
+	// the only assertion that discriminates the fix here, a regression that walked GRE would misclassify it.
 	chained := make([]byte, 60)
 	chained[0] = 0x60                                  // version 6
 	chained[6] = byte(layers.IPProtocolIPv6HopByHop)   // NextHeader = HopByHop extension
 	chained[7] = 64                                    // hop limit
-	chained[40] = byte(layers.IPProtocolSCTP)          // HopByHop NextHeader = SCTP
-	chained[41] = 0                                    // HopByHop length 0 -> 8 bytes, SCTP begins at offset 48
-	binary.BigEndian.PutUint16(chained[48:50], 0x1100) // SCTP src port, pre-fix forged NextHeader/length bait
-	binary.BigEndian.PutUint16(chained[50:52], 445)    // SCTP dst port, never read by parseV6
+	chained[40] = byte(layers.IPProtocolGRE)           // HopByHop NextHeader = GRE
+	chained[41] = 0                                    // HopByHop length 0 -> 8 bytes, GRE begins at offset 48
+	binary.BigEndian.PutUint16(chained[48:50], 0x1100) // GRE flags/version, pre-fix forged NextHeader/length bait
+	binary.BigEndian.PutUint16(chained[50:52], 0x86dd) // GRE protocol type, never read by parseV6
 
 	require.NoError(t, newPacket(chained, true, p))
-	assert.Equal(t, uint8(layers.IPProtocolSCTP), p.Protocol, "must fail closed on the unknown protocol after the extension header")
+	assert.Equal(t, uint8(layers.IPProtocolGRE), p.Protocol, "must fail closed on the unknown protocol after the extension header")
 	assert.Equal(t, uint16(0), p.RemotePort)
 	assert.Equal(t, uint16(0), p.LocalPort)
 	assert.False(t, p.Fragment)

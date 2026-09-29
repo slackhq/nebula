@@ -33,6 +33,14 @@ func TestNewFirewall(t *testing.T) {
 	assert.Equal(t, time.Minute, fw.UDPTimeout)
 	assert.Equal(t, time.Hour, fw.DefaultTimeout)
 
+	assert.Equal(t, time.Second, fw.conntrackTimeout(iputil.IPProtocolTCP))
+	assert.Equal(t, time.Second, fw.conntrackTimeout(iputil.IPProtocolSCTP))
+	assert.Equal(t, time.Second, fw.conntrackTimeout(iputil.IPProtocolDCCP))
+	assert.Equal(t, time.Minute, fw.conntrackTimeout(iputil.IPProtocolUDP))
+	assert.Equal(t, time.Minute, fw.conntrackTimeout(iputil.IPProtocolUDPLite))
+	assert.Equal(t, time.Hour, fw.conntrackTimeout(iputil.IPProtocolICMP))
+	assert.Equal(t, time.Hour, fw.conntrackTimeout(47)) // GRE
+
 	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
 	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
 	assert.Equal(t, 3602, conntrack.TimerWheel.wheelLen)

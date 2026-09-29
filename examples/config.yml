@@ -449,7 +449,9 @@ firewall:
   #default_local_cidr_any: false
 
   conntrack:
+    # tcp_timeout also applies to sctp and dccp
     tcp_timeout: 12m
+    # udp_timeout also applies to udplite
     udp_timeout: 3m
     default_timeout: 10m
 
