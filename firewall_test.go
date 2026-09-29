@@ -351,7 +351,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 			Certificate: &dummyCert{},
 		}
 		for n := 0; n < b.N; n++ {
-			assert.False(b, ft.match(firewall.Packet{Protocol: iputil.IPProtocolUDP}, true, c, cp))
+			assert.False(b, ft.match(&firewall.Packet{Protocol: iputil.IPProtocolUDP}, true, c, cp))
 		}
 	})
 
@@ -361,7 +361,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 			Certificate: &dummyCert{},
 		}
 		for n := 0; n < b.N; n++ {
-			assert.False(b, ft.match(firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 1}, true, c, cp))
+			assert.False(b, ft.match(&firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 1}, true, c, cp))
 		}
 	})
 
@@ -371,7 +371,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 		}
 		ip := netip.MustParsePrefix("9.254.254.254/32")
 		for n := 0; n < b.N; n++ {
-			assert.False(b, ft.match(firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 100, LocalAddr: ip.Addr()}, true, c, cp))
+			assert.False(b, ft.match(&firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 100, LocalAddr: ip.Addr()}, true, c, cp))
 		}
 	})
 	b.Run("pass proto, port, fail on local CIDRv6", func(b *testing.B) {
@@ -380,7 +380,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 		}
 		ip := netip.MustParsePrefix("fd99::99/128")
 		for n := 0; n < b.N; n++ {
-			assert.False(b, ft.match(firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 100, LocalAddr: ip.Addr()}, true, c, cp))
+			assert.False(b, ft.match(&firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 100, LocalAddr: ip.Addr()}, true, c, cp))
 		}
 	})
 
@@ -393,7 +393,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 			InvertedGroups: map[string]struct{}{"nope": {}},
 		}
 		for n := 0; n < b.N; n++ {
-			assert.False(b, ft.match(firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 10}, true, c, cp))
+			assert.False(b, ft.match(&firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 10}, true, c, cp))
 		}
 	})
 	b.Run("pass proto, port, any local CIDRv6, fail all group, name, and cidr", func(b *testing.B) {
@@ -405,7 +405,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 			InvertedGroups: map[string]struct{}{"nope": {}},
 		}
 		for n := 0; n < b.N; n++ {
-			assert.False(b, ft.match(firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 10}, true, c, cp))
+			assert.False(b, ft.match(&firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 10}, true, c, cp))
 		}
 	})
 
@@ -418,7 +418,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 			InvertedGroups: map[string]struct{}{"nope": {}},
 		}
 		for n := 0; n < b.N; n++ {
-			assert.False(b, ft.match(firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 100, LocalAddr: pfix.Addr()}, true, c, cp))
+			assert.False(b, ft.match(&firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 100, LocalAddr: pfix.Addr()}, true, c, cp))
 		}
 	})
 	b.Run("pass proto, port, specific local CIDRv6, fail all group, name, and cidr", func(b *testing.B) {
@@ -430,7 +430,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 			InvertedGroups: map[string]struct{}{"nope": {}},
 		}
 		for n := 0; n < b.N; n++ {
-			assert.False(b, ft.match(firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 100, LocalAddr: pfix6.Addr()}, true, c, cp))
+			assert.False(b, ft.match(&firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 100, LocalAddr: pfix6.Addr()}, true, c, cp))
 		}
 	})
 
@@ -442,7 +442,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 			InvertedGroups: map[string]struct{}{"good-group": {}},
 		}
 		for n := 0; n < b.N; n++ {
-			assert.True(b, ft.match(firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 10}, true, c, cp))
+			assert.True(b, ft.match(&firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 10}, true, c, cp))
 		}
 	})
 
@@ -454,7 +454,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 			InvertedGroups: map[string]struct{}{"good-group": {}},
 		}
 		for n := 0; n < b.N; n++ {
-			assert.True(b, ft.match(firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 100, LocalAddr: pfix.Addr()}, true, c, cp))
+			assert.True(b, ft.match(&firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 100, LocalAddr: pfix.Addr()}, true, c, cp))
 		}
 	})
 	b.Run("pass on group on specific local cidr6", func(b *testing.B) {
@@ -465,7 +465,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 			InvertedGroups: map[string]struct{}{"good-group": {}},
 		}
 		for n := 0; n < b.N; n++ {
-			assert.True(b, ft.match(firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 100, LocalAddr: pfix6.Addr()}, true, c, cp))
+			assert.True(b, ft.match(&firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 100, LocalAddr: pfix6.Addr()}, true, c, cp))
 		}
 	})
 
@@ -477,7 +477,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 			InvertedGroups: map[string]struct{}{"nope": {}},
 		}
 		for n := 0; n < b.N; n++ {
-			ft.match(firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 10}, true, c, cp)
+			ft.match(&firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 10}, true, c, cp)
 		}
 	})
 }

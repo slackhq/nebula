@@ -458,7 +458,7 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 	}
 
 	// Check if we spoke to this tuple, if we did then allow this packet
-	if f.inConns(fp, h, caPool, localCache) {
+	if f.inConns(&fp, h, caPool, localCache) {
 		return nil
 	}
 
@@ -468,13 +468,13 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 	}
 
 	// We now know which firewall table to check against
-	if !table.match(fp, incoming, h.ConnectionState.peerCert, caPool) {
+	if !table.match(&fp, incoming, h.ConnectionState.peerCert, caPool) {
 		f.metrics(incoming).droppedNoRule.Inc(1)
 		return ErrNoMatchingRule
 	}
 
 	// We always want to conntrack since it is a faster operation
-	f.addConn(fp, incoming)
+	f.addConn(&fp, incoming)
 
 	return nil
 }
@@ -503,9 +503,9 @@ func (f *Firewall) EmitStats() {
 	metrics.GetOrRegisterGauge("firewall.rules.hash", nil).Update(int64(f.GetRuleHashFNV()))
 }
 
-func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) bool {
+func (f *Firewall) inConns(fp *firewall.Packet, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) bool {
 	if localCache != nil {
-		if _, ok := localCache[fp]; ok {
+		if _, ok := localCache[*fp]; ok {
 			return true
 		}
 	}
@@ -518,7 +518,7 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 		f.evict(ep)
 	}
 
-	c, ok := conntrack.Conns[fp]
+	c, ok := conntrack.Conns[*fp]
 
 	if !ok {
 		conntrack.Unlock()
@@ -537,20 +537,20 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 		if !table.match(fp, c.incoming, h.ConnectionState.peerCert, caPool) {
 			if f.l.Enabled(context.Background(), slog.LevelDebug) {
 				h.logger(f.l).Debug("dropping old conntrack entry, does not match new ruleset",
-					"fwPacket", fp,
+					"fwPacket", *fp,
 					"incoming", c.incoming,
 					"rulesVersion", f.rulesVersion,
 					"oldRulesVersion", c.rulesVersion,
 				)
 			}
-			delete(conntrack.Conns, fp)
+			delete(conntrack.Conns, *fp)
 			conntrack.Unlock()
 			return false
 		}
 
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			h.logger(f.l).Debug("keeping old conntrack entry, does match new ruleset",
-				"fwPacket", fp,
+				"fwPacket", *fp,
 				"incoming", c.incoming,
 				"rulesVersion", f.rulesVersion,
 				"oldRulesVersion", c.rulesVersion,
@@ -572,13 +572,13 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 	conntrack.Unlock()
 
 	if localCache != nil {
-		localCache[fp] = struct{}{}
+		localCache[*fp] = struct{}{}
 	}
 
 	return true
 }
 
-func (f *Firewall) addConn(fp firewall.Packet, incoming bool) {
+func (f *Firewall) addConn(fp *firewall.Packet, incoming bool) {
 	var timeout time.Duration
 	c := &conn{}
 
@@ -593,9 +593,9 @@ func (f *Firewall) addConn(fp firewall.Packet, incoming bool) {
 
 	conntrack := f.Conntrack
 	conntrack.Lock()
-	if _, ok := conntrack.Conns[fp]; !ok {
+	if _, ok := conntrack.Conns[*fp]; !ok {
 		conntrack.TimerWheel.Advance(time.Now())
-		conntrack.TimerWheel.Add(fp, timeout)
+		conntrack.TimerWheel.Add(*fp, timeout)
 	}
 
 	// Record which rulesVersion allowed this connection, so we can retest after
@@ -603,7 +603,7 @@ func (f *Firewall) addConn(fp firewall.Packet, incoming bool) {
 	c.incoming = incoming
 	c.rulesVersion = f.rulesVersion
 	c.Expires = time.Now().Add(timeout)
-	conntrack.Conns[fp] = c
+	conntrack.Conns[*fp] = c
 	conntrack.Unlock()
 }
 
@@ -630,7 +630,7 @@ func (f *Firewall) evict(p firewall.Packet) {
 	delete(conntrack.Conns, p)
 }
 
-func (ft *FirewallTable) match(p firewall.Packet, incoming bool, c *cert.CachedCertificate, caPool *cert.CAPool) bool {
+func (ft *FirewallTable) match(p *firewall.Packet, incoming bool, c *cert.CachedCertificate, caPool *cert.CAPool) bool {
 	if ft.AnyProto.match(p, incoming, c, caPool) {
 		return true
 	}
@@ -674,7 +674,7 @@ func (fp firewallPort) addRule(f *Firewall, startPort int32, endPort int32, grou
 	return nil
 }
 
-func (fp firewallPort) match(p firewall.Packet, incoming bool, c *cert.CachedCertificate, caPool *cert.CAPool) bool {
+func (fp firewallPort) match(p *firewall.Packet, incoming bool, c *cert.CachedCertificate, caPool *cert.CAPool) bool {
 	// We don't have any allowed ports, bail
 	if fp == nil {
 		return false
@@ -744,7 +744,7 @@ func (fc *FirewallCA) addRule(f *Firewall, groups []string, host string, cidr, l
 	return nil
 }
 
-func (fc *FirewallCA) match(p firewall.Packet, c *cert.CachedCertificate, caPool *cert.CAPool) bool {
+func (fc *FirewallCA) match(p *firewall.Packet, c *cert.CachedCertificate, caPool *cert.CAPool) bool {
 	if fc == nil {
 		return false
 	}
@@ -846,7 +846,7 @@ func (fr *FirewallRule) isAny(groups []string, host string, cidr string) bool {
 	return false
 }
 
-func (fr *FirewallRule) match(p firewall.Packet, c *cert.CachedCertificate) bool {
+func (fr *FirewallRule) match(p *firewall.Packet, c *cert.CachedCertificate) bool {
 	if fr == nil {
 		return false
 	}
@@ -918,7 +918,7 @@ func (flc *firewallLocalCIDR) addRule(f *Firewall, localCidr string) error {
 	return nil
 }
 
-func (flc *firewallLocalCIDR) match(p firewall.Packet, c *cert.CachedCertificate) bool {
+func (flc *firewallLocalCIDR) match(p *firewall.Packet, c *cert.CachedCertificate) bool {
 	if flc == nil {
 		return false
 	}
