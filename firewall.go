@@ -89,19 +89,31 @@ type FirewallConntrack struct {
 // FirewallTable is the entry point for a rule, the evaluation order is:
 // Proto AND port AND (CA SHA or CA name) AND local CIDR AND (group OR groups OR name OR remote CIDR)
 type FirewallTable struct {
-	TCP      firewallPort
-	UDP      firewallPort
-	ICMP     firewallPort
+	// Protos holds the rules for each IP protocol number, nil for protocols without rules.
+	// ICMP and ICMPv6 share one set of rules.
+	Protos   [256]firewallPort
 	AnyProto firewallPort
 }
 
 func newFirewallTable() *FirewallTable {
 	return &FirewallTable{
-		TCP:      firewallPort{},
-		UDP:      firewallPort{},
-		ICMP:     firewallPort{},
 		AnyProto: firewallPort{},
 	}
+}
+
+// protoPorts returns the rules for proto, creating them on first use.
+func (ft *FirewallTable) protoPorts(proto uint8) firewallPort {
+	if ft.Protos[proto] == nil {
+		fp := firewallPort{}
+		ft.Protos[proto] = fp
+		switch proto {
+		case iputil.IPProtocolICMP:
+			ft.Protos[iputil.IPProtocolICMPv6] = fp
+		case iputil.IPProtocolICMPv6:
+			ft.Protos[iputil.IPProtocolICMP] = fp
+		}
+	}
+	return ft.Protos[proto]
 }
 
 type FirewallCA struct {
@@ -263,10 +275,6 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 	}
 
 	switch proto {
-	case iputil.IPProtocolTCP:
-		fp = ft.TCP
-	case iputil.IPProtocolUDP:
-		fp = ft.UDP
 	case iputil.IPProtocolICMP, iputil.IPProtocolICMPv6:
 		//ICMP traffic doesn't have ports, so we always coerce to "any", even if a value is provided
 		if startPort != firewall.PortAny {
@@ -274,11 +282,11 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 		}
 		startPort = firewall.PortAny
 		endPort = firewall.PortAny
-		fp = ft.ICMP
+		fp = ft.protoPorts(proto)
 	case firewall.ProtoAny:
 		fp = ft.AnyProto
 	default:
-		return fmt.Errorf("unknown protocol %v", proto)
+		fp = ft.protoPorts(proto)
 	}
 
 	// We need this rule string because we generate a hash. Removing this will break firewall reload.
@@ -359,26 +367,39 @@ func AddFirewallRulesFromConfig(l *slog.Logger, inbound bool, c *config.C, fw Fi
 		}
 
 		var proto uint8
-		var startPort, endPort int32
 		switch r.Proto {
 		case "any":
 			proto = firewall.ProtoAny
-			startPort, endPort, err = parsePort(sPort)
 		case "tcp":
 			proto = iputil.IPProtocolTCP
-			startPort, endPort, err = parsePort(sPort)
 		case "udp":
 			proto = iputil.IPProtocolUDP
-			startPort, endPort, err = parsePort(sPort)
+		case "udplite":
+			proto = iputil.IPProtocolUDPLite
+		case "dccp":
+			proto = iputil.IPProtocolDCCP
+		case "sctp":
+			proto = iputil.IPProtocolSCTP
 		case "icmp":
 			proto = iputil.IPProtocolICMP
+		default:
+			// Any other protocol by number. 0 is reserved for `any`.
+			n, perr := strconv.ParseUint(r.Proto, 10, 8)
+			if perr != nil || n == 0 {
+				return fmt.Errorf("%s rule #%v; proto was not understood; `%s`", table, i, r.Proto)
+			}
+			proto = uint8(n)
+		}
+
+		var startPort, endPort int32
+		if proto == iputil.IPProtocolICMP || proto == iputil.IPProtocolICMPv6 {
 			startPort = firewall.PortAny
 			endPort = firewall.PortAny
 			if sPort != "" {
 				l.Warn("ignoring port specification for ICMP firewall rule", "port", sPort)
 			}
-		default:
-			return fmt.Errorf("%s rule #%v; proto was not understood; `%s`", table, i, r.Proto)
+		} else {
+			startPort, endPort, err = parsePort(sPort)
 		}
 		if err != nil {
 			return fmt.Errorf("%s rule #%v; %s %s", table, i, errPort, err)
@@ -635,22 +656,7 @@ func (ft *FirewallTable) match(p *firewall.Packet, incoming bool, c *cert.Cached
 		return true
 	}
 
-	switch p.Protocol {
-	case iputil.IPProtocolTCP:
-		if ft.TCP.match(p, incoming, c, caPool) {
-			return true
-		}
-	case iputil.IPProtocolUDP:
-		if ft.UDP.match(p, incoming, c, caPool) {
-			return true
-		}
-	case iputil.IPProtocolICMP, iputil.IPProtocolICMPv6:
-		if ft.ICMP.match(p, incoming, c, caPool) {
-			return true
-		}
-	}
-
-	return false
+	return ft.Protos[p.Protocol].match(p, incoming, c, caPool)
 }
 
 func (fp firewallPort) addRule(f *Firewall, startPort int32, endPort int32, groups []string, host string, cidr, localCidr, caName string, caSha string) error {
@@ -680,7 +686,7 @@ func (fp firewallPort) match(p *firewall.Packet, incoming bool, c *cert.CachedCe
 		return false
 	}
 
-	// this branch is here to catch traffic from FirewallTable.Any.match and FirewallTable.ICMP.match
+	// this branch is here to catch ICMP traffic from FirewallTable.AnyProto.match and the ICMP rules
 	if p.Protocol == iputil.IPProtocolICMP || p.Protocol == iputil.IPProtocolICMPv6 {
 		// port numbers are re-used for connection tracking of ICMP,
 		// but we don't want to actually filter on them.

@@ -457,10 +457,11 @@ firewall:
   # Rules are comprised of a protocol, port, and one or more of host, group, or CIDR
   # Logical evaluation is roughly: port AND proto AND (ca_sha OR ca_name) AND (host OR group OR groups OR cidr) AND (local cidr)
   # - port: Takes `0` or `any` as any, a single number `80`, a range `200-901`, or `fragment` to match second and further fragments of fragmented packets (since there is no port available).
-  #   proto: `any`, `tcp`, `udp`, or `icmp`
+  #   proto: `any`, `tcp`, `udp`, `udplite`, `dccp`, `sctp`, `icmp`, or any other IP protocol number from 1 to 255, ie `47` for gre
   #          a port specification is ignored if proto is `icmp`
-  #          Nebula only reads ports from tcp and udp, so a proto `any` rule with a specific port or range only matches tcp and udp traffic.
-  #          Other protocols (gre, esp, sctp, etc) need port `any`.
+  #          `icmp`, `1`, and `58` are the same, each matches both ICMP and ICMPv6
+  #          Nebula only reads ports from tcp, udp, udplite, dccp, and sctp, so a proto `any` rule with a specific port or range only matches those protocols.
+  #          Rules for other protocols (gre, esp, etc) need port `any`.
   #   host: `any` or a literal hostname, ie `test-host`
   #   group: `any` or a literal group name, ie `default-group`
   #   groups: Same as group but accepts a list of values. Multiple values are AND'd together and a certificate would have to contain all groups to pass

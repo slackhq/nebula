@@ -50,6 +50,12 @@ func (fp Packet) MarshalJSON() ([]byte, error) {
 		proto = "icmpv6"
 	case iputil.IPProtocolUDP:
 		proto = "udp"
+	case iputil.IPProtocolUDPLite:
+		proto = "udplite"
+	case iputil.IPProtocolDCCP:
+		proto = "dccp"
+	case iputil.IPProtocolSCTP:
+		proto = "sctp"
 	default:
 		proto = fmt.Sprintf("unknown %v", fp.Protocol)
 	}
