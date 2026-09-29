@@ -32,6 +32,9 @@ const (
 	IPProtocolICMPv6      = 58
 	IPProtocolTCP         = 6
 	IPProtocolUDP         = 17
+	IPProtocolUDPLite     = 136
+	IPProtocolDCCP        = 33
+	IPProtocolSCTP        = 132
 	ICMPv6TypeEchoRequest = 128
 	ICMPv6TypeEchoReply   = 129
 )

@@ -385,7 +385,7 @@ func parseV6(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 			fp.RemotePort = 0
 		}
 
-	case iputil.IPProtocolTCP, iputil.IPProtocolUDP:
+	case iputil.IPProtocolTCP, iputil.IPProtocolUDP, iputil.IPProtocolDCCP, iputil.IPProtocolSCTP, iputil.IPProtocolUDPLite:
 		if dataLen < offset+4 {
 			return ErrIPv6PacketTooShort
 		}
@@ -464,7 +464,7 @@ func parseV4(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 		fp.RemotePort = binary.BigEndian.Uint16(data[ihl+4 : ihl+6]) //identifier
 		fp.LocalPort = 0                                             //code would be uint16(data[ihl+1])
 
-	case iputil.IPProtocolTCP, iputil.IPProtocolUDP:
+	case iputil.IPProtocolTCP, iputil.IPProtocolUDP, iputil.IPProtocolDCCP, iputil.IPProtocolSCTP, iputil.IPProtocolUDPLite:
 		if incoming {
 			fp.RemotePort = binary.BigEndian.Uint16(data[ihl : ihl+2])  //src port
 			fp.LocalPort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4]) //dst port
