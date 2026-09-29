@@ -11,6 +11,7 @@ import (
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_NewHandshakeManagerVpnIp(t *testing.T) {
@@ -41,8 +42,6 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	i := blah.StartHandshake(ip, nil)
 	i2 := blah.StartHandshake(ip, nil)
 	assert.Same(t, i, i2)
-
-	i.remotes = NewRemoteList([]netip.Addr{}, nil)
 
 	// Adding something to pending should not affect the main hostmap
 	assert.Empty(t, mainHM.Hosts)
@@ -234,4 +233,33 @@ func TestHandleIncomingDispatch(t *testing.T) {
 		hm.HandleIncoming(via, pkt, h)
 		assert.Empty(t, hm.indexes, "orphan stage-2 must not create state")
 	})
+}
+
+// Test_PendingHandshakeHasRemotes covers create-tunnel -address: a hostinfo returned by
+// StartHandshake must already carry its RemoteList, so SetRemote on it before the handshake
+// loop has run is safe and the address becomes one the handshake is sent to.
+func Test_PendingHandshakeHasRemotes(t *testing.T) {
+	l := test.NewLogger()
+	mainHM := newHostMap(l)
+	preferredRanges := []netip.Prefix{}
+	mainHM.preferredRanges.Store(&preferredRanges)
+
+	hm := NewHandshakeManager(l, mainHM, newTestLighthouse(), &udp.NoopConn{}, defaultHandshakeConfig)
+
+	vpnIp := netip.MustParseAddr("172.1.1.2")
+	remote := netip.MustParseAddrPort("192.168.1.9:4242")
+
+	hi := hm.StartHandshake(vpnIp, nil)
+	require.NotNil(t, hi.remotes, "a pending handshake must never be without its RemoteList")
+
+	hi.SetRemote(remote)
+	assert.Contains(t, hi.remotes.CopyAddrs(preferredRanges), remote, "the handshake must be sent to the supplied remote")
+	assert.Equal(t, remote, hi.GetRemote())
+
+	// A RemoteList keeps one learned address per host, so a second remote replaces the
+	// first — the same behaviour change-remote has on an established tunnel.
+	other := netip.MustParseAddrPort("192.168.1.10:4242")
+	hi.SetRemote(other)
+	assert.Equal(t, []netip.AddrPort{other}, hi.remotes.CopyAddrs(preferredRanges))
+	assert.Equal(t, other, hi.GetRemote())
 }

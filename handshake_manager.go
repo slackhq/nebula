@@ -259,14 +259,6 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		"style": header.SubTypeName(header.Handshake, hh.machine.Subtype()),
 	}
 
-	// Get a remotes object if we don't already have one.
-	// This is mainly to protect us as this should never be the case
-	// NB ^ This comment doesn't jive. It's how the thing gets initialized.
-	// It's the common path. Should it update every time, in case a future LH query/queries give us more info?
-	if hostinfo.remotes == nil {
-		hostinfo.remotes = hm.lightHouse.QueryCache([]netip.Addr{vpnIp})
-	}
-
 	remotes := hostinfo.remotes.CopyAddrs(hm.mainHostMap.GetPreferredRanges())
 	remotesHaveChanged := !slices.Equal(remotes, hh.lastRemotes)
 
@@ -371,6 +363,11 @@ func (hm *HandshakeManager) StartHandshake(vpnAddr netip.Addr, cacheCb func(*Han
 	hostinfo := &HostInfo{
 		vpnAddrs:        []netip.Addr{vpnAddr},
 		HandshakePacket: make(map[uint8][]byte, 0),
+		// The lighthouse's list for this address, shared with it and updated in place as
+		// replies arrive. Attached here rather than on the handshake loop's first pass so
+		// a pending hostinfo never exists without one: SetRemote and the timeout path both
+		// dereference it, and create-tunnel -address reaches SetRemote before the loop runs.
+		remotes: hm.lightHouse.QueryCache([]netip.Addr{vpnAddr}),
 		relayState: RelayState{
 			relays:         nil,
 			relayForByAddr: map[netip.Addr]*Relay{},
