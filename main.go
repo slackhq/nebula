@@ -343,6 +343,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		l:                      l,
 		ctx:                    ctx,
 		cancel:                 cancel,
+		ssh:                    ssh,
 		sshStart:               sshStart,
 		statsStart:             stats.Start,
 		dnsStart:               ds.Start,

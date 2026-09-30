@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"sync"
@@ -192,6 +193,18 @@ func (s *SSHServer) AddAuthorizedKey(user, pubKey string) error {
 // RegisterCommand adds a command that can be run by a user, by default only `help` is available
 func (s *SSHServer) RegisterCommand(c *Command) {
 	s.commands.Insert(c.Name, c)
+}
+
+// Commands returns every registered command, in no particular order.
+func (s *SSHServer) Commands() []*Command {
+	return allCommands(s.commands)
+}
+
+// Dispatch runs one command line against the registered commands, writing what an ssh
+// session would have shown to w. It exists so the command surface can be exercised
+// without a connection.
+func (s *SSHServer) Dispatch(line string, w io.Writer) {
+	dispatch(s.commands, line, &stringWriter{w: w})
 }
 
 // Run begins listening and accepting connections. Each invocation derives a fresh per-Run context
