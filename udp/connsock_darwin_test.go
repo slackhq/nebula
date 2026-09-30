@@ -20,19 +20,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// newConnSockListener opens a listener with the connected socket knobs pinned to their defaults, so NEBULA_*
-// variables in the environment can't change what a test sees, applies cfg, and starts ListenOut with r.
+// newConnSockListener opens a listener, applies cfg to its connected socket knobs, and starts ListenOut with r.
 func newConnSockListener(t *testing.T, s Settings, h slog.Handler, r EncReader, cfg ...func(*connSockConfig)) *StdConn {
 	t.Helper()
-	for k, v := range map[string]string{
-		"NEBULA_CONNSOCKS":           "8",
-		"NEBULA_CONNSOCK_RUN":        "64",
-		"NEBULA_CONNSOCK_WINDOW":     "1s",
-		"NEBULA_CONNSOCK_IDLE":       "30s",
-		"NEBULA_CONNSOCK_OPEN_EVERY": "1s",
-	} {
-		t.Setenv(k, v)
-	}
 	if h == nil {
 		h = slog.DiscardHandler
 	}
@@ -47,8 +37,23 @@ func newConnSockListener(t *testing.T, s Settings, h slog.Handler, r EncReader, 
 		f(&u.socks.cfg)
 	}
 	go func() { _ = u.ListenOut(r, func() {}) }()
-	require.Eventually(t, func() bool { return u.reader.Load() != nil }, 5*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return u.listening.Load() }, 5*time.Second, time.Millisecond)
 	return u
+}
+
+// oneAtATime stands in for sendFd with f, which writes one datagram, so a test can fail chosen datagrams.
+func oneAtATime(f func(fd int, b []byte) error) func(int, [][]byte, *sendScratch) (int, error) {
+	return func(fd int, bufs [][]byte, _ *sendScratch) (int, error) {
+		if err := f(fd, bufs[0]); err != nil {
+			return 0, err
+		}
+		return 1, nil
+	}
+}
+
+func writeFd(fd int, b []byte) error {
+	_, err := syscall.Write(fd, b)
+	return err
 }
 
 func listen(s string) Settings { return Settings{Listen: netip.MustParseAddrPort(s)} }
@@ -282,10 +287,10 @@ func TestConnSocksSharedAcrossRoutines(t *testing.T) {
 	s1 := u1.connSockFor(a)
 	require.NotNil(t, s1)
 	var sends atomic.Int64
-	s1.sys = func(fd int, b []byte) error {
+	s1.sys = oneAtATime(func(fd int, b []byte) error {
 		sends.Add(1)
 		return writeFd(fd, b)
-	}
+	})
 	require.NoError(t, u0.WriteTo([]byte("via u0"), a))
 	readFrom(t, peerA, 1)
 	assert.EqualValues(t, 1, sends.Load(), "routine 0 didn't send on routine 1's connected socket")
@@ -566,10 +571,10 @@ func TestConnSocksWriteBatchMixedDestinations(t *testing.T) {
 	peerB, b := newEstablishedPeer(t, u, "udp4", "127.0.0.1:0")
 	peerC, c := newPeer(t, "udp4", "127.0.0.1:0")
 	var onSock atomic.Int64
-	s.sys = func(fd int, b []byte) error {
+	s.sys = oneAtATime(func(fd int, b []byte) error {
 		onSock.Add(1)
 		return writeFd(fd, b)
-	}
+	})
 
 	var bufs [][]byte
 	var addrs []netip.AddrPort
@@ -598,12 +603,12 @@ func TestConnSocksWriteBatchMixedDestinations(t *testing.T) {
 func TestConnSocksWriteError(t *testing.T) {
 	u := newConnSockListener(t, listen("0.0.0.0:0"), nil, nil)
 	s, peer := openConnSock(t, u)
-	s.sys = func(fd int, b []byte) error {
+	s.sys = oneAtATime(func(fd int, b []byte) error {
 		if string(b) == "bad" {
 			return syscall.EMSGSIZE
 		}
 		return writeFd(fd, b)
-	}
+	})
 	bufs := [][]byte{[]byte("ok0"), []byte("bad"), []byte("ok2")}
 	n, err := u.WriteBatch(bufs, []netip.AddrPort{s.dst, s.dst, s.dst})
 	require.NoError(t, err)
@@ -621,12 +626,12 @@ func TestConnSocksWriteBatchFallsBackMidRun(t *testing.T) {
 			u := newConnSockListener(t, listen("0.0.0.0:0"), nil, nil)
 			s, peer := openConnSock(t, u)
 			var calls atomic.Int64
-			s.sys = func(fd int, b []byte) error {
+			s.sys = oneAtATime(func(fd int, b []byte) error {
 				if calls.Add(1) > 2 {
 					return fail
 				}
 				return writeFd(fd, b)
-			}
+			})
 			bufs, addrs := run(s.dst, 5, "r")
 			n, err := u.WriteBatch(bufs, addrs)
 			require.NoError(t, err)
@@ -673,12 +678,12 @@ func TestConnSockWriteENOBUFS(t *testing.T) {
 		now.Add(int64(d))
 	}
 	var enobufs atomic.Bool
-	s.sys = func(fd int, b []byte) error {
+	s.sys = oneAtATime(func(fd int, b []byte) error {
 		if enobufs.Load() {
 			return syscall.ENOBUFS
 		}
 		return writeFd(fd, b)
-	}
+	})
 	perStall := int(u.socks.cfg.enobufsMax / enobufsWait)
 	bufs, _ := run(s.dst, 3, "q")
 
@@ -718,13 +723,13 @@ func TestConnSockWriteENOBUFSConcurrentWriters(t *testing.T) {
 	// Datagrams starting with 'e' get ENOBUFS while enobufs is set; the rest go out.
 	var enobufs atomic.Bool
 	var wrote atomic.Int64
-	s.sys = func(fd int, b []byte) error {
+	s.sys = oneAtATime(func(fd int, b []byte) error {
 		if b[0] == 'e' && enobufs.Load() {
 			return syscall.ENOBUFS
 		}
 		wrote.Add(1)
 		return writeFd(fd, b)
-	}
+	})
 	write := func(tag string, done chan<- int) {
 		sent, _, _ := u.connSockWrite(s, [][]byte{[]byte(tag)})
 		done <- sent
@@ -782,12 +787,12 @@ func TestConnSockWriteEAGAINBounded(t *testing.T) {
 	s, peer := openConnSock(t, u)
 	var eagain atomic.Bool
 	eagain.Store(true)
-	s.sys = func(fd int, b []byte) error {
+	s.sys = oneAtATime(func(fd int, b []byte) error {
 		if eagain.Load() {
 			return syscall.EAGAIN
 		}
 		return writeFd(fd, b)
-	}
+	})
 	budget := u.socks.cfg.enobufsMax
 
 	start := time.Now()
@@ -853,12 +858,12 @@ func TestConnSockWriteDoesNotBlockClose(t *testing.T) {
 		<-wake
 	}
 	var gone atomic.Bool
-	s.sys = func(fd int, b []byte) error {
+	s.sys = oneAtATime(func(fd int, b []byte) error {
 		if gone.Load() {
 			return writeFd(fd, b)
 		}
 		return syscall.ENOBUFS
-	}
+	})
 	done := make(chan bool)
 	go func() {
 		bufs, _ := run(s.dst, 1, "q")

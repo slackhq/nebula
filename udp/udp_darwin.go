@@ -10,12 +10,12 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/internal/msgx"
 	"golang.org/x/sys/unix"
 )
 
@@ -31,15 +31,13 @@ type StdConn struct {
 	// rc reaches the listener's descriptor for another listen routine's Rebind.
 	rc    syscall.RawConn
 	socks *connSocks
-	// reader is ListenOut's reader, which connected socket readers share; readMu serializes them, since an
-	// EncReader isn't safe for concurrent use.
-	reader atomic.Pointer[readerPair]
-	readMu sync.Mutex
-}
-
-type readerPair struct {
-	r     EncReader
-	flush func()
+	// listening is set once ListenOut runs. The listener's and every connected socket's readers hand their batches
+	// to it on rx, so the EncReader runs on ListenOut's goroutine alone; done closes when ListenOut returns.
+	listening atomic.Bool
+	rx        chan *rxBatch
+	done      chan struct{}
+	// free holds the batches ListenOut has delivered, for the readers to fill again.
+	free chan *rxBatch
 }
 
 var _ Conn = &StdConn{}
@@ -53,7 +51,8 @@ func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 	}
 
 	if uc, ok := pc.(*net.UDPConn); ok {
-		c := &StdConn{UDPConn: uc, l: l, listenHost: s.Listen.Addr()}
+		c := &StdConn{UDPConn: uc, l: l, listenHost: s.Listen.Addr(), rx: make(chan *rxBatch, 1), done: make(chan struct{}),
+			free: make(chan *rxBatch, rxBatchesKept)}
 
 		rc, err := uc.SyscallConn()
 		if err != nil {
@@ -247,14 +246,176 @@ func NewUDPStatsEmitter(udpConns []Conn) func() {
 	return func() {}
 }
 
+// ListenOut delivers the batches that the listener's reader and the connected sockets' readers hand it.
 func (u *StdConn) ListenOut(r EncReader, flush func()) error {
-	buffer := make([]byte, MTU)
-	u.reader.Store(&readerPair{r: r, flush: flush})
+	defer close(u.done)
+	u.listening.Store(true)
 	u.startConnSocks()
-
+	errc := make(chan error, 1)
+	go func() { errc <- u.readListener() }()
 	for {
-		// Just read one packet at a time
-		n, rua, err := u.ReadFromUDPAddrPort(buffer)
+		select {
+		case b := <-u.rx:
+			for i := range b.n {
+				r(b.addrs[i], b.pkts[i])
+			}
+			flush()
+			u.putBatch(b)
+		case err := <-errc:
+			return err
+		}
+	}
+}
+
+// rxBatch is one recvmsg_x batch: n datagrams in pkts, from addrs. A reader takes one only while its socket is
+// readable, so an idle connected socket holds none.
+type rxBatch struct {
+	n     int
+	pkts  [msgx.Batch][]byte
+	addrs [msgx.Batch]netip.AddrPort
+	buf   []byte
+	names [msgx.Batch]unix.RawSockaddrInet6
+	iovs  [msgx.Batch]unix.Iovec
+	hdrs  [msgx.Batch]msgx.Hdr
+}
+
+// rxBatchesKept is how many batches a listener keeps for reuse: one being delivered and one queued, plus one for
+// each socket reading at once, the listener and up to 8 connected sockets. Each is msgx.Batch*MTU, about 576KB.
+const rxBatchesKept = 11
+
+func (u *StdConn) getBatch() *rxBatch {
+	select {
+	case b := <-u.free:
+		return b
+	default:
+	}
+	b := &rxBatch{buf: make([]byte, msgx.Batch*MTU)}
+	for i := range b.hdrs {
+		b.iovs[i].Base = &b.buf[i*MTU]
+		b.iovs[i].SetLen(MTU)
+		b.hdrs[i] = msgx.Hdr{Name: (*byte)(unsafe.Pointer(&b.names[i])), Iov: &b.iovs[i], Iovlen: 1}
+	}
+	return b
+}
+
+func (u *StdConn) putBatch(b *rxBatch) {
+	select {
+	case u.free <- b:
+	default:
+	}
+}
+
+// noRecvX is set once recvmsg_x is refused or misbehaves; every reader then reads one datagram per syscall.
+var noRecvX atomic.Bool
+
+// parse checks the n entries recvmsg_x filled and sets pkts and addrs from them. It rejects a batch that intact
+// msghdr_x entries can't produce, which is how a change to xnu's private struct layout would show up.
+func (b *rxBatch) parse(n int) error {
+	if n > len(b.hdrs) {
+		return fmt.Errorf("returned %d datagrams for %d headers", n, len(b.hdrs))
+	}
+	for i := range n {
+		h := &b.hdrs[i]
+		if h.Datalen > MTU {
+			return fmt.Errorf("datagram %d is %d bytes, past the %d byte buffer", i, h.Datalen, MTU)
+		}
+		sa := &b.names[i]
+		switch {
+		case sa.Family == unix.AF_INET && h.Namelen == unix.SizeofSockaddrInet4:
+			sa4 := (*unix.RawSockaddrInet4)(unsafe.Pointer(sa))
+			b.addrs[i] = netip.AddrPortFrom(netip.AddrFrom4(sa4.Addr), binary.BigEndian.Uint16((*[2]byte)(unsafe.Pointer(&sa4.Port))[:]))
+		case sa.Family == unix.AF_INET6 && h.Namelen == unix.SizeofSockaddrInet6:
+			b.addrs[i] = netip.AddrPortFrom(netip.AddrFrom16(sa.Addr).Unmap(), binary.BigEndian.Uint16((*[2]byte)(unsafe.Pointer(&sa.Port))[:]))
+		default:
+			return fmt.Errorf("datagram %d has address family %d with length %d", i, sa.Family, h.Namelen)
+		}
+		b.pkts[i] = b.buf[i*MTU : i*MTU+int(h.Datalen) : i*MTU+int(h.Datalen)]
+	}
+	b.n = n
+	return nil
+}
+
+// batchReader reads one socket in batches. Its fn is bound once, since a closure passed through the RawConn
+// interface escapes and would allocate on every read.
+type batchReader struct {
+	u     *StdConn
+	conn  *net.UDPConn
+	rc    syscall.RawConn
+	b     *rxBatch
+	errno syscall.Errno
+	fn    func(fd uintptr) bool
+}
+
+func (u *StdConn) newBatchReader(conn *net.UDPConn, rc syscall.RawConn) *batchReader {
+	r := &batchReader{u: u, conn: conn, rc: rc}
+	r.fn = r.recv
+	return r
+}
+
+func (r *batchReader) recv(fd uintptr) bool {
+	b := r.u.getBatch()
+	for i := range b.hdrs {
+		b.hdrs[i].Namelen = unix.SizeofSockaddrInet6
+		b.hdrs[i].Flags = 0
+		b.hdrs[i].Datalen = 0
+	}
+	n, errno := msgx.Recv(fd, b.hdrs[:])
+	if errno == unix.EAGAIN {
+		r.u.putBatch(b)
+		return false
+	}
+	b.n, r.b, r.errno = n, b, errno
+	return true
+}
+
+// read returns the next batch: up to msgx.Batch datagrams from one recvmsg_x, or one datagram once recvmsg_x is off.
+func (u *StdConn) read(r *batchReader) (*rxBatch, error) {
+	if !noRecvX.Load() {
+		r.b = nil
+		err := r.rc.Read(r.fn)
+		b := r.b
+		switch {
+		case err != nil:
+			if b != nil {
+				u.putBatch(b)
+			}
+			return nil, err
+		case r.errno == 0:
+			perr := b.parse(b.n)
+			if perr == nil {
+				return b, nil
+			}
+			// The batch was read through a layout the kernel no longer writes, so none of it is trustworthy.
+			u.disableRecvX("returned an unexpected header", perr)
+		case msgx.Unsupported(r.errno):
+			u.disableRecvX("unavailable", r.errno)
+		default:
+			u.putBatch(b)
+			return nil, r.errno
+		}
+		u.putBatch(b)
+	}
+	b := u.getBatch()
+	n, from, err := r.conn.ReadFromUDPAddrPort(b.buf[:MTU])
+	if err != nil {
+		u.putBatch(b)
+		return nil, err
+	}
+	b.n, b.pkts[0], b.addrs[0] = 1, b.buf[:n:n], netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
+	return b, nil
+}
+
+func (u *StdConn) disableRecvX(why string, err error) {
+	if noRecvX.CompareAndSwap(false, true) {
+		u.l.Warn("recvmsg_x "+why+", reading one datagram per syscall", "error", err)
+	}
+}
+
+// readListener hands the listener's batches to ListenOut until the listener closes.
+func (u *StdConn) readListener() error {
+	r := u.newBatchReader(u.UDPConn, u.rc)
+	for {
+		b, err := u.read(r)
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				return err
@@ -262,11 +423,20 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 			u.l.Error("unexpected udp socket receive error", "error", err)
 			continue
 		}
+		if !u.deliver(b) {
+			return net.ErrClosed
+		}
+	}
+}
 
-		u.readMu.Lock()
-		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n:n])
-		flush()
-		u.readMu.Unlock()
+// deliver hands b to ListenOut, and reports false once ListenOut has returned.
+func (u *StdConn) deliver(b *rxBatch) bool {
+	select {
+	case u.rx <- b:
+		return true
+	case <-u.done:
+		u.putBatch(b)
+		return false
 	}
 }
 

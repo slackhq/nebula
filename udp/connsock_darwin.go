@@ -12,12 +12,13 @@ import (
 	"net/netip"
 	"os"
 	"slices"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unsafe"
 
+	"github.com/slackhq/nebula/internal/msgx"
 	"golang.org/x/sys/unix"
 )
 
@@ -52,13 +53,46 @@ type connSock struct {
 	// parkMu serializes the writes that wait for a full send buffer, since the write deadline bounding each wait
 	// is the descriptor's, not the writer's.
 	parkMu sync.Mutex
-	// sys writes one datagram on the descriptor: writeFd, or a stand-in for the interface in tests.
-	sys func(fd int, b []byte) error
+	// sys writes bufs on the descriptor and returns how many went out: sendFd, or a stand-in for the interface in
+	// tests.
+	sys func(fd int, bufs [][]byte, x *sendScratch) (int, error)
 }
 
-func writeFd(fd int, b []byte) error {
-	_, err := syscall.Write(fd, b)
-	return err
+// sendScratch is the msghdr_x array one sendmsg_x reads.
+type sendScratch struct {
+	hdrs [msgx.Batch]msgx.Hdr
+	iovs [msgx.Batch]unix.Iovec
+}
+
+// noSendX is set once sendmsg_x is refused; connected sockets then write one datagram per syscall.
+var noSendX atomic.Bool
+
+// sendFd writes bufs on fd, a lone datagram with write and more with one sendmsg_x, which xnu runs through the stack
+// as a batch on a connected socket. It returns how many went out, or none and the errno. sendmsg_x reports EAGAIN,
+// ENOBUFS and EMSGSIZE only when it took nothing, and any other error without the count it took, which a connected
+// socket gets only on its first datagram, as its peer's unreachable.
+func sendFd(fd int, bufs [][]byte, x *sendScratch) (int, error) {
+	if len(bufs) == 1 {
+		if _, err := syscall.Write(fd, bufs[0]); err != nil {
+			return 0, err
+		}
+		return 1, nil
+	}
+	n := min(len(bufs), msgx.Batch)
+	for i, b := range bufs[:n] {
+		x.iovs[i] = unix.Iovec{Base: unsafe.SliceData(b)}
+		x.iovs[i].SetLen(len(b))
+		x.hdrs[i] = msgx.Hdr{Iov: &x.iovs[i], Iovlen: 1}
+	}
+	sent, errno := msgx.Send(uintptr(fd), x.hdrs[:n])
+	clear(x.iovs[:n])
+	if errno != 0 {
+		return 0, errno
+	}
+	if sent == 0 {
+		return 0, syscall.EAGAIN
+	}
+	return sent, nil
 }
 
 // errStallSpent is a write that found the connected socket's stall budget spent, so its datagram is dropped.
@@ -67,11 +101,16 @@ var errStallSpent = errors.New("connected socket stall budget spent")
 // connSockWriter carries one write through RawConn.Write. They are pooled with fn bound once, since a closure
 // passed through the RawConn interface escapes and would allocate on every send.
 type connSockWriter struct {
-	s    *connSock
-	b    []byte
-	park bool
-	err  error
-	fn   func(fd uintptr) bool
+	s *connSock
+	// bufs holds a copy of the datagrams' slice headers rather than the caller's slice, which would escape
+	// through the pool and cost WriteTo's one-datagram array an allocation per send.
+	bufs  [msgx.Batch][]byte
+	nbufs int
+	park  bool
+	n     int
+	err   error
+	fn    func(fd uintptr) bool
+	x     sendScratch
 }
 
 var connSockWriters = sync.Pool{New: func() any {
@@ -82,7 +121,7 @@ var connSockWriters = sync.Pool{New: func() any {
 
 func (w *connSockWriter) write(fd uintptr) bool {
 	for {
-		w.err = w.s.sys(int(fd), w.b)
+		w.n, w.err = w.s.sys(int(fd), w.bufs[:w.nbufs], &w.x)
 		switch {
 		case w.err == syscall.EINTR:
 		case w.err == syscall.EAGAIN && w.park:
@@ -93,28 +132,28 @@ func (w *connSockWriter) write(fd uintptr) bool {
 	}
 }
 
-// try writes b on s once and returns nil, the write's errno, os.ErrDeadlineExceeded, or net.ErrClosed. With park
-// set, EAGAIN waits in the netpoller until the socket is writable or the write deadline passes; without it, EAGAIN
-// is returned.
-func (s *connSock) try(b []byte, park bool) error {
+// try writes bufs on s once and returns how many went out, or none and the write's errno,
+// os.ErrDeadlineExceeded, or net.ErrClosed. With park set, EAGAIN waits in the netpoller until the socket is
+// writable or the write deadline passes; without it, EAGAIN is returned.
+func (s *connSock) try(bufs [][]byte, park bool) (int, error) {
 	w := connSockWriters.Get().(*connSockWriter)
-	w.s, w.b, w.park = s, b, park
+	w.s, w.nbufs, w.park = s, copy(w.bufs[:], bufs), park
 	rerr := s.rc.Write(w.fn)
-	err := w.err
-	*w = connSockWriter{fn: w.fn}
+	n, err := w.n, w.err
+	clear(w.bufs[:w.nbufs])
+	w.s, w.nbufs, w.n, w.err = nil, 0, 0, nil
 	connSockWriters.Put(w)
 	switch {
 	case rerr == nil:
-		return err
+		return n, err
 	case errors.Is(rerr, os.ErrDeadlineExceeded):
-		return os.ErrDeadlineExceeded
+		return 0, os.ErrDeadlineExceeded
 	default:
-		return net.ErrClosed
+		return 0, net.ErrClosed
 	}
 }
 
-// connSockConfig holds the knobs. connSockConfigFromEnv reads all but backoff and enobufsMax from the environment,
-// so one binary can be tuned without a rebuild.
+// connSockConfig holds the knobs, which tests change.
 type connSockConfig struct {
 	// max is how many connected sockets the listen routines may have open at once; 0 turns connected sockets off.
 	max int
@@ -135,8 +174,8 @@ type connSockConfig struct {
 	enobufsMax time.Duration
 }
 
-func connSockConfigFromEnv() connSockConfig {
-	c := connSockConfig{
+func defaultConnSockConfig() connSockConfig {
+	return connSockConfig{
 		max:        8,
 		run:        64,
 		window:     time.Second,
@@ -145,22 +184,6 @@ func connSockConfigFromEnv() connSockConfig {
 		openEvery:  time.Second,
 		enobufsMax: 10 * time.Millisecond,
 	}
-	if v, err := strconv.Atoi(os.Getenv("NEBULA_CONNSOCKS")); err == nil {
-		c.max = v
-	}
-	if v, err := strconv.Atoi(os.Getenv("NEBULA_CONNSOCK_RUN")); err == nil && v > 0 {
-		c.run = v
-	}
-	if v, err := time.ParseDuration(os.Getenv("NEBULA_CONNSOCK_WINDOW")); err == nil && v > 0 {
-		c.window = v
-	}
-	if v, err := time.ParseDuration(os.Getenv("NEBULA_CONNSOCK_IDLE")); err == nil && v > 0 {
-		c.idle = v
-	}
-	if v, err := time.ParseDuration(os.Getenv("NEBULA_CONNSOCK_OPEN_EVERY")); err == nil && v > 0 {
-		c.openEvery = v
-	}
-	return c
 }
 
 // connSockGroups holds the connSocks that the listen routines bound to one address share, so the limits, the
@@ -182,7 +205,7 @@ func joinConnSocks(u *StdConn, la netip.AddrPort, s Settings) *connSocks {
 		cs.mu.Unlock()
 		return cs
 	}
-	cs := &connSocks{cfg: connSockConfigFromEnv(), key: la, members: []*StdConn{u}, clock: monoNow, sleep: time.Sleep}
+	cs := &connSocks{cfg: defaultConnSockConfig(), key: la, members: []*StdConn{u}, clock: monoNow, sleep: time.Sleep}
 	if cs.cfg.max > 0 && !u.listenHost.IsUnspecified() && !s.Multi {
 		// A connected socket on a specific listen.host binds the listener's own address, which xnu allows only when
 		// both sockets set SO_REUSEPORT, and a listener with it lets another uid bind a dual-stack wildcard on the
@@ -433,7 +456,7 @@ func (u *StdConn) connSockRun(p *connSockPeer, dst netip.AddrPort, bufs [][]byte
 // one out.
 func (u *StdConn) maybeOpenConnSock(p *connSockPeer, dst netip.AddrPort, n int) *connSock {
 	cs := u.socks
-	if n <= 0 || u.reader.Load() == nil || int(cs.reserved.Load()) >= cs.cfg.max || !p.busy(cs.clock(), n, &cs.cfg) {
+	if n <= 0 || !u.listening.Load() || int(cs.reserved.Load()) >= cs.cfg.max || !p.busy(cs.clock(), n, &cs.cfg) {
 		return nil
 	}
 	cs.mu.Lock()
@@ -527,7 +550,7 @@ func (u *StdConn) dialConnSock(p *connSockPeer, dst netip.AddrPort) (*connSock, 
 		_ = uc.Close()
 		return nil, err
 	}
-	s := &connSock{dst: dst, peer: p, conn: uc, rc: rc, sys: writeFd}
+	s := &connSock{dst: dst, peer: p, conn: uc, rc: rc, sys: sendFd}
 	s.used.Store(u.socks.clock())
 	return s, nil
 }
@@ -677,7 +700,7 @@ func connSockDead(errno syscall.Errno) bool {
 // the 09-25 probes.
 const enobufsWait = 50 * time.Microsecond
 
-// connSockWrite writes bufs on s, one datagram per write. A full socket buffer parks the caller in the netpoller
+// connSockWrite writes bufs on s, up to msgx.Batch datagrams per sendmsg_x. A full socket buffer parks the caller in the netpoller
 // until the socket is writable, and a flow-controlled interface makes it wait out ENOBUFS, so a busy link slows
 // the tun reader instead of dropping. Once the connected socket has waited cfg.enobufsMax without a send going
 // through, either one drops the datagram instead, and a dropped datagram counts as sent, as the listener's
@@ -691,15 +714,30 @@ func (u *StdConn) connSockWrite(s *connSock, bufs [][]byte) (sent int, errno sys
 			s.used.Store(cs.clock())
 		}
 	}()
+	probe := false
 	for sent < len(bufs) {
-		err := s.try(bufs[sent], false)
+		n := 1
+		if !noSendX.Load() && !probe {
+			n = len(bufs) - sent
+		}
+		k, err := s.try(bufs[sent:sent+n], false)
+		if errno, ok := err.(syscall.Errno); ok && n > 1 && msgx.Unsupported(errno) {
+			// EPERM may be the datagram's own fault, so sendmsg_x is off for good only once a plain write of the same
+			// datagram goes through.
+			probe = true
+			continue
+		}
+		if probe && err == nil && noSendX.CompareAndSwap(false, true) {
+			u.l.Warn("sendmsg_x unavailable, writing one datagram per syscall")
+		}
+		probe = false
 		if err == syscall.EAGAIN || err == os.ErrDeadlineExceeded {
 			// os.ErrDeadlineExceeded here is another writer's parked deadline, passed but not yet cleared.
-			err = u.parkedWrite(s, bufs[sent])
+			k, err = u.parkedWrite(s, bufs[sent:sent+1])
 		}
 		switch err {
 		case nil:
-			sent++
+			sent += k
 			if s.stallAt.Load() != 0 {
 				s.stallAt.Store(0)
 				s.dropping.Store(false)
@@ -731,23 +769,23 @@ func (u *StdConn) connSockWrite(s *connSock, bufs [][]byte) (sent int, errno sys
 // parkedWrite writes b after EAGAIN, parked in the netpoller for what is left of s's stall budget, and returns
 // errStallSpent once none is. golang/go#73919: a darwin UDP write parked on EAGAIN can wait forever for a
 // writability event that never comes, so the wait always has a deadline.
-func (u *StdConn) parkedWrite(s *connSock, b []byte) error {
+func (u *StdConn) parkedWrite(s *connSock, b [][]byte) (int, error) {
 	cs := u.socks
 	s.parkMu.Lock()
 	defer s.parkMu.Unlock()
 	left := cs.cfg.enobufsMax - s.stalledFor(cs.clock())
 	if left <= 0 {
-		return errStallSpent
+		return 0, errStallSpent
 	}
 	if err := s.conn.SetWriteDeadline(time.Now().Add(left)); err != nil {
-		return net.ErrClosed
+		return 0, net.ErrClosed
 	}
-	err := s.try(b, true)
+	n, err := s.try(b, true)
 	_ = s.conn.SetWriteDeadline(time.Time{})
 	if err == os.ErrDeadlineExceeded {
-		return errStallSpent
+		return 0, errStallSpent
 	}
-	return err
+	return n, err
 }
 
 // dropStalled logs the first datagram a stall drops.
@@ -772,14 +810,13 @@ func (s *connSock) stalledFor(now int64) time.Duration {
 	return time.Duration(now - at)
 }
 
-// readConnSock delivers a connected socket's datagrams through the listener's reader, serialized with ListenOut,
-// until the connected socket is closed. Any receive error closes it: a connected socket reports its peer's
-// unreachables here, and retrying an unexpected error could spin.
+// readConnSock hands a connected socket's batches to ListenOut until the connected socket is closed. Any receive
+// error closes it: a connected socket reports its peer's unreachables here, and retrying an unexpected error could
+// spin.
 func (u *StdConn) readConnSock(s *connSock) {
-	rd := u.reader.Load()
-	buf := make([]byte, MTU)
+	r := u.newBatchReader(s.conn, s.rc)
 	for {
-		n, from, err := s.conn.ReadFromUDPAddrPort(buf)
+		b, err := u.read(r)
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				return
@@ -795,9 +832,8 @@ func (u *StdConn) readConnSock(s *connSock) {
 			return
 		}
 		s.used.Store(u.socks.clock())
-		u.readMu.Lock()
-		rd.r(netip.AddrPortFrom(from.Addr().Unmap(), from.Port()), buf[:n:n])
-		rd.flush()
-		u.readMu.Unlock()
+		if !u.deliver(b) {
+			return
+		}
 	}
 }

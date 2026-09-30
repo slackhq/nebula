@@ -10,19 +10,10 @@ import (
 	"time"
 )
 
-// benchConnSocks opens a wildcard listener with ListenOut running, with the connected socket knobs pinned to
-// their defaults and then cfg applied, and a loopback peer that never reads, so its sends cost only the sender.
+// benchConnSocks opens a wildcard listener with ListenOut running and cfg applied, and a loopback peer that never
+// reads, so its sends cost only the sender.
 func benchConnSocks(b *testing.B, s Settings, cfg func(*connSockConfig)) (*StdConn, netip.AddrPort) {
 	b.Helper()
-	for k, v := range map[string]string{
-		"NEBULA_CONNSOCKS":           "8",
-		"NEBULA_CONNSOCK_RUN":        "64",
-		"NEBULA_CONNSOCK_WINDOW":     "1s",
-		"NEBULA_CONNSOCK_IDLE":       "30s",
-		"NEBULA_CONNSOCK_OPEN_EVERY": "1s",
-	} {
-		b.Setenv(k, v)
-	}
 	c, err := NewListener(slog.New(slog.DiscardHandler), s)
 	if err != nil {
 		b.Fatal(err)
@@ -33,7 +24,7 @@ func benchConnSocks(b *testing.B, s Settings, cfg func(*connSockConfig)) (*StdCo
 		cfg(&u.socks.cfg)
 	}
 	go func() { _ = u.ListenOut(func(netip.AddrPort, []byte) {}, func() {}) }()
-	for u.reader.Load() == nil {
+	for !u.listening.Load() {
 		time.Sleep(time.Millisecond)
 	}
 	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
