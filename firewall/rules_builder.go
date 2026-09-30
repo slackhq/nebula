@@ -29,16 +29,6 @@ type RulesBuilder struct {
 	l *slog.Logger
 }
 
-// Rules are the Tables built for each direction, with hashes of the rules they were built from
-type Rules struct {
-	In, Out *Table
-
-	// Hash is a sha256 of the rules, HashFNV is an FNV-1a of them for use as a metric value.
-	// Rule sets with the same rules have the same hashes.
-	Hash    string
-	HashFNV uint32
-}
-
 // tableRules are one direction's rules, waiting to be built into a Table
 type tableRules struct {
 	anyRules []rule
@@ -140,13 +130,13 @@ func parseRule(startPort, endPort int32, groups []string, host, cidr, localCidr,
 	var err error
 	r.cidr, r.anyCIDR, err = parseCIDR(cidr)
 	if err != nil {
-		return rule{}, err
+		return rule{}, fmt.Errorf("cidr did not parse; %w", err)
 	}
 
 	var localCIDR netip.Prefix
 	localCIDR, r.anyLocalCIDR, err = parseCIDR(localCidr)
 	if err != nil {
-		return rule{}, err
+		return rule{}, fmt.Errorf("local_cidr did not parse; %w", err)
 	}
 	if localCIDR.IsValid() {
 		r.localCIDRs = []netip.Prefix{localCIDR}
@@ -186,19 +176,19 @@ func (tr *tableRules) build(defaultLocalAny bool, defaultLocalCIDRs []netip.Pref
 	}
 
 	t := &Table{}
-	for proto := range t.Protos {
+	for proto := range t.protos {
 		rules := tr.protoRules[proto]
 		if len(rules) == 0 {
-			t.Protos[proto] = anyProto
+			t.protos[proto] = anyProto
 			continue
 		}
 
 		pr := portRules{}
 		add(pr, tr.anyRules)
 		add(pr, rules)
-		t.Protos[proto] = pr
+		t.protos[proto] = pr
 	}
-	t.Protos[iputil.IPProtocolICMPv6] = t.Protos[iputil.IPProtocolICMP]
+	t.protos[iputil.IPProtocolICMPv6] = t.protos[iputil.IPProtocolICMP]
 
 	return t
 }
@@ -227,70 +217,45 @@ func (r rule) isAny() bool {
 
 func (pr portRules) add(r rule) {
 	for i := r.startPort; i <= r.endPort; i++ {
-		if _, ok := pr[i]; !ok {
-			pr[i] = &caRules{
-				CANames: make(map[string]*remoteRules),
-				CAShas:  make(map[string]*remoteRules),
-			}
+		cr := pr[i]
+		if cr == nil {
+			cr = &caRules{}
+			pr[i] = cr
 		}
-
-		pr[i].add(r)
+		cr.add(r)
 	}
 }
 
 func (cr *caRules) add(r rule) {
-	newRemoteRules := func() *remoteRules {
-		return &remoteRules{
-			Hosts:  make(map[string]*localRules),
-			Groups: make([]*groupsRule, 0),
-			CIDR:   new(bart.Table[*localRules]),
-		}
-	}
-
 	if r.caSha == "" && r.caName == "" {
 		if cr.Any == nil {
-			cr.Any = newRemoteRules()
+			cr.Any = &remoteRules{}
 		}
-
 		cr.Any.add(r)
 		return
 	}
 
 	if r.caSha != "" {
-		if _, ok := cr.CAShas[r.caSha]; !ok {
-			cr.CAShas[r.caSha] = newRemoteRules()
-		}
-		cr.CAShas[r.caSha].add(r)
+		getOrNew(&cr.CAShas, r.caSha).add(r)
 	}
 
 	if r.caName != "" {
-		if _, ok := cr.CANames[r.caName]; !ok {
-			cr.CANames[r.caName] = newRemoteRules()
-		}
-		cr.CANames[r.caName].add(r)
+		getOrNew(&cr.CANames, r.caName).add(r)
 	}
 }
 
 func (rr *remoteRules) add(r rule) {
-	newLocalRules := func() *localRules {
-		return &localRules{
-			LocalCIDR: new(bart.Lite),
-		}
-	}
-
 	if r.isAny() {
 		if rr.Any == nil {
-			rr.Any = newLocalRules()
+			rr.Any = &localRules{}
 		}
-
 		rr.Any.add(r)
 		return
 	}
 
 	if len(r.groups) > 0 {
-		lr := newLocalRules()
+		lr := &localRules{}
 		lr.add(r)
-
 		rr.Groups = append(rr.Groups, &groupsRule{
 			Groups:    r.groups,
 			LocalCIDR: lr,
@@ -298,21 +263,19 @@ func (rr *remoteRules) add(r rule) {
 	}
 
 	if r.host != "" {
-		lr := rr.Hosts[r.host]
-		if lr == nil {
-			lr = newLocalRules()
-		}
-		lr.add(r)
-		rr.Hosts[r.host] = lr
+		getOrNew(&rr.Hosts, r.host).add(r)
 	}
 
 	if r.cidr.IsValid() {
-		lr, _ := rr.CIDR.Get(r.cidr)
-		if lr == nil {
-			lr = newLocalRules()
+		if rr.CIDR == nil {
+			rr.CIDR = new(bart.Table[*localRules])
+		}
+		lr, ok := rr.CIDR.Get(r.cidr)
+		if !ok {
+			lr = &localRules{}
+			rr.CIDR.Insert(r.cidr, lr)
 		}
 		lr.add(r)
-		rr.CIDR.Insert(r.cidr, lr)
 	}
 }
 
@@ -322,7 +285,23 @@ func (lr *localRules) add(r rule) {
 		return
 	}
 
+	if lr.LocalCIDR == nil {
+		lr.LocalCIDR = new(bart.Lite)
+	}
 	for _, prefix := range r.localCIDRs {
 		lr.LocalCIDR.Insert(prefix)
 	}
+}
+
+// getOrNew returns m[k], adding a new value for k first when there isn't one. m is made if it's nil.
+func getOrNew[M ~map[K]*V, K comparable, V any](m *M, k K) *V {
+	if *m == nil {
+		*m = make(M)
+	}
+	v := (*m)[k]
+	if v == nil {
+		v = new(V)
+		(*m)[k] = v
+	}
+	return v
 }

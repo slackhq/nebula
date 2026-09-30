@@ -19,19 +19,19 @@ type ruleAdder interface {
 	AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, cidr, localCidr string, caName string, caSha string) error
 }
 
-// RulesFromConfig reads the inbound and outbound firewall rules from c
-func RulesFromConfig(l *slog.Logger, c *config.C) (*RulesBuilder, error) {
+// RulesFromConfig reads the inbound and outbound firewall rules from c and builds them, see RulesBuilder.Build
+func RulesFromConfig(l *slog.Logger, c *config.C, vpnNetworks, unsafeNetworks []netip.Prefix) (Rules, error) {
 	b := NewRulesBuilder(l)
 	b.defaultLocalCIDRAny = c.GetBool("firewall.default_local_cidr_any", false)
 
 	if err := addRulesFromConfig(l, false, c, b); err != nil {
-		return nil, err
+		return Rules{}, err
 	}
 	if err := addRulesFromConfig(l, true, c, b); err != nil {
-		return nil, err
+		return Rules{}, err
 	}
 
-	return b, nil
+	return b.Build(vpnNetworks, unsafeNetworks), nil
 }
 
 func addRulesFromConfig(l *slog.Logger, inbound bool, c *config.C, ra ruleAdder) error {
@@ -114,20 +114,6 @@ func addRulesFromConfig(l *slog.Logger, inbound bool, c *config.C, ra ruleAdder)
 			return fmt.Errorf("%s rule #%v; %s %s", table, i, errPort, err)
 		}
 
-		if r.Cidr != "" && r.Cidr != "any" {
-			_, err = netip.ParsePrefix(r.Cidr)
-			if err != nil {
-				return fmt.Errorf("%s rule #%v; cidr did not parse; %s", table, i, err)
-			}
-		}
-
-		if r.LocalCidr != "" && r.LocalCidr != "any" {
-			_, err = netip.ParsePrefix(r.LocalCidr)
-			if err != nil {
-				return fmt.Errorf("%s rule #%v; local_cidr did not parse; %s", table, i, err)
-			}
-		}
-
 		if warning := r.sanity(); warning != nil {
 			l.Warn("firewall rule sanity check",
 				"table", table,
@@ -138,7 +124,7 @@ func addRulesFromConfig(l *slog.Logger, inbound bool, c *config.C, ra ruleAdder)
 
 		err = ra.AddRule(inbound, proto, startPort, endPort, r.Groups, r.Host, r.Cidr, r.LocalCidr, r.CAName, r.CASha)
 		if err != nil {
-			return fmt.Errorf("%s rule #%v; `%s`", table, i, err)
+			return fmt.Errorf("%s rule #%v; %s", table, i, err)
 		}
 	}
 

@@ -31,8 +31,7 @@ type conn struct {
 type Firewall struct {
 	Conntrack *FirewallConntrack
 
-	InRules  *firewall.Table
-	OutRules *firewall.Table
+	rules firewall.Rules
 
 	InboundSendReject  bool
 	OutboundSendReject bool
@@ -52,9 +51,6 @@ type Firewall struct {
 	// unsafeNetworks is the list of unsafe networks issued to us in the certificate
 	unsafeNetworks []netip.Prefix
 
-	// ruleHash and ruleHashFNV identify the rules, see firewall.Rules
-	ruleHash     string
-	ruleHashFNV  uint32
 	rulesVersion uint16
 
 	incomingMetrics firewallMetrics
@@ -109,11 +105,13 @@ func NewFirewall(l *slog.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.Dur
 		routableNetworks.Insert(n)
 	}
 
-	fw := &Firewall{
+	return &Firewall{
 		Conntrack: &FirewallConntrack{
 			Conns:      make(map[firewall.Packet]*conn),
 			TimerWheel: NewTimerWheel[firewall.Packet](tmin, tmax),
 		},
+		// Nothing is allowed until there are rules
+		rules:            firewall.NewRulesBuilder(l).Build(assignedNetworks, unsafeNetworks),
 		TCPTimeout:       tcpTimeout,
 		UDPTimeout:       UDPTimeout,
 		DefaultTimeout:   defaultTimeout,
@@ -133,10 +131,6 @@ func NewFirewall(l *slog.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.Dur
 			droppedNoRule:     metrics.GetOrRegisterCounter("firewall.outgoing.dropped.no_rule", nil),
 		},
 	}
-
-	// Nothing is allowed until there are rules
-	fw.setRules(firewall.NewRulesBuilder(l))
-	return fw
 }
 
 func NewFirewallFromConfig(l *slog.Logger, cs *CertState, c *config.C) (*Firewall, error) {
@@ -180,30 +174,23 @@ func NewFirewallFromConfig(l *slog.Logger, cs *CertState, c *config.C) (*Firewal
 		fw.OutboundSendReject = false
 	}
 
-	rules, err := firewall.RulesFromConfig(l, c)
+	rules, err := firewall.RulesFromConfig(l, c, fw.assignedNetworks, fw.unsafeNetworks)
 	if err != nil {
 		return nil, err
 	}
-	fw.setRules(rules)
+	fw.rules = rules
 
 	return fw, nil
 }
 
-// setRules builds rules into InRules and OutRules
-func (f *Firewall) setRules(rb *firewall.RulesBuilder) {
-	rules := rb.Build(f.assignedNetworks, f.unsafeNetworks)
-	f.InRules, f.OutRules = rules.In, rules.Out
-	f.ruleHash, f.ruleHashFNV = rules.Hash, rules.HashFNV
-}
-
 // GetRuleHash returns a hash representation of all inbound and outbound rules
 func (f *Firewall) GetRuleHash() string {
-	return f.ruleHash
+	return f.rules.Hash
 }
 
 // GetRuleHashFNV returns a uint32 FNV-1 hash representation the rules, for use as a metric value
 func (f *Firewall) GetRuleHashFNV() uint32 {
-	return f.ruleHashFNV
+	return f.rules.HashFNV
 }
 
 // GetRuleHashes returns both the sha256 and FNV-1 hashes, suitable for logging
@@ -258,13 +245,7 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 		return nil
 	}
 
-	table := f.OutRules
-	if incoming {
-		table = f.InRules
-	}
-
-	// We now know which firewall table to check against
-	if !table.Match(&fp, incoming, h.ConnectionState.peerCert, caPool) {
+	if !f.rules.Match(&fp, incoming, h.ConnectionState.peerCert, caPool) {
 		f.metrics(incoming).droppedNoRule.Inc(1)
 		return ErrNoMatchingRule
 	}
@@ -324,13 +305,7 @@ func (f *Firewall) inConns(fp *firewall.Packet, h *HostInfo, caPool *cert.CAPool
 	if c.rulesVersion != f.rulesVersion {
 		// This conntrack entry was for an older rule set, validate
 		// it still passes with the current rule set
-		table := f.OutRules
-		if c.incoming {
-			table = f.InRules
-		}
-
-		// We now know which firewall table to check against
-		if !table.Match(fp, c.incoming, h.ConnectionState.peerCert, caPool) {
+		if !f.rules.Match(fp, c.incoming, h.ConnectionState.peerCert, caPool) {
 			if f.l.Enabled(context.Background(), slog.LevelDebug) {
 				h.logger(f.l).Debug("dropping old conntrack entry, does not match new ruleset",
 					"fwPacket", *fp,

@@ -3,7 +3,6 @@ package nebula
 import (
 	"bytes"
 	"log/slog"
-	"math"
 	"net/netip"
 	"testing"
 	"time"
@@ -26,8 +25,11 @@ func TestNewFirewall(t *testing.T) {
 	assert.NotNil(t, conntrack)
 	assert.NotNil(t, conntrack.Conns)
 	assert.NotNil(t, conntrack.TimerWheel)
-	assert.NotNil(t, fw.InRules)
-	assert.NotNil(t, fw.OutRules)
+	assert.NotNil(t, fw.rules.In)
+	assert.NotNil(t, fw.rules.Out)
+	// Nothing is allowed until there are rules
+	assert.False(t, fw.rules.Match(&firewall.Packet{Protocol: iputil.IPProtocolTCP}, true, nil, nil))
+	assert.False(t, fw.rules.Match(&firewall.Packet{Protocol: iputil.IPProtocolTCP}, false, nil, nil))
 	assert.Equal(t, time.Second, fw.TCPTimeout)
 	assert.Equal(t, time.Minute, fw.UDPTimeout)
 	assert.Equal(t, time.Hour, fw.DefaultTimeout)
@@ -63,185 +65,6 @@ func TestNewFirewall(t *testing.T) {
 	fw = NewFirewall(l, time.Minute, time.Second, time.Hour, c)
 	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
 	assert.Equal(t, 3602, conntrack.TimerWheel.wheelLen)
-}
-
-func TestFirewall_AddRule(t *testing.T) {
-	ob := &bytes.Buffer{}
-	l := test.NewLoggerWithOutput(ob)
-
-	c := &dummyCert{}
-	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
-	rb := firewall.NewRulesBuilder(l)
-	assert.NotNil(t, fw.InRules)
-	assert.NotNil(t, fw.OutRules)
-
-	ti, err := netip.ParsePrefix("1.2.3.4/32")
-	require.NoError(t, err)
-
-	ti6, err := netip.ParsePrefix("fd12::34/128")
-	require.NoError(t, err)
-
-	require.NoError(t, rb.AddRule(true, iputil.IPProtocolTCP, 1, 1, []string{}, "", "", "", "", ""))
-	fw.setRules(rb)
-	// An empty rule is any
-	assert.True(t, fw.InRules.Protos[iputil.IPProtocolTCP][1].Any.Any.Any)
-	assert.Empty(t, fw.InRules.Protos[iputil.IPProtocolTCP][1].Any.Groups)
-	assert.Empty(t, fw.InRules.Protos[iputil.IPProtocolTCP][1].Any.Hosts)
-
-	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
-	rb = firewall.NewRulesBuilder(l)
-	require.NoError(t, rb.AddRule(true, iputil.IPProtocolUDP, 1, 1, []string{"g1"}, "", "", "", "", ""))
-	fw.setRules(rb)
-	assert.Nil(t, fw.InRules.Protos[iputil.IPProtocolUDP][1].Any.Any)
-	assert.Contains(t, fw.InRules.Protos[iputil.IPProtocolUDP][1].Any.Groups[0].Groups, "g1")
-	assert.Empty(t, fw.InRules.Protos[iputil.IPProtocolUDP][1].Any.Hosts)
-
-	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
-	rb = firewall.NewRulesBuilder(l)
-	require.NoError(t, rb.AddRule(true, iputil.IPProtocolICMP, 1, 1, []string{}, "h1", "", "", "", ""))
-	require.NoError(t, rb.AddRule(true, iputil.IPProtocolICMPv6, 1, 1, []string{}, "h2", "", "", "", ""))
-	fw.setRules(rb)
-	//no matter what port is given for icmp, it should end up as "any"
-	assert.Nil(t, fw.InRules.Protos[iputil.IPProtocolICMP][firewall.PortAny].Any.Any)
-	assert.Empty(t, fw.InRules.Protos[iputil.IPProtocolICMP][firewall.PortAny].Any.Groups)
-	assert.Contains(t, fw.InRules.Protos[iputil.IPProtocolICMP][firewall.PortAny].Any.Hosts, "h1")
-
-	// ICMP and ICMPv6 share one set of rules
-	assert.Contains(t, fw.InRules.Protos[iputil.IPProtocolICMP][firewall.PortAny].Any.Hosts, "h2")
-	assert.Contains(t, fw.InRules.Protos[iputil.IPProtocolICMPv6][firewall.PortAny].Any.Hosts, "h1")
-
-	// Any other protocol number gets its own rules
-	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
-	rb = firewall.NewRulesBuilder(l)
-	require.NoError(t, rb.AddRule(true, 47, 0, 0, []string{"g1"}, "", "", "", "", "")) // GRE
-	fw.setRules(rb)
-	assert.Contains(t, fw.InRules.Protos[47][firewall.PortAny].Any.Groups[0].Groups, "g1")
-	assert.Nil(t, fw.InRules.Protos[iputil.IPProtocolTCP])
-
-	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
-	rb = firewall.NewRulesBuilder(l)
-	require.NoError(t, rb.AddRule(false, firewall.ProtoAny, 1, 1, []string{}, "", ti.String(), "", "", ""))
-	fw.setRules(rb)
-	assert.Nil(t, fw.OutRules.Protos[firewall.ProtoAny][1].Any.Any)
-	_, ok := fw.OutRules.Protos[firewall.ProtoAny][1].Any.CIDR.Get(ti)
-	assert.True(t, ok)
-
-	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
-	rb = firewall.NewRulesBuilder(l)
-	require.NoError(t, rb.AddRule(false, firewall.ProtoAny, 1, 1, []string{}, "", ti6.String(), "", "", ""))
-	fw.setRules(rb)
-	assert.Nil(t, fw.OutRules.Protos[firewall.ProtoAny][1].Any.Any)
-	_, ok = fw.OutRules.Protos[firewall.ProtoAny][1].Any.CIDR.Get(ti6)
-	assert.True(t, ok)
-
-	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
-	rb = firewall.NewRulesBuilder(l)
-	require.NoError(t, rb.AddRule(false, firewall.ProtoAny, 1, 1, []string{}, "", "", ti.String(), "", ""))
-	fw.setRules(rb)
-	assert.NotNil(t, fw.OutRules.Protos[firewall.ProtoAny][1].Any.Any)
-	ok = fw.OutRules.Protos[firewall.ProtoAny][1].Any.Any.LocalCIDR.Get(ti)
-	assert.True(t, ok)
-
-	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
-	rb = firewall.NewRulesBuilder(l)
-	require.NoError(t, rb.AddRule(false, firewall.ProtoAny, 1, 1, []string{}, "", "", ti6.String(), "", ""))
-	fw.setRules(rb)
-	assert.NotNil(t, fw.OutRules.Protos[firewall.ProtoAny][1].Any.Any)
-	ok = fw.OutRules.Protos[firewall.ProtoAny][1].Any.Any.LocalCIDR.Get(ti6)
-	assert.True(t, ok)
-
-	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
-	rb = firewall.NewRulesBuilder(l)
-	require.NoError(t, rb.AddRule(true, iputil.IPProtocolUDP, 1, 1, []string{"g1"}, "", "", "", "ca-name", ""))
-	fw.setRules(rb)
-	assert.Contains(t, fw.InRules.Protos[iputil.IPProtocolUDP][1].CANames, "ca-name")
-
-	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
-	rb = firewall.NewRulesBuilder(l)
-	require.NoError(t, rb.AddRule(true, iputil.IPProtocolUDP, 1, 1, []string{"g1"}, "", "", "", "", "ca-sha"))
-	fw.setRules(rb)
-	assert.Contains(t, fw.InRules.Protos[iputil.IPProtocolUDP][1].CAShas, "ca-sha")
-
-	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
-	rb = firewall.NewRulesBuilder(l)
-	require.NoError(t, rb.AddRule(false, firewall.ProtoAny, 0, 0, []string{}, "any", "", "", "", ""))
-	fw.setRules(rb)
-	assert.True(t, fw.OutRules.Protos[firewall.ProtoAny][0].Any.Any.Any)
-
-	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
-	rb = firewall.NewRulesBuilder(l)
-	anyIp, err := netip.ParsePrefix("0.0.0.0/0")
-	require.NoError(t, err)
-
-	require.NoError(t, rb.AddRule(false, firewall.ProtoAny, 0, 0, []string{}, "", anyIp.String(), "", "", ""))
-	fw.setRules(rb)
-	assert.Nil(t, fw.OutRules.Protos[firewall.ProtoAny][0].Any.Any)
-	table, ok := fw.OutRules.Protos[firewall.ProtoAny][0].Any.CIDR.Lookup(netip.MustParseAddr("1.1.1.1"))
-	assert.True(t, table.Any)
-	table, ok = fw.OutRules.Protos[firewall.ProtoAny][0].Any.CIDR.Lookup(netip.MustParseAddr("9::9"))
-	assert.False(t, ok)
-
-	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
-	rb = firewall.NewRulesBuilder(l)
-	anyIp6, err := netip.ParsePrefix("::/0")
-	require.NoError(t, err)
-
-	require.NoError(t, rb.AddRule(false, firewall.ProtoAny, 0, 0, []string{}, "", anyIp6.String(), "", "", ""))
-	fw.setRules(rb)
-	assert.Nil(t, fw.OutRules.Protos[firewall.ProtoAny][0].Any.Any)
-	table, ok = fw.OutRules.Protos[firewall.ProtoAny][0].Any.CIDR.Lookup(netip.MustParseAddr("9::9"))
-	assert.True(t, table.Any)
-	table, ok = fw.OutRules.Protos[firewall.ProtoAny][0].Any.CIDR.Lookup(netip.MustParseAddr("1.1.1.1"))
-	assert.False(t, ok)
-
-	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
-	rb = firewall.NewRulesBuilder(l)
-	require.NoError(t, rb.AddRule(false, firewall.ProtoAny, 0, 0, []string{}, "", "any", "", "", ""))
-	fw.setRules(rb)
-	assert.True(t, fw.OutRules.Protos[firewall.ProtoAny][0].Any.Any.Any)
-
-	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
-	rb = firewall.NewRulesBuilder(l)
-	require.NoError(t, rb.AddRule(false, firewall.ProtoAny, 0, 0, []string{}, "", "", anyIp.String(), "", ""))
-	fw.setRules(rb)
-	assert.False(t, fw.OutRules.Protos[firewall.ProtoAny][0].Any.Any.Any)
-	assert.True(t, fw.OutRules.Protos[firewall.ProtoAny][0].Any.Any.LocalCIDR.Lookup(netip.MustParseAddr("1.1.1.1")))
-	assert.False(t, fw.OutRules.Protos[firewall.ProtoAny][0].Any.Any.LocalCIDR.Lookup(netip.MustParseAddr("9::9")))
-
-	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
-	rb = firewall.NewRulesBuilder(l)
-	require.NoError(t, rb.AddRule(false, firewall.ProtoAny, 0, 0, []string{}, "", "", anyIp6.String(), "", ""))
-	fw.setRules(rb)
-	assert.False(t, fw.OutRules.Protos[firewall.ProtoAny][0].Any.Any.Any)
-	assert.True(t, fw.OutRules.Protos[firewall.ProtoAny][0].Any.Any.LocalCIDR.Lookup(netip.MustParseAddr("9::9")))
-	assert.False(t, fw.OutRules.Protos[firewall.ProtoAny][0].Any.Any.LocalCIDR.Lookup(netip.MustParseAddr("1.1.1.1")))
-
-	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
-	rb = firewall.NewRulesBuilder(l)
-	require.NoError(t, rb.AddRule(false, firewall.ProtoAny, 0, 0, []string{}, "", "", "any", "", ""))
-	fw.setRules(rb)
-	assert.True(t, fw.OutRules.Protos[firewall.ProtoAny][0].Any.Any.Any)
-
-	// Every protocol number is accepted
-	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
-	rb = firewall.NewRulesBuilder(l)
-	require.NoError(t, rb.AddRule(true, math.MaxUint8, 0, 0, []string{}, "", "", "", "", ""))
-	fw.setRules(rb)
-	assert.True(t, fw.InRules.Protos[math.MaxUint8][firewall.PortAny].Any.Any.Any)
-
-	// Test error conditions, a bad rule is reported when it's added
-	rb = firewall.NewRulesBuilder(l)
-	require.Error(t, rb.AddRule(true, firewall.ProtoAny, 10, 0, []string{}, "", "", "", "", ""))
-	require.Error(t, rb.AddRule(true, firewall.ProtoAny, 0, 0, []string{}, "", "junk", "", "", ""))
-	require.Error(t, rb.AddRule(true, firewall.ProtoAny, 0, 0, []string{}, "", "", "junk", "", ""))
-
-	// A new firewall allows nothing until its rules are set
-	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
-	rb = firewall.NewRulesBuilder(l)
-	require.NoError(t, rb.AddRule(true, firewall.ProtoAny, 0, 0, []string{"any"}, "", "", "", "", ""))
-	assert.Nil(t, fw.InRules.Protos[iputil.IPProtocolTCP])
-	fw.setRules(rb)
-	assert.NotNil(t, fw.InRules.Protos[iputil.IPProtocolTCP])
 }
 
 func TestFirewall_Drop(t *testing.T) {
@@ -1108,7 +931,6 @@ func TestFirewall_ProtocolRules(t *testing.T) {
 
 		require.NoError(t, fw.Drop(pkt(iputil.IPProtocolICMP), true, &h, cp, nil), "anyFirst %v", anyFirst)
 		require.NoError(t, fw.Drop(pkt(iputil.IPProtocolICMPv6), true, &h, cp, nil), "anyFirst %v", anyFirst)
-		assert.Len(t, fw.InRules.Protos[iputil.IPProtocolICMP][firewall.PortAny].Any.Groups, 2, "anyFirst %v", anyFirst)
 	}
 
 	// Protocols without rules of their own have no rules to check until there is a proto `any` rule to share
@@ -1116,7 +938,6 @@ func TestFirewall_ProtocolRules(t *testing.T) {
 	rb = firewall.NewRulesBuilder(l)
 	require.NoError(t, rb.AddRule(true, iputil.IPProtocolTCP, 22, 22, []string{"any"}, "", "", "", "", ""))
 	fw.setRules(rb)
-	assert.Nil(t, fw.InRules.Protos[47])
 	assert.Equal(t, ErrNoMatchingRule, fw.Drop(pkt(47), true, &h, cp, nil))
 
 	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
@@ -1633,6 +1454,11 @@ func TestFirewall_Drop_EnforceIPMatch(t *testing.T) {
 		tc.err = nil
 		tc.Test(t, fw) //should pass
 	})
+}
+
+// setRules builds rb for fw's networks and makes them its rules
+func (f *Firewall) setRules(rb *firewall.RulesBuilder) {
+	f.rules = rb.Build(f.assignedNetworks, f.unsafeNetworks)
 }
 
 func resetConntrack(fw *Firewall) {

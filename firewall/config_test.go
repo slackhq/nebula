@@ -224,11 +224,10 @@ func TestAddRulesFromConfig(t *testing.T) {
 	require.NoError(t, addRulesFromConfig(l, true, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: true, proto: ProtoAny, startPort: 1, endPort: 1, groups: nil, ip: "any", localIp: ""}, mf.lastCall)
 
-	// Test adding rule with junk cidr
+	// Test adding rule with junk cidr, which RulesBuilder rejects
 	conf = config.NewC(test.NewLogger())
-	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[string]any{"inbound": []any{map[string]any{"port": "1", "proto": "any", "cidr": "junk/junk"}}}
-	require.EqualError(t, addRulesFromConfig(l, true, conf, mf), "firewall.inbound rule #0; cidr did not parse; netip.ParsePrefix(\"junk/junk\"): ParseAddr(\"junk\"): unable to parse IP")
+	require.EqualError(t, addRulesFromConfig(l, true, conf, NewRulesBuilder(l)), "firewall.inbound rule #0; cidr did not parse; netip.ParsePrefix(\"junk/junk\"): ParseAddr(\"junk\"): unable to parse IP")
 
 	// Test adding rule with local_cidr ipv6
 	conf = config.NewC(test.NewLogger())
@@ -244,11 +243,10 @@ func TestAddRulesFromConfig(t *testing.T) {
 	require.NoError(t, addRulesFromConfig(l, true, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: true, proto: ProtoAny, startPort: 1, endPort: 1, groups: nil, localIp: "any"}, mf.lastCall)
 
-	// Test adding rule with junk local_cidr
+	// Test adding rule with junk local_cidr, which RulesBuilder rejects
 	conf = config.NewC(test.NewLogger())
-	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[string]any{"inbound": []any{map[string]any{"port": "1", "proto": "any", "local_cidr": "junk/junk"}}}
-	require.EqualError(t, addRulesFromConfig(l, true, conf, mf), "firewall.inbound rule #0; local_cidr did not parse; netip.ParsePrefix(\"junk/junk\"): ParseAddr(\"junk\"): unable to parse IP")
+	require.EqualError(t, addRulesFromConfig(l, true, conf, NewRulesBuilder(l)), "firewall.inbound rule #0; local_cidr did not parse; netip.ParsePrefix(\"junk/junk\"): ParseAddr(\"junk\"): unable to parse IP")
 
 	// Test adding rule with ca_sha
 	conf = config.NewC(test.NewLogger())
@@ -290,7 +288,63 @@ func TestAddRulesFromConfig(t *testing.T) {
 	mf = &mockFirewall{}
 	mf.nextCallReturn = errors.New("test error")
 	conf.Settings["firewall"] = map[string]any{"inbound": []any{map[string]any{"port": "1", "proto": "any", "host": "a"}}}
-	require.EqualError(t, addRulesFromConfig(l, true, conf, mf), "firewall.inbound rule #0; `test error`")
+	require.EqualError(t, addRulesFromConfig(l, true, conf, mf), "firewall.inbound rule #0; test error")
+}
+
+// TestRulesFromConfig_defaultLocalCIDR ensures rules without a local_cidr allow only the vpn networks when there are
+// unsafe networks, unless default_local_cidr_any is set, and that a rule's own local_cidr is kept either way
+func TestRulesFromConfig_defaultLocalCIDR(t *testing.T) {
+	vpnNetworks := []netip.Prefix{netip.MustParsePrefix("10.1.0.5/16")}
+	unsafeNetworks := []netip.Prefix{netip.MustParsePrefix("192.168.0.0/24")}
+	vpnAddr := netip.MustParseAddr("10.1.9.9")
+	unsafeAddr := netip.MustParseAddr("192.168.0.3")
+
+	allows := func(lr *localRules, addr netip.Addr) bool {
+		return lr.match(&Packet{LocalAddr: addr}, nil)
+	}
+
+	for _, tc := range []struct {
+		name                string
+		unsafeNetworks      []netip.Prefix
+		defaultLocalCIDRAny bool
+		wantUnsafe          bool
+	}{
+		{"no unsafe networks", nil, false, true},
+		{"unsafe networks", unsafeNetworks, false, false},
+		{"unsafe networks and default_local_cidr_any", unsafeNetworks, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conf := config.NewC(test.NewLogger())
+			conf.Settings["firewall"] = map[string]any{
+				"default_local_cidr_any": tc.defaultLocalCIDRAny,
+				"inbound": []any{
+					map[string]any{"port": "any", "proto": "any", "host": "any"},
+					map[string]any{"port": "22", "proto": "tcp", "host": "any"},
+					map[string]any{"port": "80", "proto": "tcp", "host": "any", "local_cidr": "192.168.0.0/24"},
+					map[string]any{"port": "443", "proto": "tcp", "host": "any", "local_cidr": "any"},
+				},
+			}
+			rules, err := RulesFromConfig(test.NewLogger(), conf, vpnNetworks, tc.unsafeNetworks)
+			require.NoError(t, err)
+
+			// The proto `any` rule, copied into a protocol with rules of its own and shared by one without
+			for _, proto := range []uint8{iputil.IPProtocolTCP, 47} {
+				lr := rules.In.protos[proto][PortAny].Any.Any
+				assert.True(t, allows(lr, vpnAddr), "proto %d", proto)
+				assert.Equal(t, tc.wantUnsafe, allows(lr, unsafeAddr), "proto %d", proto)
+			}
+
+			tcp := rules.In.protos[iputil.IPProtocolTCP]
+			assert.True(t, allows(tcp[22].Any.Any, vpnAddr))
+			assert.Equal(t, tc.wantUnsafe, allows(tcp[22].Any.Any, unsafeAddr))
+
+			assert.False(t, allows(tcp[80].Any.Any, vpnAddr))
+			assert.True(t, allows(tcp[80].Any.Any, unsafeAddr))
+
+			assert.True(t, allows(tcp[443].Any.Any, vpnAddr))
+			assert.True(t, allows(tcp[443].Any.Any, unsafeAddr))
+		})
+	}
 }
 
 func Test_convertRule(t *testing.T) {

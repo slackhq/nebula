@@ -8,21 +8,33 @@ import (
 	"github.com/slackhq/nebula/iputil"
 )
 
+// Rules are the Tables built for each direction, with hashes of the rules they were built from
+type Rules struct {
+	In, Out *Table
+
+	// Hash is a sha256 of the rules, HashFNV is an FNV-1a of them for use as a metric value.
+	// Rule sets with the same rules have the same hashes.
+	Hash    string
+	HashFNV uint32
+}
+
 // Table holds the rules for one direction, the evaluation order is:
 // Proto AND port AND (CA SHA or CA name) AND local CIDR AND (group OR groups OR name OR remote CIDR)
 // A Table doesn't change once built, see RulesBuilder.
 type Table struct {
-	// Protos holds the rules for each IP protocol number, so a packet is only checked against one set of rules.
+	// protos holds the rules for each IP protocol number, so a packet is only checked against one set of rules.
 	// A protocol with rules of its own also holds a copy of every proto `any` rule, the rest share the proto `any`
-	// rules, which are at Protos[ProtoAny]. nil when a protocol has no rules at all.
+	// rules, which are at protos[ProtoAny]. nil when a protocol has no rules at all.
 	// ICMP and ICMPv6 share one set of rules.
-	Protos [256]portRules
+	protos [256]portRules
 }
 
 // Even though ports are uint16, int32 maps are faster for lookup
 // Plus we can use `-1` for fragment rules
 type portRules map[int32]*caRules
 
+// caRules and the types below it only make their maps and tables once a rule needs them, a range of ports
+// gets a copy for every port so empty ones add up
 type caRules struct {
 	Any     *remoteRules
 	CANames map[string]*remoteRules
@@ -43,13 +55,23 @@ type groupsRule struct {
 }
 
 type localRules struct {
-	Any       bool
+	Any bool
+	// LocalCIDR is always set when Any isn't
 	LocalCIDR *bart.Lite
+}
+
+// Match reports whether a rule for the direction p is going allows it
+func (r *Rules) Match(p *Packet, incoming bool, c *cert.CachedCertificate, caPool *cert.CAPool) bool {
+	t := r.Out
+	if incoming {
+		t = r.In
+	}
+	return t.Match(p, incoming, c, caPool)
 }
 
 // Match reports whether a rule allows p
 func (t *Table) Match(p *Packet, incoming bool, c *cert.CachedCertificate, caPool *cert.CAPool) bool {
-	return t.Protos[p.Protocol].match(p, incoming, c, caPool)
+	return t.protos[p.Protocol].match(p, incoming, c, caPool)
 }
 
 func (pr portRules) match(p *Packet, incoming bool, c *cert.CachedCertificate, caPool *cert.CAPool) bool {
@@ -142,9 +164,11 @@ func (rr *remoteRules) match(p *Packet, c *cert.CachedCertificate) bool {
 		}
 	}
 
-	for _, v := range rr.CIDR.Supernets(netip.PrefixFrom(p.RemoteAddr, p.RemoteAddr.BitLen())) {
-		if v.match(p, c) {
-			return true
+	if rr.CIDR != nil {
+		for _, v := range rr.CIDR.Supernets(netip.PrefixFrom(p.RemoteAddr, p.RemoteAddr.BitLen())) {
+			if v.match(p, c) {
+				return true
+			}
 		}
 	}
 
