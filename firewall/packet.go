@@ -40,33 +40,53 @@ func (fp *Packet) Copy() *Packet {
 }
 
 func (fp Packet) MarshalJSON() ([]byte, error) {
-	var proto string
-	switch fp.Protocol {
-	case iputil.IPProtocolTCP:
-		proto = "tcp"
-	case iputil.IPProtocolICMP:
-		proto = "icmp"
-	case iputil.IPProtocolICMPv6:
-		proto = "icmpv6"
-	case iputil.IPProtocolUDP:
-		proto = "udp"
-	case iputil.IPProtocolUDPLite:
-		proto = "udplite"
-	case iputil.IPProtocolDCCP:
-		proto = "dccp"
-	case iputil.IPProtocolSCTP:
-		proto = "sctp"
-	default:
-		proto = fmt.Sprintf("unknown %v", fp.Protocol)
-	}
 	return json.Marshal(m{
 		"LocalAddr":  fp.LocalAddr.String(),
 		"RemoteAddr": fp.RemoteAddr.String(),
 		"LocalPort":  fp.LocalPort,
 		"RemotePort": fp.RemotePort,
-		"Protocol":   proto,
+		"Protocol":   protoName(fp.Protocol),
 		"Fragment":   fp.Fragment,
 	})
+}
+
+// protoNames are the protocol names that rules accept and packets report, and their numbers. Any other protocol
+// is given by number.
+var protoNames = []struct {
+	name  string
+	proto uint8
+}{
+	{"any", ProtoAny},
+	{"tcp", iputil.IPProtocolTCP},
+	{"udp", iputil.IPProtocolUDP},
+	{"udplite", iputil.IPProtocolUDPLite},
+	{"dccp", iputil.IPProtocolDCCP},
+	{"sctp", iputil.IPProtocolSCTP},
+	{"icmp", iputil.IPProtocolICMP},
+	{"icmpv6", iputil.IPProtocolICMPv6},
+}
+
+// protoByName returns the number of a protocol named in protoNames.
+func protoByName(name string) (uint8, bool) {
+	for _, p := range protoNames {
+		if p.name == name {
+			return p.proto, true
+		}
+	}
+	return 0, false
+}
+
+// protoName returns the name in protoNames of a packet's protocol, or "unknown" and its number. `any` is only
+// a rule's protocol, so a packet's protocol 0 is unknown.
+func protoName(proto uint8) string {
+	if proto != ProtoAny {
+		for _, p := range protoNames {
+			if p.proto == proto {
+				return p.name
+			}
+		}
+	}
+	return fmt.Sprintf("unknown %v", proto)
 }
 
 // ParsedPacket is a Packet plus the parse byproducts the RX path reuses

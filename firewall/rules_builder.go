@@ -43,7 +43,12 @@ func NewRulesBuilder(l *slog.Logger) *RulesBuilder {
 // AddRule adds a rule for incoming or outgoing traffic, on proto or on every protocol when proto is ProtoAny.
 // The rule is parsed now, so a bad rule is reported when it's added rather than when the Tables are built.
 func (b *RulesBuilder) AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, cidr, localCidr, caName string, caSha string) error {
-	if proto == iputil.IPProtocolICMP || proto == iputil.IPProtocolICMPv6 {
+	// ICMPv6 rules are ICMP rules, and a packet of either protocol is checked against both
+	if proto == iputil.IPProtocolICMPv6 {
+		proto = iputil.IPProtocolICMP
+	}
+
+	if proto == iputil.IPProtocolICMP {
 		//ICMP traffic doesn't have ports, so we always coerce to "any", even if a value is provided
 		if startPort != PortAny {
 			b.l.Warn("ignoring port specification for ICMP firewall rule", "startPort", startPort)
@@ -141,11 +146,8 @@ func parseRule(startPort, endPort int32, groups []string, host, cidr, localCidr,
 	return r, nil
 }
 
-// add keeps r for proto, or for every protocol when proto is ProtoAny. ICMPv6 rules are kept as ICMP rules.
+// add keeps r for proto, or for every protocol when proto is ProtoAny.
 func (tr *tableRules) add(proto uint8, r rule) {
-	if proto == iputil.IPProtocolICMPv6 {
-		proto = iputil.IPProtocolICMP
-	}
 	r.proto = proto
 	*tr = append(*tr, r)
 }
@@ -162,27 +164,23 @@ func (tr tableRules) build(defaultLocal []netip.Prefix) *Table {
 		}
 	}
 
-	// Every protocol starts out sharing an index of the proto `any` rules, including protos[ProtoAny]. There is
-	// one for protocols with ports and one for protocols without.
+	// A protocol with rules of its own gets an index of those rules plus the proto `any` rules, so a packet
+	// checks a single index. The other protocols share an index of the proto `any` rules, one for protocols with
+	// ports and one for protocols without.
 	anyPorts := newProtoIndex(true, t.rules, ProtoAny)
 	anyNoPorts := newProtoIndex(false, t.rules, ProtoAny)
 	for proto := range t.protos {
-		if hasPorts(uint8(proto)) {
+		switch {
+		case hasOwn[proto]:
+			t.protos[proto] = newProtoIndex(iputil.HasPorts(uint8(proto)), t.rules, uint8(proto))
+		case iputil.HasPorts(uint8(proto)):
 			t.protos[proto] = anyPorts
-		} else {
+		default:
 			t.protos[proto] = anyNoPorts
 		}
 	}
 
-	// A protocol with rules of its own gets an index of those rules plus the proto `any` rules, so a packet
-	// checks a single index.
-	for proto, own := range hasOwn {
-		if own {
-			t.protos[proto] = newProtoIndex(hasPorts(uint8(proto)), t.rules, uint8(proto))
-		}
-	}
-
-	// ICMP and ICMPv6 share one set of rules; add keeps them together under ICMP.
+	// ICMPv6 rules are ICMP rules, see AddRule, so ICMPv6 packets are checked against the ICMP index
 	t.protos[iputil.IPProtocolICMPv6] = t.protos[iputil.IPProtocolICMP]
 
 	return t

@@ -4,7 +4,6 @@ import (
 	"net/netip"
 
 	"github.com/slackhq/nebula/cert"
-	"github.com/slackhq/nebula/iputil"
 )
 
 // Rules are the Tables built for each direction, with hashes of the rules they were built from
@@ -35,7 +34,7 @@ type Table struct {
 
 // protoIndex holds the rules that can apply to one protocol, in a set for each kind of packet.
 type protoIndex struct {
-	// hasPorts reports whether the protocol has ports; see the hasPorts function.
+	// hasPorts reports whether the protocol has ports; see iputil.HasPorts.
 	hasPorts bool
 	// byPort has a set for every port number of a protocol with ports. Port 0 is covered only by port `any`
 	// rules, since a range starts at 1.
@@ -44,16 +43,6 @@ type protoIndex struct {
 	packet ruleSet
 	// fragment holds the rules for a fragment of any protocol: the port `any` and port `fragment` rules.
 	fragment ruleSet
-}
-
-// hasPorts reports whether Nebula parses port numbers from packets of proto. parseV4 and parseV6 in outside.go
-// must agree. A rule with a port or a port range only applies to these protocols.
-func hasPorts(proto uint8) bool {
-	switch proto {
-	case iputil.IPProtocolTCP, iputil.IPProtocolUDP, iputil.IPProtocolUDPLite, iputil.IPProtocolDCCP, iputil.IPProtocolSCTP:
-		return true
-	}
-	return false
 }
 
 // whichMatch returns the set of rules whose proto and port clauses allow p.

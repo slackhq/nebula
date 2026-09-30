@@ -39,6 +39,16 @@ const (
 	ICMPv6TypeEchoReply   = 129
 )
 
+// HasPorts reports whether packets of proto carry port numbers that the packet parsers read: TCP, UDP, UDPLite,
+// DCCP, and SCTP. Firewall rules with a port or a port range only apply to these protocols.
+func HasPorts(proto uint8) bool {
+	switch proto {
+	case IPProtocolTCP, IPProtocolUDP, IPProtocolUDPLite, IPProtocolDCCP, IPProtocolSCTP:
+		return true
+	}
+	return false
+}
+
 func CreateRejectPacket(packet []byte, out []byte) []byte {
 	if len(packet) < 1 {
 		return nil

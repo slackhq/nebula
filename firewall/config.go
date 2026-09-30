@@ -75,23 +75,8 @@ func addRulesFromConfig(l *slog.Logger, inbound bool, c *config.C, ra ruleAdder)
 			sPort = r.Port
 		}
 
-		var proto uint8
-		switch r.Proto {
-		case "any":
-			proto = ProtoAny
-		case "tcp":
-			proto = iputil.IPProtocolTCP
-		case "udp":
-			proto = iputil.IPProtocolUDP
-		case "udplite":
-			proto = iputil.IPProtocolUDPLite
-		case "dccp":
-			proto = iputil.IPProtocolDCCP
-		case "sctp":
-			proto = iputil.IPProtocolSCTP
-		case "icmp":
-			proto = iputil.IPProtocolICMP
-		default:
+		proto, ok := protoByName(r.Proto)
+		if !ok {
 			// Any other protocol by number. 0 is reserved for `any`.
 			n, perr := strconv.ParseUint(r.Proto, 10, 8)
 			if perr != nil || n == 0 {
@@ -99,9 +84,13 @@ func addRulesFromConfig(l *slog.Logger, inbound bool, c *config.C, ra ruleAdder)
 			}
 			proto = uint8(n)
 		}
+		// ICMPv6 rules are ICMP rules, see RulesBuilder.AddRule
+		if proto == iputil.IPProtocolICMPv6 {
+			proto = iputil.IPProtocolICMP
+		}
 
 		var startPort, endPort int32
-		if proto == iputil.IPProtocolICMP || proto == iputil.IPProtocolICMPv6 {
+		if proto == iputil.IPProtocolICMP {
 			startPort = PortAny
 			endPort = PortAny
 			if sPort != "" {

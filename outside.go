@@ -368,8 +368,8 @@ func parseV6(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 		return nil
 	}
 
-	switch proto {
-	case iputil.IPProtocolICMPv6:
+	switch {
+	case proto == iputil.IPProtocolICMPv6:
 		// An ICMPv6 message is at least type, code and checksum, 4 bytes. Only echo carries more than we read.
 		if dataLen < offset+4 {
 			return ErrIPv6PacketTooShort
@@ -385,7 +385,7 @@ func parseV6(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 			fp.RemotePort = 0
 		}
 
-	case iputil.IPProtocolTCP, iputil.IPProtocolUDP, iputil.IPProtocolDCCP, iputil.IPProtocolSCTP, iputil.IPProtocolUDPLite:
+	case iputil.HasPorts(proto):
 		if dataLen < offset+4 {
 			return ErrIPv6PacketTooShort
 		}
@@ -459,12 +459,12 @@ func parseV4(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 		return nil
 	}
 
-	switch fp.Protocol {
-	case iputil.IPProtocolICMP: //note that orientation doesn't matter on ICMP
+	switch {
+	case fp.Protocol == iputil.IPProtocolICMP: //note that orientation doesn't matter on ICMP
 		fp.RemotePort = binary.BigEndian.Uint16(data[ihl+4 : ihl+6]) //identifier
 		fp.LocalPort = 0                                             //code would be uint16(data[ihl+1])
 
-	case iputil.IPProtocolTCP, iputil.IPProtocolUDP, iputil.IPProtocolDCCP, iputil.IPProtocolSCTP, iputil.IPProtocolUDPLite:
+	case iputil.HasPorts(fp.Protocol):
 		if incoming {
 			fp.RemotePort = binary.BigEndian.Uint16(data[ihl : ihl+2])  //src port
 			fp.LocalPort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4]) //dst port
