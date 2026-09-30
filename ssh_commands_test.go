@@ -83,3 +83,49 @@ func TestKnownNamesAreTheRegisteredSet(t *testing.T) {
 
 	assert.ElementsMatch(t, commands.Known[:], got)
 }
+
+// TestLocalSocketSurface pins which of nebula's commands the always-on local socket
+// serves. Commands are served by default, so this test is what turns "somebody forgot to
+// think about it" into a visible decision: adding a command fails here until the lists
+// below say where it belongs.
+func TestLocalSocketSurface(t *testing.T) {
+	reg := registeredCommands(t)
+
+	var served, withheld []commands.Name
+	for _, c := range reg.All() {
+		if c.ForProfiling {
+			withheld = append(withheld, c.Name)
+		} else {
+			served = append(served, c.Name)
+		}
+	}
+
+	// The profiling commands stay off this surface and remain one workflow on the ssh
+	// debug server, where sshd.sandbox_dir governs where their output lands.
+	assert.ElementsMatch(t, []commands.Name{
+		commands.StartCPUProfile,
+		commands.StopCPUProfile,
+		commands.SaveHeapProfile,
+		commands.MutexProfileFraction,
+		commands.SaveMutexProfile,
+	}, withheld)
+
+	assert.ElementsMatch(t, []commands.Name{
+		commands.Help,
+		commands.ListHostmap,
+		commands.ListPendingHostmap,
+		commands.ListLighthouseAddrmap,
+		commands.PrintCert,
+		commands.PrintTunnel,
+		commands.PrintRelays,
+		commands.DeviceInfo,
+		commands.Version,
+		commands.QueryLighthouse,
+		commands.Reload,
+		commands.LogLevel,
+		commands.LogFormat,
+		commands.ChangeRemote,
+		commands.CloseTunnel,
+		commands.CreateTunnel,
+	}, served)
+}

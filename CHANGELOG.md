@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `nebula ctl <command>` provides access to all of the ssh client commands except those related to profiling.
+  It is built into both the `nebula` and `nebula-service` binaries, and a bare argument that is not `ctl`,
+  whether first or after the daemon's flags, is reported as a mistyped subcommand rather than ignored, which
+  used to start a second daemon. Access is via a unix domain socket everywhere except windows, which uses a
+  named pipe, and is limited to the nebula user by default. `nebula ctl` talks to the socket named with
+  `-socket`, or the one implied by the config named with `-config` (or found next to the executable); both
+  flags may come before or after the command, and `nebula -config <path> ctl <command>` carries the daemon's
+  config over. It never searches for a socket, and it
+  refuses a socket owned by anyone else, so a daemon run by a service account, such as a systemd service
+  with `User=` and `RuntimeDirectory=nebula`, is reached by running `nebula ctl` as that account. The socket
+  lives under `/var/run/nebula` for root or a service account, else under the login session's runtime
+  directory; it is never derived under `/tmp` or any other directory other users can write to, and a daemon
+  with neither gets no socket and a log line saying which to add. The optional `local_api.control.socket`
+  config key overrides the endpoint location, and `nebula ctl` honours it when it reads the same config. On
+  windows the pipe is created under `\\.\pipe\ProtectedPrefix\Administrators\`, where only administrators
+  and SYSTEM may create names, so an ordinary user cannot put something there ahead of the daemon; a daemon
+  that is not an administrator says so and names the fix. `nebula ctl` also reads the owner of the pipe it
+  connected to before sending anything and refuses one that is not its own account, SYSTEM, Administrators or
+  a service account, which is what protects an override outside that namespace; the daemon refuses to serve
+  a name another process already holds and logs that as an error.
+
 ### Fixed
 
 - `create-tunnel -address <ip:port>` panicked on a nil RemoteList and, over the ssh debug server, took nebula

@@ -125,6 +125,7 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 	reg.Register(&commands.Command{
 		Name:             commands.StartCPUProfile,
 		ShortDescription: "Starts a cpu profile and write output to the provided file, ex: `cpu-profile.pb.gz`",
+		ForProfiling:     true,
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			return sshStartCpuProfile(sandboxDir, fs, a, w)
 		},
@@ -133,6 +134,7 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 	reg.Register(&commands.Command{
 		Name:             commands.StopCPUProfile,
 		ShortDescription: "Stops a cpu profile and writes output to the previously provided file",
+		ForProfiling:     true,
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			pprof.StopCPUProfile()
 			return w.WriteLine("If a CPU profile was running it is now stopped")
@@ -142,6 +144,7 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 	reg.Register(&commands.Command{
 		Name:             commands.SaveHeapProfile,
 		ShortDescription: "Saves a heap profile to the provided path, ex: `heap-profile.pb.gz`",
+		ForProfiling:     true,
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			return sshGetHeapProfile(sandboxDir, fs, a, w)
 		},
@@ -150,12 +153,14 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 	reg.Register(&commands.Command{
 		Name:             commands.MutexProfileFraction,
 		ShortDescription: "Gets or sets runtime.SetMutexProfileFraction",
+		ForProfiling:     true,
 		Callback:         sshMutexProfileFraction,
 	})
 
 	reg.Register(&commands.Command{
 		Name:             commands.SaveMutexProfile,
 		ShortDescription: "Saves a mutex profile to the provided path, ex: `mutex-profile.pb.gz`",
+		ForProfiling:     true,
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			return sshGetMutexProfile(sandboxDir, fs, a, w)
 		},

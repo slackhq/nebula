@@ -8,7 +8,9 @@ import (
 	"strings"
 
 	"github.com/slackhq/nebula"
+	"github.com/slackhq/nebula/cmd/internal/ctl"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/localapi"
 	"github.com/slackhq/nebula/logging"
 	"github.com/slackhq/nebula/util"
 )
@@ -32,6 +34,11 @@ func init() {
 }
 
 func main() {
+	// commands are either `nebula ctl ...` or `nebula -<flag> ...`
+	if code, done := ctl.Subcommand(os.Args); done {
+		os.Exit(code)
+	}
+
 	serviceFlag := flag.String("service", "", "Control the system service.")
 	configPath := flag.String("config", "", "Path to either a file or directory to load configuration from")
 	configTest := flag.Bool("test", false, "Test the config and print the end result. Non zero exit indicates a faulty config")
@@ -39,6 +46,12 @@ func main() {
 	printUsage := flag.Bool("help", false, "Print command line usage")
 
 	flag.Parse()
+
+	// A word after the daemon's flags is `ctl` in the other place an operator puts it,
+	// or a mistyped subcommand, and either way not a daemon to start; see Trailing.
+	if code, done := ctl.Trailing(flag.Args(), *configPath); done {
+		os.Exit(code)
+	}
 
 	if *printVersion {
 		fmt.Printf("Version: %s\n", Build)
@@ -103,9 +116,17 @@ func main() {
 			os.Exit(1)
 		}
 
+		ctl := localapi.Wire(ctrl.Context(), l, c, ctrl.Commands(), *configPath)
+
 		go ctrl.ShutdownBlock()
 
-		if err := ctrl.Wait(); err != nil {
+		err := ctrl.Wait()
+
+		// os.Exit skips deferred calls, so the socket is removed here, before either exit
+		// below, rather than left to a deferred Stop that would never run.
+		ctl.Stop()
+
+		if err != nil {
 			l.Error("Nebula stopped due to fatal error", "error", err)
 			os.Exit(2)
 		}

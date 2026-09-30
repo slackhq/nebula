@@ -236,6 +236,44 @@ punchy:
   # Overriding this to "" is the same as "/" and will allow overwriting any path on the host.
   #sandbox_dir: /var/tmp/nebula-debug
 
+# Local APIs are the ways a process on this host can talk to a running nebula.
+#local_api:
+  # The control socket lets the user who ran nebula inspect and adjust it from
+  # `nebula ctl <command>`. It's on by default, and usually requires no configuration.
+  # The socket is created under /var/run/nebula when nebula runs as root or was handed
+  # that directory by a service manager (RuntimeDirectory=nebula under systemd), else
+  # under the login session's runtime directory. It is named after the config file, and
+  # only the user nebula runs as can connect to it; `nebula ctl` must run as that user.
+  # It is never created under /tmp or any other directory other users can write to; a
+  # daemon with no session and no runtime directory gets no socket, and says so in its
+  # log. On Windows it is a named pipe under \\.\pipe\ProtectedPrefix\Administrators\, which
+  # only administrators and SYSTEM may create under, and whose security descriptor admits
+  # only that account, SYSTEM and Administrators.
+  #control:
+    # You almost certainly do not need this. It overrides where the socket is created.
+    #
+    # The last directory in the path is created if it is missing, and removed again when
+    # the socket leaves it empty; everything above it must exist. A directory that was
+    # already there is used as it is: nothing about it is changed or checked, and the
+    # socket's own mode is what keeps other users out. Keep it out of directories other
+    # users can write to, since they could remove the socket.
+    #
+    # `nebula ctl` reads this key from the config it is pointed at, so it keeps working
+    # when it can read this file. Otherwise pass `nebula ctl -socket <path> ...`. That
+    # includes a reload that changes this key: `nebula ctl -config <this file> reload`
+    # would look for the socket at the new path while the daemon still serves the old
+    # one, so reload with SIGHUP, or `nebula ctl -socket <old path> reload`.
+    #
+    # On Windows this is a full pipe name, such as \\.\pipe\nebula-ctl. Any account can
+    # create a name outside \\.\pipe\ProtectedPrefix\Administrators\, so `nebula ctl` checks
+    # who owns the pipe it reached before sending anything.
+    #
+    # A relative path is taken from this file's directory, not from wherever nebula or
+    # `nebula ctl` happened to be started, so both resolve it to the same socket.
+    #
+    # This setting is reloadable. The socket moves to the new path on SIGHUP.
+    #socket: /var/run/nebula/ctl.sock
+
 # EXPERIMENTAL: relay support for networks that can't establish direct connections.
 relay:
   # Relays are a list of Nebula IP's that peers can use to relay packets to me.
