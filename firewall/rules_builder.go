@@ -4,40 +4,32 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"hash"
 	"hash/fnv"
-	"io"
 	"log/slog"
 	"math"
 	"net/netip"
 	"slices"
+	"strings"
 
 	"github.com/slackhq/nebula/iputil"
 )
 
 // RulesBuilder collects the inbound and outbound rules, Build turns them into a Table for each direction
 type RulesBuilder struct {
-	in, out tableRules
+	// in and out are each direction's rules in the order they were added
+	in, out []rule
 
 	// defaultLocalCIDRAny makes rules without a local cidr allow any local address, even with unsafe networks
 	defaultLocalCIDRAny bool
 
-	// ruleSHA and ruleFNV hash every rule as it's added, see Rules
-	ruleSHA hash.Hash
-	ruleFNV hash.Hash32
+	// ruleText describes every rule as it is added, one line each. Build hashes it; see Rules.
+	ruleText strings.Builder
 
 	l *slog.Logger
 }
 
-// tableRules are one direction's rules in the order they were added, waiting to be built into a Table
-type tableRules []rule
-
 func NewRulesBuilder(l *slog.Logger) *RulesBuilder {
-	return &RulesBuilder{
-		ruleSHA: sha256.New(),
-		ruleFNV: fnv.New32a(),
-		l:       l,
-	}
+	return &RulesBuilder{l: l}
 }
 
 // AddRule adds a rule for incoming or outgoing traffic, on proto or on every protocol when proto is ProtoAny.
@@ -57,19 +49,19 @@ func (b *RulesBuilder) AddRule(incoming bool, proto uint8, startPort int32, endP
 		endPort = PortAny
 	}
 
-	r, err := parseRule(startPort, endPort, groups, host, cidr, localCidr, caName, caSha)
+	r, err := parseRule(proto, startPort, endPort, groups, host, cidr, localCidr, caName, caSha)
 	if err != nil {
 		return err
 	}
 
 	if incoming {
-		b.in.add(proto, r)
+		b.in = append(b.in, r)
 	} else {
-		b.out.add(proto, r)
+		b.out = append(b.out, r)
 	}
 
 	// The rule hashes are of these lines, changing them changes every hash
-	fmt.Fprintf(io.MultiWriter(b.ruleSHA, b.ruleFNV),
+	fmt.Fprintf(&b.ruleText,
 		"incoming: %v, proto: %v, startPort: %v, endPort: %v, groups: %v, host: %v, ip: %v, localIp: %v, caName: %v, caSha: %s\n",
 		incoming, proto, startPort, endPort, groups, host, cidr, localCidr, caName, caSha,
 	)
@@ -94,15 +86,20 @@ func (b *RulesBuilder) Build(vpnNetworks, unsafeNetworks []netip.Prefix) Rules {
 		defaultLocal = append([]netip.Prefix{}, vpnNetworks...)
 	}
 
+	text := []byte(b.ruleText.String())
+	sha := sha256.Sum256(text)
+	h := fnv.New32a()
+	h.Write(text)
+
 	return Rules{
-		In:      b.in.build(defaultLocal),
-		Out:     b.out.build(defaultLocal),
-		Hash:    hex.EncodeToString(b.ruleSHA.Sum(nil)),
-		HashFNV: b.ruleFNV.Sum32(),
+		In:      buildTable(b.in, defaultLocal),
+		Out:     buildTable(b.out, defaultLocal),
+		Hash:    hex.EncodeToString(sha[:]),
+		HashFNV: h.Sum32(),
 	}
 }
 
-func parseRule(startPort, endPort int32, groups []string, host, cidr, localCidr, caName, caSha string) (rule, error) {
+func parseRule(proto uint8, startPort, endPort int32, groups []string, host, cidr, localCidr, caName, caSha string) (rule, error) {
 	if startPort > endPort {
 		return rule{}, fmt.Errorf("start port was lower than end port")
 	}
@@ -115,6 +112,7 @@ func parseRule(startPort, endPort int32, groups []string, host, cidr, localCidr,
 	}
 
 	r := rule{
+		proto:     proto,
 		startPort: startPort,
 		endPort:   endPort,
 		groups:    groups,
@@ -146,18 +144,12 @@ func parseRule(startPort, endPort int32, groups []string, host, cidr, localCidr,
 	return r, nil
 }
 
-// add keeps r for proto, or for every protocol when proto is ProtoAny.
-func (tr *tableRules) add(proto uint8, r rule) {
-	r.proto = proto
-	*tr = append(*tr, r)
-}
-
-// build turns the rules into a Table. Rules without a local cidr allow defaultLocal,
+// buildTable turns one direction's rules into a Table. Rules without a local cidr allow defaultLocal,
 // or any local address when defaultLocal is nil.
-func (tr tableRules) build(defaultLocal []netip.Prefix) *Table {
-	t := &Table{rules: make([]rule, len(tr))}
+func buildTable(rules []rule, defaultLocal []netip.Prefix) *Table {
+	t := &Table{rules: make([]rule, len(rules))}
 	var hasOwn [256]bool
-	for id, r := range tr {
+	for id, r := range rules {
 		t.rules[id] = r.withDefaultLocal(defaultLocal)
 		if r.proto != ProtoAny {
 			hasOwn[r.proto] = true

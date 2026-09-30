@@ -84,13 +84,10 @@ func addRulesFromConfig(l *slog.Logger, inbound bool, c *config.C, ra ruleAdder)
 			}
 			proto = uint8(n)
 		}
-		// ICMPv6 rules are ICMP rules, see RulesBuilder.AddRule
-		if proto == iputil.IPProtocolICMPv6 {
-			proto = iputil.IPProtocolICMP
-		}
-
 		var startPort, endPort int32
-		if proto == iputil.IPProtocolICMP {
+		if proto == iputil.IPProtocolICMP || proto == iputil.IPProtocolICMPv6 {
+			// RulesBuilder.AddRule coerces ICMP ports to `any` as well. This copy stays so that an ICMP rule's
+			// port is warned about rather than parsed, whatever it holds.
 			startPort = PortAny
 			endPort = PortAny
 			if sPort != "" {

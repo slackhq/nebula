@@ -170,13 +170,21 @@ func TestAddRulesFromConfig(t *testing.T) {
 		assert.Equal(t, addRuleCall{incoming: false, proto: 47, startPort: PortAny, endPort: PortAny, groups: nil, host: "a", ip: "", localIp: ""}, mf.lastCall, proto)
 	}
 
-	// Test ICMP and ICMPv6, by name and by number, still ignore ports. An ICMPv6 rule is added as an ICMP rule.
-	for _, proto := range []any{"icmp", "icmpv6", iputil.IPProtocolICMP, iputil.IPProtocolICMPv6} {
+	// Test ICMP and ICMPv6, by name and by number, still ignore ports
+	for _, tc := range []struct {
+		given any
+		want  uint8
+	}{
+		{"icmp", iputil.IPProtocolICMP},
+		{"icmpv6", iputil.IPProtocolICMPv6},
+		{iputil.IPProtocolICMP, iputil.IPProtocolICMP},
+		{iputil.IPProtocolICMPv6, iputil.IPProtocolICMPv6},
+	} {
 		conf = config.NewC(test.NewLogger())
 		mf = &mockFirewall{}
-		conf.Settings["firewall"] = map[string]any{"outbound": []any{map[string]any{"port": "1", "proto": proto, "host": "a"}}}
-		require.NoError(t, addRulesFromConfig(l, false, conf, mf), proto)
-		assert.Equal(t, addRuleCall{incoming: false, proto: iputil.IPProtocolICMP, startPort: PortAny, endPort: PortAny, groups: nil, host: "a", ip: "", localIp: ""}, mf.lastCall, proto)
+		conf.Settings["firewall"] = map[string]any{"outbound": []any{map[string]any{"port": "1", "proto": tc.given, "host": "a"}}}
+		require.NoError(t, addRulesFromConfig(l, false, conf, mf), tc.given)
+		assert.Equal(t, addRuleCall{incoming: false, proto: tc.want, startPort: PortAny, endPort: PortAny, groups: nil, host: "a", ip: "", localIp: ""}, mf.lastCall, tc.given)
 	}
 
 	// Test protocols that aren't a known name or a number from 1 to 255
