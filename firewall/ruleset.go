@@ -44,24 +44,6 @@ func (s ruleSets) at(i int) ruleSet {
 	return s.bits[i*s.setLen : (i+1)*s.setLen]
 }
 
-// any reports whether pred holds for any id in s. It tries the ids in ascending order and stops at the first
-// one for which pred holds.
-//
-// any walks the set the same way all does, but without a range-over-func iterator, whose state machine costs
-// about a nanosecond per call.
-func (s ruleSet) any(pred func(id int) bool) bool {
-	for i, ids := range s {
-		for ids != 0 {
-			id := i*8 + bits.TrailingZeros8(ids)
-			ids &= ids - 1 // Clear the lowest set bit, which is id's.
-			if pred(id) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // all returns an iterator over the ids in s, in ascending order.
 func (s ruleSet) all() iter.Seq[int] {
 	return func(yield func(int) bool) {

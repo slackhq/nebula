@@ -110,11 +110,15 @@ func (t *Table) Match(p *Packet, incoming bool, c *cert.CachedCertificate, caPoo
 		return false
 	}
 
-	// The index yields every rule whose proto and port clauses allow p. The packet is allowed when the
-	// remaining clauses of any of those rules allow it as well.
-	return proto.whichMatch(p, incoming).any(func(id int) bool {
-		return t.rules[id].match(p, c, caPool)
-	})
+	// The index yields every rule whose proto and port clauses allow p.
+	// The packet is allowed when the remaining clauses of any of those rules allow it as well.
+	for id := range proto.whichMatch(p, incoming).all() {
+		if t.rules[id].match(p, c, caPool) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // match reports whether r allows p from the peer with certificate c. The port clause is not checked here; the
