@@ -59,21 +59,29 @@ func TestRulesBuilder_AddRule(t *testing.T) {
 	require.NoError(t, rb.AddRule(false, ProtoAny, 1, 1, []string{}, "", ti.String(), "", "", ""))
 	rules = rb.Build(nil, nil)
 	assert.Nil(t, rules.Out.protos[ProtoAny][1].Any.Any)
-	_, ok := rules.Out.protos[ProtoAny][1].Any.CIDR.Get(ti)
-	assert.True(t, ok)
+	require.Len(t, rules.Out.protos[ProtoAny][1].Any.CIDR, 1)
+	assert.Equal(t, ti, rules.Out.protos[ProtoAny][1].Any.CIDR[0].Prefix)
 
 	rb = NewRulesBuilder(l)
 	require.NoError(t, rb.AddRule(false, ProtoAny, 1, 1, []string{}, "", ti6.String(), "", "", ""))
 	rules = rb.Build(nil, nil)
 	assert.Nil(t, rules.Out.protos[ProtoAny][1].Any.Any)
-	_, ok = rules.Out.protos[ProtoAny][1].Any.CIDR.Get(ti6)
-	assert.True(t, ok)
+	require.Len(t, rules.Out.protos[ProtoAny][1].Any.CIDR, 1)
+	assert.Equal(t, ti6, rules.Out.protos[ProtoAny][1].Any.CIDR[0].Prefix)
+
+	// The same cidr written two ways is one entry
+	rb = NewRulesBuilder(l)
+	require.NoError(t, rb.AddRule(false, ProtoAny, 1, 1, []string{}, "", "1.2.3.4/24", "", "", ""))
+	require.NoError(t, rb.AddRule(false, ProtoAny, 1, 1, []string{}, "", "1.2.3.0/24", "", "", ""))
+	rules = rb.Build(nil, nil)
+	require.Len(t, rules.Out.protos[ProtoAny][1].Any.CIDR, 1)
+	assert.Equal(t, netip.MustParsePrefix("1.2.3.0/24"), rules.Out.protos[ProtoAny][1].Any.CIDR[0].Prefix)
 
 	rb = NewRulesBuilder(l)
 	require.NoError(t, rb.AddRule(false, ProtoAny, 1, 1, []string{}, "", "", ti.String(), "", ""))
 	rules = rb.Build(nil, nil)
 	assert.NotNil(t, rules.Out.protos[ProtoAny][1].Any.Any)
-	ok = rules.Out.protos[ProtoAny][1].Any.Any.LocalCIDR.Get(ti)
+	ok := rules.Out.protos[ProtoAny][1].Any.Any.LocalCIDR.Get(ti)
 	assert.True(t, ok)
 
 	rb = NewRulesBuilder(l)
@@ -102,25 +110,23 @@ func TestRulesBuilder_AddRule(t *testing.T) {
 	anyIp, err := netip.ParsePrefix("0.0.0.0/0")
 	require.NoError(t, err)
 
+	// 0.0.0.0/0 is any IPv4 address, not any IPv6 address
 	require.NoError(t, rb.AddRule(false, ProtoAny, 0, 0, []string{}, "", anyIp.String(), "", "", ""))
 	rules = rb.Build(nil, nil)
 	assert.Nil(t, rules.Out.protos[ProtoAny][0].Any.Any)
-	table, ok := rules.Out.protos[ProtoAny][0].Any.CIDR.Lookup(netip.MustParseAddr("1.1.1.1"))
-	assert.True(t, table.Any)
-	table, ok = rules.Out.protos[ProtoAny][0].Any.CIDR.Lookup(netip.MustParseAddr("9::9"))
-	assert.False(t, ok)
+	assert.True(t, rules.Out.protos[ProtoAny][0].Any.match(&Packet{RemoteAddr: netip.MustParseAddr("1.1.1.1")}, nil))
+	assert.False(t, rules.Out.protos[ProtoAny][0].Any.match(&Packet{RemoteAddr: netip.MustParseAddr("9::9")}, nil))
 
 	rb = NewRulesBuilder(l)
 	anyIp6, err := netip.ParsePrefix("::/0")
 	require.NoError(t, err)
 
+	// ::/0 is any IPv6 address, not any IPv4 address
 	require.NoError(t, rb.AddRule(false, ProtoAny, 0, 0, []string{}, "", anyIp6.String(), "", "", ""))
 	rules = rb.Build(nil, nil)
 	assert.Nil(t, rules.Out.protos[ProtoAny][0].Any.Any)
-	table, ok = rules.Out.protos[ProtoAny][0].Any.CIDR.Lookup(netip.MustParseAddr("9::9"))
-	assert.True(t, table.Any)
-	table, ok = rules.Out.protos[ProtoAny][0].Any.CIDR.Lookup(netip.MustParseAddr("1.1.1.1"))
-	assert.False(t, ok)
+	assert.True(t, rules.Out.protos[ProtoAny][0].Any.match(&Packet{RemoteAddr: netip.MustParseAddr("9::9")}, nil))
+	assert.False(t, rules.Out.protos[ProtoAny][0].Any.match(&Packet{RemoteAddr: netip.MustParseAddr("1.1.1.1")}, nil))
 
 	rb = NewRulesBuilder(l)
 	require.NoError(t, rb.AddRule(false, ProtoAny, 0, 0, []string{}, "", "any", "", "", ""))

@@ -288,15 +288,13 @@ func (rr *remoteRules) add(r rule) {
 	}
 
 	if r.cidr.IsValid() {
-		if rr.CIDR == nil {
-			rr.CIDR = new(bart.Table[*localRules])
+		prefix := r.cidr.Masked()
+		i := slices.IndexFunc(rr.CIDR, func(cr cidrRule) bool { return cr.Prefix == prefix })
+		if i < 0 {
+			i = len(rr.CIDR)
+			rr.CIDR = append(rr.CIDR, cidrRule{Prefix: prefix, LocalCIDR: &localRules{}})
 		}
-		lr, ok := rr.CIDR.Get(r.cidr)
-		if !ok {
-			lr = &localRules{}
-			rr.CIDR.Insert(r.cidr, lr)
-		}
-		lr.add(r)
+		rr.CIDR[i].LocalCIDR.add(r)
 	}
 }
 

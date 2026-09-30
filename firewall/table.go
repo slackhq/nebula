@@ -46,11 +46,19 @@ type remoteRules struct {
 	Any    *localRules
 	Hosts  map[string]*localRules
 	Groups []*groupsRule
-	CIDR   *bart.Table[*localRules]
+	// CIDR is checked with Prefix.Contains, so 0.0.0.0/0 allows any IPv4 address and ::/0 any IPv6 address,
+	// neither allows the other family
+	CIDR []cidrRule
 }
 
 type groupsRule struct {
 	Groups    []string
+	LocalCIDR *localRules
+}
+
+type cidrRule struct {
+	// Prefix is masked, so a cidr written two ways is one cidrRule
+	Prefix    netip.Prefix
 	LocalCIDR *localRules
 }
 
@@ -164,11 +172,9 @@ func (rr *remoteRules) match(p *Packet, c *cert.CachedCertificate) bool {
 		}
 	}
 
-	if rr.CIDR != nil {
-		for _, v := range rr.CIDR.Supernets(netip.PrefixFrom(p.RemoteAddr, p.RemoteAddr.BitLen())) {
-			if v.match(p, c) {
-				return true
-			}
+	for i := range rr.CIDR {
+		if rr.CIDR[i].Prefix.Contains(p.RemoteAddr) && rr.CIDR[i].LocalCIDR.match(p, c) {
+			return true
 		}
 	}
 

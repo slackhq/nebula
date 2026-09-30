@@ -389,7 +389,35 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 			ft.Match(&firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 10}, true, c, cp)
 		}
 	})
+
+	// The port 10 rules have a cidr, this cert fails their group and host so only the cidr can pass them
+	cidrCert := &cert.CachedCertificate{
+		Certificate:    &dummyCert{name: "nope"},
+		InvertedGroups: map[string]struct{}{"nope": {}},
+	}
+	for _, tc := range []struct {
+		name string
+		addr netip.Addr
+		want bool
+	}{
+		{"pass on cidr", pfix.Addr(), true},
+		{"pass on cidr6", pfix6.Addr(), true},
+		{"pass proto, port, fail group and name, fail on cidr", netip.MustParseAddr("9.254.254.245"), false},
+		{"pass proto, port, fail group and name, fail on cidr6", netip.MustParseAddr("fd99::99"), false},
+	} {
+		p := &firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: 10, RemoteAddr: tc.addr}
+		b.Run(tc.name, func(b *testing.B) {
+			if ft.Match(p, true, cidrCert, cp) != tc.want {
+				b.Fatal("wrong verdict")
+			}
+			for b.Loop() {
+				benchMatchSink = ft.Match(p, true, cidrCert, cp)
+			}
+		})
+	}
 }
+
+var benchMatchSink bool
 
 func TestFirewall_Drop2(t *testing.T) {
 	ob := &bytes.Buffer{}
