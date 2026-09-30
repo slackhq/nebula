@@ -830,7 +830,11 @@ func TestLighthouse_QueryServerDoesNotBlock(t *testing.T) {
 	t.Cleanup(func() { close(w.release) })
 
 	lh.QueryServer(netip.MustParseAddr("10.128.0.10"))
-	<-w.held
+	select {
+	case <-w.held:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the query worker never took the first query")
+	}
 	dropped := lh.queryDropped.Count()
 	done := make(chan struct{})
 	go func() {
