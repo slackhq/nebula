@@ -802,28 +802,155 @@ func (t *tun) Name() string {
 }
 
 func (t *tun) Queues(int) ([]tio.Queue, error) {
-	t.raisePendingPackets()
-	return []tio.Queue{&tunQueue{t: t, buf: make([]byte, tunReadArena)}}, nil
+	return []tio.Queue{newTunQueue(t)}, nil
 }
 
 // tunReadBatch is the most packets one tunQueue.Read returns.
-const tunReadBatch = 64
+const tunReadBatch = msgx.Batch
 
-// tunReadArena is tunQueue's receive buffer. Draining stops once less than defaultBatchBufSize of it is left, so
-// every readv has room for the largest packet utun can return at any device MTU.
-const tunReadArena = 4 * defaultBatchBufSize
+// tunRecvXSlot is each recvmsg_x entry's packet buffer. recvmsg_x lays its buffers out before it knows the packet
+// sizes, so each gets room for the largest IP packet; the kernel only touches what it writes.
+const tunRecvXSlot = defaultBatchBufSize
 
-// tunQueue is the darwin tun's Queue. Read drains every packet already queued on the utun, up to tunReadBatch, so
-// the caller encrypts and sends them as one batch rather than one per wakeup.
+// tunRecvXStride is how far apart the slots start: 64 byte aligned, and one cache line more than 64KiB so the packet
+// starts don't all land in the same cache sets.
+const tunRecvXStride = 65536 + 64
+
+// tunQueue is the darwin tun's Queue. Read hands back every packet already queued on the utun, up to tunReadBatch, so
+// the caller encrypts and sends them as one batch rather than one per wakeup. It reads them with one recvmsg_x when
+// it can and one readv per packet otherwise.
 type tunQueue struct {
-	t    *tun
+	t *tun
+	// buf holds the packets Read returns: recvmsg_x's slots, or, for readv, one arena. readv stops once less than
+	// defaultBatchBufSize of it is left, so every readv has room for the largest packet utun can return.
 	buf  []byte
 	pkts [tunReadBatch]tio.Packet
+	// x is the recvmsg_x scratch, nil once recvmsg_x is off for good.
+	x *tunRecvX
 }
 
-// Read waits for the utun to become readable, then reads packets until it would block. An error after at least one
-// packet is dropped in favor of returning those packets; a persistent one recurs on the next Read.
+// tunRecvX is the recvmsg_x scratch. Entry i scatters its AF prefix into heads[i] and its packet into slot i of the
+// queue's buf; the kernel reads and writes every entry in place.
+type tunRecvX struct {
+	heads [tunReadBatch][4]byte
+	iovs  [tunReadBatch][2]unix.Iovec
+	hdrs  [tunReadBatch]msgx.Hdr
+}
+
+// newTunQueue returns t's Queue, raising t's pending packet limit first so a read can find more than one.
+func newTunQueue(t *tun) *tunQueue {
+	t.raisePendingPackets()
+	q := &tunQueue{t: t, buf: make([]byte, tunReadBatch*tunRecvXStride), x: &tunRecvX{}}
+	x := q.x
+	for i := range x.hdrs {
+		x.iovs[i] = [2]unix.Iovec{
+			{Base: &x.heads[i][0], Len: 4},
+			{Base: &q.buf[i*tunRecvXStride], Len: tunRecvXSlot},
+		}
+		x.hdrs[i] = msgx.Hdr{Iov: &x.iovs[i][0], Iovlen: 2}
+	}
+	return q
+}
+
+// Read waits for the utun to become readable, then returns the packets queued on it.
 func (q *tunQueue) Read() ([]tio.Packet, error) {
+	if q.x != nil {
+		if pkts, err, ok := q.readX(); ok {
+			return pkts, err
+		}
+	}
+	return q.readv()
+}
+
+// tunRecvmsgX is msgx.Recv; tests swap it to inject results.
+var tunRecvmsgX = msgx.Recv
+
+// readX reads up to tunReadBatch packets with one recvmsg_x. ok is false when the caller should read with readv
+// instead: recvmsg_x failed this time, or has been turned off for good. A batch that fails tunRecvXCheck is dropped:
+// its packets are off the socket, but their lengths can't be trusted.
+func (q *tunQueue) readX() (pkts []tio.Packet, err error, ok bool) {
+	rc, err := q.t.f.SyscallConn()
+	if err != nil {
+		return nil, err, true
+	}
+
+	x := q.x
+	var n int
+	var errno syscall.Errno
+	err = rc.Read(func(fd uintptr) bool {
+		for i := range x.hdrs {
+			x.hdrs[i].Flags = 0
+			x.hdrs[i].Datalen = 0
+		}
+		n, errno = tunRecvmsgX(fd, x.hdrs[:])
+		return errno != unix.EAGAIN
+	})
+	if err != nil {
+		return nil, err, true
+	}
+	if tunRecvXRefused(errno) {
+		q.disableX("unavailable", errno)
+		return nil, nil, false
+	}
+	if errno != 0 {
+		// recvmsg_x can fail where readv wouldn't (a kernel allocation, say), so let readv read this wakeup and
+		// report the error if it is real.
+		return nil, nil, false
+	}
+	if cerr := tunRecvXCheck(n, x.hdrs[:], x.heads[:], tunRecvXSlot); cerr != nil {
+		q.disableX("returned an unexpected batch", cerr)
+		return nil, nil, false
+	}
+	for i := range n {
+		off := i * tunRecvXStride
+		end := off + int(x.hdrs[i].Datalen) - 4
+		q.pkts[i] = tio.Packet{Bytes: q.buf[off:end:end]}
+	}
+	// n is 0 at end of file, as readv's short read is.
+	return q.pkts[:n], nil, true
+}
+
+// tunRecvXRefused reports whether a recvmsg_x errno means it will never work here: msgx.Unsupported's refusals, and
+// EINVAL and EMSGSIZE, which with the headers newTunQueue builds come only from xnu rejecting their layout.
+func tunRecvXRefused(errno syscall.Errno) bool {
+	return msgx.Unsupported(errno) || errno == unix.EINVAL || errno == unix.EMSGSIZE
+}
+
+// disableX turns recvmsg_x off for q for good. readv keeps reading into buf.
+func (q *tunQueue) disableX(why string, err error) {
+	q.x = nil
+	q.t.l.Warn("recvmsg_x "+why+" on the tun device, reading one packet per syscall", "error", err)
+}
+
+// tunRecvXCheck rejects a recvmsg_x batch of n entries that intact msghdr_x entries can't produce, which would mean
+// the private layout changed under us: more entries than headers, one past its 4 byte head plus slot byte buffer or
+// too short to hold the head, or an AF prefix utun never writes. A slot holds the largest IP packet, so nothing is
+// ever truncated; xnu's default recvmsg_x path doesn't report MSG_TRUNC per entry anyway, only its SO_DONTTRUNC path
+// does, and that is checked too.
+func tunRecvXCheck(n int, hdrs []msgx.Hdr, heads [][4]byte, slot int) error {
+	if n < 0 || n > len(hdrs) || n > len(heads) {
+		return fmt.Errorf("returned %d packets for %d headers", n, len(hdrs))
+	}
+	for i := range n {
+		h := &hdrs[i]
+		if h.Flags&unix.MSG_TRUNC != 0 {
+			return fmt.Errorf("packet %d came back truncated, flags %#x", i, h.Flags)
+		}
+		if h.Datalen < 4 || h.Datalen > uint64(4+slot) {
+			return fmt.Errorf("packet %d is %d bytes, outside the 4 to %d the buffers allow", i, h.Datalen, 4+slot)
+		}
+		switch heads[i] {
+		case [4]byte{3: syscall.AF_INET}, [4]byte{3: syscall.AF_INET6}:
+		default:
+			return fmt.Errorf("packet %d has AF prefix % x", i, heads[i])
+		}
+	}
+	return nil
+}
+
+// readv reads packets one readv at a time until the utun would block. An error after at least one packet is dropped
+// in favor of returning those packets; a persistent one recurs on the next Read.
+func (q *tunQueue) readv() ([]tio.Packet, error) {
 	rc, err := q.t.f.SyscallConn()
 	if err != nil {
 		return nil, err
