@@ -48,6 +48,14 @@ type Conn interface {
 	Close() error
 }
 
+// EstablishedPeerConn is a Conn that treats the remotes of established tunnels differently from other
+// destinations, as darwin's gives busy ones connected sockets.
+type EstablishedPeerConn interface {
+	// SetEstablishedPeer reports whether dst is the current remote of at least one established tunnel. Calls for
+	// one dst must not race each other.
+	SetEstablishedPeer(dst netip.AddrPort, established bool)
+}
+
 type NoopConn struct{}
 
 func (NoopConn) Rebind() error {

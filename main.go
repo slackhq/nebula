@@ -213,6 +213,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	}
 
 	hostMap := NewHostMapFromConfig(l, c)
+	hostMap.established = newEstablishedRemotes(udpConns)
 	punchy := NewPunchyFromConfig(l, c, udpConns[0])
 	connManager := newConnectionManagerFromConfig(l, c, hostMap, punchy)
 	lightHouse, err := NewLightHouseFromConfig(ctx, l, c, pki.getCertState(), udpConns[0], punchy)
