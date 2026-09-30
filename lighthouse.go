@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gaissmai/bart"
+	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
@@ -81,6 +82,8 @@ type LightHouse struct {
 
 	updateTrigger chan struct{}
 	queryChan     chan netip.Addr
+	// queryDropped counts queries QueryServer dropped because queryChan was full.
+	queryDropped metrics.Counter
 
 	calculatedRemotes atomic.Pointer[bart.Table[[]*calculatedRemote]] // Maps VpnAddr to []*calculatedRemote
 
@@ -116,7 +119,8 @@ func NewLightHouseFromConfig(ctx context.Context, l *slog.Logger, c *config.C, c
 		nebulaPort:         nebulaPort,
 		punchy:             p,
 		updateTrigger:      make(chan struct{}, 1),
-		queryChan:          make(chan netip.Addr, c.GetUint32("handshakes.query_buffer", 64)),
+		queryChan:          make(chan netip.Addr, c.GetUint32("handshakes.query_buffer", 1024)),
+		queryDropped:       metrics.GetOrRegisterCounter("lighthouse.query.dropped", nil),
 		l:                  l,
 	}
 	h.localAddrsFn = func(al *LocalAllowList) []netip.Addr {
@@ -512,14 +516,19 @@ func (lh *LightHouse) Query(vpnAddr netip.Addr) *RemoteList {
 	return nil
 }
 
-// QueryServer is asynchronous so no reply should be expected
+// QueryServer is asynchronous and non-blocking, no reply should be expected.
+// If the query channel is full, the query is dropped.
 func (lh *LightHouse) QueryServer(vpnAddr netip.Addr) {
 	// Don't put lighthouse addrs in the query channel because we can't query lighthouses about lighthouses
 	if lh.amLighthouse || lh.IsLighthouseAddr(vpnAddr) {
 		return
 	}
 
-	lh.queryChan <- vpnAddr
+	select {
+	case lh.queryChan <- vpnAddr:
+	default:
+		lh.queryDropped.Inc(1)
+	}
 }
 
 func (lh *LightHouse) QueryCache(vpnAddrs []netip.Addr) *RemoteList {

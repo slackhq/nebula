@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/cert"
@@ -794,4 +796,52 @@ func TestLightHouse_logLocalAddrsErr(t *testing.T) {
 	assert.Empty(t, out.String())
 	lh.logLocalAddrsErr(errors.New("something else"))
 	assert.Contains(t, out.String(), "level=WARN")
+}
+
+// heldEncWriter holds the query worker in its first GetHostInfo until release closes.
+type heldEncWriter struct {
+	mockEncWriter
+	once    sync.Once
+	held    chan struct{}
+	release chan struct{}
+}
+
+func (w *heldEncWriter) GetHostInfo(netip.Addr) *HostInfo {
+	w.once.Do(func() { close(w.held) })
+	<-w.release
+	return nil
+}
+
+// QueryServer never waits on the query worker, since the packet readers call it and nothing drains the channel at
+// shutdown; a query that finds the channel full is dropped and counted. The worker is held on its first query so the
+// channel fills.
+func TestLighthouse_QueryServerDoesNotBlock(t *testing.T) {
+	l := test.NewLogger()
+	cs := testCertState(netip.MustParsePrefix("10.128.0.1/16"))
+	lh1 := "10.128.0.2"
+	c := config.NewC(l)
+	c.Settings["lighthouse"] = map[string]any{"hosts": []any{lh1}}
+	c.Settings["static_host_map"] = map[string]any{lh1: []any{"1.1.1.1:4242"}}
+	c.Settings["handshakes"] = map[string]any{"query_buffer": 1}
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, cs, nil, nil)
+	require.NoError(t, err)
+	w := &heldEncWriter{held: make(chan struct{}), release: make(chan struct{})}
+	lh.ifce = w
+	t.Cleanup(func() { close(w.release) })
+
+	lh.QueryServer(netip.MustParseAddr("10.128.0.10"))
+	<-w.held
+	dropped := lh.queryDropped.Count()
+	done := make(chan struct{})
+	go func() {
+		lh.QueryServer(netip.MustParseAddr("10.128.0.11"))
+		lh.QueryServer(netip.MustParseAddr("10.128.0.12"))
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("QueryServer blocked on a full query channel")
+	}
+	assert.EqualValues(t, 1, lh.queryDropped.Count()-dropped)
 }

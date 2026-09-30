@@ -410,8 +410,8 @@ logging:
   #try_interval: 100ms
   #retries: 20
 
-  # query_buffer is the size of the buffer channel for querying lighthouses
-  #query_buffer: 64
+  # query_buffer is the size of the buffer channel for querying lighthouses, drops are recorded in the lighthouse.query.dropped metric.
+  #query_buffer: 1024
 
   # trigger_buffer is the size of the buffer channel for quickly sending handshakes
   # after receiving the response for lighthouse queries
