@@ -21,7 +21,8 @@ type Rules struct {
 // proto AND port AND (CA SHA or CA name) AND local CIDR AND (group OR groups OR name OR remote CIDR).
 // A Table does not change once built; see RulesBuilder.
 type Table struct {
-	// rules holds every rule for the direction. A rule's index in this slice is its id in the ruleSets.
+	// rules holds every rule for the direction, in the order they were added. A rule's index in this slice is
+	// its id in the ruleSets.
 	rules []rule
 
 	// protos holds the index for each IP protocol number, so a packet is checked against a single index.
@@ -73,6 +74,10 @@ func (pi *protoIndex) whichMatch(p *Packet, incoming bool) ruleSet {
 
 // rule is a parsed rule. A packet is allowed by the rule when its port, certificate, and address clauses all pass.
 type rule struct {
+	// proto is the IP protocol number the rule applies to, or ProtoAny for every protocol. ICMPv6 rules are kept
+	// as ICMP. The protoIndex checks it, so match does not.
+	proto uint8
+
 	// startPort and endPort are the port clause. A startPort of PortAny covers every port, every packet of a
 	// protocol without ports, and every fragment. PortFragment covers only fragments. A range covers the ports
 	// in it, so it never applies to a protocol without ports.

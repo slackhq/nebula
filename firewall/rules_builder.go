@@ -29,12 +29,8 @@ type RulesBuilder struct {
 	l *slog.Logger
 }
 
-// tableRules are one direction's rules, waiting to be built into a Table
-type tableRules struct {
-	anyRules []rule
-	// protoRules holds the rules for each protocol besides proto `any`, ICMPv6 rules are kept with ICMP
-	protoRules [256][]rule
-}
+// tableRules are one direction's rules in the order they were added, waiting to be built into a Table
+type tableRules []rule
 
 func NewRulesBuilder(l *slog.Logger) *RulesBuilder {
 	return &RulesBuilder{
@@ -145,42 +141,31 @@ func parseRule(startPort, endPort int32, groups []string, host, cidr, localCidr,
 	return r, nil
 }
 
-// add keeps r for proto, or for every protocol when proto is ProtoAny
+// add keeps r for proto, or for every protocol when proto is ProtoAny. ICMPv6 rules are kept as ICMP rules.
 func (tr *tableRules) add(proto uint8, r rule) {
-	switch proto {
-	case ProtoAny:
-		tr.anyRules = append(tr.anyRules, r)
-	case iputil.IPProtocolICMPv6:
-		tr.protoRules[iputil.IPProtocolICMP] = append(tr.protoRules[iputil.IPProtocolICMP], r)
-	default:
-		tr.protoRules[proto] = append(tr.protoRules[proto], r)
+	if proto == iputil.IPProtocolICMPv6 {
+		proto = iputil.IPProtocolICMP
 	}
+	r.proto = proto
+	*tr = append(*tr, r)
 }
 
 // build turns the rules into a Table. Rules without a local cidr allow defaultLocal,
 // or any local address when defaultLocal is nil.
-func (tr *tableRules) build(defaultLocal []netip.Prefix) *Table {
-	t := &Table{}
-
-	// A rule's id is its index in t.rules.
-	add := func(rules []rule) []int {
-		ids := make([]int, 0, len(rules))
-		for _, r := range rules {
-			ids = append(ids, len(t.rules))
-			t.rules = append(t.rules, r.withDefaultLocal(defaultLocal))
+func (tr tableRules) build(defaultLocal []netip.Prefix) *Table {
+	t := &Table{rules: make([]rule, len(tr))}
+	var hasOwn [256]bool
+	for id, r := range tr {
+		t.rules[id] = r.withDefaultLocal(defaultLocal)
+		if r.proto != ProtoAny {
+			hasOwn[r.proto] = true
 		}
-		return ids
-	}
-	anyIDs := add(tr.anyRules)
-	var protoIDs [256][]int
-	for proto, rules := range tr.protoRules {
-		protoIDs[proto] = add(rules)
 	}
 
 	// Every protocol starts out sharing an index of the proto `any` rules, including protos[ProtoAny]. There is
 	// one for protocols with ports and one for protocols without.
-	anyPorts := newProtoIndex(true, t.rules, anyIDs)
-	anyNoPorts := newProtoIndex(false, t.rules, anyIDs)
+	anyPorts := newProtoIndex(true, t.rules, ProtoAny)
+	anyNoPorts := newProtoIndex(false, t.rules, ProtoAny)
 	for proto := range t.protos {
 		if hasPorts(uint8(proto)) {
 			t.protos[proto] = anyPorts
@@ -191,9 +176,9 @@ func (tr *tableRules) build(defaultLocal []netip.Prefix) *Table {
 
 	// A protocol with rules of its own gets an index of those rules plus the proto `any` rules, so a packet
 	// checks a single index.
-	for proto, ids := range protoIDs {
-		if len(ids) > 0 {
-			t.protos[proto] = newProtoIndex(hasPorts(uint8(proto)), t.rules, anyIDs, ids)
+	for proto, own := range hasOwn {
+		if own {
+			t.protos[proto] = newProtoIndex(hasPorts(uint8(proto)), t.rules, uint8(proto))
 		}
 	}
 
@@ -203,23 +188,25 @@ func (tr *tableRules) build(defaultLocal []netip.Prefix) *Table {
 	return t
 }
 
-// newProtoIndex builds an index of the rules with the given ids for a protocol with or without ports, or
-// returns nil when there are none.
-func newProtoIndex(hasPorts bool, rules []rule, idSets ...[]int) *protoIndex {
-	ids := slices.Concat(idSets...)
-	if len(ids) == 0 {
-		return nil
-	}
+// newProtoIndex builds an index of the proto `any` rules and proto's own rules, for a protocol with or without
+// ports, or returns nil when there are none. With ProtoAny, it indexes only the proto `any` rules.
+func newProtoIndex(hasPorts bool, rules []rule, proto uint8) *protoIndex {
+	var pi *protoIndex
+	for id := range rules {
+		r := &rules[id]
+		if r.proto != ProtoAny && r.proto != proto {
+			continue
+		}
 
-	pi := &protoIndex{hasPorts: hasPorts, fragment: newRuleSet(len(rules))}
-	if hasPorts {
-		pi.byPort = newRuleSets(math.MaxUint16+1, len(rules))
-	} else {
-		pi.packet = newRuleSet(len(rules))
-	}
-
-	for _, id := range ids {
-		pi.add(&rules[id], id)
+		if pi == nil {
+			pi = &protoIndex{hasPorts: hasPorts, fragment: newRuleSet(len(rules))}
+			if hasPorts {
+				pi.byPort = newRuleSets(math.MaxUint16+1, len(rules))
+			} else {
+				pi.packet = newRuleSet(len(rules))
+			}
+		}
+		pi.add(r, id)
 	}
 	return pi
 }

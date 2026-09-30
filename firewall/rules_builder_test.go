@@ -279,11 +279,12 @@ func TestRulesBuilder_manyRules(t *testing.T) {
 	rules := rb.Build(nil, nil)
 
 	assert.Equal(t, ruleSetLen(n+1), rules.In.protos[iputil.IPProtocolTCP].byPort.setLen)
+	// Ids are the order the rules were added in, so the proto `any` rule comes last
 	for i := range n {
 		rs := rules.In.rulesAt(iputil.IPProtocolTCP, int32(i+1))
 		require.Len(t, rs, 2, "port %d", i+1)
-		assert.Equal(t, "any", rs[0].host)
-		assert.Equal(t, fmt.Sprintf("h%d", i), rs[1].host)
+		assert.Equal(t, fmt.Sprintf("h%d", i), rs[0].host)
+		assert.Equal(t, "any", rs[1].host)
 	}
 	assert.Len(t, rules.In.rulesAt(iputil.IPProtocolTCP, n+1), 1)
 }
