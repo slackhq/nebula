@@ -9,10 +9,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -57,8 +59,8 @@ func echoCommand() *commands.Command {
 	return &commands.Command{
 		Name:             "echo",
 		ShortDescription: "echoes its arguments",
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return w.Write(fmt.Sprintf("%v", a))
+		Run: func(fs any, a []string) (commands.Result, error) {
+			return commands.Value(fmt.Sprintf("%v", a)), nil
 		},
 	}
 }
@@ -70,14 +72,14 @@ func basicRegistry() *commands.Registry {
 		Name:             "withheld",
 		ShortDescription: "a command this surface withholds",
 		ForProfiling:     true,
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return w.Write("mutated")
+		Run: func(fs any, a []string) (commands.Result, error) {
+			return commands.Value("mutated"), nil
 		},
 	})
 	reg.Register(&commands.Command{
 		Name:             "boom",
 		ShortDescription: "panics",
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
+		Run: func(fs any, a []string) (commands.Result, error) {
 			panic("this command is broken")
 		},
 	})
@@ -89,7 +91,7 @@ func basicRegistry() *commands.Registry {
 func run(t *testing.T, path, command string, args ...string) (string, string) {
 	t.Helper()
 
-	res, err := (&Client{Path: path}).Invoke(command, nil, args)
+	res, err := (&Client{Path: path}).Invoke(command, nil, args, "")
 	require.NoError(t, err)
 	return Text(res.Result), res.Error
 }
@@ -353,9 +355,9 @@ func TestConcurrentClientsAreBounded(t *testing.T) {
 	reg.Register(&commands.Command{
 		Name:             "block",
 		ShortDescription: "blocks until released",
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
+		Run: func(fs any, a []string) (commands.Result, error) {
 			<-release
-			return w.Write("done")
+			return commands.Value("done"), nil
 		},
 	})
 
@@ -370,19 +372,112 @@ func TestConcurrentClientsAreBounded(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = (&Client{Path: path}).Invoke("block", nil, nil)
+			_, _ = (&Client{Path: path}).Invoke("block", nil, nil, "")
 		}()
 	}
 
 	// Give the two blockers time to occupy the slots.
 	time.Sleep(200 * time.Millisecond)
 
-	res, err := (&Client{Path: path}).Invoke("block", nil, nil)
+	res, err := (&Client{Path: path}).Invoke("block", nil, nil, "")
 	require.NoError(t, err)
 	assert.Contains(t, res.Error, "busy")
 
 	close(release)
 	wg.Wait()
+}
+
+// TestSlowCommandIsNamedInTheLog: a command that does not return holds its slot for
+// good, and enough of them leave the socket answering only "busy". Both are logged, the
+// command by name once it has run past slowAfter and each refused connection as it
+// happens, so a busy socket can be traced to what wedged it.
+func TestSlowCommandIsNamedInTheLog(t *testing.T) {
+	reg := commands.New()
+	release := make(chan struct{})
+	reg.Register(&commands.Command{
+		Name:             "block",
+		ShortDescription: "blocks until released",
+		Run: func(fs any, a []string) (commands.Result, error) {
+			<-release
+			return commands.Value("done"), nil
+		},
+	})
+
+	var logs lockedBuffer
+	s := NewServer(test.NewLoggerWithOutput(&logs), reg)
+	s.maxConns = 1
+	s.slowAfter = 20 * time.Millisecond
+	path := testSocket(t)
+	require.NoError(t, s.Rebind(context.Background(), path))
+	defer s.Stop()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, _ = (&Client{Path: path}).Invoke("block", nil, []string{"x"}, "")
+	}()
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(logs.String(), "still running")
+	}, 2*time.Second, 10*time.Millisecond)
+	assert.Contains(t, logs.String(), "command=block")
+	assert.Contains(t, logs.String(), "args=[x]")
+
+	res, err := (&Client{Path: path}).Invoke("block", nil, nil, "")
+	require.NoError(t, err)
+	assert.Contains(t, res.Error, "busy")
+	assert.Contains(t, logs.String(), "at capacity")
+
+	close(release)
+	wg.Wait()
+}
+
+// TestPanickedCommandIsNotReportedAsStillRunning: the slow command line is about a slot
+// that is still held. A command that panicked has given its slot back, and the client
+// its answer, so no line must claim otherwise after the fact.
+func TestPanickedCommandIsNotReportedAsStillRunning(t *testing.T) {
+	reg := commands.New()
+	reg.Register(&commands.Command{
+		Name:             "boom",
+		ShortDescription: "panics",
+		Run: func(fs any, a []string) (commands.Result, error) {
+			panic("this command is broken")
+		},
+	})
+
+	var logs lockedBuffer
+	s := NewServer(test.NewLoggerWithOutput(&logs), reg)
+	s.slowAfter = 20 * time.Millisecond
+	path := testSocket(t)
+	require.NoError(t, s.Rebind(context.Background(), path))
+	defer s.Stop()
+
+	res, err := (&Client{Path: path}).Invoke("boom", nil, nil, "")
+	require.NoError(t, err)
+	assert.Equal(t, "command failed", res.Error)
+
+	time.Sleep(100 * time.Millisecond)
+	assert.Contains(t, logs.String(), "Recovered from panic")
+	assert.NotContains(t, logs.String(), "still running")
+}
+
+// lockedBuffer is a strings.Builder the server's goroutines and the test can share.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }
 
 // flakyListener fails its first few Accepts the way a process that is out of file
@@ -503,12 +598,12 @@ func TestNamedParametersDriveFlags(t *testing.T) {
 			fl.StringVar(&s.Label, "label", "none", "a label")
 			return fl, &s
 		},
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
+		Run: func(fs any, a []string) (commands.Result, error) {
 			s := fs.(*struct {
 				Verbose bool
 				Label   string
 			})
-			return w.Write(fmt.Sprintf("verbose=%v label=%s args=%v", s.Verbose, s.Label, a))
+			return commands.Value(fmt.Sprintf("verbose=%v label=%s args=%v", s.Verbose, s.Label, a)), nil
 		},
 	})
 
@@ -517,6 +612,7 @@ func TestNamedParametersDriveFlags(t *testing.T) {
 	res, err := (&Client{Path: path}).Invoke("report",
 		map[string]any{"verbose": true, "label": "here"},
 		[]string{"an-operand"},
+		"",
 	)
 	require.NoError(t, err)
 
@@ -536,12 +632,12 @@ func TestUnknownParameterIsReported(t *testing.T) {
 			fl.Bool("verbose", false, "say more")
 			return fl, nil
 		},
-		Callback: func(fs any, a []string, w commands.StringWriter) error { return nil },
+		Run: func(fs any, a []string) (commands.Result, error) { return commands.Nothing(), nil },
 	})
 
 	_, path := serve(t, reg)
 
-	res, err := (&Client{Path: path}).Invoke("report", map[string]any{"verbos": true}, nil)
+	res, err := (&Client{Path: path}).Invoke("report", map[string]any{"verbos": true}, nil, "")
 	require.NoError(t, err)
 
 	assert.Contains(t, res.Error, `report has no parameter "verbos"`)
@@ -550,7 +646,7 @@ func TestUnknownParameterIsReported(t *testing.T) {
 func TestParametersOnACommandThatTakesNoneAreReported(t *testing.T) {
 	_, path := serve(t, basicRegistry())
 
-	res, err := (&Client{Path: path}).Invoke("echo", map[string]any{"nope": true}, nil)
+	res, err := (&Client{Path: path}).Invoke("echo", map[string]any{"nope": true}, nil, "")
 	require.NoError(t, err)
 
 	assert.Contains(t, res.Error, "echo takes no parameters")
@@ -563,14 +659,14 @@ func TestJSONOutputIsAJSONValue(t *testing.T) {
 	reg.Register(&commands.Command{
 		Name:             "emit",
 		ShortDescription: "emits json",
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return w.Write(`{"hosts":[1,2,3]}`)
+		Run: func(fs any, a []string) (commands.Result, error) {
+			return commands.Value(map[string]any{"hosts": []int{1, 2, 3}}), nil
 		},
 	})
 
 	_, path := serve(t, reg)
 
-	res, err := (&Client{Path: path}).Invoke("emit", nil, nil)
+	res, err := (&Client{Path: path}).Invoke("emit", nil, nil, "")
 	require.NoError(t, err)
 
 	var decoded struct {
@@ -584,7 +680,7 @@ func TestJSONOutputIsAJSONValue(t *testing.T) {
 func TestTextOutputIsAJSONString(t *testing.T) {
 	_, path := serve(t, basicRegistry())
 
-	res, err := (&Client{Path: path}).Invoke("echo", nil, []string{"hi"})
+	res, err := (&Client{Path: path}).Invoke("echo", nil, []string{"hi"}, "")
 	require.NoError(t, err)
 
 	var s string
@@ -605,6 +701,88 @@ func TestDescribeReportsFlagTypes(t *testing.T) {
 
 	assert.Contains(t, names, "echo")
 	assert.NotContains(t, names, "withheld", "the schema advertises only what this surface serves")
+}
+
+// TestPresentationParametersAreRefused: the schema lists json and pretty on every
+// command, because the command lines take them, but a request has one way to choose its
+// rendering, the format field. A client that sends them as parameters is pointed there
+// rather than given a second, weaker way to say the same thing.
+func TestPresentationParametersAreRefused(t *testing.T) {
+	reg := commands.New()
+	reg.Register(&commands.Command{
+		Name:             "pair",
+		ShortDescription: "returns a pair",
+		Run: func(fs any, a []string) (commands.Result, error) {
+			return commands.Value(map[string]int{"a": 1}), nil
+		},
+		Text: func(v any, w io.Writer) error {
+			_, err := fmt.Fprintln(w, "a is one")
+			return err
+		},
+	})
+	_, path := serve(t, reg)
+	c := &Client{Path: path}
+
+	for _, name := range []string{"json", "pretty"} {
+		res, err := c.Invoke("pair", map[string]any{name: true}, nil, "text")
+		require.NoError(t, err)
+		assert.Contains(t, res.Error, name+" is a command line flag, not a parameter")
+		assert.Contains(t, res.Error, "format")
+		assert.Empty(t, res.Result, "a refused request runs nothing")
+	}
+
+	// The format field is the one that counts.
+	res, err := c.Invoke("pair", nil, nil, "text")
+	require.NoError(t, err)
+	require.Empty(t, res.Error)
+	assert.Equal(t, "a is one\n", Text(res.Result))
+
+	res, err = c.Invoke("pair", nil, nil, "")
+	require.NoError(t, err)
+	require.Empty(t, res.Error)
+	assert.JSONEq(t, `{"a":1}`, string(res.Result), "the API default is JSON")
+}
+
+// TestTextRequestToATextlessCommand: a command with no human rendering still answers a
+// text request when the answer is a refusal, since a refusal always has one. Only a
+// successful result has nothing to say in text, and that is reported then, by the daemon.
+func TestTextRequestToATextlessCommand(t *testing.T) {
+	reg := commands.New()
+	reg.Register(&commands.Command{
+		Name:             "tunnel",
+		ShortDescription: "data on success, a refusal without an operand",
+		Run: func(fs any, a []string) (commands.Result, error) {
+			if len(a) == 0 {
+				return commands.Failed("No vpn address was provided"), nil
+			}
+			return commands.Value(map[string]int{"index": 7}), nil
+		},
+		JSONOnly: true,
+	})
+	_, path := serve(t, reg)
+	c := &Client{Path: path}
+
+	res, err := c.Invoke("tunnel", nil, nil, "text")
+	require.NoError(t, err)
+	assert.Equal(t, "No vpn address was provided\n", res.Error, "the refusal is rendered, not the missing text form")
+
+	res, err = c.Invoke("tunnel", nil, []string{"10.0.0.1"}, "text")
+	require.NoError(t, err)
+	assert.Contains(t, res.Error, "tunnel has no human readable output yet; pass -json or -pretty")
+	assert.Empty(t, res.Result)
+
+	res, err = c.Invoke("tunnel", nil, []string{"10.0.0.1"}, "json")
+	require.NoError(t, err)
+	require.Empty(t, res.Error)
+	assert.JSONEq(t, `{"index":7}`, string(res.Result))
+
+	// A refusal asked for as JSON carries the outcome for a program and the reason in
+	// Error, so a client exits non-zero on the envelope alone, never by sniffing the
+	// payload for an ok field some unrelated result might also have.
+	res, err = c.Invoke("tunnel", nil, nil, "json")
+	require.NoError(t, err)
+	assert.Equal(t, "No vpn address was provided", res.Error)
+	assert.JSONEq(t, `{"ok":false,"reason":"No vpn address was provided"}`, string(res.Result))
 }
 
 // TestRebindAfterFailedBindStillStopsOnCancel covers a daemon whose initial listen
@@ -644,8 +822,8 @@ func TestCommandRegisteredAfterStartIsServed(t *testing.T) {
 	reg.Register(&commands.Command{
 		Name:             "late",
 		ShortDescription: "registered after the server started",
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return w.Write("late")
+		Run: func(fs any, a []string) (commands.Result, error) {
+			return commands.Value("late"), nil
 		},
 	})
 
@@ -659,10 +837,48 @@ func TestCommandRegisteredAfterStartIsServed(t *testing.T) {
 	}
 	assert.Contains(t, names, "late")
 
-	res, err := c.Invoke("late", nil, nil)
+	res, err := c.Invoke("late", nil, nil, "")
 	require.NoError(t, err)
 	require.Empty(t, res.Error)
 	assert.JSONEq(t, `"late"`, string(res.Result))
+}
+
+// TestAfterReplyRunsOnceTheResponseIsOut: the hook blocks until the test releases it, so
+// the only way a response can arrive is if it was written before the hook began.
+func TestAfterReplyRunsOnceTheResponseIsOut(t *testing.T) {
+	release := make(chan struct{})
+	acted := make(chan struct{})
+
+	reg := commands.New()
+	reg.Register(&commands.Command{
+		Name:             "act",
+		ShortDescription: "replies, then acts",
+		Run: func(fs any, a []string) (commands.Result, error) {
+			return commands.Did("about to act"), nil
+		},
+		AfterReply: func() {
+			<-release
+			close(acted)
+		},
+	})
+	_, path := serve(t, reg)
+
+	res, err := (&Client{Path: path}).Invoke("act", nil, nil, "")
+	require.NoError(t, err)
+	require.Empty(t, res.Error)
+
+	select {
+	case <-acted:
+		t.Fatal("AfterReply ran before the response was delivered")
+	default:
+	}
+
+	close(release)
+	select {
+	case <-acted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("AfterReply never ran")
+	}
 }
 
 // TestRebindRefusesDuringShutdown: a reload that lands after the daemon's context is

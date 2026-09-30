@@ -25,18 +25,40 @@ func NewSession(reg *commands.Registry, conn *ssh.ServerConn, chans <-chan ssh.N
 		c:        conn,
 		cancel:   cancel,
 	}
+	s.commands.DefaultFormat = DefaultFormat
 
 	s.commands.Register(&commands.Command{
 		Name:             commands.Logout,
 		ShortDescription: "Ends the current session",
-		Callback: func(a any, args []string, w commands.StringWriter) error {
+		Run: func(a any, args []string) (commands.Result, error) {
 			s.Close()
-			return nil
+			return commands.Nothing(), nil
 		},
 	})
 
 	go s.handleChannels(chans)
 	return s
+}
+
+// DefaultFormat is what an ssh session renders when the operator gave neither -json nor
+// -pretty. It encodes what every command printed before rendering was shared: text
+// where a command has a human form, and compact JSON for the ones that never did
+// (print-tunnel, print-relays, query-lighthouse). It is ssh's policy, exported so a test
+// can dispatch through the same choice, and ssh's to change.
+func DefaultFormat(c *commands.Command, r commands.Result) commands.Format {
+	if !c.JSONOnly {
+		return commands.FormatText
+	}
+
+	// Backwards compatibility. The JSON-only commands always printed their refusals as
+	// a plain sentence ("No vpn address was provided") even though their data is JSON,
+	// so an outcome keeps rendering as text here. Drop this branch to make ssh's default
+	// apply uniformly; the output golden will show exactly which lines change.
+	if r.Value == nil {
+		return commands.FormatText
+	}
+
+	return commands.FormatJSON
 }
 
 func (s *session) handleChannels(chans <-chan ssh.NewChannel) {
@@ -85,7 +107,7 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 			}
 
 			req.Reply(true, nil)
-			s.dispatchCommand(payload.Value, commands.NewStringWriter(channel))
+			s.dispatchCommand(payload.Value, commands.MergedOutput(channel))
 
 			status := struct{ Status uint32 }{uint32(0)}
 			channel.SendRequest("exit-status", false, ssh.Marshal(status))
@@ -126,7 +148,7 @@ func (s *session) createTerm(channel ssh.Channel) *term.Terminal {
 }
 
 func (s *session) handleInput() {
-	w := commands.NewStringWriter(s.term)
+	w := commands.MergedOutput(s.term)
 	for {
 		line, err := s.term.ReadLine()
 		if err != nil {
@@ -137,7 +159,7 @@ func (s *session) handleInput() {
 	}
 }
 
-func (s *session) dispatchCommand(line string, w commands.StringWriter) {
+func (s *session) dispatchCommand(line string, w commands.Output) {
 	s.commands.Dispatch(line, w)
 }
 

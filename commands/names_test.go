@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"bytes"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,7 +23,7 @@ func TestKnownIsOneOfEach(t *testing.T) {
 func TestAllListsInDisplayOrder(t *testing.T) {
 	r := New()
 	for _, n := range []Name{"zz-extra", Version, "aa-extra", ChangeRemote} {
-		r.Register(&Command{Name: n, Callback: func(fs any, a []string, w StringWriter) error { return nil }})
+		r.Register(&Command{Name: n, Run: func(fs any, a []string) (Result, error) { return Nothing(), nil }})
 	}
 
 	var got []Name
@@ -33,13 +32,16 @@ func TestAllListsInDisplayOrder(t *testing.T) {
 	}
 	require.Equal(t, []Name{ChangeRemote, Help, Version, "aa-extra", "zz-extra"}, got)
 
-	// The command list follows the same order.
-	out := &bytes.Buffer{}
-	r.DumpCommands(NewStringWriter(out))
-	assert.Equal(t, "Available commands:\n"+
-		"change-remote - \n"+
-		"help - prints available commands or help <command> for specific usage info\n"+
-		"version - \n"+
-		"aa-extra - \n"+
-		"zz-extra - \n\n", out.String())
+	// Help, the schema and a filtered copy all follow the same order.
+	var schema []Name
+	for _, cs := range r.Schema() {
+		schema = append(schema, cs.Name)
+	}
+	assert.Equal(t, got, schema)
+
+	var filtered []Name
+	for _, c := range r.Filter(func(c *Command) bool { return c.Name != Version }, testReason).All() {
+		filtered = append(filtered, c.Name)
+	}
+	assert.Equal(t, []Name{ChangeRemote, Help, "aa-extra", "zz-extra"}, filtered)
 }

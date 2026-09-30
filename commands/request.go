@@ -2,18 +2,20 @@ package commands
 
 import (
 	"flag"
-	"fmt"
 	"maps"
 	"slices"
 )
 
 // Request is one command to run, as every surface hands it to Invoke: the command, its
-// options by name in the form their flags parse, and its operands.
+// options by name in the form their flags parse, its operands, and the rendering the
+// line asked for, if any.
 //
-// It is where the surfaces meet. An ssh line is parsed against the command's own FlagSet
-// and becomes one of these through ParseLine; nebula ctl parses its line the same way
-// against the schema and sends the pieces over the wire, where the control socket turns
-// them back into one. From here on there is one path to the command.
+// It is where the wire meets the daemon. nebula ctl parses its line against the schema
+// and ParseLine turns what was set into one of these, which travels as a JSON object
+// and becomes a Request again on the control socket. An ssh line never becomes one: it
+// is parsed straight into the command's own FlagSet, which Run then reads, so there is
+// nothing to carry. Both surfaces drive Run through the FlagSet commandFlags builds,
+// ssh by Parse and the socket by Set, and the flag package keeps those two in step.
 type Request struct {
 	// Command is the command to run, resolved by the surface at its edge. See
 	// Registry.Resolve for the one that tells an unknown name from a withheld one.
@@ -25,16 +27,28 @@ type Request struct {
 
 	// Args carries the operands: whatever the line did not consume as a flag.
 	Args []string
+
+	// Format is the rendering the line asked for with -json or -pretty, or FormatUnset
+	// when it expressed no preference. It is ParseLine's reading of the line for the
+	// client that sends the Request; Invoke does not read it, since the surface that
+	// runs a Request renders with the format it agreed with its caller.
+	Format Format
 }
 
-// ParseLine reads a FlagSet that Parse has filled, and the operands it returned, into a
-// Request. Command is left for the caller to set: it resolved the command before it
-// could build the FlagSet. Every flag the line set travels by name in the form it parses
-// from, which is what Invoke applies.
+// ParseLine reads a FlagSet that ParseArgs has filled, and the operands it returned,
+// into a Request to send over the wire. Command is left for the caller to set.
+//
+// Every flag the line set other than the presentation flags travels by name, as its
+// flag's String, which is what the daemon's Set parses. That round trip is exact for
+// the bool and string flags a client builds from the schema; it is the client's to make,
+// and the ssh path does not make it, since it runs the FlagSet it parsed.
 func ParseLine(fl *flag.FlagSet, operands []string) Request {
-	req := Request{Args: operands}
+	req := Request{Args: operands, Format: presentationFormat(fl)}
 
 	fl.Visit(func(f *flag.Flag) {
+		if isPresentationFlag(f.Name) {
+			return
+		}
 		if req.Params == nil {
 			req.Params = map[string]string{}
 		}
@@ -44,41 +58,65 @@ func ParseLine(fl *flag.FlagSet, operands []string) Request {
 	return req
 }
 
-// Invoke runs one Request, with w as the command's output.
+// presentationFormat is the one reading of -json and -pretty from a parsed line, so a
+// line means the same on every surface: only a flag set to true asks for JSON, since one
+// set to false expresses no preference, and -pretty implies -json. FormatUnset means the
+// line expressed no preference and the surface's own default applies.
+func presentationFormat(fl *flag.FlagSet) Format {
+	var asJSON, pretty bool
+	fl.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case FlagJSON:
+			asJSON = flagIsTrue(f)
+		case FlagPretty:
+			pretty = flagIsTrue(f)
+		}
+	})
+
+	switch {
+	case pretty:
+		return FormatPrettyJSON
+	case asJSON:
+		return FormatJSON
+	default:
+		return FormatUnset
+	}
+}
+
+// flagIsTrue reports whether a bool flag was set to true. The flag package's bool value
+// is a flag.Getter whose Get returns the bool, so this never falls back to parsing text.
+func flagIsTrue(f *flag.Flag) bool {
+	g, ok := f.Value.(flag.Getter)
+	if !ok {
+		return false
+	}
+	b, _ := g.Get().(bool)
+	return b
+}
+
+// Invoke runs one Request and returns the command's Result, unrendered.
 //
 // The parameters are applied by flag name, in name order: a request from the wire is a
 // JSON object with no order of its own, and which of two bad parameters is reported must
 // not change from one request to the next. An unknown parameter is an error rather than
 // something quietly ignored, because a caller that misspells one deserves to hear about
-// it instead of getting a default. A bad parameter means the command is never called,
-// and the FlagSet is fresh for this call, so nothing set before it is seen by anyone.
-func Invoke(req Request, w StringWriter) error {
+// it instead of getting a default. A bad parameter means Run is never called, and the
+// FlagSet is fresh for this call, so nothing set before it is seen by anyone.
+//
+// Nothing here writes anywhere and nothing here renders. What a surface does with the
+// Result, marshal its Payload or run the command's own text rendering through Render,
+// is the surface's decision, and keeping that out of here is what lets a caller tell a
+// refusal from a success after the text has been produced. The presentation flags are
+// not parameters: a Request says how it wants rendering in Format, and sending them as
+// parameters is refused rather than read as a preference.
+func Invoke(req Request) (Result, error) {
 	c := req.Command
 	names := slices.Sorted(maps.Keys(req.Params))
 
-	var fs any
-	if c.Flags != nil {
-		fl, box := c.Flags()
-		fs = box
-
-		if fl != nil {
-			fl.SetOutput(w.Err())
-
-			for _, k := range names {
-				if fl.Lookup(k) == nil {
-					return fmt.Errorf("%s has no parameter %q", c.Name, k)
-				}
-
-				if err := fl.Set(k, req.Params[k]); err != nil {
-					return fmt.Errorf("%s: %w", k, err)
-				}
-			}
-		} else if len(names) > 0 {
-			return fmt.Errorf("%s takes no parameters", c.Name)
-		}
-	} else if len(names) > 0 {
-		return fmt.Errorf("%s takes no parameters", c.Name)
+	fl, fs, own := commandFlags(c)
+	if err := setParams(fl, string(c.Name), names, req.Params, own); err != nil {
+		return Result{}, err
 	}
 
-	return c.Callback(fs, req.Args, w)
+	return c.Run(fs, req.Args)
 }

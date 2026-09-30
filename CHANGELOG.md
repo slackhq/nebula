@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connected to before sending anything and refuses one that is not its own account, SYSTEM, Administrators or
   a service account, which is what protects an override outside that namespace; the daemon refuses to serve
   a name another process already holds and logs that as an error.
+- Every command on both the ssh debug server and `nebula ctl` now takes `-json` and `-pretty`, rendered by one
+  shared implementation per command. `nebula ctl` prints human readable output by default; `print-tunnel`,
+  `print-relays` and `query-lighthouse` have no human form yet and ask for `-json` or `-pretty` rather than
+  inventing one. The ssh server's output with no flags is unchanged. Previously `-json` was ignored by some
+  commands, rejected by others, and taken as an address by `query-lighthouse`; `print-cert -json -raw` now
+  returns `{"pem": ...}` where `-json` used to silently win. A flag may come before or after an operand, so
+  `print-tunnel 10.0.0.1 -json` asks for JSON rather than dropping the flag; a negative number is still an
+  operand, so `mutex-profile-fraction -1` keeps working; and `--` ends the flags as it always has.
 
 ### Fixed
 

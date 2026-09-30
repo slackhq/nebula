@@ -15,6 +15,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/commands"
+	"github.com/slackhq/nebula/sshd"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/require"
 )
@@ -68,11 +69,14 @@ func TestCommandOutput(t *testing.T) {
 	control.Start()
 	t.Cleanup(func() { control.Stop() })
 
+	// Dispatch with ssh's default-format policy, so the no-flag column records what an
+	// operator at an ssh prompt sees.
 	reg := control.Commands().Clone()
+	reg.DefaultFormat = sshd.DefaultFormat
 
 	run := func(args ...string) string {
 		buf := &bytes.Buffer{}
-		_ = reg.DispatchArgs(args, strings.Join(args, " "), commands.NewStringWriter(buf))
+		_ = reg.DispatchArgs(args, strings.Join(args, " "), commands.MergedOutput(buf))
 		return buf.String()
 	}
 
@@ -93,6 +97,8 @@ func TestCommandOutput(t *testing.T) {
 		{"print-cert", []string{"10.222.0.9"}},
 		{"print-cert", []string{"10.222.0.250"}},
 		{"print-cert", []string{"not-an-address"}},
+		// A flag after the operand is still a flag, on both surfaces.
+		{"print-cert", []string{"10.222.0.9", "-json"}},
 		{"print-tunnel", nil},
 		{"print-tunnel", []string{"10.222.0.9"}},
 		{"print-tunnel", []string{"10.222.0.250"}},
@@ -122,6 +128,9 @@ func TestCommandOutput(t *testing.T) {
 		{"close-tunnel", []string{"not-an-address"}},
 		{"mutex-profile-fraction", nil},
 		{"mutex-profile-fraction", []string{"nope"}},
+		// -1 is runtime's read-current sentinel, and the operand every command must keep
+		// accepting now that each one has a FlagSet.
+		{"mutex-profile-fraction", []string{"-1"}},
 		{"start-cpu-profile", nil},
 		{"save-heap-profile", nil},
 		{"save-mutex-profile", nil},

@@ -21,7 +21,7 @@ import (
 var updateGolden = flag.Bool("update", false, "update golden files")
 
 func TestSSHCommandSurface(t *testing.T) {
-	got := renderCommandSurface(registeredCommands(t).All())
+	got := renderCommandSurface(registeredCommands(t).Schema())
 	test.Golden(t, filepath.Join("testdata", "ssh_commands.golden"), got, *updateGolden)
 }
 
@@ -35,21 +35,25 @@ func registeredCommands(t *testing.T) *commands.Registry {
 	return reg
 }
 
-func renderCommandSurface(cmds []*commands.Command) string {
+// renderCommandSurface prints what a client actually sees, which is the schema rather
+// than the Command structs: the presentation flags are offered on every command that
+// returns a value, so reading Command.Flags alone would under-report the surface.
+func renderCommandSurface(cmds []commands.CommandSchema) string {
 	lines := make([]string, 0, len(cmds))
 	for _, cmd := range cmds {
 		b := &bytes.Buffer{}
 		fmt.Fprintf(b, "%s\n", cmd.Name)
-		fmt.Fprintf(b, "  short: %s\n", cmd.ShortDescription)
+		fmt.Fprintf(b, "  short: %s\n", cmd.Short)
 		fmt.Fprintf(b, "  help: %s\n", cmd.Help)
 
-		if cmd.Flags != nil {
-			fl, _ := cmd.Flags()
-			if fl != nil {
-				fb := &bytes.Buffer{}
-				fl.SetOutput(fb)
-				fl.PrintDefaults()
-				fmt.Fprintf(b, "  flags:\n%s", fb.String())
+		if len(cmd.Flags) > 0 {
+			fmt.Fprintf(b, "  flags:\n")
+			for _, f := range cmd.Flags {
+				kind := " string"
+				if f.Bool {
+					kind = ""
+				}
+				fmt.Fprintf(b, "  -%s%s\n    \t%s\n", f.Name, kind, f.Usage)
 			}
 		}
 
@@ -66,22 +70,6 @@ func joinLines(in []string) string {
 		b.WriteString(l)
 	}
 	return b.String()
-}
-
-// TestKnownNamesAreTheRegisteredSet holds commands.Known to what nebula registers: every
-// name there is registered by attachCommands or, for logout, by the ssh session, and
-// nothing is registered under a name that is not there. Known is also the display
-// order, so a command missing from it would list last rather than where it belongs.
-func TestKnownNamesAreTheRegisteredSet(t *testing.T) {
-	reg := registeredCommands(t)
-
-	// Registered per ssh session on a clone of this registry; see sshd.NewSession.
-	got := []commands.Name{commands.Logout}
-	for _, c := range reg.All() {
-		got = append(got, c.Name)
-	}
-
-	assert.ElementsMatch(t, commands.Known[:], got)
 }
 
 // TestLocalSocketSurface pins which of nebula's commands the always-on local socket
@@ -128,4 +116,20 @@ func TestLocalSocketSurface(t *testing.T) {
 		commands.CloseTunnel,
 		commands.CreateTunnel,
 	}, served)
+}
+
+// TestKnownNamesAreTheRegisteredSet holds commands.Known to what nebula registers: every
+// name there is registered by attachCommands or, for logout, by the ssh session, and
+// nothing is registered under a name that is not there. Known is also the display
+// order, so a command missing from it would list last rather than where it belongs.
+func TestKnownNamesAreTheRegisteredSet(t *testing.T) {
+	reg := registeredCommands(t)
+
+	// Registered per ssh session on a clone of this registry; see sshd.NewSession.
+	got := []commands.Name{commands.Logout}
+	for _, c := range reg.All() {
+		got = append(got, c.Name)
+	}
+
+	assert.ElementsMatch(t, commands.Known[:], got)
 }

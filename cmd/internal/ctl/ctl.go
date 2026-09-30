@@ -1,6 +1,7 @@
 package ctl
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -62,7 +63,7 @@ func Trailing(rest []string, configPath string) (code int, done bool) {
 	if configPath != "" {
 		// First, so a -config on the ctl side of the line still wins: Parse applies
 		// flags in order and the last value set is the one read.
-		args = append([]string{"-config", configPath}, args...)
+		args = append([]string{"-" + commands.FlagConfig, configPath}, args...)
 	}
 
 	return Run(args), true
@@ -83,8 +84,8 @@ func Run(args []string) int {
 	fs := flag.NewFlagSet("nebula ctl", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
-	configPath := fs.String("config", "", "Path to the config of the running nebula, used to locate its control socket")
-	socketPath := fs.String("socket", "", "Path to the control socket, instead of the one the config implies")
+	configPath := fs.String(commands.FlagConfig, "", "Path to the config of the running nebula, used to locate its control socket")
+	socketPath := fs.String(commands.FlagSocket, "", "Path to the control socket, instead of the one the config implies")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: nebula ctl [flags] <command> [command flags]\n\n")
 		fmt.Fprintf(os.Stderr, "Inspects and controls a nebula already running on this machine.\n")
@@ -150,22 +151,13 @@ func Run(args []string) int {
 		return 0
 	}
 
-	res, err := client.Invoke(string(req.name), wireParams(req.Params), req.Args)
+	res, err := client.Invoke(string(req.name), wireParams(req.Params), req.Args, wireFormat(req.Format))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "nebula: %s\n", err)
 		return 1
 	}
 
-	out := localapi.Text(res.Result)
-
-	// Indentation is the client's business: whitespace does not survive a JSON envelope,
-	// and the daemon has no reason to care how its answer is laid out.
-	if req.Params["pretty"] == "true" {
-		if indented, ok := localapi.Pretty(res.Result); ok {
-			out = indented
-		}
-	}
-
+	out := output(res.Result, req.Format)
 	if out != "" {
 		fmt.Fprint(os.Stdout, out)
 		if !strings.HasSuffix(out, "\n") {
@@ -173,25 +165,65 @@ func Run(args []string) int {
 		}
 	}
 
+	// Error set is the one failure signal, whether the request never ran or the command
+	// ran and refused. A refusal asked for in JSON has already gone to stdout as the
+	// {ok, reason} object, and is not said again on stderr; the exit status carries it.
 	if res.Error == "" {
 		return 0
 	}
 
-	msg := res.Error
-	if !strings.HasSuffix(msg, "\n") {
-		msg += "\n"
+	if len(res.Result) == 0 {
+		msg := res.Error
+		if !strings.HasSuffix(msg, "\n") {
+			msg += "\n"
+		}
+		fmt.Fprint(os.Stderr, msg)
 	}
-	fmt.Fprint(os.Stderr, msg)
 
 	return 1
 }
 
+// output renders what the daemon answered for the format the line asked for. A text
+// request is answered with the command's rendering carried as a JSON string, and is
+// unquoted back into it; a JSON request is answered with the value itself, which is
+// printed as it came, since a value that happens to be a string is still JSON to the
+// script reading it. Indentation is the client's business: whitespace does not survive a
+// JSON envelope, and the daemon has no reason to care how its answer is laid out.
+func output(result json.RawMessage, format commands.Format) string {
+	switch format {
+	case commands.FormatJSON:
+		return string(result)
+	case commands.FormatPrettyJSON:
+		if indented, ok := localapi.Pretty(result); ok {
+			return indented
+		}
+		return string(result)
+	default:
+		return localapi.Text(result)
+	}
+}
+
 // ctlRequest is one parsed nebula ctl command line: the command's name, which only the
 // daemon can resolve, and the line as every surface parses it. The Request's Command is
-// nil here, since the CLI holds a schema rather than the command.
+// nil here, since the CLI holds a schema rather than the command, and its Format is
+// FormatUnset when the line named none, which to nebula ctl means text: its default
+// differs from the API's.
 type ctlRequest struct {
 	name commands.Name
 	commands.Request
+}
+
+// wireFormat is what a request asks the daemon for. Pretty is the client's business,
+// since whitespace does not survive a JSON envelope, so it travels as json. No
+// preference is text, nebula ctl's default: a person gets the human rendering wherever
+// one exists.
+func wireFormat(f commands.Format) string {
+	switch f {
+	case commands.FormatJSON, commands.FormatPrettyJSON:
+		return "json"
+	default:
+		return "text"
+	}
 }
 
 // wireParams carries the line's options as the wire takes them: the strings the flags
@@ -210,7 +242,8 @@ func wireParams(in map[string]string) map[string]any {
 
 // parseCommand turns the user's command line into a ctlRequest, using the schema the
 // daemon supplied. The line is parsed with the same rules the daemon applies to an ssh
-// line, through ParseLine, so a line means the same on both.
+// line, through ParseArgs, and ParseLine reads what was set into the Request to send, so
+// a line means the same on both.
 //
 // printedHelp reports that help was written for the command instead, and there is
 // nothing to send.
@@ -232,11 +265,6 @@ func parseCommand(schema []commands.CommandSchema, argv []string) (req ctlReques
 		return ctlRequest{name: name, Request: commands.Request{Args: argv[1:]}}, false, nil
 	}
 
-	if commands.IsHelpRequest(argv[1:]) {
-		printCommandHelp(found)
-		return ctlRequest{}, true, nil
-	}
-
 	// The flag package's own report is a bare message followed by a usage dump in a layout
 	// that does not match WriteCommandHelp, so it is silenced and the error is reported
 	// once, below, with a pointer at the help this command actually prints.
@@ -251,15 +279,29 @@ func parseCommand(schema []commands.CommandSchema, argv []string) (req ctlReques
 		fs.String(f.Name, f.Default, f.Usage)
 	}
 
-	if err := fs.Parse(argv[1:]); err != nil {
+	operands, err := commands.ParseArgs(fs, argv[1:])
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			// The same rendering the daemon uses for `help <command>`, so -h and help agree.
+			_ = commands.WriteCommandHelp(*found, os.Stdout)
+			return ctlRequest{}, true, nil
+		}
+
 		// Say what flag did: an unknown flag, a missing value and a malformed value are
 		// different mistakes, and "does not take" would be wrong for two of them.
 		return ctlRequest{}, false, fmt.Errorf("nebula: %s: %s (see 'nebula ctl %s -h')", name, err, name)
 	}
 
 	// Only what the user actually set travels. A parameter left alone is the daemon's
-	// default to apply, not the client's to assert.
-	return ctlRequest{name: name, Request: commands.ParseLine(fs, fs.Args())}, false, nil
+	// default to apply, not the client's to assert, and the presentation flags are the
+	// client's to interpret, never sent.
+	//
+	// Where the command has no human form the daemon says so, and only once the command
+	// has run: a refusal ("No vpn address was provided") always has a human form, so
+	// telling the user to pass -json before finding out whether the command would even
+	// accept the line sends them to fix the wrong thing. That is why the schema does not
+	// say which commands have a human form: nothing should decide on it before running.
+	return ctlRequest{name: name, Request: commands.ParseLine(fs, operands)}, false, nil
 }
 
 // splitLine divides a nebula ctl line into the client's own flags, for fs to parse, and
@@ -273,10 +315,10 @@ func parseCommand(schema []commands.CommandSchema, argv []string) (req ctlReques
 // flags fs defines are lifted out, and only those: the command's own flags are unknown
 // here, since they come from the daemon the line has yet to name, and -h after the
 // command asks for that command's help. Which command flags take a value is unknown too,
-// so the client's names are its alone: a command must not give one a value here. A "--"
-// before the command is consumed, as fs.Parse would have; one after it belongs to the
-// command line and ends the lifting, so an operand spelled like a client flag can still
-// be passed.
+// so the client's names are reserved in the commands package and no command can give
+// one a value that would be lifted from here. A "--" before the command is consumed, as
+// fs.Parse would have; one after it belongs to the command line and ends the lifting,
+// so an operand spelled like a client flag can still be passed.
 func splitLine(fs *flag.FlagSet, args []string) (own, cmd []string) {
 	seenCommand := false
 	for i := 0; i < len(args); i++ {
@@ -405,23 +447,4 @@ func pathFromConfig(configFlag string) (path, configPath, overrideIn string, err
 		overrideIn = configPath
 	}
 	return p, configPath, overrideIn, nil
-}
-
-func printCommandHelp(c *commands.CommandSchema) {
-	fmt.Fprintf(os.Stdout, "%s - %s\n", c.Name, c.Short)
-	if c.Help != "" {
-		fmt.Fprintf(os.Stdout, "  %s\n", c.Help)
-	}
-
-	for _, f := range c.Flags {
-		fmt.Fprintf(os.Stdout, "  -%s", f.Name)
-		if !f.Bool {
-			fmt.Fprintf(os.Stdout, " string")
-		}
-		fmt.Fprintf(os.Stdout, "\n    \t%s", f.Usage)
-		if f.Default != "" && f.Default != "false" {
-			fmt.Fprintf(os.Stdout, " (default %s)", f.Default)
-		}
-		fmt.Fprintln(os.Stdout)
-	}
 }
