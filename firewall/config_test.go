@@ -299,8 +299,17 @@ func TestRulesFromConfig_defaultLocalCIDR(t *testing.T) {
 	vpnAddr := netip.MustParseAddr("10.1.9.9")
 	unsafeAddr := netip.MustParseAddr("192.168.0.3")
 
-	allows := func(lr *localRules, addr netip.Addr) bool {
-		return lr.match(&Packet{LocalAddr: addr}, nil)
+	// ruleOnPort returns the rule on proto whose port clause is exactly port, chosen from the rules that a packet
+	// on port is checked against.
+	ruleOnPort := func(t *testing.T, table *Table, proto uint8, port int32) *rule {
+		t.Helper()
+		for _, r := range table.rulesAt(proto, port) {
+			if r.startPort == port {
+				return r
+			}
+		}
+		require.Failf(t, "no rule found", "proto %d port %d", proto, port)
+		return nil
 	}
 
 	for _, tc := range []struct {
@@ -327,22 +336,24 @@ func TestRulesFromConfig_defaultLocalCIDR(t *testing.T) {
 			rules, err := RulesFromConfig(test.NewLogger(), conf, vpnNetworks, tc.unsafeNetworks)
 			require.NoError(t, err)
 
-			// The proto `any` rule, copied into a protocol with rules of its own and shared by one without
+			// The proto `any` rule, as indexed by a protocol with rules of its own and as shared by one without.
 			for _, proto := range []uint8{iputil.IPProtocolTCP, 47} {
-				lr := rules.In.protos[proto][PortAny].Any.Any
-				assert.True(t, allows(lr, vpnAddr), "proto %d", proto)
-				assert.Equal(t, tc.wantUnsafe, allows(lr, unsafeAddr), "proto %d", proto)
+				r := ruleOnPort(t, rules.In, proto, PortAny)
+				assert.True(t, r.matchLocal(vpnAddr), "proto %d", proto)
+				assert.Equal(t, tc.wantUnsafe, r.matchLocal(unsafeAddr), "proto %d", proto)
 			}
 
-			tcp := rules.In.protos[iputil.IPProtocolTCP]
-			assert.True(t, allows(tcp[22].Any.Any, vpnAddr))
-			assert.Equal(t, tc.wantUnsafe, allows(tcp[22].Any.Any, unsafeAddr))
+			r := ruleOnPort(t, rules.In, iputil.IPProtocolTCP, 22)
+			assert.True(t, r.matchLocal(vpnAddr))
+			assert.Equal(t, tc.wantUnsafe, r.matchLocal(unsafeAddr))
 
-			assert.False(t, allows(tcp[80].Any.Any, vpnAddr))
-			assert.True(t, allows(tcp[80].Any.Any, unsafeAddr))
+			r = ruleOnPort(t, rules.In, iputil.IPProtocolTCP, 80)
+			assert.False(t, r.matchLocal(vpnAddr))
+			assert.True(t, r.matchLocal(unsafeAddr))
 
-			assert.True(t, allows(tcp[443].Any.Any, vpnAddr))
-			assert.True(t, allows(tcp[443].Any.Any, unsafeAddr))
+			r = ruleOnPort(t, rules.In, iputil.IPProtocolTCP, 443)
+			assert.True(t, r.matchLocal(vpnAddr))
+			assert.True(t, r.matchLocal(unsafeAddr))
 		})
 	}
 }

@@ -8,10 +8,10 @@ import (
 	"hash/fnv"
 	"io"
 	"log/slog"
+	"math"
 	"net/netip"
 	"slices"
 
-	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/iputil"
 )
 
@@ -34,24 +34,6 @@ type tableRules struct {
 	anyRules []rule
 	// protoRules holds the rules for each protocol besides proto `any`, ICMPv6 rules are kept with ICMP
 	protoRules [256][]rule
-}
-
-// rule is a parsed rule, so adding it to a Table can't fail
-type rule struct {
-	startPort, endPort int32
-	groups             []string
-	host               string
-	caName, caSha      string
-
-	// cidr is the remote cidr, not valid when the rule doesn't have one
-	cidr    netip.Prefix
-	anyCIDR bool
-
-	// localCIDR is the local addresses the rule allows, anyLocalCIDR allows all of them.
-	// Neither is set for a rule without a local cidr until the Table is built and it gets the default.
-	// localCIDR is shared by every localRules the rule is added to, so it's never changed, see localRules.add
-	localCIDR    *bart.Lite
-	anyLocalCIDR bool
 }
 
 func NewRulesBuilder(l *slog.Logger) *RulesBuilder {
@@ -105,12 +87,10 @@ func (b *RulesBuilder) AddRule(incoming bool, proto uint8, startPort int32, endP
 // Build turns the rules into a Table for each direction, and hashes them. Rules without a local cidr allow
 // vpnNetworks when there are unsafe networks, otherwise any local address.
 func (b *RulesBuilder) Build(vpnNetworks, unsafeNetworks []netip.Prefix) Rules {
-	var defaultLocal *bart.Lite
+	var defaultLocal []netip.Prefix
 	if len(unsafeNetworks) > 0 && !b.defaultLocalCIDRAny {
-		defaultLocal = new(bart.Lite)
-		for _, network := range vpnNetworks {
-			defaultLocal.Insert(network)
-		}
+		// Never nil, even when there are no vpn networks, so that the rules allow nothing rather than everything.
+		defaultLocal = append([]netip.Prefix{}, vpnNetworks...)
 	}
 
 	return Rules{
@@ -125,6 +105,13 @@ func parseRule(startPort, endPort int32, groups []string, host, cidr, localCidr,
 	if startPort > endPort {
 		return rule{}, fmt.Errorf("start port was lower than end port")
 	}
+	if startPort < PortFragment || endPort > math.MaxUint16 {
+		return rule{}, fmt.Errorf("port range %d-%d is outside of %d-%d", startPort, endPort, PortFragment, math.MaxUint16)
+	}
+	// A range that includes port 0 is port `any`.
+	if startPort <= PortAny && PortAny <= endPort {
+		startPort, endPort = PortAny, PortAny
+	}
 
 	r := rule{
 		startPort: startPort,
@@ -135,20 +122,24 @@ func parseRule(startPort, endPort int32, groups []string, host, cidr, localCidr,
 		caSha:     caSha,
 	}
 
+	var anyCIDR bool
 	var err error
-	r.cidr, r.anyCIDR, err = parseCIDR(cidr)
+	r.cidr, anyCIDR, err = parseCIDR(cidr)
 	if err != nil {
 		return rule{}, fmt.Errorf("cidr did not parse; %w", err)
 	}
 
+	// A rule with no group, host, or cidr allows any host, as does a rule with `any` for one of them.
+	r.remoteAny = anyCIDR || host == "any" || slices.Contains(groups, "any") ||
+		(len(groups) == 0 && host == "" && !r.cidr.IsValid())
+
 	var localCIDR netip.Prefix
-	localCIDR, r.anyLocalCIDR, err = parseCIDR(localCidr)
+	localCIDR, r.localAny, err = parseCIDR(localCidr)
 	if err != nil {
 		return rule{}, fmt.Errorf("local_cidr did not parse; %w", err)
 	}
 	if localCIDR.IsValid() {
-		r.localCIDR = new(bart.Lite)
-		r.localCIDR.Insert(localCIDR)
+		r.local = []netip.Prefix{localCIDR}
 	}
 
 	return r, nil
@@ -168,40 +159,96 @@ func (tr *tableRules) add(proto uint8, r rule) {
 
 // build turns the rules into a Table. Rules without a local cidr allow defaultLocal,
 // or any local address when defaultLocal is nil.
-func (tr *tableRules) build(defaultLocal *bart.Lite) *Table {
+func (tr *tableRules) build(defaultLocal []netip.Prefix) *Table {
 	t := &Table{}
 
-	// Every protocol starts out sharing the proto `any` rules, including protos[ProtoAny]
-	anyProto := newPortRules(defaultLocal, tr.anyRules)
-	for proto := range t.protos {
-		t.protos[proto] = anyProto
+	// A rule's id is its index in t.rules.
+	add := func(rules []rule) []int {
+		ids := make([]int, 0, len(rules))
+		for _, r := range rules {
+			ids = append(ids, len(t.rules))
+			t.rules = append(t.rules, r.withDefaultLocal(defaultLocal))
+		}
+		return ids
+	}
+	anyIDs := add(tr.anyRules)
+	var protoIDs [256][]int
+	for proto, rules := range tr.protoRules {
+		protoIDs[proto] = add(rules)
 	}
 
-	// Protocols with rules of their own get a copy of the proto `any` rules too, so a packet only checks one set
-	for proto, rules := range tr.protoRules {
-		if len(rules) > 0 {
-			t.protos[proto] = newPortRules(defaultLocal, tr.anyRules, rules)
+	// Every protocol starts out sharing an index of the proto `any` rules, including protos[ProtoAny]. There is
+	// one for protocols with ports and one for protocols without.
+	anyPorts := newProtoIndex(true, t.rules, anyIDs)
+	anyNoPorts := newProtoIndex(false, t.rules, anyIDs)
+	for proto := range t.protos {
+		if hasPorts(uint8(proto)) {
+			t.protos[proto] = anyPorts
+		} else {
+			t.protos[proto] = anyNoPorts
 		}
 	}
 
-	// ICMP and ICMPv6 share one set of rules, add keeps them together under ICMP
+	// A protocol with rules of its own gets an index of those rules plus the proto `any` rules, so a packet
+	// checks a single index.
+	for proto, ids := range protoIDs {
+		if len(ids) > 0 {
+			t.protos[proto] = newProtoIndex(hasPorts(uint8(proto)), t.rules, anyIDs, ids)
+		}
+	}
+
+	// ICMP and ICMPv6 share one set of rules; add keeps them together under ICMP.
 	t.protos[iputil.IPProtocolICMPv6] = t.protos[iputil.IPProtocolICMP]
 
 	return t
 }
 
-// newPortRules builds portRules from each set of rules, or returns nil when there are none
-func newPortRules(defaultLocal *bart.Lite, ruleSets ...[]rule) portRules {
-	var pr portRules
-	for _, rules := range ruleSets {
-		for _, r := range rules {
-			if pr == nil {
-				pr = portRules{}
-			}
-			pr.add(r.withDefaultLocal(defaultLocal))
+// newProtoIndex builds an index of the rules with the given ids for a protocol with or without ports, or
+// returns nil when there are none.
+func newProtoIndex(hasPorts bool, rules []rule, idSets ...[]int) *protoIndex {
+	ids := slices.Concat(idSets...)
+	if len(ids) == 0 {
+		return nil
+	}
+
+	pi := &protoIndex{hasPorts: hasPorts, fragment: newRuleSet(len(rules))}
+	if hasPorts {
+		pi.byPort = newRuleSets(math.MaxUint16+1, len(rules))
+	} else {
+		pi.packet = newRuleSet(len(rules))
+	}
+
+	for _, id := range ids {
+		pi.add(&rules[id], id)
+	}
+	return pi
+}
+
+// add puts id in every set that r's port clause covers.
+func (pi *protoIndex) add(r *rule, id int) {
+	switch r.startPort {
+	case PortAny:
+		pi.fragment.add(id)
+		if pi.hasPorts {
+			pi.addPorts(0, math.MaxUint16, id)
+		} else {
+			pi.packet.add(id)
+		}
+	case PortFragment:
+		pi.fragment.add(id)
+	default:
+		// A range only applies to a protocol with ports.
+		if pi.hasPorts {
+			pi.addPorts(int(r.startPort), int(r.endPort), id)
 		}
 	}
-	return pr
+}
+
+// addPorts puts id in the set of every port from lo through hi.
+func (pi *protoIndex) addPorts(lo, hi, id int) {
+	for port := lo; port <= hi; port++ {
+		pi.byPort.at(port).add(id)
+	}
 }
 
 // parseCIDR parses a rule's cidr, which is empty, `any`, or a prefix
@@ -217,112 +264,12 @@ func parseCIDR(s string) (prefix netip.Prefix, isAny bool, err error) {
 	return prefix, false, err
 }
 
-// isAny reports whether r matches any host, making its groups, host, and cidr irrelevant
-func (r rule) isAny() bool {
-	if len(r.groups) == 0 && r.host == "" && !r.cidr.IsValid() {
-		return true
-	}
-
-	return slices.Contains(r.groups, "any") || r.host == "any" || r.anyCIDR
-}
-
 // withDefaultLocal returns r allowing defaultLocal, or any local address when defaultLocal is nil,
 // unless r has a local cidr of its own
-func (r rule) withDefaultLocal(defaultLocal *bart.Lite) rule {
-	if !r.anyLocalCIDR && r.localCIDR == nil {
-		r.anyLocalCIDR = defaultLocal == nil
-		r.localCIDR = defaultLocal
+func (r rule) withDefaultLocal(defaultLocal []netip.Prefix) rule {
+	if !r.localAny && r.local == nil {
+		r.localAny = defaultLocal == nil
+		r.local = defaultLocal
 	}
 	return r
-}
-
-func (pr portRules) add(r rule) {
-	for i := r.startPort; i <= r.endPort; i++ {
-		cr := pr[i]
-		if cr == nil {
-			cr = &caRules{}
-			pr[i] = cr
-		}
-		cr.add(r)
-	}
-}
-
-func (cr *caRules) add(r rule) {
-	if r.caSha == "" && r.caName == "" {
-		if cr.Any == nil {
-			cr.Any = &remoteRules{}
-		}
-		cr.Any.add(r)
-		return
-	}
-
-	if r.caSha != "" {
-		getOrNew(&cr.CAShas, r.caSha).add(r)
-	}
-
-	if r.caName != "" {
-		getOrNew(&cr.CANames, r.caName).add(r)
-	}
-}
-
-func (rr *remoteRules) add(r rule) {
-	if r.isAny() {
-		if rr.Any == nil {
-			rr.Any = &localRules{}
-		}
-		rr.Any.add(r)
-		return
-	}
-
-	if len(r.groups) > 0 {
-		lr := &localRules{}
-		lr.add(r)
-		rr.Groups = append(rr.Groups, &groupsRule{
-			Groups:    r.groups,
-			LocalCIDR: lr,
-		})
-	}
-
-	if r.host != "" {
-		getOrNew(&rr.Hosts, r.host).add(r)
-	}
-
-	if r.cidr.IsValid() {
-		prefix := r.cidr.Masked()
-		i := slices.IndexFunc(rr.CIDR, func(cr cidrRule) bool { return cr.Prefix == prefix })
-		if i < 0 {
-			i = len(rr.CIDR)
-			rr.CIDR = append(rr.CIDR, cidrRule{Prefix: prefix, LocalCIDR: &localRules{}})
-		}
-		rr.CIDR[i].LocalCIDR.add(r)
-	}
-}
-
-func (lr *localRules) add(r rule) {
-	if r.anyLocalCIDR {
-		lr.Any = true
-		return
-	}
-
-	// Share the rule's local cidrs until another rule's need adding, then copy them instead of changing them
-	if lr.LocalCIDR == nil {
-		lr.LocalCIDR = r.localCIDR
-		return
-	}
-	for prefix := range r.localCIDR.All() {
-		lr.LocalCIDR = lr.LocalCIDR.InsertPersist(prefix)
-	}
-}
-
-// getOrNew returns m[k], adding a new value for k first when there isn't one. m is made if it's nil.
-func getOrNew[M ~map[K]*V, K comparable, V any](m *M, k K) *V {
-	if *m == nil {
-		*m = make(M)
-	}
-	v := (*m)[k]
-	if v == nil {
-		v = new(V)
-		(*m)[k] = v
-	}
-	return v
 }

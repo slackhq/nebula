@@ -3,7 +3,6 @@ package firewall
 import (
 	"net/netip"
 
-	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/iputil"
 )
@@ -18,54 +17,80 @@ type Rules struct {
 	HashFNV uint32
 }
 
-// Table holds the rules for one direction, the evaluation order is:
-// Proto AND port AND (CA SHA or CA name) AND local CIDR AND (group OR groups OR name OR remote CIDR)
-// A Table doesn't change once built, see RulesBuilder.
+// Table holds the rules for one direction. A packet is allowed when every clause of a single rule allows it:
+// proto AND port AND (CA SHA or CA name) AND local CIDR AND (group OR groups OR name OR remote CIDR).
+// A Table does not change once built; see RulesBuilder.
 type Table struct {
-	// protos holds the rules for each IP protocol number, so a packet is only checked against one set of rules.
-	// A protocol with rules of its own also holds a copy of every proto `any` rule, the rest share the proto `any`
-	// rules, which are at protos[ProtoAny]. nil when a protocol has no rules at all.
-	// ICMP and ICMPv6 share one set of rules.
-	protos [256]portRules
+	// rules holds every rule for the direction. A rule's index in this slice is its id in the ruleSets.
+	rules []rule
+
+	// protos holds the index for each IP protocol number, so a packet is checked against a single index.
+	// A protocol with rules of its own has an index that also includes every proto `any` rule. The remaining
+	// protocols share an index of only the proto `any` rules: one for protocols with ports and one for
+	// protocols without; see hasPorts. An entry is nil when the protocol has no rules at all.
+	// ICMP and ICMPv6 share one index.
+	protos [256]*protoIndex
 }
 
-// Even though ports are uint16, int32 maps are faster for lookup
-// Plus we can use `-1` for fragment rules
-type portRules map[int32]*caRules
-
-// caRules and the types below it only make their maps and tables once a rule needs them, a range of ports
-// gets a copy for every port so empty ones add up
-type caRules struct {
-	Any     *remoteRules
-	CANames map[string]*remoteRules
-	CAShas  map[string]*remoteRules
+// protoIndex holds the rules that can apply to one protocol, in a set for each kind of packet.
+type protoIndex struct {
+	// hasPorts reports whether the protocol has ports; see the hasPorts function.
+	hasPorts bool
+	// byPort has a set for every port number of a protocol with ports. Port 0 is covered only by port `any`
+	// rules, since a range starts at 1.
+	byPort ruleSets
+	// packet holds the rules for a packet of a protocol without ports: the port `any` rules.
+	packet ruleSet
+	// fragment holds the rules for a fragment of any protocol: the port `any` and port `fragment` rules.
+	fragment ruleSet
 }
 
-type remoteRules struct {
-	// Any makes Hosts, Groups, and CIDR irrelevant
-	Any    *localRules
-	Hosts  map[string]*localRules
-	Groups []*groupsRule
-	// CIDR is checked with Prefix.Contains, so 0.0.0.0/0 allows any IPv4 address and ::/0 any IPv6 address,
-	// neither allows the other family
-	CIDR []cidrRule
+// hasPorts reports whether Nebula parses port numbers from packets of proto. parseV4 and parseV6 in outside.go
+// must agree. A rule with a port or a port range only applies to these protocols.
+func hasPorts(proto uint8) bool {
+	switch proto {
+	case iputil.IPProtocolTCP, iputil.IPProtocolUDP, iputil.IPProtocolUDPLite, iputil.IPProtocolDCCP, iputil.IPProtocolSCTP:
+		return true
+	}
+	return false
 }
 
-type groupsRule struct {
-	Groups    []string
-	LocalCIDR *localRules
+// whichMatch returns the set of rules whose proto and port clauses allow p.
+func (pi *protoIndex) whichMatch(p *Packet, incoming bool) ruleSet {
+	switch {
+	case p.Fragment:
+		// The ports of a fragmented packet are in its first fragment, and this is a later one.
+		return pi.fragment
+	case !pi.hasPorts:
+		// The port fields are zero, or for ICMP the identifier, which is only for connection tracking.
+		return pi.packet
+	case incoming:
+		return pi.byPort.at(int(p.LocalPort))
+	default:
+		return pi.byPort.at(int(p.RemotePort))
+	}
 }
 
-type cidrRule struct {
-	// Prefix is masked, so a cidr written two ways is one cidrRule
-	Prefix    netip.Prefix
-	LocalCIDR *localRules
-}
+// rule is a parsed rule. A packet is allowed by the rule when its port, certificate, and address clauses all pass.
+type rule struct {
+	// startPort and endPort are the port clause. A startPort of PortAny covers every port, every packet of a
+	// protocol without ports, and every fragment. PortFragment covers only fragments. A range covers the ports
+	// in it, so it never applies to a protocol without ports.
+	startPort, endPort int32
 
-type localRules struct {
-	Any bool
-	// LocalCIDR is always set when Any isn't. It's shared with other localRules, so it's never changed.
-	LocalCIDR *bart.Lite
+	// caSha and caName pass a certificate issued by either CA. When neither is set, any CA passes.
+	caSha, caName string
+
+	// remoteAny makes host, groups, and cidr irrelevant. Otherwise, the peer passes when any one of them matches.
+	remoteAny bool
+	host      string
+	groups    []string
+	cidr      netip.Prefix // Invalid when the rule has no cidr.
+
+	// localAny allows any local address. Otherwise, local must contain the address. Neither is set for a rule
+	// without a local cidr until the Table is built and the rule gets the default; see withDefaultLocal.
+	localAny bool
+	local    []netip.Prefix
 }
 
 // Match reports whether a rule for the direction p is going allows it
@@ -79,101 +104,33 @@ func (r *Rules) Match(p *Packet, incoming bool, c *cert.CachedCertificate, caPoo
 
 // Match reports whether a rule allows p
 func (t *Table) Match(p *Packet, incoming bool, c *cert.CachedCertificate, caPool *cert.CAPool) bool {
-	return t.protos[p.Protocol].match(p, incoming, c, caPool)
-}
-
-func (pr portRules) match(p *Packet, incoming bool, c *cert.CachedCertificate, caPool *cert.CAPool) bool {
-	// We don't have any allowed ports, bail
-	if pr == nil {
+	proto := t.protos[p.Protocol]
+	if proto == nil {
+		// The protocol has no rules of its own, and there are no proto `any` rules.
 		return false
 	}
 
-	// ICMP has no ports, only the port `any` rules apply, including the ones copied in from proto `any` rules
-	if p.Protocol == iputil.IPProtocolICMP || p.Protocol == iputil.IPProtocolICMPv6 {
-		// port numbers are re-used for connection tracking of ICMP,
-		// but we don't want to actually filter on them.
-		return pr[PortAny].match(p, c, caPool)
-	}
+	// The index yields every rule whose proto and port clauses allow p. The packet is allowed when the
+	// remaining clauses of any of those rules allow it as well.
+	return proto.whichMatch(p, incoming).any(func(id int) bool {
+		return t.rules[id].match(p, c, caPool)
+	})
+}
 
-	var port int32
+// match reports whether r allows p from the peer with certificate c. The port clause is not checked here; the
+// protoIndex has already done so.
+func (r *rule) match(p *Packet, c *cert.CachedCertificate, caPool *cert.CAPool) bool {
+	return r.matchLocal(p.LocalAddr) && r.matchRemote(p.RemoteAddr, c) && r.matchCA(c, caPool)
+}
 
-	if p.Fragment {
-		port = PortFragment
-	} else if incoming {
-		port = int32(p.LocalPort)
-	} else {
-		port = int32(p.RemotePort)
-	}
-
-	// Packets without ports (gre, esp, etc) have port 0, which is PortAny, don't check those rules twice
-	if port != PortAny && pr[port].match(p, c, caPool) {
+// matchLocal reports whether r allows the local address addr.
+func (r *rule) matchLocal(addr netip.Addr) bool {
+	if r.localAny {
 		return true
 	}
 
-	return pr[PortAny].match(p, c, caPool)
-}
-
-func (cr *caRules) match(p *Packet, c *cert.CachedCertificate, caPool *cert.CAPool) bool {
-	if cr == nil {
-		return false
-	}
-
-	if cr.Any.match(p, c) {
-		return true
-	}
-
-	if t, ok := cr.CAShas[c.Certificate.Issuer()]; ok {
-		if t.match(p, c) {
-			return true
-		}
-	}
-
-	s, err := caPool.GetCAForCert(c.Certificate)
-	if err != nil {
-		return false
-	}
-
-	return cr.CANames[s.Certificate.Name()].match(p, c)
-}
-
-func (rr *remoteRules) match(p *Packet, c *cert.CachedCertificate) bool {
-	if rr == nil {
-		return false
-	}
-
-	// Shortcut path for if groups, hosts, or cidr contained an `any`
-	if rr.Any.match(p, c) {
-		return true
-	}
-
-	// Need any of group, host, or cidr to match
-	for _, sg := range rr.Groups {
-		found := false
-
-		for _, g := range sg.Groups {
-			if _, ok := c.InvertedGroups[g]; !ok {
-				found = false
-				break
-			}
-
-			found = true
-		}
-
-		if found && sg.LocalCIDR.match(p, c) {
-			return true
-		}
-	}
-
-	if rr.Hosts != nil {
-		if lr, ok := rr.Hosts[c.Certificate.Name()]; ok {
-			if lr.match(p, c) {
-				return true
-			}
-		}
-	}
-
-	for i := range rr.CIDR {
-		if rr.CIDR[i].Prefix.Contains(p.RemoteAddr) && rr.CIDR[i].LocalCIDR.match(p, c) {
+	for _, prefix := range r.local {
+		if prefix.Contains(addr) {
 			return true
 		}
 	}
@@ -181,14 +138,52 @@ func (rr *remoteRules) match(p *Packet, c *cert.CachedCertificate) bool {
 	return false
 }
 
-func (lr *localRules) match(p *Packet, c *cert.CachedCertificate) bool {
-	if lr == nil {
-		return false
-	}
-
-	if lr.Any {
+// matchRemote reports whether r allows the peer with certificate c, sending from addr. The cidr is checked with
+// Prefix.Contains, so 0.0.0.0/0 allows any IPv4 address and ::/0 allows any IPv6 address; neither allows the
+// other family.
+func (r *rule) matchRemote(addr netip.Addr, c *cert.CachedCertificate) bool {
+	if r.remoteAny {
 		return true
 	}
 
-	return lr.LocalCIDR.Contains(p.LocalAddr)
+	if r.cidr.IsValid() && r.cidr.Contains(addr) {
+		return true
+	}
+
+	if r.host != "" && r.host == c.Certificate.Name() {
+		return true
+	}
+
+	// Every group must be present.
+	if len(r.groups) == 0 {
+		return false
+	}
+	for _, g := range r.groups {
+		if _, ok := c.InvertedGroups[g]; !ok {
+			return false
+		}
+	}
+
+	return true
+}
+
+// matchCA reports whether c was issued by a CA that r allows.
+func (r *rule) matchCA(c *cert.CachedCertificate, caPool *cert.CAPool) bool {
+	if r.caSha == "" && r.caName == "" {
+		return true
+	}
+
+	if r.caSha != "" && r.caSha == c.Certificate.Issuer() {
+		return true
+	}
+
+	if r.caName != "" {
+		s, err := caPool.GetCAForCert(c.Certificate)
+		if err != nil {
+			return false
+		}
+		return r.caName == s.Certificate.Name()
+	}
+
+	return false
 }
