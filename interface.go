@@ -432,6 +432,11 @@ func (f *Interface) pinThisThread(i int) {
 }
 
 func (f *Interface) listenIn(queue tio.Queue, i int) {
+	if sendPipelinePlatform {
+		listenInPipelined(f, queue, i)
+		return
+	}
+
 	// Pinning this thread (and goroutine) to a single CPU keeps every sendmmsg from this goroutine going through the
 	// same TX ring on the nic, so the wire sees per-flow order. Skip entirely when tun.pin_threads is false.
 	if f.pinThreads {
@@ -478,6 +483,11 @@ func (f *Interface) listenIn(queue tio.Queue, i int) {
 func (f *Interface) flushSendBatch(sb *batch.SendBatch, q int) {
 	queued := sb.Len()
 	written, err := sb.Flush()
+	f.accountSendBatch(queued, written, err, q)
+}
+
+// accountSendBatch is flushSendBatch's accounting, also for the writes a send pipeline makes.
+func (f *Interface) accountSendBatch(queued, written int, err error, q int) {
 	if err != nil {
 		f.l.Error("Failed to write outgoing batch", "error", err, "writer", q)
 	}
