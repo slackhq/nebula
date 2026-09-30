@@ -8,12 +8,14 @@ import (
 	"log/slog"
 	"net/netip"
 	"os"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/internal/msgx"
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
@@ -33,7 +35,22 @@ type tun struct {
 	// and routes for it. NEPacketTunnelProvider on darwin does this.
 	hostOwned bool
 	l         *slog.Logger
+
+	// batchMu guards batch, WriteBatch's sendmsg_x scratch.
+	batchMu sync.Mutex
+	batch   tunBatch
 }
+
+// tunBatch is WriteBatch's scratch. The kernel reads every entry in place.
+type tunBatch struct {
+	heads [msgx.Batch][4]byte
+	iovs  [msgx.Batch][2]unix.Iovec
+	hdrs  [msgx.Batch]msgx.Hdr
+	pkts  [msgx.Batch][]byte
+}
+
+// noTunSendX is set once sendmsg_x is refused on the tun; WriteBatch then writes one packet at a time.
+var noTunSendX atomic.Bool
 
 type ifReq struct {
 	Name  [unix.IFNAMSIZ]byte
@@ -615,16 +632,12 @@ func (t *tun) Write(from []byte) (int, error) {
 		return 0, syscall.EIO
 	}
 
-	ipVer := from[0] >> 4
 	var head [4]byte
-	switch ipVer {
-	case 4:
-		head[3] = syscall.AF_INET
-	case 6:
-		head[3] = syscall.AF_INET6
-	default:
-		return 0, fmt.Errorf("unable to determine IP version from packet")
+	af, err := tunAF(from)
+	if err != nil {
+		return 0, err
 	}
+	head[3] = af
 
 	// Grab rc as a local so the compiler can devirtualize the call and keep the closure on the stack.
 	rc, err := t.f.SyscallConn()
@@ -657,6 +670,129 @@ func (t *tun) Write(from []byte) (int, error) {
 	return n - 4, nil
 }
 
+// tunAF returns the utun address-family prefix byte for an IP packet.
+func tunAF(pkt []byte) (byte, error) {
+	switch pkt[0] >> 4 {
+	case 4:
+		return syscall.AF_INET, nil
+	case 6:
+		return syscall.AF_INET6, nil
+	default:
+		return 0, fmt.Errorf("unable to determine IP version from packet")
+	}
+}
+
+// WriteBatch writes pkts to the utun device with sendmsg_x, up to msgx.Batch packets per syscall. utun is a
+// connected datagram socket, so xnu takes the batched send path, though it still hands utun each packet on its own:
+// this saves syscalls, not per-packet kernel work. Safe for concurrent use.
+//
+// An empty packet or one with no IP version is skipped and reported, as Write would. A short count goes on with the
+// rest; EMSGSIZE, which sendmsg_x returns only when the first packet is past the send buffer, sends that one through
+// Write, which reports it. Any other error means the kernel took an unknown prefix and dropped the rest, so it is
+// reported rather than retried, which could deliver packets twice. Under mbuf exhaustion sendmsg_x reports packets it
+// freed unsent as a short count, so they are lost where writev would have delivered them.
+func (t *tun) WriteBatch(pkts [][]byte) error {
+	if noTunSendX.Load() {
+		return t.writeEach(pkts)
+	}
+
+	t.batchMu.Lock()
+	defer t.batchMu.Unlock()
+	b := &t.batch
+	var firstErr error
+	keep := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	for len(pkts) > 0 {
+		n := 0
+		for len(pkts) > 0 && n < msgx.Batch {
+			p := pkts[0]
+			pkts = pkts[1:]
+			if len(p) == 0 {
+				keep(syscall.EIO)
+				continue
+			}
+			af, err := tunAF(p)
+			if err != nil {
+				keep(err)
+				continue
+			}
+			b.heads[n] = [4]byte{3: af}
+			b.iovs[n] = [2]unix.Iovec{{Base: &b.heads[n][0], Len: 4}, {Base: &p[0], Len: uint64(len(p))}}
+			b.hdrs[n] = msgx.Hdr{Iov: &b.iovs[n][0], Iovlen: 2}
+			b.pkts[n] = p
+			n++
+		}
+
+		for off := 0; off < n; {
+			sent, err := t.sendmsgX(b.hdrs[off:n])
+			switch {
+			case err == nil && sent > 0:
+				off += sent
+			case err == nil:
+				keep(t.writeEach(b.pkts[off:n]))
+				off = n
+			case err == unix.EMSGSIZE:
+				keep(t.writeEach(b.pkts[off : off+1]))
+				off++
+			case isUnsupported(err):
+				if noTunSendX.CompareAndSwap(false, true) {
+					t.l.Warn("sendmsg_x unavailable on the tun device, writing one packet per syscall", "error", err)
+				}
+				keep(t.writeEach(b.pkts[off:n]))
+				keep(t.writeEach(pkts))
+				pkts, off = nil, n
+			default:
+				keep(err)
+				off = n
+			}
+		}
+		clear(b.iovs[:n])
+		clear(b.pkts[:n])
+	}
+	return firstErr
+}
+
+// sendmsgX hands hdrs to sendmsg_x, waiting while the socket is full, and returns how many the kernel took.
+func (t *tun) sendmsgX(hdrs []msgx.Hdr) (int, error) {
+	rc, err := t.f.SyscallConn()
+	if err != nil {
+		return 0, err
+	}
+	var sent int
+	var errno syscall.Errno
+	err = rc.Write(func(fd uintptr) bool {
+		sent, errno = msgx.Send(fd, hdrs)
+		// sendmsg_x reports EAGAIN only when it took nothing; a partial batch returns its count.
+		return errno != syscall.EAGAIN
+	})
+	if err != nil {
+		return 0, err
+	}
+	if errno != 0 {
+		return 0, errno
+	}
+	return sent, nil
+}
+
+func isUnsupported(err error) bool {
+	errno, ok := err.(syscall.Errno)
+	return ok && msgx.Unsupported(errno)
+}
+
+// writeEach writes pkts one at a time with Write.
+func (t *tun) writeEach(pkts [][]byte) error {
+	var firstErr error
+	for _, p := range pkts {
+		if _, err := t.Write(p); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
 func (t *tun) Networks() []netip.Prefix {
 	return t.vpnNetworks
 }
@@ -666,5 +802,137 @@ func (t *tun) Name() string {
 }
 
 func (t *tun) Queues(int) ([]tio.Queue, error) {
-	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}, nil
+	t.raisePendingPackets()
+	return []tio.Queue{&tunQueue{t: t, buf: make([]byte, tunReadArena)}}, nil
+}
+
+// tunReadBatch is the most packets one tunQueue.Read returns.
+const tunReadBatch = 64
+
+// tunReadArena is tunQueue's receive buffer. Draining stops once less than defaultBatchBufSize of it is left, so
+// every readv has room for the largest packet utun can return at any device MTU.
+const tunReadArena = 4 * defaultBatchBufSize
+
+// tunQueue is the darwin tun's Queue. Read drains every packet already queued on the utun, up to tunReadBatch, so
+// the caller encrypts and sends them as one batch rather than one per wakeup.
+type tunQueue struct {
+	t    *tun
+	buf  []byte
+	pkts [tunReadBatch]tio.Packet
+}
+
+// Read waits for the utun to become readable, then reads packets until it would block. An error after at least one
+// packet is dropped in favor of returning those packets; a persistent one recurs on the next Read.
+func (q *tunQueue) Read() ([]tio.Packet, error) {
+	rc, err := q.t.f.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+
+	var head [4]byte
+	n, off := 0, 0
+	var callErr error
+	err = rc.Read(func(fd uintptr) bool {
+		for n < tunReadBatch && len(q.buf)-off >= defaultBatchBufSize {
+			iovecs := [2]unix.Iovec{
+				{Base: &head[0], Len: 4},
+				{Base: &q.buf[off], Len: uint64(len(q.buf) - off)},
+			}
+			l, e := tunReadv(int(fd), iovecs[:])
+			if e != nil {
+				if errno, ok := e.(syscall.Errno); ok && errno.Temporary() {
+					// Park on the poller only while there is nothing to hand back.
+					return n > 0
+				}
+				callErr = e
+				return true
+			}
+			if l < 4 {
+				// A datagram too short to carry the AF prefix, or end of file; stop rather than spin on it.
+				return true
+			}
+			end := off + l - 4
+			q.pkts[n] = tio.Packet{Bytes: q.buf[off:end:end]}
+			n++
+			off = end
+		}
+		return true
+	})
+	if n > 0 {
+		return q.pkts[:n], nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nil, callErr
+}
+
+func (q *tunQueue) Write(p []byte) (int, error) { return q.t.Write(p) }
+
+func (q *tunQueue) WriteBatch(pkts [][]byte) error { return q.t.WriteBatch(pkts) }
+
+func (q *tunQueue) Close() error { return q.t.Close() }
+
+// xnu lets one packet wait on a utun control socket by default (if_utun.c utun_ctl_bind): utun_start stops moving
+// packets from the interface's send queue to the socket once one is waiting, and resumes only when a read wakes the
+// interface's starter thread. So every read finds one packet. tunPendingPackets lets a whole read batch wait
+// instead (_UTUN_OPT_MAX_PENDING_PACKETS, bsd/net/if_utun.h, set at SYSPROTO_CONTROL level).
+const (
+	tunPendingPackets             = tunReadBatch
+	_UTUN_OPT_MAX_PENDING_PACKETS = 16
+	_SYSPROTO_CONTROL             = 2
+)
+
+// tunSetsockoptInt and tunGetsockoptInt are setsockopt and getsockopt; tests swap them.
+var (
+	tunSetsockoptInt = unix.SetsockoptInt
+	tunGetsockoptInt = unix.GetsockoptInt
+)
+
+// raisePendingPackets lets up to tunPendingPackets packets wait on the utun control socket, first growing its
+// receive buffer to hold that many packets and their 4 byte AF prefix: utun drops a packet the buffer has no room
+// for, while one over the limit waits in the interface's queue. It sizes for the larger of tun.mtu and the device's
+// current MTU. Failures are logged and leave xnu's default; the tun works either way.
+func (t *tun) raisePendingPackets() {
+	if t.f == nil {
+		return
+	}
+	rc, err := t.f.SyscallConn()
+	if err != nil {
+		return
+	}
+	mtu := max(t.DefaultMTU, t.currentMTU())
+	_ = rc.Control(func(fd uintptr) {
+		pending := tunPendingPackets
+		need := pending * (mtu + 4)
+		if have, err := tunGetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_RCVBUF); err == nil && have < need {
+			if err := tunSetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_RCVBUF, need); err != nil {
+				pending = max(have/(mtu+4), 1)
+				t.l.Warn("could not grow the tun control socket's receive buffer, capping pending packets",
+					"error", err, "rcvbuf", have, "wanted", need, "pending", pending)
+			}
+		}
+		if err := tunSetsockoptInt(int(fd), _SYSPROTO_CONTROL, _UTUN_OPT_MAX_PENDING_PACKETS, pending); err != nil {
+			t.l.Warn("could not raise the tun's pending packet limit, reads will return one packet each",
+				"error", err, "pending", pending)
+		}
+	})
+}
+
+// currentMTU is the utun's MTU as the kernel has it now, or 0 if that can't be read. A host-owned device's MTU
+// comes from the host, not tun.mtu.
+func (t *tun) currentMTU() int {
+	if t.Device == "" {
+		return 0
+	}
+	s, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, unix.IPPROTO_IP)
+	if err != nil {
+		return 0
+	}
+	defer unix.Close(s)
+	ifr, err := unix.IoctlGetIfreqMTU(s, t.Device)
+	if err != nil {
+		return 0
+	}
+	return int(ifr.MTU)
 }
