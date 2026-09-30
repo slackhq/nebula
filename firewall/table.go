@@ -56,7 +56,7 @@ type groupsRule struct {
 
 type localRules struct {
 	Any bool
-	// LocalCIDR is always set when Any isn't
+	// LocalCIDR is always set when Any isn't. It's shared with other localRules, so it's never changed.
 	LocalCIDR *bart.Lite
 }
 

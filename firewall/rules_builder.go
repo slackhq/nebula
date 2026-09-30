@@ -47,9 +47,10 @@ type rule struct {
 	cidr    netip.Prefix
 	anyCIDR bool
 
-	// localCIDRs are the local addresses the rule allows, anyLocalCIDR allows all of them.
+	// localCIDR is the local addresses the rule allows, anyLocalCIDR allows all of them.
 	// Neither is set for a rule without a local cidr until the Table is built and it gets the default.
-	localCIDRs   []netip.Prefix
+	// localCIDR is shared by every localRules the rule is added to, so it's never changed, see localRules.add
+	localCIDR    *bart.Lite
 	anyLocalCIDR bool
 }
 
@@ -104,10 +105,17 @@ func (b *RulesBuilder) AddRule(incoming bool, proto uint8, startPort int32, endP
 // Build turns the rules into a Table for each direction, and hashes them. Rules without a local cidr allow
 // vpnNetworks when there are unsafe networks, otherwise any local address.
 func (b *RulesBuilder) Build(vpnNetworks, unsafeNetworks []netip.Prefix) Rules {
-	anyLocal := len(unsafeNetworks) == 0 || b.defaultLocalCIDRAny
+	var defaultLocal *bart.Lite
+	if len(unsafeNetworks) > 0 && !b.defaultLocalCIDRAny {
+		defaultLocal = new(bart.Lite)
+		for _, network := range vpnNetworks {
+			defaultLocal.Insert(network)
+		}
+	}
+
 	return Rules{
-		In:      b.in.build(anyLocal, vpnNetworks),
-		Out:     b.out.build(anyLocal, vpnNetworks),
+		In:      b.in.build(defaultLocal),
+		Out:     b.out.build(defaultLocal),
 		Hash:    hex.EncodeToString(b.ruleSHA.Sum(nil)),
 		HashFNV: b.ruleFNV.Sum32(),
 	}
@@ -139,7 +147,8 @@ func parseRule(startPort, endPort int32, groups []string, host, cidr, localCidr,
 		return rule{}, fmt.Errorf("local_cidr did not parse; %w", err)
 	}
 	if localCIDR.IsValid() {
-		r.localCIDRs = []netip.Prefix{localCIDR}
+		r.localCIDR = new(bart.Lite)
+		r.localCIDR.Insert(localCIDR)
 	}
 
 	return r, nil
@@ -157,40 +166,42 @@ func (tr *tableRules) add(proto uint8, r rule) {
 	}
 }
 
-// build turns the rules into a Table. Rules without a local cidr allow defaultLocalCIDRs,
-// or any local address when defaultLocalAny is set.
-func (tr *tableRules) build(defaultLocalAny bool, defaultLocalCIDRs []netip.Prefix) *Table {
-	add := func(pr portRules, rules []rule) {
-		for _, r := range rules {
-			if !r.anyLocalCIDR && r.localCIDRs == nil {
-				r.anyLocalCIDR, r.localCIDRs = defaultLocalAny, defaultLocalCIDRs
-			}
-			pr.add(r)
-		}
-	}
-
-	var anyProto portRules
-	if len(tr.anyRules) > 0 {
-		anyProto = portRules{}
-		add(anyProto, tr.anyRules)
-	}
-
+// build turns the rules into a Table. Rules without a local cidr allow defaultLocal,
+// or any local address when defaultLocal is nil.
+func (tr *tableRules) build(defaultLocal *bart.Lite) *Table {
 	t := &Table{}
-	for proto := range t.protos {
-		rules := tr.protoRules[proto]
-		if len(rules) == 0 {
-			t.protos[proto] = anyProto
-			continue
-		}
 
-		pr := portRules{}
-		add(pr, tr.anyRules)
-		add(pr, rules)
-		t.protos[proto] = pr
+	// Every protocol starts out sharing the proto `any` rules, including protos[ProtoAny]
+	anyProto := newPortRules(defaultLocal, tr.anyRules)
+	for proto := range t.protos {
+		t.protos[proto] = anyProto
 	}
+
+	// Protocols with rules of their own get a copy of the proto `any` rules too, so a packet only checks one set
+	for proto, rules := range tr.protoRules {
+		if len(rules) > 0 {
+			t.protos[proto] = newPortRules(defaultLocal, tr.anyRules, rules)
+		}
+	}
+
+	// ICMP and ICMPv6 share one set of rules, add keeps them together under ICMP
 	t.protos[iputil.IPProtocolICMPv6] = t.protos[iputil.IPProtocolICMP]
 
 	return t
+}
+
+// newPortRules builds portRules from each set of rules, or returns nil when there are none
+func newPortRules(defaultLocal *bart.Lite, ruleSets ...[]rule) portRules {
+	var pr portRules
+	for _, rules := range ruleSets {
+		for _, r := range rules {
+			if pr == nil {
+				pr = portRules{}
+			}
+			pr.add(r.withDefaultLocal(defaultLocal))
+		}
+	}
+	return pr
 }
 
 // parseCIDR parses a rule's cidr, which is empty, `any`, or a prefix
@@ -213,6 +224,16 @@ func (r rule) isAny() bool {
 	}
 
 	return slices.Contains(r.groups, "any") || r.host == "any" || r.anyCIDR
+}
+
+// withDefaultLocal returns r allowing defaultLocal, or any local address when defaultLocal is nil,
+// unless r has a local cidr of its own
+func (r rule) withDefaultLocal(defaultLocal *bart.Lite) rule {
+	if !r.anyLocalCIDR && r.localCIDR == nil {
+		r.anyLocalCIDR = defaultLocal == nil
+		r.localCIDR = defaultLocal
+	}
+	return r
 }
 
 func (pr portRules) add(r rule) {
@@ -285,11 +306,13 @@ func (lr *localRules) add(r rule) {
 		return
 	}
 
+	// Share the rule's local cidrs until another rule's need adding, then copy them instead of changing them
 	if lr.LocalCIDR == nil {
-		lr.LocalCIDR = new(bart.Lite)
+		lr.LocalCIDR = r.localCIDR
+		return
 	}
-	for _, prefix := range r.localCIDRs {
-		lr.LocalCIDR.Insert(prefix)
+	for prefix := range r.localCIDR.All() {
+		lr.LocalCIDR = lr.LocalCIDR.InsertPersist(prefix)
 	}
 }
 
