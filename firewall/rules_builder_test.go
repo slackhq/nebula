@@ -175,20 +175,29 @@ func TestRulesBuilder_AddRule(t *testing.T) {
 }
 
 // TestRulesBuilder_sharedLocalCIDR ensures local cidrs shared between rules and ports are copied, not changed,
-// when another rule's local cidrs are added to them
+// when another rule's local cidrs are added to them. The prefixes share their first octet so the copy has to reach
+// past the root of the shared table.
 func TestRulesBuilder_sharedLocalCIDR(t *testing.T) {
-	vpnNetworks := []netip.Prefix{netip.MustParsePrefix("10.1.0.5/16")}
+	vpnNetworks := []netip.Prefix{
+		netip.MustParsePrefix("10.1.0.5/16"),
+		netip.MustParsePrefix("10.2.0.5/16"),
+		netip.MustParsePrefix("fd00:1::5/64"),
+	}
 	unsafeNetworks := []netip.Prefix{netip.MustParsePrefix("192.168.0.0/24")}
-	vpnAddr := netip.MustParseAddr("10.1.9.9")
-	unsafeAddr := netip.MustParseAddr("192.168.0.3")
-	otherAddr := netip.MustParseAddr("172.16.0.1")
+	vpn1 := netip.MustParseAddr("10.1.9.9")
+	vpn2 := netip.MustParseAddr("10.2.9.9")
+	vpn6 := netip.MustParseAddr("fd00:1::9")
+	h1Extra := netip.MustParseAddr("10.3.0.1")
+	h1Extra6 := netip.MustParseAddr("fd00:2::1")
+	h2Own := netip.MustParseAddr("10.4.0.1")
 
 	rb := NewRulesBuilder(test.NewLogger())
-	// h1 allows the vpn networks by default on ports 1 and 2, and 172.16.0.0/12 as well on port 1
+	// h1 allows the vpn networks by default on ports 1 and 2, and 10.3.0.0/16 and fd00:2::/64 as well on port 1
 	require.NoError(t, rb.AddRule(true, iputil.IPProtocolTCP, 1, 2, nil, "h1", "", "", "", ""))
-	require.NoError(t, rb.AddRule(true, iputil.IPProtocolTCP, 1, 1, nil, "h1", "", "172.16.0.0/12", "", ""))
-	// h2 allows 192.168.0.0/24 on ports 1 and 2, and the vpn networks by default as well on port 1
-	require.NoError(t, rb.AddRule(true, iputil.IPProtocolTCP, 1, 2, nil, "h2", "", "192.168.0.0/24", "", ""))
+	require.NoError(t, rb.AddRule(true, iputil.IPProtocolTCP, 1, 1, nil, "h1", "", "10.3.0.0/16", "", ""))
+	require.NoError(t, rb.AddRule(true, iputil.IPProtocolTCP, 1, 1, nil, "h1", "", "fd00:2::/64", "", ""))
+	// h2 allows 10.4.0.0/16 on ports 1 and 2, and the vpn networks by default as well on port 1
+	require.NoError(t, rb.AddRule(true, iputil.IPProtocolTCP, 1, 2, nil, "h2", "", "10.4.0.0/16", "", ""))
 	require.NoError(t, rb.AddRule(true, iputil.IPProtocolTCP, 1, 1, nil, "h2", "", "", "", ""))
 	// h3 only has the default
 	require.NoError(t, rb.AddRule(true, iputil.IPProtocolTCP, 3, 3, nil, "h3", "", "", "", ""))
@@ -200,19 +209,29 @@ func TestRulesBuilder_sharedLocalCIDR(t *testing.T) {
 		addr netip.Addr
 		want bool
 	}{
-		{1, "h1", vpnAddr, true},
-		{1, "h1", otherAddr, true},
-		{1, "h1", unsafeAddr, false},
-		{2, "h1", vpnAddr, true},
-		{2, "h1", otherAddr, false},
-		{1, "h2", unsafeAddr, true},
-		{1, "h2", vpnAddr, true},
-		{1, "h2", otherAddr, false},
-		{2, "h2", unsafeAddr, true},
-		{2, "h2", vpnAddr, false},
-		{3, "h3", vpnAddr, true},
-		{3, "h3", otherAddr, false},
-		{3, "h3", unsafeAddr, false},
+		{1, "h1", vpn1, true},
+		{1, "h1", vpn2, true},
+		{1, "h1", vpn6, true},
+		{1, "h1", h1Extra, true},
+		{1, "h1", h1Extra6, true},
+		{1, "h1", h2Own, false},
+		{2, "h1", vpn1, true},
+		{2, "h1", h1Extra, false},
+		{2, "h1", h1Extra6, false},
+		{1, "h2", h2Own, true},
+		{1, "h2", vpn1, true},
+		{1, "h2", vpn2, true},
+		{1, "h2", vpn6, true},
+		{1, "h2", h1Extra, false},
+		{2, "h2", h2Own, true},
+		{2, "h2", vpn1, false},
+		{2, "h2", vpn6, false},
+		{3, "h3", vpn1, true},
+		{3, "h3", vpn2, true},
+		{3, "h3", vpn6, true},
+		{3, "h3", h1Extra, false},
+		{3, "h3", h1Extra6, false},
+		{3, "h3", h2Own, false},
 	} {
 		lr := rules.In.protos[iputil.IPProtocolTCP][tc.port].Any.Hosts[tc.host]
 		assert.Equal(t, tc.want, lr.match(&Packet{LocalAddr: tc.addr}, nil), "port %d, %s, %s", tc.port, tc.host, tc.addr)
