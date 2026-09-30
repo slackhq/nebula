@@ -268,7 +268,7 @@ func TestRulesBuilder_protoIndex(t *testing.T) {
 	assert.Nil(t, rules.Out.protos[iputil.IPProtocolTCP])
 }
 
-// TestRulesBuilder_manyRules checks that rule ids beyond the first 64 are indexed correctly.
+// TestRulesBuilder_manyRules checks that rule ids beyond the first byte of a rule set are indexed correctly.
 func TestRulesBuilder_manyRules(t *testing.T) {
 	rb := NewRulesBuilder(test.NewLogger())
 	const n = 130
@@ -278,7 +278,7 @@ func TestRulesBuilder_manyRules(t *testing.T) {
 	require.NoError(t, rb.AddRule(true, ProtoAny, PortAny, PortAny, nil, "any", "", "", "", ""))
 	rules := rb.Build(nil, nil)
 
-	assert.Equal(t, 3, rules.In.protos[iputil.IPProtocolTCP].byPort.setLen)
+	assert.Equal(t, ruleSetLen(n+1), rules.In.protos[iputil.IPProtocolTCP].byPort.setLen)
 	for i := range n {
 		rs := rules.In.rulesAt(iputil.IPProtocolTCP, int32(i+1))
 		require.Len(t, rs, 2, "port %d", i+1)

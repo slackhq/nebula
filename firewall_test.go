@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
 	"net/netip"
 	"testing"
@@ -418,6 +419,40 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 }
 
 var benchMatchSink bool
+
+// BenchmarkFirewallTable_matchManyRules measures a table with more rules than fit in one word of a rule set.
+// Rule 0 is a proto `any` rule that fails on host, and rules 1 through 130 are tcp ports 1 through 130 for hosts
+// h1 through h130, so the last rule id is the one that passes.
+func BenchmarkFirewallTable_matchManyRules(b *testing.B) {
+	rb := firewall.NewRulesBuilder(test.NewLogger())
+	require.NoError(b, rb.AddRule(true, firewall.ProtoAny, firewall.PortAny, firewall.PortAny, nil, "nope", "", "", "", ""))
+	for i := 1; i <= 130; i++ {
+		require.NoError(b, rb.AddRule(true, iputil.IPProtocolTCP, int32(i), int32(i), nil, fmt.Sprintf("h%d", i), "", "", "", ""))
+	}
+	ft := rb.Build(nil, nil).In
+	cp := cert.NewCAPool()
+	c := &cert.CachedCertificate{Certificate: &dummyCert{name: "h130"}, InvertedGroups: map[string]struct{}{}}
+
+	for _, tc := range []struct {
+		name string
+		port uint16
+		want bool
+	}{
+		{"fail on port", 5000, false},
+		{"pass on name, last id", 130, true},
+		{"fail on name, middle id", 65, false},
+	} {
+		p := &firewall.Packet{Protocol: iputil.IPProtocolTCP, LocalPort: tc.port}
+		b.Run(tc.name, func(b *testing.B) {
+			if ft.Match(p, true, c, cp) != tc.want {
+				b.Fatal("wrong verdict")
+			}
+			for b.Loop() {
+				benchMatchSink = ft.Match(p, true, c, cp)
+			}
+		})
+	}
+}
 
 func TestFirewall_Drop2(t *testing.T) {
 	ob := &bytes.Buffer{}
