@@ -14,6 +14,7 @@ import (
 
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/cert_test"
+	"github.com/slackhq/nebula/commands"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/require"
 )
@@ -67,9 +68,11 @@ func TestCommandOutput(t *testing.T) {
 	control.Start()
 	t.Cleanup(func() { control.Stop() })
 
+	reg := control.Commands().Clone()
+
 	run := func(args ...string) string {
 		buf := &bytes.Buffer{}
-		control.SSH().Dispatch(strings.Join(args, " "), buf)
+		_ = reg.DispatchArgs(args, strings.Join(args, " "), commands.NewStringWriter(buf))
 		return buf.String()
 	}
 
