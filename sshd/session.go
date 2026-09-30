@@ -140,17 +140,22 @@ func (s *session) handleInput() {
 }
 
 func (s *session) dispatchCommand(line string, w StringWriter) {
+	dispatch(s.commands, line, w)
+}
+
+// dispatch parses one command line and runs it against commands, writing to w.
+func dispatch(commands *radix.Tree, line string, w StringWriter) {
 	args, err := shlex.Split(line, true)
 	if err != nil {
 		return
 	}
 
 	if len(args) == 0 {
-		dumpCommands(s.commands, w)
+		dumpCommands(commands, w)
 		return
 	}
 
-	c, err := lookupCommand(s.commands, args[0])
+	c, err := lookupCommand(commands, args[0])
 	if err != nil {
 		return
 	}
@@ -159,12 +164,12 @@ func (s *session) dispatchCommand(line string, w StringWriter) {
 		err := w.WriteLine(fmt.Sprintf("did not understand: %s", line))
 		_ = err
 
-		dumpCommands(s.commands, w)
+		dumpCommands(commands, w)
 		return
 	}
 
 	if checkHelpArgs(args) {
-		s.dispatchCommand(fmt.Sprintf("%s %s", "help", c.Name), w)
+		dispatch(commands, fmt.Sprintf("%s %s", "help", c.Name), w)
 		return
 	}
 
