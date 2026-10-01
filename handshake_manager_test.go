@@ -263,3 +263,41 @@ func Test_PendingHandshakeHasRemotes(t *testing.T) {
 	assert.Equal(t, []netip.AddrPort{other}, hi.remotes.CopyAddrs(preferredRanges))
 	assert.Equal(t, other, hi.GetRemote())
 }
+
+// newRemotesRaceFixture builds a handshake manager with an established tunnel to vpnAddr whose
+// RemoteList is the lighthouse's cached list, the state every teardown-during-handshake race starts from.
+func newRemotesRaceFixture(t *testing.T, vpnAddr netip.Addr) (*HandshakeManager, *Interface, *HostInfo) {
+	t.Helper()
+	l := test.NewLogger()
+	mainHM := newHostMap(l)
+	preferredRanges := []netip.Prefix{}
+	mainHM.preferredRanges.Store(&preferredRanges)
+
+	lh := newTestLighthouse()
+	hm := NewHandshakeManager(l, mainHM, lh, &udp.NoopConn{}, defaultHandshakeConfig)
+	f := &Interface{hostMap: mainHM, lightHouse: lh, handshakeManager: hm, l: l}
+	hm.f = f
+
+	established := &HostInfo{
+		vpnAddrs:        []netip.Addr{vpnAddr},
+		localIndexId:    1,
+		remoteIndexId:   101,
+		remotes:         lh.QueryCache([]netip.Addr{vpnAddr}),
+		HandshakePacket: map[uint8][]byte{},
+	}
+	mainHM.Lock()
+	mainHM.unlockedAddHostInfo(established, f)
+	mainHM.Unlock()
+
+	return hm, f, established
+}
+
+// With no handshake pending, tearing down the last tunnel still evicts the list.
+func Test_CloseTunnelEvictsWithoutPendingHandshake(t *testing.T) {
+	vpnAddr := netip.MustParseAddr("172.1.1.2")
+	_, f, established := newRemotesRaceFixture(t, vpnAddr)
+
+	f.closeTunnel(established)
+	assert.NotContains(t, f.hostMap.Hosts, vpnAddr)
+	assert.NotContains(t, f.lightHouse.addrMap, vpnAddr)
+}
