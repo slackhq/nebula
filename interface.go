@@ -356,7 +356,19 @@ type rxContext struct {
 	h            *header.H
 	fwPacket     *firewall.ParsedPacket
 	hostmapCache map[uint32]*HostInfo
-	lhh          *LightHouseHandler
+
+	// lastAllowed is the last flow the inbound firewall let in during this batch. UDP GRO hands us segments
+	// in runs from the same flow, so the rest of a run can skip the firewall. Cleared by endBatch.
+	lastAllowed     firewall.Packet
+	lastAllowedHost *HostInfo
+	lhh             *LightHouseHandler
+}
+
+// endBatch forgets what was learned during a batch, so nothing outlives a hostmap or firewall change by more than one batch
+func (rxc *rxContext) endBatch() {
+	clear(rxc.hostmapCache)
+	rxc.lastAllowed = firewall.Packet{}
+	rxc.lastAllowedHost = nil
 }
 
 func newRxContext(f *Interface, q int) *rxContext {
@@ -389,7 +401,7 @@ func (f *Interface) listenOut(i int) {
 		if err := f.batchers[i].Flush(); err != nil {
 			f.l.Error("Failed to flush tun coalescer", "error", err)
 		}
-		clear(rxc.hostmapCache)
+		rxc.endBatch()
 	}
 
 	err := li.ListenOut(listener, flusher)
