@@ -469,6 +469,7 @@ func (hm *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket
 		)
 	}
 
+	hm.unlockedReattachRemotes(hostinfo)
 	hm.mainHostMap.unlockedAddHostInfo(hostinfo, f)
 	return existingHostInfo, nil
 }
@@ -493,7 +494,25 @@ func (hm *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 
 	// We need to remove from the pending hostmap first to avoid undoing work when after to the main hostmap.
 	hm.unlockedDeleteHostInfo(hostinfo)
+	hm.unlockedReattachRemotes(hostinfo)
 	hm.mainHostMap.unlockedAddHostInfo(hostinfo, f)
+}
+
+// unlockedReattachRemotes points hostinfo at the lighthouse's current RemoteList and records our
+// current remote in it. The caller must hold the main hostmap write lock, which closeTunnel also
+// holds across its delete and eviction.
+func (hm *HandshakeManager) unlockedReattachRemotes(hostinfo *HostInfo) {
+	current := hm.lightHouse.QueryCache(hostinfo.vpnAddrs)
+	if current == hostinfo.remotes {
+		return
+	}
+
+	hostinfo.remotes = current
+	// The handshake recorded where the peer answered from into the old list. Carry it over so the
+	// address we know works is not lost with it. A relayed handshake has no remote to carry.
+	if remote := hostinfo.GetRemote(); remote.IsValid() {
+		current.LearnRemote(hostinfo.vpnAddrs[0], remote)
+	}
 }
 
 // allocateIndex generates a unique localIndexId for this HostInfo
