@@ -415,10 +415,13 @@ all.
 
 ### Per-tunnel: back to a single session
 
-`newLaneSet` returns `nil`, and the tunnel is an ordinary one, when:
+The tunnel gets no lane set and is an ordinary one when:
 
-- the peer advertised no port count (vanilla peer, or multiport off there), or
-- `sessions < 2`, i.e. neither side offers a lane.
+- the peer advertised no port count (vanilla peer, or multiport off there),
+- the peer's advertised range is invalid -- a zero base port, or a range running
+  past 65535. `maybeAllocLanes` logs `Ignoring multiport advert with an invalid
+  port range` rather than aiming lanes at ports that wrapped, or
+- `sessions < 2`, i.e. neither side offers a lane (`newLaneSet` returns `nil`).
 
 `txLanes` can also land at 1 -- we bound ports but the peer bound only one -- in
 which case the set exists for RX but we never send on a lane.
@@ -520,7 +523,9 @@ up never demotes them.
 Logs worth grepping: `multiport enabled` and `multiport routines` at startup, the
 `lanes` attr on handshake completion (`tx`, `sessions`, `peerBasePort`,
 `peerPorts`, `portOffset`), and `Multiport lane up` / `Multiport lane demoted`,
-both of which name the `udpAddr` involved.
+both of which name the `udpAddr` involved. A lane that has never come up logs
+`Multiport lane not coming up` at Warn, once, after 3 unanswered probes in a
+row -- usually a sign that only the base port is open.
 
 ## Known gaps
 

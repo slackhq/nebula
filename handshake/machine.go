@@ -345,8 +345,8 @@ func (m *Machine) processPayload(msg []byte, flags msgFlags) error {
 		// Multiport advert from the peer's side of the exchange. Out-of-range
 		// values mean a peer we can't pair lanes with; ignore the advert
 		// rather than failing the handshake — the tunnel itself is fine, it
-		// just won't get lanes. Semantic policing (port-count caps, lane
-		// clamping) belongs to the handshake manager.
+		// just won't get lanes. Semantic policing (the port range, lane
+		// clamping) belongs to the handshake manager and newLaneSet.
 		var peerLanes *LaneDetails
 		if m.result.Initiator {
 			peerLanes = payload.ResponderLanes

@@ -64,6 +64,11 @@ const (
 	// laneMaxFails caps the failure counter; the backoff saturates well before.
 	laneMaxFails = 8
 
+	// laneWarnFails is how many unanswered probes a lane that has never come up
+	// takes before it is worth a warning. One or two can be loss; this many in a
+	// row is usually a firewall that only opens the base port.
+	laneWarnFails = 3
+
 	// laneProbeTimeout is how long a probe may go unacked before it counts as a
 	// failure. It is shorter than the connection manager's check interval on
 	// purpose: an outstanding probe is judged on the next tick either way, and a
@@ -168,6 +173,12 @@ type laneProbeState struct {
 
 	// retryAt is the earliest we may probe this lane again.
 	retryAt time.Time
+}
+
+// validLaneAdvert reports whether a peer's advertised port range is one we can
+// aim lanes at: a real base port, and every port in the range a valid one.
+func validLaneAdvert(basePort, portCount uint32) bool {
+	return basePort != 0 && portCount != 0 && basePort+portCount-1 <= 0xffff
 }
 
 // newLaneSet sets up the lanes for a freshly completed base handshake. It
@@ -592,6 +603,11 @@ func (f *Interface) probeLanes(hostinfo *HostInfo, now time.Time, nb, out []byte
 			if up {
 				ls.txAddr[s].Store(nil)
 				hostinfo.logger(f.l).Info("Multiport lane demoted, probe unanswered", "lane", s, "udpAddr", p.target)
+			} else if p.lastAck.IsZero() && p.fails == laneWarnFails {
+				// Said once per lane: fails only passes through this value again
+				// after an ack or a reset clears it.
+				hostinfo.logger(f.l).Warn("Multiport lane not coming up, probes unanswered; check that the peer's lane ports are reachable",
+					"lane", s, "udpAddr", p.target, "fails", p.fails)
 			}
 			continue
 		}

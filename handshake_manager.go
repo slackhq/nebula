@@ -732,6 +732,13 @@ func (hm *HandshakeManager) maybeAllocLanes(hostinfo *HostInfo, result *handshak
 	if len(hm.f.myVpnAddrs) == 0 || len(hostinfo.vpnAddrs) == 0 {
 		return
 	}
+	if !validLaneAdvert(result.PeerBasePort, result.PeerPortCount) {
+		// Lane targets are computed in uint16, so a range like this would wrap
+		// onto low ports. The tunnel itself is fine; it just gets no lanes.
+		hostinfo.logger(hm.l).Warn("Ignoring multiport advert with an invalid port range",
+			"peerBasePort", result.PeerBasePort, "peerPorts", result.PeerPortCount)
+		return
+	}
 
 	hostinfo.lanes = newLaneSet(result, hm.config.laneCount, hm.f.myVpnAddrs[0], hostinfo.vpnAddrs[0])
 }

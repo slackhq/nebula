@@ -1,8 +1,10 @@
 package nebula
 
 import (
+	"bytes"
 	"log/slog"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -1106,4 +1108,68 @@ func TestHandshakeManagerVpnIpsIdentityDelete(t *testing.T) {
 	// And deleting the actual owner still works.
 	hm.DeleteHostInfo(pendingBase)
 	assert.Nil(t, hm.QueryVpnAddr(vpnIp))
+}
+
+func TestValidLaneAdvert(t *testing.T) {
+	assert.True(t, validLaneAdvert(4242, 4))
+	assert.True(t, validLaneAdvert(65535, 1))
+	assert.True(t, validLaneAdvert(65532, 4), "a range ending on 65535 is valid")
+	assert.False(t, validLaneAdvert(0, 4), "no base port")
+	assert.False(t, validLaneAdvert(4242, 0), "no ports")
+	assert.False(t, validLaneAdvert(65533, 4), "the range runs past 65535")
+}
+
+// A peer advertising a port range that would wrap gets a plain tunnel, and a
+// warning saying why, rather than lanes aimed at low ports.
+func TestMaybeAllocLanesRejectsInvalidRange(t *testing.T) {
+	hostMap := newHostMap(test.NewLogger())
+	ifce := newLaneTestInterface(hostMap)
+	ifce.myVpnAddrs = []netip.Addr{testMyAddr}
+	hm := ifce.handshakeManager
+	hm.config.laneCount = 4
+	var buf bytes.Buffer
+	hm.l = test.NewLoggerWithOutputAndLevel(&buf, slog.LevelWarn)
+
+	initR, _ := runTestHandshake(t)
+
+	hi := &HostInfo{vpnAddrs: []netip.Addr{testPeerAddr}}
+	initR.PeerBasePort, initR.PeerPortCount, initR.PeerTxLanes = 65530, 16, 4
+	hm.maybeAllocLanes(hi, initR)
+	assert.Nil(t, hi.lanes)
+	assert.Contains(t, buf.String(), "invalid port range")
+
+	hi = &HostInfo{vpnAddrs: []netip.Addr{testPeerAddr}}
+	initR.PeerBasePort = 4242
+	hm.maybeAllocLanes(hi, initR)
+	assert.NotNil(t, hi.lanes)
+}
+
+// A lane that has never come up warns once after laneWarnFails unanswered
+// probes, and not again while it keeps failing.
+func TestLaneNotComingUpWarnsOnce(t *testing.T) {
+	hostMap := newHostMap(test.NewLogger())
+	ifce := newLaneTestInterface(hostMap)
+	var buf bytes.Buffer
+	ifce.l = test.NewLoggerWithOutputAndLevel(&buf, slog.LevelWarn)
+
+	initR, _ := runTestHandshake(t)
+	ls := newTestLaneSet(t, initR, 2, 2, 4242, 2)
+	hi := newTestLaneHostInfo(t, initR, ls)
+
+	nb := make([]byte, 12)
+	out := make([]byte, mtu)
+	now := time.Now()
+	const msg = "Multiport lane not coming up"
+	for i := 1; i <= laneWarnFails+3; i++ {
+		ls.demand[1].Store(true)
+		ifce.probeLanes(hi, now, nb, out)
+		now = now.Add(laneProbeTimeout)
+		ifce.probeLanes(hi, now, nb, out)
+		now = now.Add(laneRetryMax)
+
+		if i < laneWarnFails {
+			require.NotContains(t, buf.String(), msg, "warned after %d failures", i)
+		}
+	}
+	assert.Equal(t, 1, strings.Count(buf.String(), msg))
 }
