@@ -972,6 +972,9 @@ func convertRule(l *slog.Logger, p any, table string, i int) (rule, error) {
 		if len(v) > 1 {
 			return r, errors.New("group should contain a single value, an array with more than one entry was provided")
 		}
+		if len(v) == 0 {
+			return r, errors.New("group should contain a single value, an empty array was provided")
+		}
 
 		l.Warn("group was an array with a single value, converting to simple value",
 			"table", table,
@@ -982,13 +985,15 @@ func convertRule(l *slog.Logger, p any, table string, i int) (rule, error) {
 
 	singleGroup := toString("group", m)
 
-	if rg, ok := m["groups"]; ok {
+	// A null value, `groups:` with nothing after it, is the same as no groups
+	if rg, ok := m["groups"]; ok && rg != nil {
 		switch reflect.TypeOf(rg).Kind() {
 		case reflect.Slice:
+			// Every entry is read as a string, as the other fields are, so `groups: [1, 2]` is the groups "1" and "2"
 			v := reflect.ValueOf(rg)
 			r.Groups = make([]string, v.Len())
 			for i := 0; i < v.Len(); i++ {
-				r.Groups[i] = v.Index(i).Interface().(string)
+				r.Groups[i] = fmt.Sprintf("%v", v.Index(i).Interface())
 			}
 		case reflect.String:
 			r.Groups = []string{rg.(string)}
