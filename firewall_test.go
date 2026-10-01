@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log/slog"
 	"math"
@@ -23,39 +24,12 @@ func TestNewFirewall(t *testing.T) {
 	l := test.NewLogger()
 	c := &dummyCert{}
 	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
-	conntrack := fw.Conntrack
-	assert.NotNil(t, conntrack)
-	assert.NotNil(t, conntrack.Conns)
-	assert.NotNil(t, conntrack.TimerWheel)
+	assert.NotNil(t, fw.Conntrack)
 	assert.NotNil(t, fw.InRules)
 	assert.NotNil(t, fw.OutRules)
 	assert.Equal(t, time.Second, fw.TCPTimeout)
 	assert.Equal(t, time.Minute, fw.UDPTimeout)
 	assert.Equal(t, time.Hour, fw.DefaultTimeout)
-
-	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
-	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
-	assert.Equal(t, 3602, conntrack.TimerWheel.wheelLen)
-
-	fw = NewFirewall(l, time.Second, time.Hour, time.Minute, c)
-	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
-	assert.Equal(t, 3602, conntrack.TimerWheel.wheelLen)
-
-	fw = NewFirewall(l, time.Hour, time.Second, time.Minute, c)
-	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
-	assert.Equal(t, 3602, conntrack.TimerWheel.wheelLen)
-
-	fw = NewFirewall(l, time.Hour, time.Minute, time.Second, c)
-	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
-	assert.Equal(t, 3602, conntrack.TimerWheel.wheelLen)
-
-	fw = NewFirewall(l, time.Minute, time.Hour, time.Second, c)
-	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
-	assert.Equal(t, 3602, conntrack.TimerWheel.wheelLen)
-
-	fw = NewFirewall(l, time.Minute, time.Second, time.Hour, c)
-	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
-	assert.Equal(t, 3602, conntrack.TimerWheel.wheelLen)
 }
 
 func TestFirewall_AddRule(t *testing.T) {
@@ -212,44 +186,44 @@ func TestFirewall_Drop(t *testing.T) {
 	cp := cert.NewCAPool()
 
 	// Drop outbound
-	assert.Equal(t, ErrNoMatchingRule, fw.Drop(p, false, &h, cp, nil))
+	assert.Equal(t, ErrNoMatchingRule, fw.Drop(p, false, &h, cp))
 	// Allow inbound
 	resetConntrack(fw)
-	require.NoError(t, fw.Drop(p, true, &h, cp, nil))
+	require.NoError(t, fw.Drop(p, true, &h, cp))
 	// Allow outbound because conntrack
-	require.NoError(t, fw.Drop(p, false, &h, cp, nil))
+	require.NoError(t, fw.Drop(p, false, &h, cp))
 
 	// test remote mismatch
 	oldRemote := p.RemoteAddr
 	p.RemoteAddr = netip.MustParseAddr("1.2.3.10")
-	assert.Equal(t, fw.Drop(p, false, &h, cp, nil), ErrInvalidRemoteIP)
+	assert.Equal(t, fw.Drop(p, false, &h, cp), ErrInvalidRemoteIP)
 	p.RemoteAddr = oldRemote
 
 	// ensure signer doesn't get in the way of group checks
 	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, &c)
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"nope"}, "", "", "", "", "signer-shasum"))
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"default-group"}, "", "", "", "", "signer-shasum-bad"))
-	assert.Equal(t, fw.Drop(p, true, &h, cp, nil), ErrNoMatchingRule)
+	assert.Equal(t, fw.Drop(p, true, &h, cp), ErrNoMatchingRule)
 
 	// test caSha doesn't drop on match
 	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, &c)
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"nope"}, "", "", "", "", "signer-shasum-bad"))
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"default-group"}, "", "", "", "", "signer-shasum"))
-	require.NoError(t, fw.Drop(p, true, &h, cp, nil))
+	require.NoError(t, fw.Drop(p, true, &h, cp))
 
 	// ensure ca name doesn't get in the way of group checks
 	cp.CAs["signer-shasum"] = &cert.CachedCertificate{Certificate: &dummyCert{name: "ca-good"}}
 	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, &c)
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"nope"}, "", "", "", "ca-good", ""))
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"default-group"}, "", "", "", "ca-good-bad", ""))
-	assert.Equal(t, fw.Drop(p, true, &h, cp, nil), ErrNoMatchingRule)
+	assert.Equal(t, fw.Drop(p, true, &h, cp), ErrNoMatchingRule)
 
 	// test caName doesn't drop on match
 	cp.CAs["signer-shasum"] = &cert.CachedCertificate{Certificate: &dummyCert{name: "ca-good"}}
 	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, &c)
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"nope"}, "", "", "", "ca-good-bad", ""))
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"default-group"}, "", "", "", "ca-good", ""))
-	require.NoError(t, fw.Drop(p, true, &h, cp, nil))
+	require.NoError(t, fw.Drop(p, true, &h, cp))
 }
 
 func TestFirewall_DropV6(t *testing.T) {
@@ -290,44 +264,44 @@ func TestFirewall_DropV6(t *testing.T) {
 	cp := cert.NewCAPool()
 
 	// Drop outbound
-	assert.Equal(t, ErrNoMatchingRule, fw.Drop(p, false, &h, cp, nil))
+	assert.Equal(t, ErrNoMatchingRule, fw.Drop(p, false, &h, cp))
 	// Allow inbound
 	resetConntrack(fw)
-	require.NoError(t, fw.Drop(p, true, &h, cp, nil))
+	require.NoError(t, fw.Drop(p, true, &h, cp))
 	// Allow outbound because conntrack
-	require.NoError(t, fw.Drop(p, false, &h, cp, nil))
+	require.NoError(t, fw.Drop(p, false, &h, cp))
 
 	// test remote mismatch
 	oldRemote := p.RemoteAddr
 	p.RemoteAddr = netip.MustParseAddr("fd12::56")
-	assert.Equal(t, fw.Drop(p, false, &h, cp, nil), ErrInvalidRemoteIP)
+	assert.Equal(t, fw.Drop(p, false, &h, cp), ErrInvalidRemoteIP)
 	p.RemoteAddr = oldRemote
 
 	// ensure signer doesn't get in the way of group checks
 	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, &c)
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"nope"}, "", "", "", "", "signer-shasum"))
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"default-group"}, "", "", "", "", "signer-shasum-bad"))
-	assert.Equal(t, fw.Drop(p, true, &h, cp, nil), ErrNoMatchingRule)
+	assert.Equal(t, fw.Drop(p, true, &h, cp), ErrNoMatchingRule)
 
 	// test caSha doesn't drop on match
 	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, &c)
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"nope"}, "", "", "", "", "signer-shasum-bad"))
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"default-group"}, "", "", "", "", "signer-shasum"))
-	require.NoError(t, fw.Drop(p, true, &h, cp, nil))
+	require.NoError(t, fw.Drop(p, true, &h, cp))
 
 	// ensure ca name doesn't get in the way of group checks
 	cp.CAs["signer-shasum"] = &cert.CachedCertificate{Certificate: &dummyCert{name: "ca-good"}}
 	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, &c)
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"nope"}, "", "", "", "ca-good", ""))
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"default-group"}, "", "", "", "ca-good-bad", ""))
-	assert.Equal(t, fw.Drop(p, true, &h, cp, nil), ErrNoMatchingRule)
+	assert.Equal(t, fw.Drop(p, true, &h, cp), ErrNoMatchingRule)
 
 	// test caName doesn't drop on match
 	cp.CAs["signer-shasum"] = &cert.CachedCertificate{Certificate: &dummyCert{name: "ca-good"}}
 	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, &c)
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"nope"}, "", "", "", "ca-good-bad", ""))
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"default-group"}, "", "", "", "ca-good", ""))
-	require.NoError(t, fw.Drop(p, true, &h, cp, nil))
+	require.NoError(t, fw.Drop(p, true, &h, cp))
 }
 
 func BenchmarkFirewallTable_match(b *testing.B) {
@@ -534,10 +508,10 @@ func TestFirewall_Drop2(t *testing.T) {
 	cp := cert.NewCAPool()
 
 	// h1/c1 lacks the proper groups
-	require.ErrorIs(t, fw.Drop(p, true, &h1, cp, nil), ErrNoMatchingRule)
+	require.ErrorIs(t, fw.Drop(p, true, &h1, cp), ErrNoMatchingRule)
 	// c has the proper groups
 	resetConntrack(fw)
-	require.NoError(t, fw.Drop(p, true, &h, cp, nil))
+	require.NoError(t, fw.Drop(p, true, &h, cp))
 }
 
 func TestFirewall_Drop3(t *testing.T) {
@@ -614,18 +588,18 @@ func TestFirewall_Drop3(t *testing.T) {
 	cp := cert.NewCAPool()
 
 	// c1 should pass because host match
-	require.NoError(t, fw.Drop(p, true, &h1, cp, nil))
+	require.NoError(t, fw.Drop(p, true, &h1, cp))
 	// c2 should pass because ca sha match
 	resetConntrack(fw)
-	require.NoError(t, fw.Drop(p, true, &h2, cp, nil))
+	require.NoError(t, fw.Drop(p, true, &h2, cp))
 	// c3 should fail because no match
 	resetConntrack(fw)
-	assert.Equal(t, fw.Drop(p, true, &h3, cp, nil), ErrNoMatchingRule)
+	assert.Equal(t, fw.Drop(p, true, &h3, cp), ErrNoMatchingRule)
 
 	// Test a remote address match
 	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 1, 1, []string{}, "", "1.2.3.4/24", "", "", ""))
-	require.NoError(t, fw.Drop(p, true, &h1, cp, nil))
+	require.NoError(t, fw.Drop(p, true, &h1, cp))
 }
 
 func TestFirewall_Drop3V6(t *testing.T) {
@@ -662,7 +636,7 @@ func TestFirewall_Drop3V6(t *testing.T) {
 	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
 	cp := cert.NewCAPool()
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 1, 1, []string{}, "", "fd12::34/120", "", "", ""))
-	require.NoError(t, fw.Drop(p, true, &h, cp, nil))
+	require.NoError(t, fw.Drop(p, true, &h, cp))
 }
 
 func TestFirewall_DropConntrackReload(t *testing.T) {
@@ -703,12 +677,12 @@ func TestFirewall_DropConntrackReload(t *testing.T) {
 	cp := cert.NewCAPool()
 
 	// Drop outbound
-	assert.Equal(t, fw.Drop(p, false, &h, cp, nil), ErrNoMatchingRule)
+	assert.Equal(t, fw.Drop(p, false, &h, cp), ErrNoMatchingRule)
 	// Allow inbound
 	resetConntrack(fw)
-	require.NoError(t, fw.Drop(p, true, &h, cp, nil))
+	require.NoError(t, fw.Drop(p, true, &h, cp))
 	// Allow outbound because conntrack
-	require.NoError(t, fw.Drop(p, false, &h, cp, nil))
+	require.NoError(t, fw.Drop(p, false, &h, cp))
 
 	oldFw := fw
 	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
@@ -717,7 +691,7 @@ func TestFirewall_DropConntrackReload(t *testing.T) {
 	fw.rulesVersion = oldFw.rulesVersion + 1
 
 	// Allow outbound because conntrack and new rules allow port 10
-	require.NoError(t, fw.Drop(p, false, &h, cp, nil))
+	require.NoError(t, fw.Drop(p, false, &h, cp))
 
 	oldFw = fw
 	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
@@ -726,7 +700,7 @@ func TestFirewall_DropConntrackReload(t *testing.T) {
 	fw.rulesVersion = oldFw.rulesVersion + 1
 
 	// Drop outbound because conntrack doesn't match new ruleset
-	assert.Equal(t, fw.Drop(p, false, &h, cp, nil), ErrNoMatchingRule)
+	assert.Equal(t, fw.Drop(p, false, &h, cp), ErrNoMatchingRule)
 }
 
 func TestFirewall_ICMPPortBehavior(t *testing.T) {
@@ -771,12 +745,12 @@ func TestFirewall_ICMPPortBehavior(t *testing.T) {
 			p.LocalPort = 0
 			p.RemotePort = 0
 			// Drop outbound
-			assert.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+			assert.Equal(t, fw.Drop(*p, false, &h, cp), ErrNoMatchingRule)
 			// Allow inbound
 			resetConntrack(fw)
-			require.NoError(t, fw.Drop(*p, true, &h, cp, nil))
+			require.NoError(t, fw.Drop(*p, true, &h, cp))
 			//now also allow outbound
-			require.NoError(t, fw.Drop(*p, false, &h, cp, nil))
+			require.NoError(t, fw.Drop(*p, false, &h, cp))
 		})
 
 		t.Run("nonzero ports", func(t *testing.T) {
@@ -784,12 +758,12 @@ func TestFirewall_ICMPPortBehavior(t *testing.T) {
 			p.LocalPort = 0xabcd
 			p.RemotePort = 0x1234
 			// Drop outbound
-			assert.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+			assert.Equal(t, fw.Drop(*p, false, &h, cp), ErrNoMatchingRule)
 			// Allow inbound
 			resetConntrack(fw)
-			require.NoError(t, fw.Drop(*p, true, &h, cp, nil))
+			require.NoError(t, fw.Drop(*p, true, &h, cp))
 			//now also allow outbound
-			require.NoError(t, fw.Drop(*p, false, &h, cp, nil))
+			require.NoError(t, fw.Drop(*p, false, &h, cp))
 		})
 	})
 
@@ -801,12 +775,12 @@ func TestFirewall_ICMPPortBehavior(t *testing.T) {
 			p.LocalPort = 0
 			p.RemotePort = 0
 			// Drop outbound
-			assert.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+			assert.Equal(t, fw.Drop(*p, false, &h, cp), ErrNoMatchingRule)
 			// Allow inbound
 			resetConntrack(fw)
-			assert.Equal(t, fw.Drop(*p, true, &h, cp, nil), ErrNoMatchingRule)
+			assert.Equal(t, fw.Drop(*p, true, &h, cp), ErrNoMatchingRule)
 			//now also allow outbound
-			assert.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+			assert.Equal(t, fw.Drop(*p, false, &h, cp), ErrNoMatchingRule)
 		})
 
 		t.Run("nonzero ports, still blocked", func(t *testing.T) {
@@ -814,12 +788,12 @@ func TestFirewall_ICMPPortBehavior(t *testing.T) {
 			p.LocalPort = 0xabcd
 			p.RemotePort = 0x1234
 			// Drop outbound
-			assert.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+			assert.Equal(t, fw.Drop(*p, false, &h, cp), ErrNoMatchingRule)
 			// Allow inbound
 			resetConntrack(fw)
-			assert.Equal(t, fw.Drop(*p, true, &h, cp, nil), ErrNoMatchingRule)
+			assert.Equal(t, fw.Drop(*p, true, &h, cp), ErrNoMatchingRule)
 			//now also allow outbound
-			assert.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+			assert.Equal(t, fw.Drop(*p, false, &h, cp), ErrNoMatchingRule)
 		})
 
 		t.Run("nonzero, matching ports, still blocked", func(t *testing.T) {
@@ -827,12 +801,12 @@ func TestFirewall_ICMPPortBehavior(t *testing.T) {
 			p.LocalPort = 80
 			p.RemotePort = 80
 			// Drop outbound
-			assert.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+			assert.Equal(t, fw.Drop(*p, false, &h, cp), ErrNoMatchingRule)
 			// Allow inbound
 			resetConntrack(fw)
-			assert.Equal(t, fw.Drop(*p, true, &h, cp, nil), ErrNoMatchingRule)
+			assert.Equal(t, fw.Drop(*p, true, &h, cp), ErrNoMatchingRule)
 			//now also allow outbound
-			assert.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+			assert.Equal(t, fw.Drop(*p, false, &h, cp), ErrNoMatchingRule)
 		})
 	})
 	t.Run("Any proto, any port", func(t *testing.T) {
@@ -844,12 +818,12 @@ func TestFirewall_ICMPPortBehavior(t *testing.T) {
 			p.LocalPort = 0
 			p.RemotePort = 0
 			// Drop outbound
-			assert.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+			assert.Equal(t, fw.Drop(*p, false, &h, cp), ErrNoMatchingRule)
 			// Allow inbound
 			resetConntrack(fw)
-			require.NoError(t, fw.Drop(*p, true, &h, cp, nil))
+			require.NoError(t, fw.Drop(*p, true, &h, cp))
 			//now also allow outbound
-			require.NoError(t, fw.Drop(*p, false, &h, cp, nil))
+			require.NoError(t, fw.Drop(*p, false, &h, cp))
 		})
 
 		t.Run("nonzero ports, allowed", func(t *testing.T) {
@@ -858,15 +832,15 @@ func TestFirewall_ICMPPortBehavior(t *testing.T) {
 			p.LocalPort = 0xabcd
 			p.RemotePort = 0x1234
 			// Drop outbound
-			assert.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+			assert.Equal(t, fw.Drop(*p, false, &h, cp), ErrNoMatchingRule)
 			// Allow inbound
 			resetConntrack(fw)
-			require.NoError(t, fw.Drop(*p, true, &h, cp, nil))
+			require.NoError(t, fw.Drop(*p, true, &h, cp))
 			//now also allow outbound
-			require.NoError(t, fw.Drop(*p, false, &h, cp, nil))
+			require.NoError(t, fw.Drop(*p, false, &h, cp))
 			//different ID is blocked
 			p.RemotePort++
-			require.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+			require.Equal(t, fw.Drop(*p, false, &h, cp), ErrNoMatchingRule)
 		})
 	})
 
@@ -914,7 +888,7 @@ func TestFirewall_DropIPSpoofing(t *testing.T) {
 		Protocol:   iputil.IPProtocolUDP,
 		Fragment:   false,
 	}
-	assert.Equal(t, fw.Drop(p, true, &h1, cp, nil), ErrInvalidRemoteIP)
+	assert.Equal(t, fw.Drop(p, true, &h1, cp), ErrInvalidRemoteIP)
 }
 
 func TestFirewall_ConntrackSourceSpoofingAcrossPeers(t *testing.T) {
@@ -965,18 +939,82 @@ func TestFirewall_ConntrackSourceSpoofingAcrossPeers(t *testing.T) {
 		Protocol:   iputil.IPProtocolUDP,
 	}
 
-	require.NoError(t, fw.Drop(flow, true, &victimHI, cp, nil),
+	require.NoError(t, fw.Drop(flow, true, &victimHI, cp),
 		"victim's own traffic from its own overlay IP must be allowed")
 
 	unseen := flow
 	unseen.RemotePort = 55001
-	assert.Equal(t, ErrInvalidRemoteIP, fw.Drop(unseen, true, &attackerHI, cp, nil),
+	assert.Equal(t, ErrInvalidRemoteIP, fw.Drop(unseen, true, &attackerHI, cp),
 		"sanity: attacker forging victim's source IP must be rejected when no conntrack entry exists")
 
-	got := fw.Drop(flow, true, &attackerHI, cp, nil)
+	got := fw.Drop(flow, true, &attackerHI, cp)
 	t.Logf("attacker replaying victim's 4-tuple: Drop returned %v (nil == packet ALLOWED == spoof succeeded)", got)
 	assert.Equal(t, ErrInvalidRemoteIP, got,
 		"SECURITY: attacker spoofed victim's overlay source IP (192.0.2.2) by reusing an existing conntrack 4-tuple; Drop returned %v instead of rejecting", got)
+}
+
+func TestFirewallConntrack_sweep(t *testing.T) {
+	ct := newFirewallConntrack()
+	live := firewall.Packet{LocalPort: 1}
+	dead := firewall.Packet{LocalPort: 2}
+	ct.store(live, newConn(11, true, 0))
+	ct.store(dead, newConn(10, true, 0))
+	assert.Equal(t, int64(2), ct.count.Load())
+
+	ct.sweep(10)
+	_, ok := ct.conns.Load(live)
+	assert.True(t, ok)
+	_, ok = ct.conns.Load(dead)
+	assert.False(t, ok)
+	assert.Equal(t, int64(1), ct.count.Load())
+}
+
+func TestFirewallConntrack_storeAndDeleteCount(t *testing.T) {
+	ct := newFirewallConntrack()
+	fp := firewall.Packet{LocalPort: 1}
+	first := newConn(10, true, 0)
+	ct.store(fp, first)
+
+	// Replacing an entry doesn't add to the count
+	second := newConn(20, true, 1)
+	ct.store(fp, second)
+	assert.Equal(t, int64(1), ct.count.Load())
+
+	// Deleting a stale entry is a no-op, the newer one stays
+	ct.delete(fp, first)
+	v, ok := ct.conns.Load(fp)
+	assert.True(t, ok)
+	assert.Same(t, second, v)
+	assert.Equal(t, int64(1), ct.count.Load())
+
+	ct.delete(fp, second)
+	_, ok = ct.conns.Load(fp)
+	assert.False(t, ok)
+	assert.Equal(t, int64(0), ct.count.Load())
+
+	ct.store(fp, first)
+	ct.store(firewall.Packet{LocalPort: 2}, newConn(10, true, 0))
+	ct.clear()
+	assert.Equal(t, int64(0), ct.count.Load())
+}
+
+func TestFirewallConntrack_Run(t *testing.T) {
+	ct := newFirewallConntrack()
+	ct.epoch = time.Now().Add(-time.Hour)
+	ct.store(firewall.Packet{LocalPort: 1}, newConn(10, true, 0))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		ct.Run(ctx)
+		close(done)
+	}()
+
+	// The first tick sets the clock to an hour in and sweeps the long expired entry
+	require.Eventually(t, func() bool { return ct.count.Load() == 0 }, 5*time.Second, 10*time.Millisecond)
+	assert.GreaterOrEqual(t, ct.now.Load(), uint32(3600))
+	cancel()
+	<-done
 }
 
 // BenchmarkFirewallDropConntrackHit measures Drop on an already-established flow
@@ -987,8 +1025,6 @@ func TestFirewall_ConntrackSourceSpoofingAcrossPeers(t *testing.T) {
 //     so the remote-address check is a single netip.Addr compare.
 //   - complex: peer cert has unsafe networks (h.networks populated), so the
 //     remote-address check is a BART lookup.
-//   - noCache/localCache: whether a per-batch ConntrackCache is supplied, which in
-//     the original code let the fast path skip straight past the address checks.
 func BenchmarkFirewallDropConntrackHit(b *testing.B) {
 	l := test.NewLoggerWithOutput(&bytes.Buffer{})
 
@@ -1036,14 +1072,11 @@ func BenchmarkFirewallDropConntrackHit(b *testing.B) {
 	}
 
 	cases := []struct {
-		name     string
-		host     *HostInfo
-		useCache bool
+		name string
+		host *HostInfo
 	}{
-		{"simple/noCache", simpleHost, false},
-		{"simple/localCache", simpleHost, true},
-		{"complex/noCache", complexHost, false},
-		{"complex/localCache", complexHost, true},
+		{"simple", simpleHost},
+		{"complex", complexHost},
 	}
 
 	for _, tc := range cases {
@@ -1052,17 +1085,12 @@ func BenchmarkFirewallDropConntrackHit(b *testing.B) {
 			require.NoError(b, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"any"}, "", "", "", "", ""))
 
 			// Establish the conntrack entry so every benchmarked Drop is a hit.
-			require.NoError(b, fw.Drop(flow, true, tc.host, cp, nil))
-
-			var cache firewall.ConntrackCache
-			if tc.useCache {
-				cache = firewall.ConntrackCache{}
-			}
+			require.NoError(b, fw.Drop(flow, true, tc.host, cp))
 
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if err := fw.Drop(flow, true, tc.host, cp, cache); err != nil {
+				if err := fw.Drop(flow, true, tc.host, cp); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -1550,7 +1578,7 @@ func (c *testcase) Test(t *testing.T, fw *Firewall) {
 	t.Helper()
 	cp := cert.NewCAPool()
 	resetConntrack(fw)
-	err := fw.Drop(c.p, true, c.h, cp, nil)
+	err := fw.Drop(c.p, true, c.h, cp)
 	if c.err == nil {
 		require.NoError(t, err, "failed to not drop remote address %s", c.p.RemoteAddr)
 	} else {
@@ -1741,7 +1769,5 @@ func (mf *mockFirewall) AddRule(incoming bool, proto uint8, startPort int32, end
 }
 
 func resetConntrack(fw *Firewall) {
-	fw.Conntrack.Lock()
-	fw.Conntrack.Conns = map[firewall.Packet]*conn{}
-	fw.Conntrack.Unlock()
+	fw.Conntrack.clear()
 }

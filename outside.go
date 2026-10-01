@@ -477,7 +477,7 @@ func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, messageCounte
 		return
 	}
 
-	dropReason := f.firewall.Drop(rxc.fwPacket.Packet, true, hostinfo, f.pki.GetCAPool(), rxc.ctCache.Get())
+	dropReason := f.allowInbound(hostinfo, rxc)
 	if dropReason != nil {
 		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, rxc.nb, rxc.scratch, rxc.q)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
@@ -490,6 +490,23 @@ func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, messageCounte
 	if err != nil {
 		f.l.Error("Failed to write to tun", "error", err)
 	}
+}
+
+// allowInbound runs the inbound firewall check on rxc.fwPacket. It skips the check when the packet belongs to
+// the same flow from the same host as the last one allowed in this batch.
+func (f *Interface) allowInbound(hostinfo *HostInfo, rxc *rxContext) error {
+	fp := rxc.fwPacket.Packet
+	if hostinfo == rxc.lastAllowedHost && fp == rxc.lastAllowed {
+		return nil
+	}
+
+	if err := f.firewall.Drop(fp, true, hostinfo, f.pki.GetCAPool()); err != nil {
+		return err
+	}
+
+	rxc.lastAllowed = fp
+	rxc.lastAllowedHost = hostinfo
+	return nil
 }
 
 func (f *Interface) maybeSendRecvError(endpoint netip.AddrPort, index uint32) {
