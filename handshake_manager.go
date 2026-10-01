@@ -50,6 +50,14 @@ type HandshakeConfig struct {
 	retries       int64
 	triggerBuffer int
 
+	// Multiport lane parameters; laneCount == 0 means multiport is disabled.
+	// laneCount includes implicit lane 0 (the base tunnel), so lanes
+	// 1..laneCount-1 may carry traffic. lanePortCount/laneBasePort describe our
+	// own bound port range and are advertised in every handshake payload.
+	laneCount     int
+	lanePortCount uint16
+	laneBasePort  uint16
+
 	messageMetrics *MessageMetrics
 }
 
@@ -535,6 +543,9 @@ func (hm *HandshakeManager) DeleteHostInfo(hostinfo *HostInfo) {
 
 func (hm *HandshakeManager) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 	for _, addr := range hostinfo.vpnAddrs {
+		// Only delete the pending entry if it is actually ours: an
+		// unconditional delete could evict a concurrently pending handshake for
+		// the same address.
 		if cur, ok := hm.vpnIps[addr]; ok && cur.hostinfo == hostinfo {
 			delete(hm.vpnIps, addr)
 		}
@@ -672,6 +683,7 @@ func (hm *HandshakeManager) buildStage0Packet(hh *HandshakeHostInfo) bool {
 		v, cs.GetCredential,
 		hm.certVerifier(), func() (uint32, error) { return hm.allocateIndex(hh) },
 		true, header.HandshakeIXPSK0,
+		hm.laneAdvert(),
 	)
 	if err != nil {
 		hm.f.l.Error("Failed to create handshake machine",
@@ -695,6 +707,42 @@ func (hm *HandshakeManager) buildStage0Packet(hh *HandshakeHostInfo) bool {
 	return true
 }
 
+// laneAdvert returns our multiport advert for a handshake payload, or nil
+// when multiport is disabled (which keeps the payload byte-identical to
+// vanilla).
+func (hm *HandshakeManager) laneAdvert() *handshake.LaneDetails {
+	if hm.config.laneCount == 0 {
+		return nil
+	}
+	return &handshake.LaneDetails{
+		PortCount: uint32(hm.config.lanePortCount),
+		BasePort:  uint32(hm.config.laneBasePort),
+		TxLanes:   uint32(hm.config.laneCount),
+	}
+}
+
+// maybeAllocLanes sets up the multiport lanes for a just-completed tunnel. Must
+// run before the hostinfo becomes visible in the hostmap: the data plane reads
+// hostinfo.lanes without synchronizing on it. The sessions themselves are derived
+// later, on the first packet that needs each one.
+func (hm *HandshakeManager) maybeAllocLanes(hostinfo *HostInfo, result *handshake.Result) {
+	if hm.config.laneCount == 0 || result.PeerPortCount == 0 {
+		return
+	}
+	if len(hm.f.myVpnAddrs) == 0 || len(hostinfo.vpnAddrs) == 0 {
+		return
+	}
+	if !validLaneAdvert(result.PeerBasePort, result.PeerPortCount) {
+		// Lane targets are computed in uint16, so a range like this would wrap
+		// onto low ports. The tunnel itself is fine; it just gets no lanes.
+		hostinfo.logger(hm.l).Warn("Ignoring multiport advert with an invalid port range",
+			"peerBasePort", result.PeerBasePort, "peerPorts", result.PeerPortCount)
+		return
+	}
+
+	hostinfo.lanes = newLaneSet(result, hm.config.laneCount, hm.f.myVpnAddrs[0], hostinfo.vpnAddrs[0])
+}
+
 // beginHandshake handles an incoming handshake packet that doesn't match any
 // existing pending handshake. It creates a new responder Machine and processes
 // the first message.
@@ -713,6 +761,7 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		v, cs.GetCredential,
 		hm.certVerifier(), func() (uint32, error) { return generateIndex(f.l) },
 		false, header.HandshakeIXPSK0,
+		hm.laneAdvert(),
 	)
 	if err != nil {
 		f.l.Error("Failed to create handshake machine", "from", via, "error", err)
@@ -769,6 +818,10 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		},
 	}
 
+	// Lanes are allocated before the log line so it can report what was actually
+	// negotiated, and must in any case be in place before CheckAndComplete below.
+	hm.maybeAllocLanes(hostinfo, result)
+
 	msg := "Handshake message received"
 	if !anyVpnAddrsInCommon {
 		msg = "Handshake message received, but no vpnNetworks in common."
@@ -783,6 +836,7 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		"initiatorIndex", result.RemoteIndex,
 		"responderIndex", result.LocalIndex,
 		"handshake", m{"stage": uint64(machine.MessageIndex()), "style": header.SubTypeName(header.Handshake, machine.Subtype())},
+		laneLogAttr(hm.config.laneCount, hostinfo.lanes),
 	)
 
 	// packet aliases the listener's incoming buffer, so this copy must stay.
@@ -957,6 +1011,14 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	}
 
 	duration := time.Since(hh.startTime).Nanoseconds()
+
+	hostinfo.vpnAddrs = vpnAddrs
+	hostinfo.buildNetworks(f.myVpnNetworksTable, remoteCert.Certificate)
+
+	// Lanes are allocated before the log line so it can report what was actually
+	// negotiated, and must in any case be in place before Complete below.
+	hm.maybeAllocLanes(hostinfo, result)
+
 	msg := "Handshake message received"
 	if !anyVpnAddrsInCommon {
 		msg = "Handshake message received, but no vpnNetworks in common."
@@ -973,10 +1035,8 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		"handshake", m{"stage": uint64(machine.MessageIndex()), "style": header.SubTypeName(header.Handshake, machine.Subtype())},
 		"durationNs", duration,
 		"sentCachedPackets", len(hh.packetStore),
+		laneLogAttr(hm.config.laneCount, hostinfo.lanes),
 	)
-
-	hostinfo.vpnAddrs = vpnAddrs
-	hostinfo.buildNetworks(f.myVpnNetworksTable, remoteCert.Certificate)
 
 	hm.Complete(hostinfo, f)
 
@@ -1086,7 +1146,11 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 
 	if !via.IsRelayed {
 		fields := append(logFields, "from", via)
-		err := f.outside.WriteTo(msg, via.UdpAddr)
+		// Reply from the socket the handshake arrived on so the initiator sees
+		// the source port it targeted. Identical to f.outside under vanilla
+		// config (all writers share one port); under multiport it keeps the reply on
+		// the base port, from whichever socket of its group the handshake reached.
+		err := f.writers[via.SockIdx].WriteTo(msg, via.UdpAddr)
 		if err != nil {
 			f.l.Error("Failed to send handshake message", append(fields, "error", err)...)
 		} else {

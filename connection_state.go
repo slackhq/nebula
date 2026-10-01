@@ -1,9 +1,12 @@
 package nebula
 
 import (
+	"crypto/hkdf"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -74,6 +77,53 @@ func newConnectionStateFromResult(r *handshake.Result) (*ConnectionState, error)
 	return ci, nil
 }
 
+// newLaneConnectionState derives multiport lane s's session from the base
+// tunnel's material. Each key is an HKDF expansion of the base tunnel's matching
+// key, labelled with the lane index, so the pair stays matched with no extra
+// negotiation: Noise leaves our send key equal to the peer's receive key, and
+// expanding both with the same label preserves that.
+//
+// The lane gets its own counter and replay window starting from zero. No
+// handshake messages were spent on it, so unlike the base session there is
+// nothing to seed.
+func newLaneConnectionState(m *laneMaterial, lane uint8) (*ConnectionState, error) {
+	if lane == 0 {
+		return nil, fmt.Errorf("lane 0 is the base session")
+	}
+
+	eKey, err := deriveLaneKey(m.eKey, lane)
+	if err != nil {
+		return nil, err
+	}
+	dKey, err := deriveLaneKey(m.dKey, lane)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ConnectionState{
+		myCert:    m.myCert,
+		initiator: m.initiator,
+		peerCert:  m.peerCert,
+		eKey:      noiseutil.NewCipherStateFromKey(eKey, m.cipher),
+		dKey:      noiseutil.NewCipherStateFromKey(dKey, m.cipher),
+		window:    NewBits(ReplayWindow),
+		epoch:     sessionEpoch.Add(1),
+	}, nil
+}
+
+// deriveLaneKey expands a base tunnel key into the key for one lane.
+func deriveLaneKey(base [32]byte, lane uint8) ([32]byte, error) {
+	var out [32]byte
+	// The base key is already unique to this tunnel and direction, so the lane
+	// index is the only thing that needs to vary; no salt is required.
+	k, err := hkdf.Key(sha256.New, base[:], nil, laneKeyInfo+" "+strconv.Itoa(int(lane)), len(out))
+	if err != nil {
+		return out, err
+	}
+	copy(out[:], k)
+	return out, nil
+}
+
 func (cs *ConnectionState) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m{
 		"certificate":     cs.peerCert,
@@ -116,6 +166,15 @@ func (cs *ConnectionState) Decrypt(l *slog.Logger, messageCounter uint64, packet
 		return nil, ErrAlreadySeen
 	}
 	return out, nil
+}
+
+// noteSeen records a counter that some other session for the same keys already
+// accepted, so a packet doesn't become replayable just because the session that
+// decrypted it was thrown away. See laneSet.installSession, its only caller.
+func (cs *ConnectionState) noteSeen(l *slog.Logger, messageCounter uint64) {
+	cs.decryptLock.Lock()
+	cs.window.Update(l, messageCounter)
+	cs.decryptLock.Unlock()
 }
 
 func (cs *ConnectionState) VerifyRelay(l *slog.Logger, messageCounter uint64, packet []byte, nb []byte) error {

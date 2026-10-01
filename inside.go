@@ -11,12 +11,11 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/noiseutil"
-	"github.com/slackhq/nebula/overlay/batch"
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 )
 
-func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.ParsedPacket, nb []byte, sendBatch *batch.SendBatch, rejectBuf []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.ParsedPacket, nb []byte, tx *txQueue, rejectBuf []byte, q int, localCache firewall.ConntrackCache) {
 	// borrowed: pkt.Bytes is owned by the originating tio.Queue and is
 	// only valid until the next Read on that queue. Every consumer below
 	// (parse, self-forward, handshake cache, sendInsideMessage) reads it
@@ -111,7 +110,7 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Parse
 
 	dropReason := f.firewall.Drop(fwPacket.Packet, false, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason == nil {
-		f.sendInsideMessage(hostinfo, pkt, nb, sendBatch)
+		f.sendInsideMessage(hostinfo, pkt, &fwPacket.Packet, nb, tx)
 	} else {
 		f.rejectInside(packet, rejectBuf, q)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
@@ -123,13 +122,13 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Parse
 	}
 }
 
-func (f *Interface) sendInsideEncrypt(hostinfo *HostInfo, ci *ConnectionState, seg, scratch, nb []byte) []byte {
+func (f *Interface) sendInsideEncrypt(hostinfo *HostInfo, ci *ConnectionState, lane uint8, seg, scratch, nb []byte) []byte {
 	if noiseutil.EncryptLockNeeded {
 		ci.writeLock.Lock()
 	}
 	c := ci.messageCounter.Add(1)
 
-	out := header.Encode(scratch, header.Version, header.Message, 0, hostinfo.remoteIndexId, c)
+	out := header.EncodeLane(scratch, header.Version, header.Message, 0, hostinfo.remoteIndexId, c, lane)
 
 	out, encErr := ci.eKey.EncryptDanger(out, out, seg, c, nb)
 	if noiseutil.EncryptLockNeeded {
@@ -154,11 +153,18 @@ func (f *Interface) sendInsideEncrypt(hostinfo *HostInfo, ci *ConnectionState, s
 // kernel-supplied superpacket bytes never get written into a separate
 // scratch arena: SegmentSuperpacket builds each segment's plaintext in
 // segScratch[:segLen] in turn, and we encrypt directly into a fresh SendBatch slot.
-func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []byte, sendBatch *batch.SendBatch) {
+//
+// When this flow has a usable multiport lane to this peer, the direct path swaps
+// to that lane's session and socket below. Relay and base traffic stays on
+// tx.base, this routine's socket on the base port.
+func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, fwPacket *firewall.Packet, nb []byte, tx *txQueue) {
 	ci := hostinfo.ConnectionState
 	if ci.eKey == nil {
 		return
 	}
+
+	// Base and relay traffic stays on the base port; the direct path may swap to tx.lane below.
+	sendBatch := tx.base
 
 	// One traffic-out mark covers every segment of the superpacket; doing it
 	// per segment in sendInsideEncrypt paid an atomic store up to ~45 extra
@@ -201,7 +207,7 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 			//relay header + header + plaintext + AEAD tag (16 bytes for both AES-GCM and ChaCha20-Poly1305) + relay tag
 			scratch := sendBatch.Reserve(header.Len + header.Len + len(seg) + 16 + 16)
 
-			innerPacket := f.sendInsideEncrypt(hostinfo, ci, seg, scratch[header.Len:], nb)
+			innerPacket := f.sendInsideEncrypt(hostinfo, ci, 0, seg, scratch[header.Len:], nb)
 			if innerPacket == nil {
 				return nil
 			}
@@ -222,11 +228,28 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 		return
 	}
 
+	// Direct path: prefer this flow's multiport lane once it is proven usable.
+	// txLaneForFlow hands back the lane's session and destination together, so
+	// there is no window where one is set and the other is not, and a demotion
+	// drops us back onto the base tunnel on the very next packet.
+	//
+	// A miss is also how a lane gets re-probed after a demotion: txLane raises
+	// demand, which the connection manager's next tick on this tunnel picks up.
+	// Until the lane is up the traffic rides the base tunnel, the same fallback
+	// a demoted lane uses.
+	lane := uint8(0)
+	if s, lci, laneRemote := hostinfo.lanes.txLaneForFlow(fwPacket); lci != nil {
+		lane = uint8(s)
+		ci = lci
+		remote = laneRemote
+		sendBatch = tx.laneBatch(f, s)
+	}
+
 	err := tio.SegmentSuperpacket(pkt, func(seg []byte) error {
 		// header + plaintext + AEAD tag (16 bytes for both AES-GCM and ChaCha20-Poly1305)
 		scratch := sendBatch.Reserve(header.Len + len(seg) + 16)
 
-		out := f.sendInsideEncrypt(hostinfo, ci, seg, scratch, nb)
+		out := f.sendInsideEncrypt(hostinfo, ci, lane, seg, scratch, nb)
 		if out == nil {
 			return nil
 		}
@@ -515,16 +538,50 @@ func (f *Interface) SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, noc
 		return
 	}
 
-	err = f.writers[q].WriteTo(toSend, via.GetRemote())
+	err = f.writers[f.egressSock(q)].WriteTo(toSend, via.GetRemote())
 	if err != nil {
 		via.logger(f.l).Info("Failed to WriteTo in sendVia", "error", err)
 	}
+}
+
+// egressSock picks the socket a tunnel packet leaves from.
+//
+// Everything that is not lane data plane leaves from the base port: handshakes, keepalives, close packets, rejects and
+// relay carriers all belong to the base tunnel's 4-tuple, which is the only one a peer's spoof/roam checks and a
+// vanilla peer's expectations know about. Lane data goes through laneSock instead and never comes here.
+//
+// Which socket on the base port doesn't matter — they share an address, so they produce identical packets — so keep to
+// this routine's own share of the group and leave the rest of it uncontended. Without multiport that is q itself, since
+// every socket is on the base port.
+func (f *Interface) egressSock(q int) int {
+	return f.laneSock(q, 0)
+}
+
+// laneSock returns the index in writers of a socket bound to lane s's port, for a
+// routine that reads queue q.
+//
+// Under multiport the sockets are laid out port-major — writers[s*routinesPerPort
+// + r] is the r'th socket on port listen.port+s — so every routine has a sibling
+// socket on every port and the arithmetic is a lane index away. Routines pick the
+// sibling matching their own position in their group, which spreads the writers
+// for one port over that port's whole group rather than funnelling them onto its
+// first socket. It is a pure function of (q, s), so a flow always leaves from the
+// same socket and cannot reorder itself across two of them.
+//
+// Without multiport there is one port and every socket is on it, so any lane
+// resolves to q's own socket.
+func (f *Interface) laneSock(q, s int) int {
+	if !f.multiport {
+		return q
+	}
+	return s*f.routinesPerPort + q%f.routinesPerPort
 }
 
 func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb, out []byte, q int) {
 	if ci.eKey == nil {
 		return
 	}
+	q = f.egressSock(q)
 	useRelay := !remote.IsValid() && !hostinfo.GetRemote().IsValid()
 	fullOut := out
 
@@ -554,9 +611,9 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	//l.WithField("trace", string(debug.Stack())).Error("out Header ", &Header{Version, t, st, 0, hostinfo.remoteIndexId, c}, p)
 	out = header.Encode(out, header.Version, t, st, hostinfo.remoteIndexId, c)
 	// A closing tunnel is torn down right after this, so skip the connection manager entirely: no point recording
-	// traffic or asking the lighthouse for a punch. Otherwise, if we rebound since this tunnel last sent, ask the
-	// lighthouse to get the far side punching at us again.
-	if t != header.CloseTunnel && f.connectionManager.Out(hostinfo) {
+	// traffic or asking the lighthouse for a punch. Lane probe acks are not traffic either. Otherwise, if we rebound
+	// since this tunnel last sent, ask the lighthouse to get the far side punching at us again.
+	if t != header.CloseTunnel && !isLaneProbe(t, st) && f.connectionManager.Out(hostinfo) {
 		f.lightHouse.QueryServer(hostinfo.vpnAddrs[0])
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			f.l.Debug("Lighthouse update triggered for punch due to rebind epoch",

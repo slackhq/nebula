@@ -276,6 +276,11 @@ type HostInfo struct {
 	// This value will be behind against actual tunnel utilization in the hot path.
 	// This should only be used by the ConnectionManagers ticker routine.
 	lastUsed time.Time
+
+	// lanes holds this tunnel's multiport lane sessions. Allocated when the
+	// handshake completes if both sides advertised multiport, nil otherwise.
+	// Immutable once the hostinfo is published to the data plane.
+	lanes *laneSet
 }
 
 type ViaSender struct {
@@ -283,6 +288,11 @@ type ViaSender struct {
 	relayHI   *HostInfo // relayHI is the host info object of the relay
 	relay     *Relay    // relay contains the rest of the relay information, including the PeerIP of the host trying to communicate with us.
 	IsRelayed bool      // IsRelayed is true if the packet was sent through a relay
+
+	// SockIdx is the local socket (Interface.writers index) the packet
+	// arrived on. Replies that must originate from the same 4-tuple egress
+	// f.writers[SockIdx].
+	SockIdx int
 }
 
 func (v ViaSender) String() string {
@@ -472,6 +482,9 @@ func (hm *HostMap) unlockedMakePrimary(hostinfo *HostInfo) bool {
 // any tunnel to the peer), which the caller uses to decide whether to clear learned lighthouse
 // state and disestablish relays.
 func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) bool {
+	// Lane sessions hang off this hostinfo, so deleting it takes them with it
+	// and there is nothing extra to unwind here.
+
 	// Remove this hostinfo from each of its address lists. The lists are independent, so a
 	// sibling is never promoted to an address it does not own and no other list is touched.
 	final := true

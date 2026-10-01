@@ -197,6 +197,19 @@ func (cm *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte
 	}
 
 	cm.resetRelayTrafficCheck(hostinfo)
+	cm.maintainLanes(decision, hostinfo, now, nb, out)
+}
+
+// maintainLanes piggybacks multiport lane probing on the per-tunnel traffic
+// tick. makeTrafficDecision returns a nil hostinfo for a tunnel that is idle in
+// both directions, and that tunnel is skipped: probing it would cost a probe per
+// lane per keepalive for a tunnel nothing is using. Its lanes are probed again
+// on the first tick after traffic resumes.
+func (cm *connectionManager) maintainLanes(decision trafficDecision, hostinfo *HostInfo, now time.Time, nb, out []byte) {
+	if hostinfo == nil || decision == deleteTunnel || decision == closeTunnel {
+		return
+	}
+	cm.intf.probeLanes(hostinfo, now, nb, out)
 }
 
 func (cm *connectionManager) resetRelayTrafficCheck(hostinfo *HostInfo) {
@@ -329,7 +342,10 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 		return closeTunnel, hostinfo, nil
 	}
 
-	if hostinfo.ConnectionState != nil && hostinfo.ConnectionState.messageCounter.Load() >= RejectAfterMessages {
+	// The highest counter across the base session and its lanes: the lanes carry
+	// the data, so the base counter alone would sit near zero while a lane runs
+	// its keys past the nonce ceiling.
+	if hostinfo.maxMessageCounter() >= RejectAfterMessages {
 		// Send path can't encrypt a CloseTunnel notify, so just delete locally; the peer recovers via recv_error.
 		hostinfo.logger(cm.l).Error("Dropping tunnel, message counter is exhausted")
 		return deleteTunnel, hostinfo, nil
@@ -437,6 +453,7 @@ func (cm *connectionManager) isInactive(hostinfo *HostInfo, now time.Time) (time
 		return 0, false
 	}
 
+	// Lane traffic is this hostinfo's traffic, so lastUsed already covers it.
 	inactiveDuration := now.Sub(hostinfo.lastUsed)
 	if inactiveDuration < cm.getInactivityTimeout() {
 		// It's not considered inactive
@@ -460,7 +477,7 @@ func (cm *connectionManager) shouldSwapPrimary(current *HostInfo) bool {
 		return false
 	}
 
-	if current.ConnectionState.messageCounter.Load() >= RehandshakeAfterMessages {
+	if current.maxMessageCounter() >= RehandshakeAfterMessages {
 		// This tunnel is being rolled for counter exhaustion, never swap back onto its spent key.
 		return false
 	}
@@ -564,7 +581,7 @@ func (cm *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 		cm.intf.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], nil)
 		return
 	}
-	if hostinfo.ConnectionState.messageCounter.Load() >= RehandshakeAfterMessages {
+	if hostinfo.maxMessageCounter() >= RehandshakeAfterMessages {
 		cm.l.Info("Re-handshaking with remote",
 			"vpnAddrs", hostinfo.vpnAddrs,
 			"reason", "message counter rehandshake threshold reached",

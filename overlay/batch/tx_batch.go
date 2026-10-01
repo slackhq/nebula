@@ -13,19 +13,36 @@ type batchWriter interface {
 // One SendBatch is owned by each listenIn goroutine; no locking is needed.
 // Slots are backed by an Arena (see its docs)
 type SendBatch struct {
-	out   batchWriter
-	bufs  [][]byte
-	dsts  []netip.AddrPort
-	arena *Arena
+	out  batchWriter
+	bufs [][]byte
+	dsts []netip.AddrPort
+	// arena backs the slots. borrowed means someone else owns it and Flush must
+	// leave it alone.
+	arena    *Arena
+	borrowed bool
 }
 
 // NewSendBatch makes a SendBatch with batchCap slots and an arenaSize byte buffer for slices to back those slots
 func NewSendBatch(out batchWriter, batchCap, arenaSize int) *SendBatch {
+	return newSendBatch(out, batchCap, NewArena(arenaSize), false)
+}
+
+// NewSendBatchSharedArena makes a SendBatch that borrows arena rather than
+// allocating one. Several batches over different sockets can then split a single
+// slab, which is what multiport lanes need: the slab is the expensive part of a
+// SendBatch and one routine may hold a batch per lane. Flush leaves the arena
+// alone, so the owner must Reset it once every batch sharing it is drained.
+func NewSendBatchSharedArena(out batchWriter, batchCap int, arena *Arena) *SendBatch {
+	return newSendBatch(out, batchCap, arena, true)
+}
+
+func newSendBatch(out batchWriter, batchCap int, arena *Arena, borrowed bool) *SendBatch {
 	return &SendBatch{
-		out:   out,
-		bufs:  make([][]byte, 0, batchCap),
-		dsts:  make([]netip.AddrPort, 0, batchCap),
-		arena: NewArena(arenaSize),
+		out:      out,
+		bufs:     make([][]byte, 0, batchCap),
+		dsts:     make([]netip.AddrPort, 0, batchCap),
+		arena:    arena,
+		borrowed: borrowed,
 	}
 }
 
@@ -54,6 +71,8 @@ func (b *SendBatch) Flush() (int, error) {
 	clear(b.bufs)
 	b.bufs = b.bufs[:0]
 	b.dsts = b.dsts[:0]
-	b.arena.Reset()
+	if !b.borrowed {
+		b.arena.Reset()
+	}
 	return written, err
 }

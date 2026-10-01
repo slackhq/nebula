@@ -8,16 +8,28 @@ import (
 )
 
 //Version 1 header:
-// 0                                                                       31
-// |-----------------------------------------------------------------------|
-// | Version (uint4) | Type (uint4) |  Subtype (uint8) | Reserved (uint16) | 32
-// |-----------------------------------------------------------------------|
-// |                        Remote index (uint32)                          | 64
-// |-----------------------------------------------------------------------|
-// |                           Message counter                             | 96
-// |                               (uint64)                                | 128
-// |-----------------------------------------------------------------------|
-// |                               payload...                              |
+// 0                                                                                  31
+// |------------------------------------------------------------------------------------|
+// | Version (uint4) | Type (uint4) | Subtype (uint8) | Reserved (uint8) | Lane (uint8) | 32
+// |------------------------------------------------------------------------------------|
+// |                               Remote index (uint32)                                | 64
+// |------------------------------------------------------------------------------------|
+// |                                  Message counter                                   | 96
+// |                                      (uint64)                                      | 128
+// |------------------------------------------------------------------------------------|
+// |                                     payload...                                     |
+//
+// Lane is the multiport lane index, carved out of the low 8 bits of what was a
+// single Reserved (uint16) before multiport. Lane 0 is the base tunnel, which is
+// what every sender that does not know about lanes emits and what every non-lane
+// packet — handshakes, lighthouse, relays, close — carries, so the field is
+// compatible in both directions with a peer that has never heard of it. The
+// remaining 8 bits stay reserved and are always sent as zero. The H struct still
+// holds the pair as one Reserved field; use H.Lane and EncodeLane to reach the
+// low byte.
+//
+// Lane is part of the AEAD's associated data, so a lane index cannot be altered
+// in flight: a packet decrypts on the lane it claims or not at all.
 
 type m = map[string]any
 
@@ -57,7 +69,17 @@ const (
 const (
 	TestRequest MessageSubType = 0
 	TestReply   MessageSubType = 1
+	// LaneProbe is sent on a multiport lane to prove the lane's 5-tuple is
+	// usable; LaneProbeAck answers it on the base tunnel.
+	LaneProbe    MessageSubType = 2
+	LaneProbeAck MessageSubType = 3
 )
+
+// MaxLane is the largest lane index the header can carry.
+const MaxLane = 0xff
+
+// laneMask covers the bits of Reserved that hold the lane index.
+const laneMask uint16 = 0x00ff
 
 const (
 	HandshakeIXPSK0 MessageSubType = 0
@@ -67,8 +89,10 @@ const (
 var ErrHeaderTooShort = errors.New("header is too short")
 
 var subTypeTestMap = map[MessageSubType]string{
-	TestRequest: "testRequest",
-	TestReply:   "testReply",
+	TestRequest:  "testRequest",
+	TestReply:    "testReply",
+	LaneProbe:    "laneProbe",
+	LaneProbeAck: "laneProbeAck",
 }
 
 var subTypeNoneMap = map[MessageSubType]string{0: "none"}
@@ -100,10 +124,16 @@ type H struct {
 // Encode uses the provided byte array to encode the provided header values into.
 // Byte array must be capped higher than HeaderLen or this will panic
 func Encode(b []byte, v uint8, t MessageType, st MessageSubType, ri uint32, c uint64) []byte {
+	return EncodeLane(b, v, t, st, ri, c, 0)
+}
+
+// EncodeLane is Encode with an explicit multiport lane index, which is carried
+// in the low 8 bits of Reserved.
+func EncodeLane(b []byte, v uint8, t MessageType, st MessageSubType, ri uint32, c uint64, lane uint8) []byte {
 	b = b[:Len]
 	b[0] = v<<4 | byte(t&0x0f)
 	b[1] = byte(st)
-	binary.BigEndian.PutUint16(b[2:4], 0)
+	binary.BigEndian.PutUint16(b[2:4], uint16(lane))
 	binary.BigEndian.PutUint32(b[4:8], ri)
 	binary.BigEndian.PutUint64(b[8:16], c)
 	return b
@@ -136,7 +166,13 @@ func (h *H) Encode(b []byte) ([]byte, error) {
 		return nil, errors.New("nil header")
 	}
 
-	return Encode(b, h.Version, h.Type, h.Subtype, h.RemoteIndex, h.MessageCounter), nil
+	return EncodeLane(b, h.Version, h.Type, h.Subtype, h.RemoteIndex, h.MessageCounter, h.Lane()), nil
+}
+
+// Lane returns the multiport lane index carried in Reserved. Lane 0 is the base
+// tunnel, which is what any sender that does not know about lanes will report.
+func (h *H) Lane() uint8 {
+	return uint8(h.Reserved & laneMask)
 }
 
 // Parse is a helper function to parses given bytes into new Header struct
@@ -196,7 +232,7 @@ func IsValidSubType(t MessageType, s MessageSubType) bool {
 	case Handshake:
 		return s == HandshakeIXPSK0
 	case Test:
-		return s == TestReply || s == TestRequest
+		return s == TestReply || s == TestRequest || s == LaneProbe || s == LaneProbeAck
 	case Control, CloseTunnel, RecvError, LightHouse:
 		return s == 0
 	default:
