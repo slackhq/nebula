@@ -593,6 +593,14 @@ func TestLaneProbeRoamResets(t *testing.T) {
 	assert.Equal(t, netip.MustParseAddr("198.51.100.7"), ls.peerAddr)
 	ls.mu.Unlock()
 
+	// A late ack for the probe sent before the roam must not promote the lane
+	// on the new path, so the generation has to carry across the reset.
+	ls.demand[1].Store(true)
+	ifce.probeLanes(hi, now, nb, out)
+	_, promoted = ls.noteAck(1, gen, now)
+	assert.False(t, promoted, "an ack from before the roam promoted the lane")
+	assert.Nil(t, ls.txAddr[1].Load())
+
 	// Relayed (no direct remote) means no lanes at all.
 	ls.demand[1].Store(true)
 	ifce.probeLanes(hi, now, nb, out)
@@ -604,6 +612,71 @@ func TestLaneProbeRoamResets(t *testing.T) {
 	hi.SetRemote(netip.AddrPort{})
 	ifce.probeLanes(hi, now, nb, out)
 	assert.Nil(t, ls.txAddr[1].Load(), "lane survived losing the direct path")
+}
+
+// A peer answers lane traffic it can't place with a recv_error from the lane
+// socket it arrived on, so the spoof guard must accept one from an up lane's
+// target and still refuse one from anywhere else.
+func TestHandleRecvErrorFromLane(t *testing.T) {
+	hostMap := newHostMap(test.NewLogger())
+	ifce := newLaneTestInterface(hostMap)
+
+	initR, _ := runTestHandshake(t)
+	ls := newTestLaneSet(t, initR, 4, 4, 4242, 4)
+	hi := newTestLaneHostInfo(t, initR, ls)
+	hostMap.unlockedAddHostInfo(hi, ifce)
+
+	now := time.Now()
+	ifce.probeLanes(hi, now, make([]byte, 12), make([]byte, mtu))
+	ls.mu.Lock()
+	gen := ls.probe[1].gen
+	ls.mu.Unlock()
+	laneAddr, promoted := ls.noteAck(1, gen, now)
+	require.True(t, promoted)
+	require.NotEqual(t, hi.GetRemote(), laneAddr)
+
+	h := &header.H{Type: header.RecvError, RemoteIndex: hi.remoteIndexId}
+
+	ifce.handleRecvError(netip.MustParseAddrPort("192.0.2.1:9999"), h)
+	require.NotNil(t, hostMap.QueryReverseIndex(hi.remoteIndexId), "a recv_error from an unknown port closed the tunnel")
+
+	ifce.handleRecvError(laneAddr, h)
+	assert.Nil(t, hostMap.QueryReverseIndex(hi.remoteIndexId), "a recv_error from an up lane's target was ignored")
+}
+
+// An idle tunnel is not probed, so its lanes' keepalives can't keep it alive.
+// Probing resumes on the first tick that sees traffic.
+func TestIdleTunnelSkipsLaneProbes(t *testing.T) {
+	hostMap := newHostMap(test.NewLogger())
+	ifce := newLaneTestInterface(hostMap)
+
+	initR, _ := runTestHandshake(t)
+	ls := newTestLaneSet(t, initR, 4, 4, 4242, 4)
+	hi := newTestLaneHostInfo(t, initR, ls)
+	hostMap.unlockedAddHostInfo(hi, ifce)
+
+	// An empty pool fails every cert, which with pki.disconnect_invalid off
+	// leaves the tunnel up.
+	ifce.pki.caPool.Store(cert.NewCAPool())
+
+	cm := ifce.connectionManager
+	p := []byte("")
+	nb := make([]byte, 12)
+	out := make([]byte, mtu)
+	probed := func() bool {
+		ls.mu.Lock()
+		defer ls.mu.Unlock()
+		return !ls.probe[1].sentAt.IsZero()
+	}
+
+	// Adding the tunnel records outbound traffic; drop it so the tick sees idle.
+	hi.takeTraffic()
+	cm.doTrafficCheck(hi.localIndexId, p, nb, out, time.Now())
+	assert.False(t, probed(), "an idle tunnel was probed")
+
+	cm.In(hi)
+	cm.doTrafficCheck(hi.localIndexId, p, nb, out, time.Now())
+	assert.True(t, probed(), "a tunnel with traffic was not probed")
 }
 
 // A lane probe is answered on the base tunnel, echoing the header's lane, so a
@@ -629,6 +702,7 @@ func TestHandleLaneProbe(t *testing.T) {
 	assert.Equal(t, header.Test, h.Type)
 	assert.Equal(t, header.LaneProbeAck, h.Subtype)
 	assert.Equal(t, uint8(0), h.Lane(), "the ack is base-tunnel traffic")
+	assert.False(t, hi.sentSinceCheck(), "a probe ack must not count as tunnel traffic")
 
 	pt, err := laneSessionFor(t, newTestLaneSet(t, initR, 4, 4, 4242, 4), 1).dKey.DecryptDanger(
 		nil, sent.bufs[0][:header.Len], sent.bufs[0][header.Len:], h.MessageCounter, make([]byte, 12))

@@ -32,12 +32,14 @@ message NebulaHandshakeDetails {
   LaneDetails ResponderLanes = 10;
 }
 
-// LaneDetails advertises a host's multiport lane capability. On a base
-// handshake LaneIndex is 0 and PortCount/BasePort describe the sender's
-// consecutively bound UDP ports. On a lane handshake the initiator sets
-// LaneIndex to its (nonzero) lane number.
+// LaneDetails advertises a host's multiport lane capability. PortCount/BasePort
+// describe the sender's consecutively bound UDP ports, and TxLanes is how many
+// lanes the sender may send on, so the peer knows how many lane sessions it must
+// be prepared to receive on.
 message LaneDetails {
   uint32 PortCount = 1;
   uint32 BasePort = 2;
-  uint32 LaneIndex = 3;
+  // was a per-lane handshake index
+  reserved 3;
+  uint32 TxLanes = 4;
 }

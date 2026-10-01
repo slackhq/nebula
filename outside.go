@@ -186,7 +186,9 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxCont
 	if lane == 0 {
 		f.handleHostRoaming(hostinfo, via)
 	}
-	f.connectionManager.In(hostinfo)
+	if !isLaneProbe(h.Type, h.Subtype) {
+		f.connectionManager.In(hostinfo)
+	}
 
 	switch h.Type {
 	case header.Message:
@@ -552,9 +554,10 @@ func (f *Interface) maybeSendRecvError(endpoint netip.AddrPort, index uint32, q 
 	}
 }
 
-// sendRecvError replies from the socket the offending packet arrived on (q).
-// A lane peer's spoof guard compares our source addr against the lane's
-// remote, so a reply from the base port would be discarded.
+// sendRecvError replies from the socket the offending packet arrived on (q), so
+// the reply to lane traffic rides the reverse of the lane's own 4-tuple: the
+// only one the peer's NAT and stateful firewalls are known to let through. The
+// peer's handleRecvError accepts it from that lane's target.
 func (f *Interface) sendRecvError(endpoint netip.AddrPort, index uint32, q int) {
 	f.messageMetrics.Tx(header.RecvError, 0, 1)
 
@@ -591,7 +594,7 @@ func (f *Interface) handleRecvError(addr netip.AddrPort, h *header.H) {
 	}
 
 	hr := hostinfo.GetRemote()
-	if hr.IsValid() && hr != addr {
+	if hr.IsValid() && hr != addr && !hostinfo.lanes.isLaneRemote(addr) {
 		f.l.Info("Someone spoofing recv_errors?",
 			"addr", addr,
 			"hostinfoRemote", hr,

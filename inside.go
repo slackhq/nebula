@@ -611,9 +611,9 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	//l.WithField("trace", string(debug.Stack())).Error("out Header ", &Header{Version, t, st, 0, hostinfo.remoteIndexId, c}, p)
 	out = header.Encode(out, header.Version, t, st, hostinfo.remoteIndexId, c)
 	// A closing tunnel is torn down right after this, so skip the connection manager entirely: no point recording
-	// traffic or asking the lighthouse for a punch. Otherwise, if we rebound since this tunnel last sent, ask the
-	// lighthouse to get the far side punching at us again.
-	if t != header.CloseTunnel && f.connectionManager.Out(hostinfo) {
+	// traffic or asking the lighthouse for a punch. Lane probe acks are not traffic either. Otherwise, if we rebound
+	// since this tunnel last sent, ask the lighthouse to get the far side punching at us again.
+	if t != header.CloseTunnel && !isLaneProbe(t, st) && f.connectionManager.Out(hostinfo) {
 		f.lightHouse.QueryServer(hostinfo.vpnAddrs[0])
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			f.l.Debug("Lighthouse update triggered for punch due to rebind epoch",

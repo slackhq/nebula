@@ -203,8 +203,11 @@ everything it needs in one atomic read and there is no window where one is set
 and the other is not.
 
 Probing is driven by the connection manager's per-tunnel traffic tick
-(`maintainLanes` -> `probeLanes`), which only fires for a tunnel with traffic --
-the same condition that makes a lane worth having. Timers:
+(`maintainLanes` -> `probeLanes`), which skips a tunnel that is idle in both
+directions -- a lane is only worth having while there is traffic to put on it.
+Probes and their acks are not counted as tunnel traffic, so a lane's own
+keepalive cannot keep an otherwise idle tunnel from being dropped by
+`tunnels.drop_inactive`. Timers:
 
 | timer | value |
 |---|---|
@@ -445,9 +448,10 @@ and lane probe *acks* all use the base session and a socket on the base port
 would see the tunnel's address move and roam-thrash.
 
 `recv_error` is the one deliberate exception: it replies from the socket the
-offending packet arrived on, because a lane peer's spoof guard compares our
-source address against that lane's remote and would discard a reply from the
-base port.
+offending packet arrived on, so the reply to lane traffic travels the reverse of
+the lane's own 4-tuple, the only one the peer's NAT and stateful firewalls are
+known to pass. The receiving side's spoof guard accepts a `recv_error` from the
+base remote or from the target of any of its up lanes (`isLaneRemote`).
 
 ### Wire compatibility
 

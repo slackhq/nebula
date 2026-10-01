@@ -236,7 +236,7 @@ func newLaneSet(r *handshake.Result, myLanes int, myAddr, peerAddr netip.Addr) *
 	// and the kernel remembers that for as long as the flow stays busy. A flow that
 	// starts while the lanes are still down therefore gets pinned to queue 0 on
 	// both hosts for its whole life. This costs one probe per lane on any tunnel
-	// with traffic; an idle tunnel is never ticked, so it still costs nothing.
+	// with traffic; an idle tunnel is never probed, so it still costs nothing.
 	for s := 1; s < txLanes; s++ {
 		ls.demand[s].Store(true)
 	}
@@ -545,8 +545,8 @@ func (ls *laneSet) noteAck(s int, gen uint8, now time.Time) (netip.AddrPort, boo
 // probeLanes runs one lane maintenance pass for a peer: it demotes lanes whose
 // probe went unanswered, re-proves lanes that have been up a while without one,
 // and probes down lanes the data plane asked for. Driven by the connection
-// manager's per-tunnel traffic tick, which only fires for a live tunnel — the
-// same condition that produces lane demand in the first place.
+// manager's per-tunnel traffic tick, which skips a tunnel that is idle in both
+// directions.
 func (f *Interface) probeLanes(hostinfo *HostInfo, now time.Time, nb, out []byte) {
 	ls := hostinfo.lanes
 	if ls == nil || ls.txLanes < 2 {
@@ -618,6 +618,10 @@ func (f *Interface) probeLanes(hostinfo *HostInfo, now time.Time, nb, out []byte
 // resetLocked takes every lane down and clears its probe state, without
 // counting it as a failure.
 //
+// The probe generation survives the reset. Starting it over would let a late ack
+// for a probe sent before the reset match the first probe sent after it, and
+// promote the lane to a target nothing has proven.
+//
 // Demand is deliberately left standing: it records that a routine has real
 // traffic for this peer, which a roam or a relay detour does not change. Keeping
 // it re-probes the lanes that were actually carrying data as soon as a path
@@ -625,8 +629,30 @@ func (f *Interface) probeLanes(hostinfo *HostInfo, now time.Time, nb, out []byte
 func (ls *laneSet) resetLocked() {
 	for s := 1; s < len(ls.probe); s++ {
 		ls.txAddr[s].Store(nil)
-		ls.probe[s] = laneProbeState{}
+		ls.probe[s] = laneProbeState{gen: ls.probe[s].gen}
 	}
+}
+
+// isLaneProbe reports whether t/st is a lane probe or its ack. Probing is upkeep
+// the lanes do for themselves, not traffic: counting it would let a lane's own
+// keepalive keep an idle tunnel from ever being dropped.
+func isLaneProbe(t header.MessageType, st header.MessageSubType) bool {
+	return t == header.Test && (st == header.LaneProbe || st == header.LaneProbeAck)
+}
+
+// isLaneRemote reports whether addr is the target of one of our up lanes. The
+// peer answers a lane packet from the socket it arrived on, so a recv_error for
+// lane traffic comes from that lane's target rather than the base remote.
+func (ls *laneSet) isLaneRemote(addr netip.AddrPort) bool {
+	if ls == nil {
+		return false
+	}
+	for s := 1; s < ls.txLanes; s++ {
+		if a := ls.txAddr[s].Load(); a != nil && *a == addr {
+			return true
+		}
+	}
+	return false
 }
 
 // sendLaneProbe sends a probe on lane s to addr from a socket on lane s's port.

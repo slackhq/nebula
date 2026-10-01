@@ -197,25 +197,17 @@ func (cm *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte
 	}
 
 	cm.resetRelayTrafficCheck(hostinfo)
-	cm.maintainLanes(localIndex, decision, hostinfo, now, nb, out)
+	cm.maintainLanes(decision, hostinfo, now, nb, out)
 }
 
 // maintainLanes piggybacks multiport lane probing on the per-tunnel traffic
-// tick. This tick is the right place for it precisely because lanes are
-// demand-driven: a tunnel only lands here when it has traffic, which is the
-// same condition that raises lane demand.
-//
-// makeTrafficDecision returns a nil hostinfo on some keep-alive paths, so
-// re-resolve the index in that case.
-func (cm *connectionManager) maintainLanes(localIndex uint32, decision trafficDecision, hostinfo *HostInfo, now time.Time, nb, out []byte) {
-	if decision == deleteTunnel || decision == closeTunnel {
+// tick. makeTrafficDecision returns a nil hostinfo for a tunnel that is idle in
+// both directions, and that tunnel is skipped: probing it would cost a probe per
+// lane per keepalive for a tunnel nothing is using. Its lanes are probed again
+// on the first tick after traffic resumes.
+func (cm *connectionManager) maintainLanes(decision trafficDecision, hostinfo *HostInfo, now time.Time, nb, out []byte) {
+	if hostinfo == nil || decision == deleteTunnel || decision == closeTunnel {
 		return
-	}
-	if hostinfo == nil {
-		hostinfo = cm.hostMap.QueryIndex(localIndex)
-		if hostinfo == nil {
-			return
-		}
 	}
 	cm.intf.probeLanes(hostinfo, now, nb, out)
 }
