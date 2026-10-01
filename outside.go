@@ -271,6 +271,14 @@ func (f *Interface) closeTunnel(hostInfo *HostInfo) {
 		return
 	}
 
+	// A pending handshake to the same peer is invisible to the main hostmap but shares this list, and
+	// is usually the replacement for the tunnel we just lost. Keep the list so that handshake keeps
+	// receiving lighthouse replies and completes with the addresses it already has. This is best
+	// effort: a handshake that starts after this check is still covered by the re-attach on completion.
+	if f.handshakeManager != nil && f.handshakeManager.isPendingForAny(hostInfo.vpnAddrs) {
+		return
+	}
+
 	// We no longer have any tunnels with this vpn addr, clear learned lighthouse state to lower memory usage
 	f.lightHouse.DeleteVpnAddrs(hostInfo.vpnAddrs)
 }

@@ -500,7 +500,8 @@ func (hm *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 
 // unlockedReattachRemotes points hostinfo at the lighthouse's current RemoteList and records our
 // current remote in it. The caller must hold the main hostmap write lock, which closeTunnel also
-// holds across its delete and eviction.
+// holds across its delete and eviction. closeTunnel keeps the list while an outbound handshake is
+// pending, but an inbound handshake, or one started after that check, can still see it evicted.
 func (hm *HandshakeManager) unlockedReattachRemotes(hostinfo *HostInfo) {
 	current := hm.lightHouse.QueryCache(hostinfo.vpnAddrs)
 	if current == hostinfo.remotes {
@@ -571,6 +572,18 @@ func (hm *HandshakeManager) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 				"vpnAddrs": hostinfo.vpnAddrs, "indexNumber": hostinfo.localIndexId, "remoteIndexNumber": hostinfo.remoteIndexId},
 		)
 	}
+}
+
+// isPendingForAny reports whether an outbound handshake is in flight for any of vpnAddrs.
+func (hm *HandshakeManager) isPendingForAny(vpnAddrs []netip.Addr) bool {
+	hm.RLock()
+	defer hm.RUnlock()
+	for _, addr := range vpnAddrs {
+		if _, ok := hm.vpnIps[addr]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (hm *HandshakeManager) QueryVpnAddr(vpnIp netip.Addr) *HostInfo {

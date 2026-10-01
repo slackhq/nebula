@@ -292,9 +292,10 @@ func newRemotesRaceFixture(t *testing.T, vpnAddr netip.Addr) (*HandshakeManager,
 	return hm, f, established
 }
 
-// A tunnel torn down while a rehandshake to the same peer is pending evicts the lighthouse's list,
-// which the pending hostinfo shares. On completion the hostinfo must follow the live list rather
-// than keep the evicted one, which no lighthouse reply would ever update again.
+// A pending handshake shares the lighthouse's list. If that list is evicted before the handshake
+// completes, the hostinfo must follow the live list rather than keep the evicted one, which no
+// lighthouse reply would ever update again. closeTunnel keeps the list while a handshake is
+// pending, so evict directly, as happens when the handshake starts after closeTunnel's check.
 func Test_CompleteReattachesEvictedRemotes(t *testing.T) {
 	vpnAddr := netip.MustParseAddr("172.1.1.2")
 	hm, f, established := newRemotesRaceFixture(t, vpnAddr)
@@ -304,9 +305,7 @@ func Test_CompleteReattachesEvictedRemotes(t *testing.T) {
 	require.Same(t, established.remotes, pending.remotes, "a rehandshake shares the established tunnel's list")
 	evicted := pending.remotes
 
-	// The last established tunnel goes away while the handshake is in flight. The main hostmap
-	// cannot see the pending hostinfo, so this is final and the lighthouse forgets the list.
-	f.closeTunnel(established)
+	lh.DeleteVpnAddrs([]netip.Addr{vpnAddr})
 	require.NotContains(t, lh.addrMap, vpnAddr)
 
 	// The next lighthouse reply for the peer builds a fresh list.
@@ -323,6 +322,30 @@ func Test_CompleteReattachesEvictedRemotes(t *testing.T) {
 	assert.Same(t, pending, f.hostMap.Hosts[vpnAddr])
 	assert.Same(t, live, pending.remotes, "a completed tunnel must use the lighthouse's live list")
 	assert.Contains(t, live.CopyAddrs(nil), answeredFrom, "the address the peer answered from must carry over")
+}
+
+// Tearing down the last tunnel to a peer while a handshake to it is pending must keep the
+// lighthouse's list, so the handshake keeps the addresses it is retrying against.
+func Test_CloseTunnelKeepsRemotesForPendingHandshake(t *testing.T) {
+	vpnAddr := netip.MustParseAddr("172.1.1.2")
+	hm, f, established := newRemotesRaceFixture(t, vpnAddr)
+	lh := f.lightHouse
+
+	reported := netip.MustParseAddrPort("192.168.1.9:4242")
+	established.remotes.LearnRemote(vpnAddr, reported)
+
+	pending := hm.StartHandshake(vpnAddr, nil)
+	shared := pending.remotes
+
+	f.closeTunnel(established)
+	assert.NotContains(t, f.hostMap.Hosts, vpnAddr, "the tunnel itself must still be deleted")
+	assert.Same(t, shared, lh.addrMap[vpnAddr], "the list must stay cached while a handshake is pending")
+	assert.Contains(t, pending.remotes.CopyAddrs(nil), reported)
+
+	pending.localIndexId = 2
+	pending.remoteIndexId = 102
+	hm.Complete(pending, f)
+	assert.Same(t, shared, pending.remotes)
 }
 
 // With no handshake pending, tearing down the last tunnel still evicts the list.
