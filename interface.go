@@ -52,8 +52,6 @@ type InterfaceConfig struct {
 	reQueryEvery    uint32
 	reQueryWait     time.Duration
 
-	ConntrackCacheTimeout time.Duration
-
 	// CpuAffinity, when non-empty, names the CPUs each TUN reader goroutine
 	// should pin to. Queue i pins to CpuAffinity[i % len(CpuAffinity)] —
 	// shorter lists than `routines` cycle. Empty list keeps the default
@@ -110,8 +108,6 @@ type Interface struct {
 	// Bumped on every udp rebind, tunnels compare it to decide they need a punch from the far side
 	rebindEpoch atomic.Uint32
 	version     string
-
-	conntrackCacheTimeout time.Duration
 
 	ctx     context.Context
 	writers []udp.Conn
@@ -227,7 +223,6 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		myBroadcastAddrsTable: cs.myVpnBroadcastAddrsTable,
 		relayManager:          c.relayManager,
 		connectionManager:     c.connectionManager,
-		conntrackCacheTimeout: c.ConntrackCacheTimeout,
 		cpuAffinity:           c.CpuAffinity,
 		pinThreads:            c.PinThreads,
 
@@ -362,7 +357,6 @@ type rxContext struct {
 	fwPacket     *firewall.ParsedPacket
 	hostmapCache map[uint32]*HostInfo
 	lhh          *LightHouseHandler
-	ctCache      *firewall.ConntrackCacheTicker
 }
 
 func newRxContext(f *Interface, q int) *rxContext {
@@ -374,7 +368,6 @@ func newRxContext(f *Interface, q int) *rxContext {
 		fwPacket:     &firewall.ParsedPacket{},
 		hostmapCache: map[uint32]*HostInfo{},
 		lhh:          f.lightHouse.NewRequestHandler(),
-		ctCache:      firewall.NewConntrackCacheTicker(f.ctx, f.l, f.conntrackCacheTimeout),
 	}
 }
 
@@ -444,8 +437,6 @@ func (f *Interface) listenIn(queue tio.Queue, i int) {
 	fwPacket := &firewall.ParsedPacket{}
 	nb := make([]byte, 12, 12)
 
-	conntrackCache := firewall.NewConntrackCacheTicker(f.ctx, f.l, f.conntrackCacheTimeout)
-
 	for {
 		pkts, err := queue.Read()
 		if err != nil {
@@ -458,7 +449,7 @@ func (f *Interface) listenIn(queue tio.Queue, i int) {
 		}
 
 		for _, pkt := range pkts {
-			f.consumeInsidePacket(pkt, fwPacket, nb, sb, rejectBuf, i, conntrackCache.Get())
+			f.consumeInsidePacket(pkt, fwPacket, nb, sb, rejectBuf, i)
 			// Flush incrementally once a full sendmmsg batch has
 			// accumulated so the first packets of a deep read drain
 			// hit the wire while the rest are still being encrypted.
@@ -531,9 +522,8 @@ func (f *Interface) reloadFirewall(c *config.C) {
 	}
 
 	oldFw := f.firewall
-	conntrack := oldFw.Conntrack
-	conntrack.Lock()
-	defer conntrack.Unlock()
+	// Conntrack lives as long as the interface, keep using the running one
+	fw.Conntrack = oldFw.Conntrack
 
 	fw.rulesVersion = oldFw.rulesVersion + 1
 	// If rulesVersion is back to zero, we have wrapped all the way around. Be
@@ -544,8 +534,7 @@ func (f *Interface) reloadFirewall(c *config.C) {
 			"oldFirewallHashes", oldFw.GetRuleHashes(),
 			"rulesVersion", fw.rulesVersion,
 		)
-	} else {
-		fw.Conntrack = conntrack
+		fw.Conntrack.clear()
 	}
 
 	f.firewall = fw

@@ -10,7 +10,6 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
-	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/overlay/overlaytest"
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
@@ -43,7 +42,7 @@ func Test_emitStats_primesGauges(t *testing.T) {
 		hostMap:          hostMap,
 		inside:           &overlaytest.NoopTun{},
 		outside:          &udp.NoopConn{},
-		firewall:         &Firewall{Conntrack: &FirewallConntrack{Conns: map[firewall.Packet]*conn{}}},
+		firewall:         &Firewall{Conntrack: newFirewallConntrack()},
 		lightHouse:       lh,
 		pki:              &PKI{},
 		handshakeManager: NewHandshakeManager(l, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),

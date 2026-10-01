@@ -477,7 +477,7 @@ func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, messageCounte
 		return
 	}
 
-	dropReason := f.firewall.Drop(rxc.fwPacket.Packet, true, hostinfo, f.pki.GetCAPool(), rxc.ctCache.Get())
+	dropReason := f.firewall.Drop(rxc.fwPacket.Packet, true, hostinfo, f.pki.GetCAPool())
 	if dropReason != nil {
 		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, rxc.nb, rxc.scratch, rxc.q)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {

@@ -16,7 +16,7 @@ import (
 	"github.com/slackhq/nebula/routing"
 )
 
-func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.ParsedPacket, nb []byte, sendBatch *batch.SendBatch, rejectBuf []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.ParsedPacket, nb []byte, sendBatch *batch.SendBatch, rejectBuf []byte, q int) {
 	// borrowed: pkt.Bytes is owned by the originating tio.Queue and is
 	// only valid until the next Read on that queue. Every consumer below
 	// (parse, self-forward, handshake cache, sendInsideMessage) reads it
@@ -109,7 +109,7 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Parse
 		return
 	}
 
-	dropReason := f.firewall.Drop(fwPacket.Packet, false, hostinfo, f.pki.GetCAPool(), localCache)
+	dropReason := f.firewall.Drop(fwPacket.Packet, false, hostinfo, f.pki.GetCAPool())
 	if dropReason == nil {
 		f.sendInsideMessage(hostinfo, pkt, nb, sendBatch)
 	} else {
@@ -380,7 +380,7 @@ func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubTyp
 	}
 
 	// check if packet is in outbound fw rules
-	dropReason := f.firewall.Drop(fp.Packet, false, hostinfo, f.pki.GetCAPool(), nil)
+	dropReason := f.firewall.Drop(fp.Packet, false, hostinfo, f.pki.GetCAPool())
 	if dropReason != nil {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			f.l.Debug("dropping cached packet",
