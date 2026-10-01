@@ -156,14 +156,14 @@ func (f *Interface) sendInsideEncrypt(hostinfo *HostInfo, ci *ConnectionState, l
 //
 // When this flow has a usable multiport lane to this peer, the direct path swaps
 // to that lane's session and socket below. Relay and base traffic stays on
-// tx.base (socket 0).
+// tx.base, this routine's socket on the base port.
 func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, fwPacket *firewall.Packet, nb []byte, tx *txQueue) {
 	ci := hostinfo.ConnectionState
 	if ci.eKey == nil {
 		return
 	}
 
-	// Base and relay traffic stays on socket 0; the direct path may swap to tx.lane below.
+	// Base and relay traffic stays on the base port; the direct path may swap to tx.lane below.
 	sendBatch := tx.base
 
 	// One traffic-out mark covers every segment of the superpacket; doing it

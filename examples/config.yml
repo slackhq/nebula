@@ -190,23 +190,24 @@ listen:
 # socket sharing listen.port, multiport.ports consecutive ports are bound and
 # each gets its own group of `routines` sockets sharing it via SO_REUSEPORT, so
 # no port (the base port above all, which carries every handshake and every
-# vanilla peer) depends on a single core. One extra tunnel ("lane") per port is
-# negotiated with capable peers: lane i handshakes from local port listen.port+i
-# to the peer's advertised base+((i + pair_offset) mod peer_ports), where
-# pair_offset is a per-pair hash that spreads many small peers across a big
-# peer's whole port range.
-# Each lane is a full Noise session with its own
-# keys, nonce counter and replay window, so flows taking different paths
-# never fight over shared replay state.
+# vanilla peer) depends on a single core. Each port carries one lane: lane i
+# sends from local port listen.port+i to the peer's advertised
+# base+((i + pair_offset) mod peer_ports), where pair_offset is a per-pair hash
+# that spreads many small peers across a big peer's whole port range. Lane 0 is
+# the base tunnel itself.
+# A lane is not a separate tunnel and has no handshake of its own. Both sides
+# derive its keys from the base tunnel's, so it comes and goes with the base
+# tunnel, but it has its own nonce counter and replay window, so flows taking
+# different paths never fight over shared replay state. Each inside flow is
+# hashed onto one lane for its whole life, so multiport adds no reordering.
 #
 # Peers negotiate lanes in the handshake; vanilla peers get a single normal
 # tunnel. All control traffic (handshakes, lighthouse, punching, relays) and
-# the data fallback stay on the base tunnel/port. Lanes are built lazily: a
-# lane is only established once a routine actually has traffic for that peer
-# and no lane to carry it, so a peer you exchange a trickle with costs one
-# tunnel regardless of how many routines are configured. Established lanes
-# are kept alive with their own keepalives, and traffic falls back to the base
-# tunnel while a lane is down or not yet up.
+# the data fallback stay on the base tunnel/port. A lane only carries data once
+# a probe on it has been answered, and is re-probed every 30s while it is up;
+# traffic falls back to the base tunnel while a lane is down or not yet up.
+# Lanes are only probed on tunnels with traffic, so an idle tunnel costs
+# nothing extra.
 #
 # Requirements: multiport.ports > 1, Linux, and the port range
 # [listen.port, listen.port+multiport.ports-1] reachable through firewalls on
@@ -221,10 +222,11 @@ listen:
   # each port costs a full set of `routines` threads and sockets. Capped at 256
   # (the lane header limit). 4-8 is plenty to escape a single ECMP path.
   #ports: 0
-  # How many lanes to run, counting the base tunnel as lane 0. 0 (default)
-  # means one per bound port. Lowering this sends on a subset of the range,
-  # which bounds how many extra tunnels each peer pair maintains (useful on a
-  # big server with many peers); the ports are bound and read either way.
+  # How many lanes to send on, counting the base tunnel as lane 0. 0 (default)
+  # means one per bound port. Lowering this sends on a subset of the range
+  # (useful on a big server with many peers, to bound how many lane probes and
+  # sessions each peer costs). It only limits sending: the ports are bound and
+  # read either way, and we still receive on every lane a peer sends on.
   #lanes: 0
 
 punchy:

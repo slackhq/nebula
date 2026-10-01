@@ -108,10 +108,11 @@ egressSock(q)  = laneSock(q, 0)                          // base traffic
 
 Two properties fall out of this, and the rest of the design depends on both:
 
-1. **Every routine owns exactly one socket.** `listenIn` blocks in `recvmmsg`
-   and everything downstream of it -- the batcher, the conntrack cache, the
-   `txQueue` -- is single-owner and lock-free. More sockets than routines would
-   need epoll or locks.
+1. **Every routine owns exactly one socket.** Routine `i`'s UDP reader
+   (`listenOut`) blocks in `recvmmsg` on socket `i` and owns its batcher; its tun
+   reader (`listenIn`) owns its `txQueue` and conntrack cache. All of it is
+   single-owner and lock-free. More sockets than routines would need epoll or
+   locks.
 2. **Every routine has a sibling socket at the same group position on every
    port.** So socket selection is a pure function of `(queue, lane)` with no
    borrowing and no shared state, and each port's traffic spreads across its
@@ -145,8 +146,9 @@ txLanes   = min(myLanes, peerPortCount, sessions) // we may only SEND on ports t
 ```
 
 Sizing RX by the peer's count and TX by our own is what lets asymmetric hosts
-work: a 4-port laptop talking to a 32-port server sends on 4 lanes and receives
-on 32.
+work: a 4-port laptop talking to a 32-port server sends on 4 lanes, and keeps
+room for 32 lane sessions so it can receive on anything the server advertised it
+might send on. The server, bounded by the laptop's 4 ports, sends on 4.
 
 ### Port pairing
 
@@ -160,15 +162,19 @@ The rotation has to cancel, though, or the two directions of one flow would take
 unrelated 4-tuples and neither side's traffic would arrive through the conntrack
 or NAT entry the other's probe opened. So both sides hash the *same* sorted pair
 and the higher-addressed side **negates** the result. When the port counts match,
-the two rotations cancel exactly: our lane `s`'s 4-tuple is the reverse of the
-peer's lane `s`. `laneBias` does the matching rotation on the flow hash for the
-same reason.
+the two rotations cancel exactly on ports: our lane `s` runs from our port
+`base+s` to the peer's port `base+s+portOffset`, and the peer's lane
+`s+portOffset` runs back the other way, so the two are each other's reverse
+4-tuple. The lane *indices* don't cancel -- our lane `s` partners the peer's lane
+`s+portOffset` (mod the port count) -- and `laneBias` makes up for that: it
+rotates the flow hash by the same amount, so both directions of a flow pick
+partner lanes.
 
 That pairing only exists when our lane indices map one-to-one onto the peer's
 ports, which is exactly the `txLanes == peerPortCount` test `newLaneSet` applies
 before setting `laneBias`. If we send on 4 lanes and the peer bound 8 ports, four
 of its ports have no lane of ours pointing at them, and no choice of rotation can
-make our lane `s` and its lane `s` be each other's reverse. So in that case
+make each of our lanes the reverse of one of its lanes. So in that case
 `laneBias` stays 0 and each side hashes the flow to a lane on its own. The flow
 still works and is still spread; the two directions simply take two unrelated
 4-tuples instead of one 4-tuple and its exact reverse, and each direction depends
@@ -211,9 +217,9 @@ keepalive cannot keep an otherwise idle tunnel from being dropped by
 
 | timer | value |
 |---|---|
-| probe timeout | 2s (shorter than the 5s tick on purpose) |
+| probe timeout | 2s (shorter than the default 5s tick on purpose) |
 | keepalive | 30s |
-| retry backoff | 5s, doubling to 60s |
+| retry backoff | 10s, doubling to 60s |
 | max failure count | 8 |
 
 Traffic on a lane is not evidence the lane works -- that is the whole reason
@@ -296,7 +302,8 @@ nothing at all on one that doesn't.
      v
   tun queue q  ->  routine q
      |
-     |  s = laneFlowHash(flow) % txLanes      lane s arrives on port base+s
+     |  s = (laneFlowHash(flow) + laneBias)   lane s arrives on the peer's
+     |      % txLanes                         port for lane s
      v                                           |
   lane s session                                 |  SO_REUSEPORT hash of the
      |                                           |  4-tuple picks one socket
@@ -407,7 +414,7 @@ configuration:
 
 With a dynamic `listen.port: 0`, the first socket binds dynamically and the
 range is claimed above it; a partially-occupied range re-rolls with a fresh
-dynamic port up to 6 times.
+dynamic port, for up to 6 attempts in all.
 
 `laneSock` collapses to the identity when multiport is off, so the send path is
 unchanged: a routine writes to its own socket and no lane batches are built at
@@ -440,8 +447,9 @@ decided per packet with no state to unwind:
   all when there is no direct path and rebuilds when one returns;
 - the peer **roamed** -- a new NAT mapping has no derivable relationship to the
   old lane ports, so every lane is torn down and re-probed from a clean backoff.
-  Standing demand is deliberately kept across a reset, so the lanes that were
-  actually carrying data come back first.
+  Demand is kept across a reset, and the first packet of a flow that hashes onto
+  a lane that is now down raises it again, so lanes still carrying flows are
+  re-probed on the next tick.
 
 ### Always on the base tunnel
 
@@ -513,8 +521,9 @@ way to tell "no lanes negotiated" (key absent) from "lanes up but traffic on one
 Metrics, registered only when multiport is running so they don't sit at zero on
 nodes without it:
 
-- `multiport.lanes.up` -- lanes currently carrying traffic
-- `multiport.lanes.tunnels` -- tunnels with any lanes
+- `multiport.lanes.up` -- lanes currently proven usable for sending
+- `multiport.lanes.tunnels` -- tunnels with a lane set, including ones with no
+  lane up and receive-only ones
 
 Both are counted by walking the hostmap rather than kept at promotion/demotion,
 because a counter would drift upward forever: a tunnel torn down with its lanes

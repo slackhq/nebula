@@ -45,7 +45,7 @@ type InterfaceConfig struct {
 	routines           int
 	// Multiport means the sockets are spread over a range of ports
 	// (listen.port+slot) rather than all sharing listen.port, and that lane
-	// tunnels are negotiated with capable peers.
+	// sessions are negotiated with capable peers.
 	Multiport bool
 	// RoutinesPerPort is how many sockets share each port under multiport, and so
 	// the stride between port slots in writers: writers[s*RoutinesPerPort+r] is
@@ -294,9 +294,8 @@ func (f *Interface) activate() error {
 		"fips140Enforced", fips140.Enforced(),
 	)
 
-	// Under multiport each socket has exactly one reader on its own port, so
-	// the shared-port multi-reader capability is irrelevant (and main.go
-	// already hard-errored on unsupported platforms).
+	// Under multiport, main.go already probed this capability and turned
+	// multiport off where it is missing, so there is nothing to fall back from.
 	if f.routines > 1 && !f.multiport && !f.outside.SupportsMultipleReaders() {
 		f.routines = 1
 		f.l.Warn("multiple udp readers are not supported on this platform, falling back to a single routine")

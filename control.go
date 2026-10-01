@@ -212,7 +212,7 @@ func (c *Control) RebindUDPServer() {
 		return
 	}
 
-	// Every socket needs rebinding, not just the base: with multiport each one is bound to its own lane port, and
+	// Every socket needs rebinding, not just the base: with multiport the sockets are spread over the lane ports, and
 	// even without it the surplus SO_REUSEPORT sockets stay pinned to the interface we came up on otherwise.
 	//
 	// A failure here means we are likely still pinned to the interface we came up on, so the rest of this is
@@ -420,7 +420,7 @@ func copyHostInfo(h *HostInfo, preferredRanges []netip.Prefix) ControlHostInfo {
 
 // copyLanes snapshots the sendable multiport lanes of a tunnel, or nil when it
 // has none. txAddr is the lane's gate as well as its destination, so a nil load
-// is exactly "this lane is down and its routine is riding the base tunnel".
+// is exactly "this lane is down and its flows are riding the base tunnel".
 func copyLanes(h *HostInfo) []ControlLane {
 	ls := h.lanes
 	if ls == nil || ls.txLanes < 2 {

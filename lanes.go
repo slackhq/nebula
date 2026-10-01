@@ -41,12 +41,14 @@ import (
 // stays down until a probe on it is acked, and falls back to the base tunnel the
 // moment it stops being acked.
 //
-// Both directions are pay-per-use. A lane session is derived on the first packet
-// that needs it, because how many lanes exist is partly the peer's call: it
-// advertises how many it sends on, and we have to be able to receive all of
-// them. Deriving them all up front would let a peer advertising the maximum cost
-// us a replay window and two cipher states per lane, per tunnel, for lanes it
-// may never send on.
+// Receive is pay-per-use. A lane we only receive on gets its session on the
+// first packet that arrives on it, because how many lanes exist is partly the
+// peer's call: it advertises how many it sends on, and we have to be able to
+// receive all of them. Deriving them all up front would let a peer advertising
+// the maximum cost us a replay window and two cipher states per lane, per
+// tunnel, for lanes it may never send on. A lane we send on gets its session
+// from its first probe, and every such lane is probed on the tunnel's first
+// tick with traffic.
 
 const (
 	// laneKeyInfo is the HKDF label prefix for lane key expansion. Changing it
@@ -113,7 +115,7 @@ type laneSet struct {
 	// txLanes is how many lanes we may send on — our lane count clamped to the
 	// ports the peer bound — and so the modulus a flow's hash is reduced by.
 	// Lanes from txLanes up can only receive, which is how a peer with more
-	// routines than us still spreads its own traffic.
+	// ports than us still spreads its own traffic.
 	// Immutable, and the length of every TX-side slice here.
 	txLanes int
 
@@ -299,14 +301,15 @@ func (f *Interface) emitLaneStats(up, tunnels metrics.Gauge) {
 }
 
 // lanePortOffset returns the rotation applied to this pair's lane target ports,
-// in [0, peerPortCount). Without it every low-routine peer would aim its few
+// in [0, peerPortCount). Without it every peer with few ports would aim its few
 // lanes at a big peer's first few ports, concentrating the big peer's receive
 // work on a couple of sockets; the hash spreads pairs across the whole range.
 //
 // Both sides hash the same sorted vpn-address pair and the higher address
 // negates the result, so when port counts match the two sides' rotations
-// cancel: our lane s's 4-tuple stays the reverse of the peer's lane s, and each
-// side's probe opens the conntrack entry the other's arrives through. (The one
+// cancel on ports: our lane s's 4-tuple is the reverse of the peer's lane
+// s+offset, and each side's probe opens the conntrack entry the other's arrives
+// through. The lane indices still differ by offset; laneBias lines those up. (The one
 // lane a nonzero rotation lands on the peer's base port has no partner lane, so
 // behind a port-restricted NAT it is the one lane that may never come up.)
 func lanePortOffset(myAddr, peerAddr netip.Addr, peerPortCount uint16) uint16 {
@@ -638,10 +641,11 @@ func (f *Interface) probeLanes(hostinfo *HostInfo, now time.Time, nb, out []byte
 // for a probe sent before the reset match the first probe sent after it, and
 // promote the lane to a target nothing has proven.
 //
-// Demand is deliberately left standing: it records that a routine has real
-// traffic for this peer, which a roam or a relay detour does not change. Keeping
-// it re-probes the lanes that were actually carrying data as soon as a path
-// exists again, while a lane whose routine has gone quiet stays down.
+// Demand is deliberately left standing: a roam or a relay detour doesn't change
+// what the data plane wants. Lanes that were up had their demand spent when they
+// were probed, but the first packet of a flow that hashes onto one after the
+// reset raises it again, so lanes still carrying flows are re-probed on the next
+// tick, while a lane nothing hashes onto stays down.
 func (ls *laneSet) resetLocked() {
 	for s := 1; s < len(ls.probe); s++ {
 		ls.txAddr[s].Store(nil)

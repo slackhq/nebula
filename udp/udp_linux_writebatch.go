@@ -22,10 +22,11 @@ import (
 // scratch WriteBatch packs mmsghdr entries into, plus the GSO capability
 // state probed at socket creation.
 //
-// One socket can have several senders: under multiport every routine writes its
-// base-session traffic to socket 0, and any routine may write to any lane
-// socket, since a packet's lane comes from its flow rather than from the routine
-// that read it. The scratch is per socket, not per sender, so mu serializes
+// One socket can have several senders: under multiport a routine writes lane s
+// traffic to the socket at its own group position on lane s's port, so every
+// socket is shared by the routines at that group position, one per port, since
+// a packet's lane comes from its flow rather than from the routine that read
+// it. The scratch is per socket, not per sender, so mu serializes
 // packing and draining. It is taken once per flush — a syscall's worth of work —
 // and only contends when two routines flush the same socket at the same instant.
 //

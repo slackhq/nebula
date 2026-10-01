@@ -1148,7 +1148,8 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 		fields := append(logFields, "from", via)
 		// Reply from the socket the handshake arrived on so the initiator sees
 		// the source port it targeted. Identical to f.outside under vanilla
-		// config (all writers share one port); required for multiport lanes.
+		// config (all writers share one port); under multiport it keeps the reply on
+		// the base port, from whichever socket of its group the handshake reached.
 		err := f.writers[via.SockIdx].WriteTo(msg, via.UdpAddr)
 		if err != nil {
 			f.l.Error("Failed to send handshake message", append(fields, "error", err)...)
