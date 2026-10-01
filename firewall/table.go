@@ -32,7 +32,9 @@ type Table struct {
 	protos [256]*protoIndex
 }
 
-// protoIndex holds the rules that can apply to one protocol, in a set for each kind of packet.
+// protoIndex holds the rules that can apply to one protocol, in a set for each kind of packet. Rule ids are
+// indexes into the direction's rules, so every set is sized by the direction's rule count, not the protocol's:
+// byPort costs 64 KB per 8 rules in the direction.
 type protoIndex struct {
 	// hasPorts reports whether the protocol has ports; see iputil.HasPorts.
 	hasPorts bool

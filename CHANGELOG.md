@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Firewall rules are held as a flat list with a bitset of rule ids per port, instead of a tree of maps copied
+  into every port of a range. A rule like `port: 1024-65535` now costs kilobytes rather than tens of megabytes,
+  and matching is faster on every path.
+- A firewall rule's `proto` can be `udplite`, `dccp`, `sctp`, `icmpv6`, or any IP protocol number. A rule with
+  a port or port range on a protocol that has no ports, such as `proto: 47`, is rejected rather than silently
+  never matching. `port: any` and `port: fragment` apply to every protocol.
+- An ICMP non-first fragment is matched against `port: fragment` rules like a fragment of any other protocol.
+  It was only matched against `port: any` rules before.
+
+### Fixed
+
+- A firewall rule with `group: []`, `groups:` with no value, or a `groups` entry that isn't a string, such as
+  `groups: [1, 2]`, no longer crashes Nebula on startup or reload. An empty `group` array is rejected, a null
+  `groups` means no groups, and non-string entries are read as strings.
+
 ## [1.11.1] - 2026-08-21
 
 See the [v1.11.1](https://github.com/slackhq/nebula/milestone/30?closed=1) milestone for a complete list of changes.

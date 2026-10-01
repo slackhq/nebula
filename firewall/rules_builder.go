@@ -110,6 +110,11 @@ func parseRule(proto uint8, startPort, endPort int32, groups []string, host, cid
 	if startPort <= PortAny && PortAny <= endPort {
 		startPort, endPort = PortAny, PortAny
 	}
+	// A port rule on a protocol without ports could never match. ICMP rules were coerced to `any` by AddRule,
+	// and a proto `any` rule with a port applies to the protocols that have them.
+	if startPort > PortAny && proto != ProtoAny && !iputil.HasPorts(proto) {
+		return rule{}, fmt.Errorf("protocol %d has no ports, port must be any or fragment", proto)
+	}
 
 	r := rule{
 		proto:     proto,
@@ -214,7 +219,8 @@ func (pi *protoIndex) add(r *rule, id int) {
 	case PortFragment:
 		pi.fragment.add(id)
 	default:
-		// A range only applies to a protocol with ports.
+		// A proto `any` rule with a port is indexed for the protocols that have ports, parseRule rejects a port on
+		// a protocol without them.
 		if pi.hasPorts {
 			pi.addPorts(int(r.startPort), int(r.endPort), id)
 		}

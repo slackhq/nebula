@@ -223,8 +223,9 @@ func TestRulesBuilder_protoIndex(t *testing.T) {
 	require.NoError(t, rb.AddRule(true, iputil.IPProtocolTCP, PortFragment, PortFragment, nil, "fragment", "", "", "", ""))
 	// A range that includes port 0 is port `any`.
 	require.NoError(t, rb.AddRule(true, iputil.IPProtocolUDP, 0, 100, nil, "zero", "", "", "", ""))
-	// GRE has no ports, so a port rule on it never applies.
-	require.NoError(t, rb.AddRule(true, 47, 22, 22, nil, "gre", "", "", "", ""))
+	// GRE has no ports, so a port rule on it is rejected rather than never applying, and `any` and `fragment` apply
+	require.Error(t, rb.AddRule(true, 47, 22, 22, nil, "gre", "", "", "", ""))
+	require.NoError(t, rb.AddRule(true, 47, PortFragment, PortFragment, nil, "gre", "", "", "", ""))
 	rules := rb.Build(nil, nil)
 
 	hosts := func(proto uint8, key int32) []string {
@@ -252,7 +253,7 @@ func TestRulesBuilder_protoIndex(t *testing.T) {
 	assert.False(t, rules.In.protos[47].hasPorts)
 	assert.Equal(t, []string{"any"}, hosts(47, PortAny))
 	assert.Equal(t, []string{"any"}, hosts(47, 22))
-	assert.Equal(t, []string{"any"}, hosts(47, PortFragment))
+	assert.Equal(t, []string{"any", "gre"}, hosts(47, PortFragment))
 	assert.Equal(t, []string{"any"}, hosts(iputil.IPProtocolICMP, PortFragment))
 
 	// Protocols without rules of their own share an index of the proto `any` rules: one for protocols with

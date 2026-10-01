@@ -291,6 +291,26 @@ func TestAddRulesFromConfig(t *testing.T) {
 	require.NoError(t, addRulesFromConfig(l, true, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: true, proto: ProtoAny, startPort: 1, endPort: 1, groups: []string{"a", "b"}, ip: "", localIp: ""}, mf.lastCall)
 
+	// Test group and groups values that used to crash: an empty group array is rejected, groups entries that
+	// aren't strings are read as strings, and a null groups is no groups
+	conf = config.NewC(test.NewLogger())
+	mf = &mockFirewall{}
+	conf.Settings["firewall"] = map[string]any{"inbound": []any{map[string]any{"port": "1", "proto": "any", "group": []any{}}}}
+	require.EqualError(t, addRulesFromConfig(l, true, conf, mf), "firewall.inbound rule #0; group should contain a single value, an empty array was provided")
+
+	conf = config.NewC(test.NewLogger())
+	mf = &mockFirewall{}
+	conf.Settings["firewall"] = map[string]any{"inbound": []any{map[string]any{"port": "1", "proto": "any", "groups": []any{1, 2}}}}
+	require.NoError(t, addRulesFromConfig(l, true, conf, mf))
+	assert.Equal(t, []string{"1", "2"}, mf.lastCall.groups)
+
+	conf = config.NewC(test.NewLogger())
+	mf = &mockFirewall{}
+	conf.Settings["firewall"] = map[string]any{"inbound": []any{map[string]any{"port": "1", "proto": "any", "groups": nil, "host": "a"}}}
+	require.NoError(t, addRulesFromConfig(l, true, conf, mf))
+	assert.Empty(t, mf.lastCall.groups)
+	assert.Equal(t, "a", mf.lastCall.host)
+
 	// Test Add error
 	conf = config.NewC(test.NewLogger())
 	mf = &mockFirewall{}
