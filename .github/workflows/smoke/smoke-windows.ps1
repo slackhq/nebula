@@ -228,6 +228,14 @@ try {
         Write-Host "OK: $DevName $family NlMtu=$Mtu"
     }
 
+    # Both are set on the same handle as the v6 NlMtu, so by now they are either applied or never will be.
+    Wait-Until -TimeoutSec 30 -What "$DevName IPv6 DadTransmits=0 RouterDiscovery=Disabled" -Predicate {
+        if ($lhProc.HasExited) { throw "lighthouse exited (code $($lhProc.ExitCode)) before the v6 interface was configured" }
+        $rows = @(Get-NetIPInterface -InterfaceAlias $DevName -AddressFamily IPv6 -ErrorAction SilentlyContinue)
+        $rows.Count -gt 0 -and -not ($rows | Where-Object { $_.DadTransmits -ne 0 -or "$($_.RouterDiscovery)" -ne 'Disabled' })
+    }
+    Write-Host "OK: $DevName IPv6 DadTransmits=0 RouterDiscovery=Disabled"
+
     Wait-Until -TimeoutSec 30 -What "WSL nebula1 with $Ip2" -Predicate {
         if ($peerProc.HasExited) { throw "peer exited (code $($peerProc.ExitCode)) before tun was ready" }
         $r = wsl -d $Distro -u root -- bash -c "ip -o addr show nebula1 2>/dev/null | grep -q 'inet $Ip2' && echo yes"
