@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A firewall rule with `group: []`, `groups:` with no value, or a `groups` entry that isn't a string, such as
+  `groups: [1, 2]`, no longer crashes Nebula on startup or reload. An empty `group` array is rejected, a null
+  `groups` means no groups, and non-string entries are read as strings.
+
 ## [1.11.1] - 2026-08-21
 
 See the [v1.11.1](https://github.com/slackhq/nebula/milestone/30?closed=1) milestone for a complete list of changes.
