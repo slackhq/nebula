@@ -11,6 +11,7 @@ import (
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_NewHandshakeManagerVpnIp(t *testing.T) {
@@ -41,8 +42,6 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	i := blah.StartHandshake(ip, nil)
 	i2 := blah.StartHandshake(ip, nil)
 	assert.Same(t, i, i2)
-
-	i.remotes = NewRemoteList([]netip.Addr{}, nil)
 
 	// Adding something to pending should not affect the main hostmap
 	assert.Empty(t, mainHM.Hosts)
@@ -234,4 +233,170 @@ func TestHandleIncomingDispatch(t *testing.T) {
 		hm.HandleIncoming(via, pkt, h)
 		assert.Empty(t, hm.indexes, "orphan stage-2 must not create state")
 	})
+}
+
+// Test_PendingHandshakeHasRemotes covers create-tunnel -address: a hostinfo returned by
+// StartHandshake must already carry its RemoteList, so SetRemote on it before the handshake
+// loop has run is safe and the address becomes one the handshake is sent to.
+func Test_PendingHandshakeHasRemotes(t *testing.T) {
+	l := test.NewLogger()
+	mainHM := newHostMap(l)
+	preferredRanges := []netip.Prefix{}
+	mainHM.preferredRanges.Store(&preferredRanges)
+
+	hm := NewHandshakeManager(l, mainHM, newTestLighthouse(), &udp.NoopConn{}, defaultHandshakeConfig)
+
+	vpnIp := netip.MustParseAddr("172.1.1.2")
+	remote := netip.MustParseAddrPort("192.168.1.9:4242")
+
+	hi := hm.StartHandshake(vpnIp, nil)
+	require.NotNil(t, hi.remotes, "a pending handshake must never be without its RemoteList")
+
+	hi.SetRemote(remote)
+	assert.Contains(t, hi.remotes.CopyAddrs(preferredRanges), remote, "the handshake must be sent to the supplied remote")
+	assert.Equal(t, remote, hi.GetRemote())
+
+	// A RemoteList keeps one learned address per host, so a second remote replaces the
+	// first — the same behaviour change-remote has on an established tunnel.
+	other := netip.MustParseAddrPort("192.168.1.10:4242")
+	hi.SetRemote(other)
+	assert.Equal(t, []netip.AddrPort{other}, hi.remotes.CopyAddrs(preferredRanges))
+	assert.Equal(t, other, hi.GetRemote())
+}
+
+// newRemotesRaceFixture builds a handshake manager with an established tunnel to vpnAddr whose
+// RemoteList is the lighthouse's cached list, the state every teardown-during-handshake race starts from.
+func newRemotesRaceFixture(t *testing.T, vpnAddr netip.Addr) (*HandshakeManager, *Interface, *HostInfo) {
+	t.Helper()
+	l := test.NewLogger()
+	mainHM := newHostMap(l)
+	preferredRanges := []netip.Prefix{}
+	mainHM.preferredRanges.Store(&preferredRanges)
+
+	lh := newTestLighthouse()
+	hm := NewHandshakeManager(l, mainHM, lh, &udp.NoopConn{}, defaultHandshakeConfig)
+	f := &Interface{hostMap: mainHM, lightHouse: lh, handshakeManager: hm, l: l}
+	hm.f = f
+
+	established := &HostInfo{
+		vpnAddrs:        []netip.Addr{vpnAddr},
+		localIndexId:    1,
+		remoteIndexId:   101,
+		remotes:         lh.QueryCache([]netip.Addr{vpnAddr}),
+		HandshakePacket: map[uint8][]byte{},
+	}
+	mainHM.Lock()
+	mainHM.unlockedAddHostInfo(established, f)
+	mainHM.Unlock()
+
+	return hm, f, established
+}
+
+// A pending handshake shares the lighthouse's list. If that list is evicted before the handshake
+// completes, the hostinfo must follow the live list rather than keep the evicted one, which no
+// lighthouse reply would ever update again. closeTunnel keeps the list while a handshake is
+// pending, so evict directly, as happens when the handshake starts after closeTunnel's check.
+func Test_CompleteReattachesEvictedRemotes(t *testing.T) {
+	vpnAddr := netip.MustParseAddr("172.1.1.2")
+	hm, f, established := newRemotesRaceFixture(t, vpnAddr)
+	lh := f.lightHouse
+
+	pending := hm.StartHandshake(vpnAddr, nil)
+	require.Same(t, established.remotes, pending.remotes, "a rehandshake shares the established tunnel's list")
+	evicted := pending.remotes
+
+	lh.DeleteVpnAddrs([]netip.Addr{vpnAddr})
+	require.NotContains(t, lh.addrMap, vpnAddr)
+
+	// The next lighthouse reply for the peer builds a fresh list.
+	live := lh.QueryCache([]netip.Addr{vpnAddr})
+	require.NotSame(t, evicted, live)
+
+	// The peer answers the handshake, recorded the way continueHandshake does before completing.
+	answeredFrom := netip.MustParseAddrPort("192.168.1.9:4242")
+	pending.SetRemote(answeredFrom)
+	pending.localIndexId = 2
+	pending.remoteIndexId = 102
+	hm.Complete(pending, f)
+
+	assert.Same(t, pending, f.hostMap.Hosts[vpnAddr])
+	assert.Same(t, live, pending.remotes, "a completed tunnel must use the lighthouse's live list")
+	assert.Contains(t, live.CopyAddrs(nil), answeredFrom, "the address the peer answered from must carry over")
+}
+
+// Tearing down the last tunnel to a peer while a handshake to it is pending must keep the
+// lighthouse's list, so the handshake keeps the addresses it is retrying against.
+func Test_CloseTunnelKeepsRemotesForPendingHandshake(t *testing.T) {
+	vpnAddr := netip.MustParseAddr("172.1.1.2")
+	hm, f, established := newRemotesRaceFixture(t, vpnAddr)
+	lh := f.lightHouse
+
+	reported := netip.MustParseAddrPort("192.168.1.9:4242")
+	established.remotes.LearnRemote(vpnAddr, reported)
+
+	pending := hm.StartHandshake(vpnAddr, nil)
+	shared := pending.remotes
+
+	f.closeTunnel(established)
+	assert.NotContains(t, f.hostMap.Hosts, vpnAddr, "the tunnel itself must still be deleted")
+	assert.Same(t, shared, lh.addrMap[vpnAddr], "the list must stay cached while a handshake is pending")
+	assert.Contains(t, pending.remotes.CopyAddrs(nil), reported)
+
+	pending.localIndexId = 2
+	pending.remoteIndexId = 102
+	hm.Complete(pending, f)
+	assert.Same(t, shared, pending.remotes)
+}
+
+// With no handshake pending, tearing down the last tunnel still evicts the list.
+func Test_CloseTunnelEvictsWithoutPendingHandshake(t *testing.T) {
+	vpnAddr := netip.MustParseAddr("172.1.1.2")
+	_, f, established := newRemotesRaceFixture(t, vpnAddr)
+
+	f.closeTunnel(established)
+	assert.NotContains(t, f.hostMap.Hosts, vpnAddr)
+	assert.NotContains(t, f.lightHouse.addrMap, vpnAddr)
+}
+
+// The responder side fetches the list before it takes the hostmap lock to complete. A teardown in
+// that window must not leave the new tunnel on the evicted list either.
+func Test_CheckAndCompleteReattachesEvictedRemotes(t *testing.T) {
+	vpnAddr := netip.MustParseAddr("172.1.1.2")
+	hm, f, established := newRemotesRaceFixture(t, vpnAddr)
+	lh := f.lightHouse
+
+	answeredFrom := netip.MustParseAddrPort("192.168.1.9:4242")
+	inbound := &HostInfo{
+		vpnAddrs:        []netip.Addr{vpnAddr},
+		localIndexId:    2,
+		remoteIndexId:   102,
+		remotes:         lh.QueryCache([]netip.Addr{vpnAddr}),
+		HandshakePacket: map[uint8][]byte{handshakePacketStage0: []byte("stage0")},
+	}
+	inbound.SetRemote(answeredFrom)
+	require.Same(t, established.remotes, inbound.remotes)
+
+	f.closeTunnel(established)
+	live := lh.QueryCache([]netip.Addr{vpnAddr})
+
+	_, err := hm.CheckAndComplete(inbound, handshakePacketStage0, f)
+	require.NoError(t, err)
+	assert.Same(t, live, inbound.remotes)
+	assert.Contains(t, live.CopyAddrs(nil), answeredFrom)
+}
+
+// When nothing was evicted, completion must keep the shared list untouched.
+func Test_CompleteKeepsLiveRemotes(t *testing.T) {
+	vpnAddr := netip.MustParseAddr("172.1.1.2")
+	hm, f, established := newRemotesRaceFixture(t, vpnAddr)
+
+	pending := hm.StartHandshake(vpnAddr, nil)
+	shared := pending.remotes
+	pending.localIndexId = 2
+	pending.remoteIndexId = 102
+	hm.Complete(pending, f)
+
+	assert.Same(t, shared, pending.remotes)
+	assert.Same(t, established.remotes, pending.remotes)
+	assert.Same(t, shared, f.lightHouse.addrMap[vpnAddr])
 }

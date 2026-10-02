@@ -259,14 +259,6 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		"style": header.SubTypeName(header.Handshake, hh.machine.Subtype()),
 	}
 
-	// Get a remotes object if we don't already have one.
-	// This is mainly to protect us as this should never be the case
-	// NB ^ This comment doesn't jive. It's how the thing gets initialized.
-	// It's the common path. Should it update every time, in case a future LH query/queries give us more info?
-	if hostinfo.remotes == nil {
-		hostinfo.remotes = hm.lightHouse.QueryCache([]netip.Addr{vpnIp})
-	}
-
 	remotes := hostinfo.remotes.CopyAddrs(hm.mainHostMap.GetPreferredRanges())
 	remotesHaveChanged := !slices.Equal(remotes, hh.lastRemotes)
 
@@ -371,6 +363,11 @@ func (hm *HandshakeManager) StartHandshake(vpnAddr netip.Addr, cacheCb func(*Han
 	hostinfo := &HostInfo{
 		vpnAddrs:        []netip.Addr{vpnAddr},
 		HandshakePacket: make(map[uint8][]byte, 0),
+		// The lighthouse's list for this address, shared with it and updated in place as
+		// replies arrive. Attached here rather than on the handshake loop's first pass so
+		// a pending hostinfo never exists without one: SetRemote and the timeout path both
+		// dereference it, and create-tunnel -address reaches SetRemote before the loop runs.
+		remotes: hm.lightHouse.QueryCache([]netip.Addr{vpnAddr}),
 		relayState: RelayState{
 			relays:         nil,
 			relayForByAddr: map[netip.Addr]*Relay{},
@@ -472,6 +469,7 @@ func (hm *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket
 		)
 	}
 
+	hm.unlockedReattachRemotes(hostinfo)
 	hm.mainHostMap.unlockedAddHostInfo(hostinfo, f)
 	return existingHostInfo, nil
 }
@@ -496,7 +494,26 @@ func (hm *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 
 	// We need to remove from the pending hostmap first to avoid undoing work when after to the main hostmap.
 	hm.unlockedDeleteHostInfo(hostinfo)
+	hm.unlockedReattachRemotes(hostinfo)
 	hm.mainHostMap.unlockedAddHostInfo(hostinfo, f)
+}
+
+// unlockedReattachRemotes points hostinfo at the lighthouse's current RemoteList and records our
+// current remote in it. The caller must hold the main hostmap write lock, which closeTunnel also
+// holds across its delete and eviction. closeTunnel keeps the list while an outbound handshake is
+// pending, but an inbound handshake, or one started after that check, can still see it evicted.
+func (hm *HandshakeManager) unlockedReattachRemotes(hostinfo *HostInfo) {
+	current := hm.lightHouse.QueryCache(hostinfo.vpnAddrs)
+	if current == hostinfo.remotes {
+		return
+	}
+
+	hostinfo.remotes = current
+	// The handshake recorded where the peer answered from into the old list. Carry it over so the
+	// address we know works is not lost with it. A relayed handshake has no remote to carry.
+	if remote := hostinfo.GetRemote(); remote.IsValid() {
+		current.LearnRemote(hostinfo.vpnAddrs[0], remote)
+	}
 }
 
 // allocateIndex generates a unique localIndexId for this HostInfo
@@ -555,6 +572,18 @@ func (hm *HandshakeManager) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 				"vpnAddrs": hostinfo.vpnAddrs, "indexNumber": hostinfo.localIndexId, "remoteIndexNumber": hostinfo.remoteIndexId},
 		)
 	}
+}
+
+// isPendingForAny reports whether an outbound handshake is in flight for any of vpnAddrs.
+func (hm *HandshakeManager) isPendingForAny(vpnAddrs []netip.Addr) bool {
+	hm.RLock()
+	defer hm.RUnlock()
+	for _, addr := range vpnAddrs {
+		if _, ok := hm.vpnIps[addr]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (hm *HandshakeManager) QueryVpnAddr(vpnIp netip.Addr) *HostInfo {
