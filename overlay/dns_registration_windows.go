@@ -10,33 +10,15 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-// The TCP/IP stack keeps per-adapter DNS Client settings under these keys, one
-// subkey per adapter GUID and one hive per address family.
 var tcpipInterfaceKeys = []string{
 	`SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces`,
 	`SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces`,
 }
 
-// disableDNSRegistration stops the Windows DNS Client from registering the
-// tun adapter's addresses under the host name.
-//
-// On a domain-joined host the DNS Client registers every adapter that has
-// "Register this connection's addresses in DNS" on, which is the default for
-// a new adapter. A tun adapter that registers publishes the overlay IP as an
-// A/AAAA record for the host, so LAN clients that are not on the overlay
-// resolve the host to an address they cannot reach and RDP, SMB and WinRM to
-// it fail intermittently. Registration happens on address assignment, on a
-// timer and on every ipconfig /registerdns, so the values must be in place
-// before Activate assigns addresses.
-//
-// RegistrationEnabled alone (the adapter checkbox) does not reliably stop
-// registration, and neither does DisableDynamicUpdate alone, so all three
-// values are written, matching Tailscale and NetBird.
-//
-// Failure is logged rather than returned: a host that cannot write these keys
-// still needs its tunnel.
+// disableDNSRegistration prevents publishing overlay addresses in the host's
+// DNS records, where clients outside the overlay cannot reach them.
+// Failures are non-fatal so registry access cannot prevent tunnel creation.
 func disableDNSRegistration(l *slog.Logger, guid windows.GUID) {
-	// GUID.String yields the braced form the Interfaces subkeys are named with.
 	id := guid.String()
 	for _, base := range tcpipInterfaceKeys {
 		path := base + `\` + id
@@ -49,14 +31,15 @@ func disableDNSRegistration(l *slog.Logger, guid windows.GUID) {
 }
 
 func setDNSRegistrationValues(path string) error {
-	// CreateKey opens the subkey when the stack has already created it for the
-	// adapter and creates it otherwise; the values are honored either way.
+	// The stack may not have created the adapter's interface key yet.
 	k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, path, registry.SET_VALUE)
 	if err != nil {
 		return fmt.Errorf("open HKLM\\%s: %w", path, err)
 	}
 	defer k.Close()
 
+	// Neither RegistrationEnabled nor DisableDynamicUpdate alone reliably
+	// prevents registration, so all three settings are required.
 	values := []struct {
 		name string
 		data uint32

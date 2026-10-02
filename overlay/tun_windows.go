@@ -104,7 +104,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*w
 	}
 	t.tun = tunDevice.(*wintun.NativeTun)
 
-	// Before Activate assigns addresses, which is what triggers the first registration.
+	// Disable registration before Activate assigns addresses and triggers it.
 	disableDNSRegistration(l, *guid)
 
 	c.RegisterReloadCallback(func(c *config.C) {
