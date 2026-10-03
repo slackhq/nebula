@@ -126,7 +126,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 		f:           os.NewFile(uintptr(fd), ""),
 		Device:      name,
 		vpnNetworks: vpnNetworks,
-		DefaultMTU:  c.GetInt("tun.mtu", DefaultMTU),
+		DefaultMTU:  getMTU(c),
 		l:           l,
 	}
 

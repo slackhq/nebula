@@ -38,6 +38,12 @@ func NewC(l *slog.Logger) *C {
 	}
 }
 
+// Logger returns the logger this config was created with.
+// Code reading config values can use it to warn about a value it had to adjust.
+func (c *C) Logger() *slog.Logger {
+	return c.l
+}
+
 // Load will find all yaml files within path and load them in lexical order
 func (c *C) Load(path string) error {
 	c.path = path
