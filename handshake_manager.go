@@ -54,7 +54,8 @@ type HandshakeConfig struct {
 }
 
 type HandshakeManager struct {
-	// Mutex for interacting with the vpnIps and indexes maps
+	// Mutex for interacting with the vpnIps and indexes maps.
+	// Lock order is hostmap, then this lock, then the lighthouse, then a RemoteList.
 	sync.RWMutex
 
 	vpnIps  map[netip.Addr]*HandshakeHostInfo
@@ -950,9 +951,11 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 			newHH.hostinfo.remotes.BlockRemote(via)
 			newHH.packetStore = hh.packetStore
 			hh.packetStore = []*cachedPacket{}
-			hostinfo.vpnAddrs = vpnAddrs
-			f.sendCloseTunnel(hostinfo)
 		})
+		// sendCloseTunnel may take the hostmap lock, so it must not run under the handshake
+		// manager lock that StartHandshake holds around the callback.
+		hostinfo.vpnAddrs = vpnAddrs
+		f.sendCloseTunnel(hostinfo)
 		return
 	}
 

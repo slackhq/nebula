@@ -15,6 +15,7 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/test"
+	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.yaml.in/yaml/v3"
@@ -848,4 +849,109 @@ func TestLighthouse_QueryServerDoesNotBlock(t *testing.T) {
 		t.Fatal("QueryServer blocked on a full query channel")
 	}
 	assert.EqualValues(t, 1, lh.queryDropped.Count()-dropped)
+}
+
+// hostmapEncWriter answers GetHostInfo from a real hostmap, the way Interface does.
+type hostmapEncWriter struct {
+	mockEncWriter
+	hm *HostMap
+}
+
+func (w *hostmapEncWriter) GetHostInfo(a netip.Addr) *HostInfo { return w.hm.QueryVpnAddr(a) }
+func (w *hostmapEncWriter) GetCertState() *CertState {
+	return &CertState{initiatingVersion: cert.Version1}
+}
+
+// A lighthouse runs four paths that each hold one lock while waiting for the next: CheckAndComplete
+// holds the hostmap and takes the handshake manager, StartHandshake holds the handshake manager and
+// takes the lighthouse, a host update holds the lighthouse and takes the sender's RemoteList, and a
+// punch notification holds the querier's RemoteList while it resolves the target. If that last step
+// reaches the hostmap under the RemoteList lock, the four deadlock. Drive them all at once.
+func TestLighthouse_PunchNotificationDoesNotCloseLockCycle(t *testing.T) {
+	l := test.NewLogger()
+	myVpnNet := netip.MustParsePrefix("10.128.0.1/24")
+
+	c := config.NewC(l)
+	c.Settings["lighthouse"] = map[string]any{"am_lighthouse": true}
+	c.Settings["listen"] = map[string]any{"port": 4242}
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, testCertState(myVpnNet), nil, nil)
+	require.NoError(t, err)
+
+	mainHM := newHostMap(l)
+	pr := []netip.Prefix{}
+	mainHM.preferredRanges.Store(&pr)
+	lh.ifce = &hostmapEncWriter{hm: mainHM}
+
+	hm := NewHandshakeManager(l, mainHM, lh, &udp.NoopConn{}, defaultHandshakeConfig)
+	f := &Interface{hostMap: mainHM, lightHouse: lh, handshakeManager: hm, l: l}
+	hm.f = f
+
+	peer := netip.MustParseAddr("10.128.0.2")
+	peerUdp := netip.MustParseAddrPort("10.0.0.2:4242")
+	target := netip.MustParseAddr("10.128.0.3")
+	targetUdp := netip.MustParseAddrPort("10.0.0.3:4242")
+	outbound := netip.MustParseAddr("10.128.0.4")
+	inbound := netip.MustParseAddr("10.128.0.5")
+
+	seed := lh.NewRequestHandler()
+	newLHHostUpdate(peerUdp, peer, []netip.AddrPort{peerUdp}, seed)
+	newLHHostUpdate(targetUdp, target, []netip.AddrPort{targetUdp}, seed)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	loop := func(body func()) {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				body()
+			}
+		}
+	}
+	wg.Add(4)
+
+	// Outbound handshakes keep starting and being dropped.
+	go loop(func() {
+		hm.DeleteHostInfo(hm.StartHandshake(outbound, nil))
+	})
+
+	// Inbound handshakes keep completing and being torn down.
+	var idx uint32
+	go loop(func() {
+		idx++
+		hi := &HostInfo{
+			vpnAddrs:        []netip.Addr{inbound},
+			localIndexId:    idx,
+			remoteIndexId:   idx,
+			remotes:         lh.QueryCache([]netip.Addr{inbound}),
+			HandshakePacket: map[uint8][]byte{handshakePacketStage0: {byte(idx)}},
+		}
+		if _, err := hm.CheckAndComplete(hi, handshakePacketStage0, f); err == nil {
+			mainHM.DeleteHostInfo(hi)
+		}
+	})
+
+	// The peer keeps sending host updates.
+	updates := lh.NewRequestHandler()
+	go loop(func() {
+		newLHHostUpdate(peerUdp, peer, []netip.AddrPort{peerUdp}, updates)
+	})
+
+	// The same peer keeps querying for the target, which ends in a punch notification.
+	queries := lh.NewRequestHandler()
+	go loop(func() {
+		sendLHHostRequest(peerUdp, peer, target, queries, nil)
+	})
+
+	time.Sleep(time.Second)
+	close(stop)
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("deadlock: the lighthouse paths never finished after stop was signalled")
+	}
 }
