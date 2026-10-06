@@ -10,6 +10,7 @@ import (
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/logging"
 	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/overlay/batch"
 	"github.com/slackhq/nebula/overlay/tio"
@@ -517,7 +518,9 @@ func (f *Interface) SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, noc
 
 	err = f.writers[q].WriteTo(toSend, via.GetRemote())
 	if err != nil {
-		via.logger(f.l).Info("Failed to WriteTo in sendVia", "error", err)
+		if l, ok := logging.RateLimited(f.l, f.udpRelayTxErrLimiter); ok {
+			via.logger(l).Info("Failed to WriteTo in sendVia", "error", err)
+		}
 	}
 }
 
@@ -582,18 +585,22 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	if remote.IsValid() {
 		err = f.writers[q].WriteTo(out, remote)
 		if err != nil {
-			hostinfo.logger(f.l).Error("Failed to write outgoing packet",
-				"error", err,
-				"udpAddr", remote,
-			)
+			if l, ok := logging.RateLimited(f.l, f.udpTxErrLimiter); ok {
+				hostinfo.logger(l).Error("Failed to write outgoing packet",
+					"error", err,
+					"udpAddr", remote,
+				)
+			}
 		}
 	} else if hr := hostinfo.GetRemote(); hr.IsValid() {
 		err = f.writers[q].WriteTo(out, hr)
 		if err != nil {
-			hostinfo.logger(f.l).Error("Failed to write outgoing packet",
-				"error", err,
-				"udpAddr", hr,
-			)
+			if l, ok := logging.RateLimited(f.l, f.udpTxErrLimiter); ok {
+				hostinfo.logger(l).Error("Failed to write outgoing packet",
+					"error", err,
+					"udpAddr", hr,
+				)
+			}
 		}
 	} else {
 		// Try to send via a relay
