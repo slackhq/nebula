@@ -188,3 +188,142 @@ func TestService(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A listener that is never accepted from must not stall connections to other
+// ports, and closing it must not block.
+func TestServiceUnacceptedListener(t *testing.T) {
+	lighthousePort := ephemeralUDPPort(t)
+
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+	a := newSimpleService(ca, caKey, "a", netip.MustParseAddr("10.0.0.1"), m{
+		"static_host_map": m{},
+		"lighthouse": m{
+			"am_lighthouse": true,
+		},
+		"listen": m{
+			"host": "0.0.0.0",
+			"port": lighthousePort,
+		},
+	})
+	t.Cleanup(func() { _ = a.Close() })
+	b := newSimpleService(ca, caKey, "b", netip.MustParseAddr("10.0.0.2"), m{
+		"static_host_map": m{
+			"10.0.0.1": []string{fmt.Sprintf("127.0.0.1:%d", lighthousePort)},
+		},
+		"lighthouse": m{
+			"hosts":    []string{"10.0.0.1"},
+			"interval": 1,
+		},
+	})
+	t.Cleanup(func() { _ = b.Close() })
+
+	idle, err := a.Listen("tcp", ":1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := a.Listen("tcp", ":1235")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	idleConn, err := b.DialContext(ctx, "tcp", "10.0.0.1:1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idleConn.Close()
+
+	accepted := make(chan error, 1)
+	go func() {
+		conn, err := active.Accept()
+		if err == nil {
+			err = conn.Close()
+		}
+		accepted <- err
+	}()
+
+	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	activeConn, err := b.DialContext(ctx, "tcp", "10.0.0.1:1235")
+	if err != nil {
+		t.Fatalf("dial to accepted port stalled behind idle listener: %v", err)
+	}
+	defer activeConn.Close()
+
+	select {
+	case err := <-accepted:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("accept stalled behind idle listener")
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- idle.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("closing idle listener blocked")
+	}
+
+	if _, err := idle.Accept(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("expected net.ErrClosed from closed listener, got %v", err)
+	}
+	if err := idle.Close(); err != nil {
+		t.Fatalf("second close: %v", err)
+	}
+}
+
+// Accept must report net.ErrClosed after Close even while a handler is still
+// trying to hand off a connection.
+func TestListenerAcceptAfterClose(t *testing.T) {
+	s := &Service{}
+	s.mu.listeners = map[uint16]*tcpListener{}
+	l := &tcpListener{
+		port:   1234,
+		s:      s,
+		accept: make(chan net.Conn),
+		closed: make(chan struct{}),
+	}
+	s.mu.listeners[l.port] = l
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Keep a send pending so every Accept has a connection ready alongside closed.
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			server, client := net.Pipe()
+			_ = client.Close()
+			select {
+			case l.accept <- server:
+			case <-stop:
+				_ = server.Close()
+				return
+			}
+		}
+	}()
+	defer func() {
+		close(stop)
+		<-done
+	}()
+
+	for range 100 {
+		time.Sleep(time.Millisecond)
+		conn, err := l.Accept()
+		if conn != nil {
+			_ = conn.Close()
+		}
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Accept after Close: got err %v, want net.ErrClosed", err)
+		}
+	}
+}

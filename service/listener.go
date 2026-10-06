@@ -1,8 +1,8 @@
 package service
 
 import (
-	"io"
 	"net"
+	"sync"
 )
 
 type tcpListener struct {
@@ -10,23 +10,38 @@ type tcpListener struct {
 	s      *Service
 	addr   *net.TCPAddr
 	accept chan net.Conn
+
+	// closed is closed instead of accept so a handler blocked handing off a
+	// connection can't send on a closed channel.
+	closed    chan struct{}
+	closeOnce sync.Once
 }
 
 func (l *tcpListener) Accept() (net.Conn, error) {
-	conn, ok := <-l.accept
-	if !ok {
-		return nil, io.EOF
+	// select picks randomly among ready cases, so without this a handler still
+	// waiting to hand off could win over closed after Close has returned.
+	select {
+	case <-l.closed:
+		return nil, net.ErrClosed
+	default:
 	}
-	return conn, nil
+
+	select {
+	case conn := <-l.accept:
+		return conn, nil
+	case <-l.closed:
+		return nil, net.ErrClosed
+	}
 }
 
 func (l *tcpListener) Close() error {
-	l.s.mu.Lock()
-	defer l.s.mu.Unlock()
-	delete(l.s.mu.listeners, uint16(l.addr.Port))
+	l.closeOnce.Do(func() {
+		l.s.mu.Lock()
+		delete(l.s.mu.listeners, l.port)
+		l.s.mu.Unlock()
 
-	close(l.accept)
-
+		close(l.closed)
+	})
 	return nil
 }
 

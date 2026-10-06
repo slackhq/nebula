@@ -231,6 +231,7 @@ func (s *Service) Listen(network, address string) (net.Listener, error) {
 		s:      s,
 		addr:   addr,
 		accept: make(chan net.Conn),
+		closed: make(chan struct{}),
 	}
 
 	s.mu.Lock()
@@ -257,9 +258,8 @@ func (s *Service) tcpHandler(r *tcp.ForwarderRequest) {
 	endpointID := r.ID()
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	l, ok := s.mu.listeners[endpointID.LocalPort]
+	s.mu.Unlock()
 	if !ok {
 		r.Complete(true)
 		return
@@ -275,6 +275,12 @@ func (s *Service) tcpHandler(r *tcp.ForwarderRequest) {
 	r.Complete(false)
 	ep.SocketOptions().SetKeepAlive(true)
 
+	// The handoff blocks until Accept is called, so it must not hold s.mu or a
+	// listener nobody accepts from stalls every other port.
 	conn := gonet.NewTCPConn(&wq, ep)
-	l.accept <- conn
+	select {
+	case l.accept <- conn:
+	case <-l.closed:
+		_ = conn.Close()
+	}
 }
