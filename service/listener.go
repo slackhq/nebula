@@ -36,11 +36,13 @@ func (l *tcpListener) Accept() (net.Conn, error) {
 
 func (l *tcpListener) Close() error {
 	l.closeOnce.Do(func() {
+		// Close before leaving the map so a concurrent closeListeners that
+		// no longer sees this listener knows Accept is already released.
+		close(l.closed)
+
 		l.s.mu.Lock()
 		delete(l.s.mu.listeners, l.port)
 		l.s.mu.Unlock()
-
-		close(l.closed)
 	})
 	return nil
 }

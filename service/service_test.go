@@ -327,3 +327,162 @@ func TestListenerAcceptAfterClose(t *testing.T) {
 		}
 	}
 }
+
+// Close must release blocked Accept calls and let Wait report a clean shutdown.
+func TestServiceClose(t *testing.T) {
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+	a := newSimpleService(ca, caKey, "a", netip.MustParseAddr("10.0.0.1"), m{
+		"static_host_map": m{},
+		"listen": m{
+			"host": "127.0.0.1",
+			"port": 0,
+		},
+	})
+
+	ln, err := a.Listen("tcp", ":1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := make(chan error, 1)
+	go func() {
+		_, err := ln.Accept()
+		accepted <- err
+	}()
+
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-accepted:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("expected net.ErrClosed from Accept, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Accept still blocked after Close")
+	}
+
+	waited := make(chan error, 1)
+	go func() { waited <- a.Wait() }()
+	select {
+	case err := <-waited:
+		if err != nil {
+			t.Fatalf("expected clean shutdown from Wait, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Wait still blocked after Close")
+	}
+
+	if a.ipstack.HasNIC(nicID) {
+		t.Fatal("netstack not torn down after Wait")
+	}
+	if err := a.Close(); err != nil {
+		t.Fatalf("second close: %v", err)
+	}
+	if _, err := a.Listen("tcp", ":1235"); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("expected net.ErrClosed from Listen after Close, got %v", err)
+	}
+}
+
+// If nebula stops without Close being called, the service must still release
+// Accept and tear down the netstack.
+func TestServiceNebulaStopped(t *testing.T) {
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+	a := newSimpleService(ca, caKey, "a", netip.MustParseAddr("10.0.0.1"), m{
+		"static_host_map": m{},
+		"listen": m{
+			"host": "127.0.0.1",
+			"port": 0,
+		},
+	})
+
+	ln, err := a.Listen("tcp", ":1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := make(chan error, 1)
+	go func() {
+		_, err := ln.Accept()
+		accepted <- err
+	}()
+
+	a.control.Stop()
+
+	waited := make(chan error, 1)
+	go func() { waited <- a.Wait() }()
+	select {
+	case err := <-waited:
+		if err != nil {
+			t.Fatalf("expected clean shutdown from Wait, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Wait still blocked after nebula stopped")
+	}
+
+	select {
+	case err := <-accepted:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("expected net.ErrClosed from Accept, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Accept still blocked after nebula stopped")
+	}
+
+	if a.ipstack.HasNIC(nicID) {
+		t.Fatal("netstack not torn down after Wait")
+	}
+}
+
+// Dials racing Close must not hold Wait until their connect times out.
+func TestServiceDialDuringClose(t *testing.T) {
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+	a := newSimpleService(ca, caKey, "a", netip.MustParseAddr("10.0.0.1"), m{
+		"static_host_map": m{},
+		"listen": m{
+			"host": "127.0.0.1",
+			"port": 0,
+		},
+	})
+
+	stop := make(chan struct{})
+	var eg errgroup.Group
+	for range 8 {
+		eg.Go(func() error {
+			for {
+				select {
+				case <-stop:
+					return nil
+				default:
+				}
+				// 10.0.0.2 has no tunnel, so each dial sits in SYN-SENT until aborted
+				if c, err := a.Dial("tcp", "10.0.0.2:80"); err == nil {
+					_ = c.Close()
+				}
+			}
+		})
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- a.Wait() }()
+	select {
+	case err := <-waited:
+		if err != nil {
+			t.Fatalf("expected clean shutdown from Wait, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Wait blocked behind a dial that raced Close")
+	}
+
+	close(stop)
+	dialersDone := make(chan error, 1)
+	go func() { dialersDone <- eg.Wait() }()
+	select {
+	case <-dialersDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Dial still blocked after Wait")
+	}
+}

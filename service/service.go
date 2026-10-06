@@ -32,13 +32,18 @@ import (
 const nicID = 1
 
 type Service struct {
-	eg      *errgroup.Group
 	control *nebula.Control
 	ipstack *stack.Stack
+
+	// done is closed once the forwarding goroutines have exited and the
+	// netstack is torn down, at which point err holds the first fatal error.
+	done chan struct{}
+	err  error
 
 	mu struct {
 		sync.Mutex
 
+		closed    bool
 		listeners map[uint16]*tcpListener
 	}
 }
@@ -65,7 +70,6 @@ func New(control *nebula.Control) (_ *Service, reterr error) {
 	ctx := control.Context()
 	eg, ctx := errgroup.WithContext(ctx)
 	s := Service{
-		eg:      eg,
 		control: control,
 	}
 	s.mu.listeners = map[uint16]*tcpListener{}
@@ -74,6 +78,12 @@ func New(control *nebula.Control) (_ *Service, reterr error) {
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol, icmp.NewProtocol4, icmp.NewProtocol6},
 	})
+	// The teardown goroutine only owns the stack once New succeeds
+	defer func() {
+		if reterr != nil {
+			s.ipstack.Destroy()
+		}
+	}()
 	sackEnabledOpt := tcpip.TCPSACKEnabled(true) // TCP SACK is disabled by default
 	tcpipErr := s.ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &sackEnabledOpt)
 	if tcpipErr != nil {
@@ -123,6 +133,12 @@ func New(control *nebula.Control) (_ *Service, reterr error) {
 			// this will read exactly one packet
 			n, err := reader.Read(buf)
 			if err != nil {
+				// An error after shutdown began is noise from the device pipes
+				// closing, anything else is fatal and must stop nebula too
+				if ctx.Err() != nil {
+					return nil
+				}
+				s.control.Stop()
 				return err
 			}
 			packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
@@ -130,8 +146,8 @@ func New(control *nebula.Control) (_ *Service, reterr error) {
 			})
 			linkEP.InjectInbound(header.IPv4ProtocolNumber, packetBuf)
 
-			if err := ctx.Err(); err != nil {
-				return err
+			if ctx.Err() != nil {
+				return nil
 			}
 		}
 	})
@@ -139,13 +155,18 @@ func New(control *nebula.Control) (_ *Service, reterr error) {
 		for {
 			packet := linkEP.ReadContext(ctx)
 			if packet == nil {
-				if err := ctx.Err(); err != nil {
-					return err
+				if ctx.Err() != nil {
+					return nil
 				}
 				continue
 			}
 			bufView := packet.ToView()
 			if _, err := bufView.WriteTo(writer); err != nil {
+				// Same shutdown noise handling as the inbound reader
+				if ctx.Err() != nil {
+					return nil
+				}
+				s.control.Stop()
 				return err
 			}
 			bufView.Release()
@@ -157,6 +178,22 @@ func New(control *nebula.Control) (_ *Service, reterr error) {
 	eg.Go(func() error {
 		return control.Wait()
 	})
+
+	// Tear down here rather than in Close so it also happens when nebula stops
+	// on its own. The forwarding goroutines must exit before the stack they feed
+	// is destroyed.
+	s.done = make(chan struct{})
+	go func() {
+		s.err = eg.Wait()
+		s.closeListeners()
+		// Destroy aborts the endpoints that exist when it starts, then waits on
+		// every endpoint, so a Dial registering in between would hold Wait until
+		// its connect timed out. Without the NIC new dials fail route lookup.
+		// RemoveNIC also closes linkEP.
+		_ = s.ipstack.RemoveNIC(nicID)
+		s.ipstack.Destroy()
+		close(s.done)
+	}()
 
 	return &s, nil
 }
@@ -237,6 +274,9 @@ func (s *Service) Listen(network, address string) (net.Listener, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.mu.closed {
+		return nil, net.ErrClosed
+	}
 	if _, ok := s.mu.listeners[port]; ok {
 		return nil, fmt.Errorf("already listening on port %d", port)
 	}
@@ -245,13 +285,36 @@ func (s *Service) Listen(network, address string) (net.Listener, error) {
 	return l, nil
 }
 
+// Wait blocks until the service has fully stopped, either via Close or a fatal
+// error, and returns the first fatal error if there was one.
 func (s *Service) Wait() error {
-	return s.eg.Wait()
+	<-s.done
+	return s.err
 }
 
+// Close closes all listeners and stops nebula. Use Wait to block until
+// shutdown has completed.
 func (s *Service) Close() error {
+	s.closeListeners()
 	s.control.Stop()
 	return nil
+}
+
+// closeListeners unblocks pending Accept calls and rejects new listeners.
+func (s *Service) closeListeners() {
+	// Every caller closes every listener rather than returning early once
+	// closed is set, so none returns while another is still closing them.
+	s.mu.Lock()
+	s.mu.closed = true
+	listeners := make([]*tcpListener, 0, len(s.mu.listeners))
+	for _, l := range s.mu.listeners {
+		listeners = append(listeners, l)
+	}
+	s.mu.Unlock()
+
+	for _, l := range listeners {
+		_ = l.Close()
+	}
 }
 
 func (s *Service) tcpHandler(r *tcp.ForwarderRequest) {
