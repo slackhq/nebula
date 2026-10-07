@@ -8,11 +8,13 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
+	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -77,6 +79,15 @@ func (h *graphiteHost) addr(t *testing.T) *net.TCPAddr {
 	a, err := net.ResolveTCPAddr("tcp", h.ln.Addr().String())
 	require.NoError(t, err)
 	return a
+}
+
+// readExport reads what one send wrote, bounded so a send that never finishes fails the test rather than hanging it
+func readExport(t *testing.T, c net.Conn) []byte {
+	t.Helper()
+	require.NoError(t, c.SetReadDeadline(time.Now().Add(10*time.Second)))
+	b, err := io.ReadAll(c)
+	require.NoError(t, err)
+	return b
 }
 
 func (h *graphiteHost) next(t *testing.T, wait time.Duration) net.Conn {
@@ -151,6 +162,7 @@ func TestGraphiteSend_slowHostIsNotAStall(t *testing.T) {
 
 	// 256KB every 50ms, well inside the timeout but far longer than it overall
 	c := h.next(t, 5*time.Second)
+	require.NoError(t, c.SetReadDeadline(time.Now().Add(60*time.Second)))
 	total := 0
 	buf := make([]byte, 256<<10)
 	for {
@@ -195,11 +207,11 @@ func TestGraphiteFormat(t *testing.T) {
 	metrics.GetOrRegisterCounter("c", r).Inc(3)
 
 	var w bytes.Buffer
-	graphiteFormat(&w, graphiteConfigExport{Registry: r, FlushInterval: time.Second, DurationUnit: time.Nanosecond, Prefix: "nebula"})
+	graphiteFormat(&w, graphiteConfigExport{Registry: r, FlushInterval: time.Second, DurationUnit: time.Nanosecond, Prefix: "nebula"}, time.Unix(1700000000, 0))
 	out := w.String()
-	assert.Contains(t, out, "nebula.g.value 7 ")
-	assert.Contains(t, out, "nebula.c.count 3 ")
-	assert.Contains(t, out, "nebula.c.count_ps 3.00 ")
+	assert.Contains(t, out, "nebula.g.value 7 1700000000\n")
+	assert.Contains(t, out, "nebula.c.count 3 1700000000\n")
+	assert.Contains(t, out, "nebula.c.count_ps 3.00 1700000000\n")
 }
 
 func graphiteSenderConfig(r metrics.Registry) graphiteConfigExport {
@@ -224,19 +236,27 @@ func TestGraphiteSender_sends(t *testing.T) {
 	go s.run(t.Context())
 
 	s.request()
-	b, err := io.ReadAll(h.next(t, 5*time.Second))
-	require.NoError(t, err)
+	b := readExport(t, h.next(t, 5*time.Second))
 	assert.Contains(t, string(b), "nebula.a.value 1 ")
+	assert.Equal(t, graphiteStallTimeout, s.timeout)
 }
 
-// While a send is stuck on a host that stopped reading, requests never wait and collapse into one export, which
-// carries the values current when it runs and goes out on a fresh connection once the stuck one fails
+// nextSecond waits for the wall clock to tick over to a new second, so two stamps taken either side differ
+func nextSecond(t *testing.T) {
+	t.Helper()
+	now := time.Now().Unix()
+	require.Eventually(t, func() bool { return time.Now().Unix() > now }, 2*time.Second, 10*time.Millisecond)
+}
+
+// While a send is stuck on a host that stopped reading, requests never wait and the newest replaces any still waiting.
+// It goes out on a fresh connection once the stuck one fails, stamped with the time it was made
 func TestGraphiteSender_stuckSendBlocksNothing(t *testing.T) {
 	r := bigGraphiteRegistry()
 	marker := metrics.GetOrRegisterGauge("marker", r)
 	marker.Update(1)
 	h := newGraphiteHost(t, 4096)
-	s := newGraphiteSender(h.addr(t), graphiteSenderConfig(r), slog.New(slog.DiscardHandler))
+	logs := &lockedBuffer{}
+	s := newGraphiteSender(h.addr(t), graphiteSenderConfig(r), test.NewLoggerWithOutput(logs))
 	sent := make(chan error, 8)
 	s.sent = func(err error) { sent <- err }
 	go s.run(t.Context())
@@ -250,7 +270,6 @@ func TestGraphiteSender_stuckSendBlocksNothing(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 
-	marker.Update(2)
 	requested := make(chan struct{})
 	go func() {
 		for range 100 {
@@ -264,6 +283,14 @@ func TestGraphiteSender_stuckSendBlocksNothing(t *testing.T) {
 		t.Fatal("a request waited on a stuck send")
 	}
 
+	// The newest request is the one that goes out, with the time it was made rather than the time it was formatted
+	nextSecond(t)
+	marker.Update(2)
+	newest := time.Now().Unix()
+	s.request()
+	require.Equal(t, newest, time.Now().Unix(), "crossed a second while requesting, rerun")
+	nextSecond(t)
+
 	// Only the marker from here on, so the next export is small and reads back quickly through the small window
 	r.Each(func(name string, _ any) {
 		if name != "marker" {
@@ -271,10 +298,9 @@ func TestGraphiteSender_stuckSendBlocksNothing(t *testing.T) {
 		}
 	})
 	require.NoError(t, stuck.Close())
-	b, err := io.ReadAll(h.next(t, 30*time.Second))
-	require.NoError(t, err)
-	assert.Contains(t, string(b), "nebula.marker.value 2 ")
-	assert.NotContains(t, string(b), "nebula.marker.value 1 ", "each export starts from an empty buffer")
+	b := readExport(t, h.next(t, 30*time.Second))
+	assert.Contains(t, logs.String(), "Graphite export failed", "the stuck send's failure is logged")
+	assert.Equal(t, fmt.Sprintf("nebula.marker.value 2 %d\n", newest), string(b), "each export starts from an empty buffer")
 
 	select {
 	case <-h.conns:
@@ -283,10 +309,89 @@ func TestGraphiteSender_stuckSendBlocksNothing(t *testing.T) {
 	}
 }
 
+// lockedBuffer is a log destination a test can read while the code under test writes to it from another goroutine
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestGraphiteSender_warnsOncePerStall(t *testing.T) {
+	const warning = "Graphite export is taking longer than the stats interval"
+	const recovered = "Graphite exports are keeping up again"
+	logs := &lockedBuffer{}
+	r := metrics.NewRegistry()
+	fill := func() {
+		for i := range 200000 {
+			metrics.GetOrRegisterGauge(fmt.Sprintf("big.gauge.%d", i), r).Update(int64(i))
+		}
+	}
+	h := newGraphiteHost(t, 4096)
+	cfg := graphiteSenderConfig(r)
+	cfg.FlushInterval = 100 * time.Millisecond
+	s := newGraphiteSender(h.addr(t), cfg, test.NewLoggerWithOutput(logs))
+	sent := make(chan error, 8)
+	s.sent = func(err error) { sent <- err }
+	go s.run(t.Context())
+	waitSent := func() error {
+		t.Helper()
+		select {
+		case err := <-sent:
+			return err
+		case <-time.After(30 * time.Second):
+			t.Fatal("the send never ended")
+			return nil
+		}
+	}
+	count := func(msg string) int { return strings.Count(logs.String(), msg) }
+
+	// Two stuck sends in a row are one stall
+	fill()
+	for range 2 {
+		s.request()
+		stuck := h.next(t, 30*time.Second)
+		require.Eventually(t, func() bool { return count(warning) == 1 }, 5*time.Second, 10*time.Millisecond)
+		time.Sleep(3 * cfg.FlushInterval)
+		require.NoError(t, stuck.Close())
+		waitSent()
+	}
+	assert.Equal(t, 1, count(warning), "one warning per stall")
+	assert.Equal(t, 0, count(recovered))
+
+	// A send that keeps up ends the stall, and says nothing more once the interval has passed
+	r.UnregisterAll()
+	s.request()
+	readExport(t, h.next(t, 5*time.Second))
+	require.NoError(t, waitSent())
+	time.Sleep(2 * cfg.FlushInterval)
+	assert.Equal(t, 1, count(recovered))
+	assert.Equal(t, 1, count(warning))
+
+	// So the next stall warns again
+	fill()
+	s.request()
+	stuck := h.next(t, 30*time.Second)
+	require.Eventually(t, func() bool { return count(warning) == 2 }, 5*time.Second, 10*time.Millisecond)
+	require.NoError(t, stuck.Close())
+	waitSent()
+}
+
 // A stop or reload abandons a stuck send rather than waiting out its timeout
 func TestGraphiteSender_stopAbandonsStuckSend(t *testing.T) {
 	h := newGraphiteHost(t, 4096)
-	s := newGraphiteSender(h.addr(t), graphiteSenderConfig(bigGraphiteRegistry()), slog.New(slog.DiscardHandler))
+	logs := &lockedBuffer{}
+	s := newGraphiteSender(h.addr(t), graphiteSenderConfig(bigGraphiteRegistry()), test.NewLoggerWithOutput(logs))
 	sent := make(chan error, 1)
 	s.sent = func(err error) { sent <- err }
 	ctx, cancel := context.WithCancel(t.Context())
@@ -307,6 +412,41 @@ func TestGraphiteSender_stopAbandonsStuckSend(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the sender is still stuck after its runtime stopped")
 	}
+	assert.NotContains(t, logs.String(), "Graphite export failed", "a stop is not a failure")
+}
+
+func TestGraphiteSend_cancelledCtxDoesNotConnect(t *testing.T) {
+	h := newGraphiteHost(t, 0)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.Error(t, graphiteSend(ctx, h.addr(t), []byte("x 1 0\n"), time.Minute))
+	select {
+	case <-h.conns:
+		t.Fatal("connected on a cancelled ctx")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// buildRuntime hands the sender the configured prefix and interval
+func TestStatsServer_graphiteExportUsesConfig(t *testing.T) {
+	const name = "graphite.wiring.test"
+	metrics.GetOrRegisterCounter(name, nil).Inc(8)
+	t.Cleanup(func() { metrics.DefaultRegistry.Unregister(name) })
+	h := newGraphiteHost(t, 0)
+	s, c := newTestStatsServer(t)
+	setStatsConfig(c, map[string]any{"type": "graphite", "interval": "4s", "prefix": "pfx", "host": h.ln.Addr().String()})
+	cfg, err := loadStatsConfig(c)
+	require.NoError(t, err)
+
+	s.runMu.Lock()
+	fns, _ := s.buildRuntime(t.Context(), cfg)
+	s.runMu.Unlock()
+	for _, fn := range fns {
+		fn()
+	}
+	b := readExport(t, h.next(t, 5*time.Second))
+	assert.Contains(t, string(b), "pfx."+name+".count 8 ")
+	assert.Contains(t, string(b), "pfx."+name+".count_ps 2.00 ")
 }
 
 // The sender buildRuntime starts stops with the runtime. One left running would keep sending after a reload replaced it

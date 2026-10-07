@@ -37,6 +37,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -53,9 +54,9 @@ type graphiteConfigExport struct {
 }
 
 // graphiteFormat appends every metric in the registry to w in graphite's
-// plaintext format.
-func graphiteFormat(w *bytes.Buffer, c graphiteConfigExport) {
-	now := time.Now().Unix()
+// plaintext format, stamped with at.
+func graphiteFormat(w *bytes.Buffer, c graphiteConfigExport, at time.Time) {
+	now := at.Unix()
 	du := float64(c.DurationUnit)
 	flushSeconds := float64(c.FlushInterval) / float64(time.Second)
 	c.Registry.Each(func(name string, i any) {
@@ -118,46 +119,65 @@ const graphiteStallTimeout = 30 * time.Second
 const graphiteWriteChunk = 64 << 10
 
 // graphiteSender formats and ships exports to graphite on its own goroutine, so
-// a slow or dead host never holds up a capture pass. It formats when it is free
-// to send, from the values at that moment, into one buffer it reuses.
+// a slow or dead host never holds up a capture pass. It formats as soon as a pass
+// asks, into one buffer it reuses.
 type graphiteSender struct {
 	addr    *net.TCPAddr
 	cfg     graphiteConfigExport
 	l       *slog.Logger
 	timeout time.Duration
-	wake    chan struct{}
+	wake    chan time.Time
+	stalled atomic.Bool
 	buf     bytes.Buffer
 	// sent, when set, hears how each send ended. Only tests set it
 	sent func(error)
 }
 
 func newGraphiteSender(addr *net.TCPAddr, cfg graphiteConfigExport, l *slog.Logger) *graphiteSender {
-	return &graphiteSender{addr: addr, cfg: cfg, l: l, timeout: graphiteStallTimeout, wake: make(chan struct{}, 1)}
+	return &graphiteSender{addr: addr, cfg: cfg, l: l, timeout: graphiteStallTimeout, wake: make(chan time.Time, 1)}
 }
 
-// request asks for an export without waiting. Requests made while a send is stuck collapse into one, which reads
-// the values current when it finally runs.
+// request asks for an export stamped with the current time, without waiting. A request still waiting on a send in
+// progress is replaced, so a host that can't keep up gets the newest values and skips the rest.
 func (s *graphiteSender) request() {
-	select {
-	case s.wake <- struct{}{}:
-	default:
+	at := time.Now()
+	for {
+		select {
+		case s.wake <- at:
+			return
+		default:
+		}
+		select {
+		case <-s.wake:
+		default:
+		}
 	}
 }
 
 // run exports on each request until ctx is done. A failed send is logged and the next export goes out on a fresh
-// connection.
+// connection. A send that outlasts the interval is still let finish, with one warning per stall that exports are being
+// dropped.
 func (s *graphiteSender) run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-s.wake:
+		case at := <-s.wake:
 			if ctx.Err() != nil {
 				return
 			}
+			slow := time.AfterFunc(s.cfg.FlushInterval, func() {
+				if !s.stalled.Swap(true) {
+					s.l.Warn("Graphite export is taking longer than the stats interval, exports are being dropped",
+						"addr", s.addr, "interval", s.cfg.FlushInterval)
+				}
+			})
 			s.buf.Reset()
-			graphiteFormat(&s.buf, s.cfg)
+			graphiteFormat(&s.buf, s.cfg, at)
 			err := graphiteSend(ctx, s.addr, s.buf.Bytes(), s.timeout)
+			if slow.Stop() && err == nil && s.stalled.Swap(false) {
+				s.l.Info("Graphite exports are keeping up again", "addr", s.addr)
+			}
 			if err != nil && ctx.Err() == nil {
 				s.l.Error("Graphite export failed", "error", err)
 			}
