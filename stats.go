@@ -38,6 +38,11 @@ type statsServer struct {
 	runMu  sync.Mutex
 	runCfg *statsConfig
 	run    *statsRuntime // non-nil while a runtime is live
+	// Closed when the last runtime's capture loop has returned. Stop waits on it so nothing captures once it returns,
+	// and a reload's new runtime never overlaps the old one, go-metrics keeps its GC capture state in unguarded globals
+	loopDone chan struct{}
+	// See newStatsServerFromConfig, never changes after it
+	emitters []func()
 }
 
 // statsRuntime is the live state owned by a single Start invocation. Start
@@ -82,12 +87,16 @@ type promConfig struct {
 //
 // Start is safe to call unconditionally: it no-ops when stats are disabled.
 // The returned pointer is always non-nil, even on error.
-func newStatsServerFromConfig(ctx context.Context, l *slog.Logger, c *config.C, buildVersion string, configTest bool) (*statsServer, error) {
+//
+// emitters update metrics on every capture, ahead of the exporters so each export sees what they just set. They are
+// fixed here, before the reload callback exists, so every runtime has them.
+func newStatsServerFromConfig(ctx context.Context, l *slog.Logger, c *config.C, buildVersion string, configTest bool, emitters ...func()) (*statsServer, error) {
 	s := &statsServer{
 		l:            l,
 		ctx:          ctx,
 		buildVersion: buildVersion,
 		configTest:   configTest,
+		emitters:     emitters,
 	}
 
 	c.RegisterReloadCallback(func(c *config.C) {
@@ -120,7 +129,6 @@ func (s *statsServer) reload(c *config.C, initial bool) error {
 	s.runMu.Lock()
 	sameCfg := s.runCfg != nil && *s.runCfg == newCfg
 	s.runCfg = &newCfg
-	running := s.run != nil
 	s.runMu.Unlock()
 
 	s.enabled.Store(enabled)
@@ -129,9 +137,8 @@ func (s *statsServer) reload(c *config.C, initial bool) error {
 		return nil
 	}
 
-	if running {
-		s.Stop()
-	}
+	// Even with nothing running, a runtime whose listener failed can still be finishing its last pass
+	s.Stop()
 	if enabled && !s.configTest {
 		go s.Start()
 	}
@@ -157,9 +164,15 @@ func (s *statsServer) Start() {
 	captureFns, listener := s.buildRuntime(runCtx, cfg)
 	rt := &statsRuntime{cancel: cancel, listener: listener}
 	s.run = rt
+	done := make(chan struct{})
+	s.loopDone = done
 	s.runMu.Unlock()
 
-	go captureStatsLoop(runCtx, cfg.interval, captureFns)
+	// Prime before serving, so a scrape that lands before the first tick sees real values instead of zeros (issue #907)
+	for _, fn := range captureFns {
+		fn()
+	}
+	go captureStatsLoop(runCtx, cfg.interval, captureFns, done)
 
 	cleanExit := true
 	if listener == nil {
@@ -221,17 +234,22 @@ func (s *statsServer) Stop() {
 	s.runMu.Lock()
 	rt := s.run
 	s.run = nil
+	loopDone := s.loopDone
 	s.runMu.Unlock()
-	if rt == nil {
-		return
-	}
-	rt.cancel()
-	if rt.listener != nil {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := rt.listener.Shutdown(shutdownCtx); err != nil {
-			s.l.Warn("Failed to shut down prometheus stats listener", "error", err)
+	if rt != nil {
+		rt.cancel()
+		if rt.listener != nil {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := rt.listener.Shutdown(shutdownCtx); err != nil {
+				s.l.Warn("Failed to shut down prometheus stats listener", "error", err)
+			}
+			cancel()
 		}
-		cancel()
+	}
+	// Nothing captures once Stop returns. The last runtime is cancelled by now, whoever cleared it, so this is at most
+	// the pass it was in
+	if loopDone != nil {
+		<-loopDone
 	}
 }
 
@@ -248,6 +266,7 @@ func (s *statsServer) buildRuntime(ctx context.Context, cfg statsConfig) ([]func
 		func() { metrics.CaptureDebugGCStatsOnce(metrics.DefaultRegistry) },
 		func() { metrics.CaptureRuntimeMemStatsOnce(metrics.DefaultRegistry) },
 	}
+	captureFns = append(captureFns, s.emitters...)
 
 	switch cfg.typ {
 	case "graphite":
@@ -310,8 +329,10 @@ func (s *statsServer) buildRuntime(ctx context.Context, cfg statsConfig) ([]func
 	return captureFns, nil
 }
 
-// captureStatsLoop runs each fn on every tick of d until ctx is cancelled.
-func captureStatsLoop(ctx context.Context, d time.Duration, fns []func()) {
+// captureStatsLoop runs each fn on every tick of d until ctx is cancelled, then
+// closes done.
+func captureStatsLoop(ctx context.Context, d time.Duration, fns []func(), done chan struct{}) {
+	defer close(done)
 	t := time.NewTicker(d)
 	defer t.Stop()
 	for {

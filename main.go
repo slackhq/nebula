@@ -320,7 +320,12 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		punchy.Start(ctx, ifce, hostMap, lightHouse)
 	}
 
-	stats, err := newStatsServerFromConfig(ctx, l, c, buildVersion, configTest)
+	// On the stats server's loop, so the gauges follow the interval it accepted
+	var statsEmitters []func()
+	if ifce != nil {
+		statsEmitters = append(statsEmitters, ifce.statsEmitter())
+	}
+	stats, err := newStatsServerFromConfig(ctx, l, c, buildVersion, configTest, statsEmitters...)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to start stats emitter", err)
 	}
@@ -328,8 +333,6 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	if configTest {
 		return nil, nil
 	}
-
-	go ifce.emitStats(ctx, c.GetDuration("stats.interval", time.Second*10))
 
 	attachCommands(l, c, ssh, ifce)
 
