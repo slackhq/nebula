@@ -955,3 +955,24 @@ func TestLighthouse_PunchNotificationDoesNotCloseLockCycle(t *testing.T) {
 		t.Fatal("deadlock: the lighthouse paths never finished after stop was signalled")
 	}
 }
+
+func TestLighthouse_reloadRelaysTriggersUpdate(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	base := "lighthouse:\n  am_lighthouse: true\nlisten:\n  port: 4242\n"
+	require.NoError(t, c.LoadString(base+"relay:\n  relays: [10.128.0.5]\n"))
+
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, testCertState(netip.MustParsePrefix("10.128.0.1/24")), nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, lh.updateTrigger)
+
+	require.NoError(t, c.ReloadConfigString(base+"relay:\n  relays: [10.128.0.6]\n"))
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("10.128.0.6")}, lh.GetRelaysForMe())
+	require.Len(t, lh.updateTrigger, 1)
+	<-lh.updateTrigger
+
+	// The config changed but what we advertise did not, a bad entry is skipped
+	require.NoError(t, c.ReloadConfigString(base+"relay:\n  relays: [10.128.0.6, nope]\n"))
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("10.128.0.6")}, lh.GetRelaysForMe())
+	assert.Empty(t, lh.updateTrigger)
+}
