@@ -119,8 +119,8 @@ const graphiteStallTimeout = 30 * time.Second
 const graphiteWriteChunk = 64 << 10
 
 // graphiteSender formats and ships exports to graphite on its own goroutine, so
-// a slow or dead host never holds up a capture pass. It formats as soon as a pass
-// asks, into one buffer it reuses.
+// a slow or dead host never holds up a capture pass. It formats when it picks up
+// a request, stamped with the time the pass asked, into one buffer it reuses.
 type graphiteSender struct {
 	addr    *net.TCPAddr
 	cfg     graphiteConfigExport
@@ -155,8 +155,7 @@ func (s *graphiteSender) request() {
 }
 
 // run exports on each request until ctx is done. A failed send is logged and the next export goes out on a fresh
-// connection. A send that outlasts the interval is still let finish, with one warning per stall that exports are being
-// dropped.
+// connection. A send that outlasts the interval is still let finish, with one warning per stall.
 func (s *graphiteSender) run(ctx context.Context) {
 	for {
 		select {
@@ -168,7 +167,7 @@ func (s *graphiteSender) run(ctx context.Context) {
 			}
 			slow := time.AfterFunc(s.cfg.FlushInterval, func() {
 				if !s.stalled.Swap(true) {
-					s.l.Warn("Graphite export is taking longer than the stats interval, exports are being dropped",
+					s.l.Warn("Graphite export is taking longer than the stats interval",
 						"addr", s.addr, "interval", s.cfg.FlushInterval)
 				}
 			})
