@@ -77,7 +77,7 @@ func Test_newPacket(t *testing.T) {
 	// account for variable ip header length - outgoing
 	h = ipv4.Header{
 		Version:  1,
-		Protocol: 2,
+		Protocol: iputil.IPProtocolUDP,
 		Len:      100,
 		Src:      net.IPv4(10, 0, 0, 1),
 		Dst:      net.IPv4(10, 0, 0, 2),
@@ -89,12 +89,40 @@ func Test_newPacket(t *testing.T) {
 	err = newPacket(b, false, p)
 
 	require.NoError(t, err)
-	assert.Equal(t, uint8(2), p.Protocol)
+	assert.Equal(t, uint8(iputil.IPProtocolUDP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("10.0.0.1"), p.LocalAddr)
 	assert.Equal(t, netip.MustParseAddr("10.0.0.2"), p.RemoteAddr)
 	assert.Equal(t, uint16(6), p.RemotePort)
 	assert.Equal(t, uint16(5), p.LocalPort)
 	assert.False(t, p.Fragment)
+}
+
+// Test_newPacket_v4NoPorts ensures only TCP and UDP report ports. The first 4 bytes of other protocols are not ports,
+// and are often chosen by the sender: a GRE header's protocol type, an IPIP inner total length, a 6in4 flow label.
+// Reading them as ports would let a `proto: any` rule with a port match tunneled traffic.
+func Test_newPacket_v4NoPorts(t *testing.T) {
+	p := &firewall.ParsedPacket{}
+
+	for _, proto := range []uint8{4, 41, 47, 50, 51, 132} { // IPIP, 6in4, GRE, ESP, AH, SCTP
+		h := ipv4.Header{
+			Version:  4,
+			Len:      ipv4.HeaderLen,
+			Protocol: int(proto),
+			Src:      net.IPv4(10, 0, 0, 1),
+			Dst:      net.IPv4(10, 0, 0, 2),
+		}
+		b, err := h.Marshal()
+		require.NoError(t, err)
+		b = append(b, []byte{0x00, 0x00, 0x86, 0xdd}...) // a GRE header carrying IPv6 would read as port 34525
+
+		for _, incoming := range []bool{true, false} {
+			require.NoError(t, newPacket(b, incoming, p))
+			assert.Equal(t, proto, p.Protocol)
+			assert.Equal(t, uint16(0), p.RemotePort)
+			assert.Equal(t, uint16(0), p.LocalPort)
+			assert.False(t, p.Fragment)
+		}
+	}
 }
 
 func Test_newPacket_v6(t *testing.T) {
