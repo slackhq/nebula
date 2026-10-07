@@ -976,3 +976,24 @@ func TestLighthouse_reloadRelaysTriggersUpdate(t *testing.T) {
 	assert.Equal(t, []netip.Addr{netip.MustParseAddr("10.128.0.6")}, lh.GetRelaysForMe())
 	assert.Empty(t, lh.updateTrigger)
 }
+
+func TestLighthouse_reloadAmRelayAlone(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	base := "lighthouse:\n  am_lighthouse: true\nlisten:\n  port: 4242\nrelay:\n  relays: [10.128.0.5]\n"
+	require.NoError(t, c.LoadString(base+"  am_relay: false\n"))
+
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, testCertState(netip.MustParsePrefix("10.128.0.1/24")), nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("10.128.0.5")}, lh.GetRelaysForMe())
+
+	// Relays aren't allowed to have relays, flipping am_relay alone must drop them and tell the lighthouses
+	require.NoError(t, c.ReloadConfigString(base+"  am_relay: true\n"))
+	assert.Empty(t, lh.GetRelaysForMe())
+	require.Len(t, lh.updateTrigger, 1)
+	<-lh.updateTrigger
+
+	require.NoError(t, c.ReloadConfigString(base+"  am_relay: false\n"))
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("10.128.0.5")}, lh.GetRelaysForMe())
+	require.Len(t, lh.updateTrigger, 1)
+}
