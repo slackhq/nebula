@@ -152,6 +152,9 @@ func (s *graphiteSender) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-s.wake:
+			if ctx.Err() != nil {
+				return
+			}
 			s.buf.Reset()
 			graphiteFormat(&s.buf, s.cfg)
 			err := graphiteSend(ctx, s.addr, s.buf.Bytes(), s.timeout)

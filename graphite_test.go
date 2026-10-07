@@ -3,6 +3,7 @@ package nebula
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -309,36 +310,43 @@ func TestGraphiteSender_stopAbandonsStuckSend(t *testing.T) {
 }
 
 // The sender buildRuntime starts stops with the runtime. One left running would keep sending after a reload replaced it
+// Stop abandons the running sender's stuck send, so it goes through Start rather than handing buildRuntime a ctx
 func TestStatsServer_graphiteSenderStopsWithRuntime(t *testing.T) {
-	h := newGraphiteHost(t, 0)
+	for i := range 200000 {
+		name := fmt.Sprintf("graphite.stop.test.%d", i)
+		metrics.GetOrRegisterGauge(name, nil).Update(int64(i))
+		t.Cleanup(func() { metrics.DefaultRegistry.Unregister(name) })
+	}
+	h := newGraphiteHost(t, 4096)
 	s, c := newTestStatsServer(t)
-	setStatsConfig(c, map[string]any{"type": "graphite", "interval": "1h", "host": h.ln.Addr().String()})
-	cfg, err := loadStatsConfig(c)
-	require.NoError(t, err)
+	setStatsConfig(c, map[string]any{"type": "graphite", "interval": "50ms", "host": h.ln.Addr().String()})
+	require.NoError(t, s.reload(c, true))
 
-	ctx, cancel := context.WithCancel(t.Context())
-	s.runMu.Lock()
-	fns, _ := s.buildRuntime(ctx, cfg)
-	s.runMu.Unlock()
-	capture := func() {
-		for _, fn := range fns {
-			fn()
-		}
-	}
-
-	capture()
-	_, err = io.ReadAll(h.next(t, 5*time.Second))
-	require.NoError(t, err)
-
-	cancel()
-	// The sender may still take this request, the dial fails on the cancelled ctx either way.
-	// TestGraphiteSender_runReturnsOnCancel covers the goroutine exiting
-	capture()
+	started := make(chan struct{})
+	go func() {
+		s.Start()
+		close(started)
+	}()
+	// Formatting the big registry comes first, give a slow runner room
+	stuck := h.next(t, 30*time.Second)
+	s.Stop()
 	select {
-	case <-h.conns:
-		t.Fatal("the sender kept sending after its runtime stopped")
-	case <-time.After(500 * time.Millisecond):
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start did not return after Stop")
 	}
+
+	// A closed sender resets the connection once it sees this, one still sending just buffers it. Either way the
+	// read below doesn't have to drain the export through the small window to find out
+	_, err := stuck.Write([]byte("x"))
+	require.NoError(t, err)
+	require.NoError(t, stuck.SetReadDeadline(time.Now().Add(10*time.Second)))
+	n, err := io.Copy(io.Discard, stuck)
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		t.Fatalf("the sender kept the connection after Stop, read %d bytes", n)
+	}
+	assert.Less(t, n, int64(1<<20), "the sender kept sending after Stop")
 }
 
 func TestGraphiteSender_runReturnsOnCancel(t *testing.T) {
@@ -355,5 +363,18 @@ func TestGraphiteSender_runReturnsOnCancel(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("run kept going after its ctx was done")
+	}
+}
+
+func TestGraphiteSender_runSkipsRequestsAfterCancel(t *testing.T) {
+	h := newGraphiteHost(t, 0)
+	s := newGraphiteSender(h.addr(t), graphiteConfigExport{Registry: metrics.NewRegistry()}, slog.New(slog.DiscardHandler))
+	s.sent = func(error) { t.Fatal("formatted and sent a request after its ctx was done") }
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	// select picks at random when both are ready, enough tries that it takes the request at least once
+	for range 100 {
+		s.request()
+		s.run(ctx)
 	}
 }
