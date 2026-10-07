@@ -549,10 +549,11 @@ func TestStatsServer_reloadMovesTheInterval(t *testing.T) {
 
 	setStatsConfig(c, map[string]any{"type": "graphite", "interval": "1h", "host": host})
 	require.NoError(t, s.reload(c, false))
+	// The reload's Stop waited out the 20ms loop, the new runtime's prime is the only pass left to come
+	stopped := passes.Load()
+	waitFor(t, func() bool { return passes.Load() == stopped+1 })
 	time.Sleep(200 * time.Millisecond)
-	settled := passes.Load()
-	time.Sleep(200 * time.Millisecond)
-	assert.Equal(t, settled, passes.Load(), "the 20ms loop kept running after the reload")
+	assert.Equal(t, stopped+1, passes.Load(), "the 20ms loop kept running after the reload")
 }
 
 // A reload's new runtime never captures while the old one is still in a pass, go-metrics keeps its GC capture state
