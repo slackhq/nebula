@@ -360,6 +360,11 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 	}
 
 	if initial || c.HasChanged("relay.relays") {
+		var before []netip.Addr
+		if !initial {
+			before = lh.GetRelaysForMe()
+		}
+
 		switch c.GetBool("relay.am_relay", false) {
 		case true:
 			// Relays aren't allowed to specify other relays
@@ -383,6 +388,11 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 				}
 			}
 			lh.relaysForMe.Store(&relaysForMe)
+		}
+
+		// Tell the lighthouses now rather than at the next interval, but only when what we advertise changed
+		if !initial && !slices.Equal(before, lh.GetRelaysForMe()) {
+			lh.TriggerUpdate()
 		}
 	}
 
