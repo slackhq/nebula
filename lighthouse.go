@@ -359,7 +359,8 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 		}
 	}
 
-	if initial || c.HasChanged("relay.relays") {
+	// am_relay decides whether relay.relays applies to us at all
+	if initial || c.HasChanged("relay.relays") || c.HasChanged("relay.am_relay") {
 		var before []netip.Addr
 		if !initial {
 			before = lh.GetRelaysForMe()
