@@ -42,7 +42,7 @@ type statsServer struct {
 	// and a reload's new runtime never overlaps the old one, go-metrics keeps its GC capture state in unguarded globals
 	loopDone chan struct{}
 	// See newStatsServerFromConfig, never changes after it
-	emitters []func()
+	emitStats func()
 }
 
 // statsRuntime is the live state owned by a single Start invocation. Start
@@ -88,15 +88,15 @@ type promConfig struct {
 // Start is safe to call unconditionally: it no-ops when stats are disabled.
 // The returned pointer is always non-nil, even on error.
 //
-// emitters update metrics on every capture, ahead of the exporters so each export sees what they just set. They are
-// fixed here, before the reload callback exists, so every runtime has them.
-func newStatsServerFromConfig(ctx context.Context, l *slog.Logger, c *config.C, buildVersion string, configTest bool, emitters ...func()) (*statsServer, error) {
+// emitStats, if set, updates metrics on every capture, ahead of the exporters so each export sees what it just set. It
+// is fixed here, before the reload callback exists, so every runtime has it.
+func newStatsServerFromConfig(ctx context.Context, l *slog.Logger, c *config.C, buildVersion string, configTest bool, emitStats func()) (*statsServer, error) {
 	s := &statsServer{
 		l:            l,
 		ctx:          ctx,
 		buildVersion: buildVersion,
 		configTest:   configTest,
-		emitters:     emitters,
+		emitStats:    emitStats,
 	}
 
 	c.RegisterReloadCallback(func(c *config.C) {
@@ -266,7 +266,9 @@ func (s *statsServer) buildRuntime(ctx context.Context, cfg statsConfig) ([]func
 		func() { metrics.CaptureDebugGCStatsOnce(metrics.DefaultRegistry) },
 		func() { metrics.CaptureRuntimeMemStatsOnce(metrics.DefaultRegistry) },
 	}
-	captureFns = append(captureFns, s.emitters...)
+	if s.emitStats != nil {
+		captureFns = append(captureFns, s.emitStats)
+	}
 
 	switch cfg.typ {
 	case "graphite":

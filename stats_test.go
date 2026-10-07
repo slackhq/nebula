@@ -397,8 +397,8 @@ func freeTCPPort(t *testing.T) string {
 	return strconv.Itoa(port)
 }
 
-// Each export has to see what the emitters set in the same pass
-func TestStatsServer_emittersRunBeforeExport(t *testing.T) {
+// Each export has to see what emitStats set in the same pass
+func TestStatsServer_emitStatsRunsBeforeExport(t *testing.T) {
 	defer metrics.DefaultRegistry.Unregister("emitter.order.test")
 
 	l := slog.New(slog.DiscardHandler)
@@ -426,7 +426,7 @@ func TestStatsServer_emittersRunBeforeExport(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "emitter_order_test 42")
 }
 
-// A scrape that lands the moment the listener is up already sees the emitters' values (issue #907)
+// A scrape that lands the moment the listener is up already sees what emitStats set (issue #907)
 func TestStatsServer_Start_primesBeforeServing(t *testing.T) {
 	defer metrics.DefaultRegistry.Unregister("prime.before.serving")
 
@@ -488,8 +488,8 @@ func TestStatsServer_Start_primes(t *testing.T) {
 	}
 }
 
-// Graphite has to ship what the emitters set in the same pass, not the pass before
-func TestStatsServer_emittersRunBeforeGraphiteExport(t *testing.T) {
+// Graphite has to ship what emitStats set in the same pass, not the pass before
+func TestStatsServer_emitStatsRunsBeforeGraphiteExport(t *testing.T) {
 	defer metrics.DefaultRegistry.Unregister("emitter.graphite.test")
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -528,7 +528,7 @@ func TestStatsServer_emittersRunBeforeGraphiteExport(t *testing.T) {
 	}
 }
 
-// stats.interval reloads, and the runtime a reload starts still has the emitters
+// stats.interval reloads, and the runtime a reload starts still has emitStats
 func TestStatsServer_reloadMovesTheInterval(t *testing.T) {
 	var passes atomic.Int64
 	l := slog.New(slog.DiscardHandler)
