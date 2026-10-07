@@ -113,18 +113,6 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		l.Info("Using multiple routines", "routines", routines)
 	}
 
-	// EXPERIMENTAL
-	// Intentionally not documented yet while we do more testing and determine
-	// a good default value.
-	conntrackCacheTimeout := c.GetDuration("firewall.conntrack.routine_cache_timeout", 0)
-	if routines > 1 && !c.IsSet("firewall.conntrack.routine_cache_timeout") {
-		// Use a different default if we are running with multiple routines
-		conntrackCacheTimeout = 1 * time.Second
-	}
-	if conntrackCacheTimeout > 0 {
-		l.Info("Using routine-local conntrack cache", "duration", conntrackCacheTimeout)
-	}
-
 	var tun overlay.Device
 	if !configTest {
 		c.CatchHUP(ctx)
@@ -274,29 +262,28 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	}
 
 	ifConfig := &InterfaceConfig{
-		HostMap:               hostMap,
-		Inside:                tun,
-		Outside:               udpConns[0],
-		pki:                   pki,
-		Firewall:              fw,
-		DnsServer:             ds,
-		HandshakeManager:      handshakeManager,
-		connectionManager:     connManager,
-		lightHouse:            lightHouse,
-		tryPromoteEvery:       c.GetUint32("counters.try_promote", defaultPromoteEvery),
-		reQueryEvery:          c.GetUint32("counters.requery_every_packets", defaultReQueryEvery),
-		reQueryWait:           c.GetDuration("timers.requery_wait_duration", defaultReQueryWait),
-		DropLocalBroadcast:    c.GetBool("tun.drop_local_broadcast", false),
-		DropMulticast:         c.GetBool("tun.drop_multicast", false),
-		routines:              routines,
-		MessageMetrics:        messageMetrics,
-		version:               buildVersion,
-		relayManager:          NewRelayManager(ctx, l, hostMap, c),
-		punchy:                punchy,
-		ConntrackCacheTimeout: conntrackCacheTimeout,
-		CpuAffinity:           cpuAffinity,
-		PinThreads:            pinThreads,
-		l:                     l,
+		HostMap:            hostMap,
+		Inside:             tun,
+		Outside:            udpConns[0],
+		pki:                pki,
+		Firewall:           fw,
+		DnsServer:          ds,
+		HandshakeManager:   handshakeManager,
+		connectionManager:  connManager,
+		lightHouse:         lightHouse,
+		tryPromoteEvery:    c.GetUint32("counters.try_promote", defaultPromoteEvery),
+		reQueryEvery:       c.GetUint32("counters.requery_every_packets", defaultReQueryEvery),
+		reQueryWait:        c.GetDuration("timers.requery_wait_duration", defaultReQueryWait),
+		DropLocalBroadcast: c.GetBool("tun.drop_local_broadcast", false),
+		DropMulticast:      c.GetBool("tun.drop_multicast", false),
+		routines:           routines,
+		MessageMetrics:     messageMetrics,
+		version:            buildVersion,
+		relayManager:       NewRelayManager(ctx, l, hostMap, c),
+		punchy:             punchy,
+		CpuAffinity:        cpuAffinity,
+		PinThreads:         pinThreads,
+		l:                  l,
 	}
 
 	var ifce *Interface
@@ -316,6 +303,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 
 		handshakeManager.f = ifce
 		go handshakeManager.Run(ctx)
+		go ifce.firewall.Conntrack.Run(ctx)
 
 		punchy.Start(ctx, ifce, hostMap, lightHouse)
 	}
