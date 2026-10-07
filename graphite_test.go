@@ -151,7 +151,8 @@ func TestGraphiteOnce_stalledHostTimesOut(t *testing.T) {
 	bigGraphiteRegistry(r, t)
 	h := newGraphiteHost(t, 4096)
 	done := make(chan error, 1)
-	go func() { done <- graphiteOnce(t.Context(), testGraphiteConfig(h.addr(t), r), 300*time.Millisecond) }()
+	cfg := testGraphiteConfig(h.addr(t), r)
+	go func() { done <- graphiteOnce(t.Context(), cfg, 300*time.Millisecond) }()
 	h.next(t, 5*time.Second) // accepted, never read
 
 	select {
@@ -169,7 +170,8 @@ func TestGraphiteOnce_timeoutCoversTheWholeSend(t *testing.T) {
 	h := newGraphiteHost(t, 0)
 	done := make(chan error, 1)
 	start := time.Now()
-	go func() { done <- graphiteOnce(t.Context(), testGraphiteConfig(h.addr(t), r), 500*time.Millisecond) }()
+	cfg := testGraphiteConfig(h.addr(t), r)
+	go func() { done <- graphiteOnce(t.Context(), cfg, 500*time.Millisecond) }()
 	c := h.next(t, 5*time.Second)
 	stopReading := make(chan struct{})
 	defer close(stopReading)
@@ -216,7 +218,8 @@ func TestGraphiteOnce_cancelAbandonsSend(t *testing.T) {
 	h := newGraphiteHost(t, 4096)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- graphiteOnce(ctx, testGraphiteConfig(h.addr(t), r), time.Minute) }()
+	cfg := testGraphiteConfig(h.addr(t), r)
+	go func() { done <- graphiteOnce(ctx, cfg, time.Minute) }()
 	h.next(t, 5*time.Second)
 	select {
 	case err := <-done:
