@@ -71,6 +71,7 @@ func newTestMachine(
 		cs.version, cs.getCredential,
 		verifier, func() (uint32, error) { return localIndex, nil },
 		initiator, header.HandshakeIXPSK0,
+		nil,
 	)
 	require.NoError(t, err)
 	return m

@@ -39,6 +39,14 @@ type Result struct {
 	HandshakeTime uint64
 	MessageIndex  uint64 // number of messages exchanged during the handshake
 	Initiator     bool
+
+	// Multiport lane negotiation, from the peer's LaneDetails. All zero when
+	// the peer did not advertise (vanilla peer or multiport disabled).
+	// PeerTxLanes is how many lanes the peer may send on, which is how many lane
+	// sessions we need in order to receive everything it sends.
+	PeerPortCount uint32
+	PeerBasePort  uint32
+	PeerTxLanes   uint32
 }
 
 // Machine drives a Noise handshake through N messages. It handles Noise
@@ -61,6 +69,7 @@ type Machine struct {
 	verifier       CertVerifier
 	result         *Result
 	msgs           []msgFlags
+	lanes          *LaneDetails // our multiport advert; nil emits a vanilla payload
 	myVersion      cert.Version
 	subtype        header.MessageSubType
 	indexAllocated bool
@@ -73,6 +82,8 @@ type Machine struct {
 // the noise pattern and the per-message content layout. The credential for
 // `version` is fetched via getCred and used to seed the noise.HandshakeState.
 // IndexAllocator is called lazily when the first outgoing payload is built.
+// lanes, when non-nil, is emitted as this side's multiport advert on every
+// payload-bearing message; nil produces byte-identical vanilla payloads.
 func NewMachine(
 	version cert.Version,
 	getCred GetCredentialFunc,
@@ -80,6 +91,7 @@ func NewMachine(
 	allocIndex IndexAllocator,
 	initiator bool,
 	subtype header.MessageSubType,
+	lanes *LaneDetails,
 ) (*Machine, error) {
 	info, err := subtypeInfoFor(subtype)
 	if err != nil {
@@ -103,6 +115,7 @@ func NewMachine(
 		getCred:    getCred,
 		allocIndex: allocIndex,
 		verifier:   verifier,
+		lanes:      lanes,
 		myVersion:  version,
 		result: &Result{
 			Initiator: initiator,
@@ -298,7 +311,8 @@ func (m *Machine) processPayload(msg []byte, flags msgFlags) error {
 	}
 
 	// Assert the payload contains exactly what we expect
-	hasPayloadData := payload.InitiatorIndex != 0 || payload.ResponderIndex != 0 || payload.Time != 0
+	hasPayloadData := payload.InitiatorIndex != 0 || payload.ResponderIndex != 0 || payload.Time != 0 ||
+		payload.InitiatorLanes != nil || payload.ResponderLanes != nil
 	if hasPayloadData != flags.expectsPayload {
 		m.failed = true
 		return ErrUnexpectedContent
@@ -327,6 +341,23 @@ func (m *Machine) processPayload(msg []byte, flags msgFlags) error {
 		m.result.RemoteIndex = remoteIndex
 		m.result.HandshakeTime = payload.Time
 		m.payloadSet = true
+
+		// Multiport advert from the peer's side of the exchange. Out-of-range
+		// values mean a peer we can't pair lanes with; ignore the advert
+		// rather than failing the handshake — the tunnel itself is fine, it
+		// just won't get lanes. Semantic policing (the port range, lane
+		// clamping) belongs to the handshake manager and newLaneSet.
+		var peerLanes *LaneDetails
+		if m.result.Initiator {
+			peerLanes = payload.ResponderLanes
+		} else {
+			peerLanes = payload.InitiatorLanes
+		}
+		if peerLanes != nil && peerLanes.BasePort <= 0xffff && peerLanes.PortCount <= 0xffff && peerLanes.TxLanes <= 0xffff {
+			m.result.PeerPortCount = peerLanes.PortCount
+			m.result.PeerBasePort = peerLanes.BasePort
+			m.result.PeerTxLanes = peerLanes.TxLanes
+		}
 	}
 
 	// Process certificate
@@ -397,9 +428,11 @@ func (m *Machine) marshalOutgoing(flags msgFlags) ([]byte, error) {
 
 		if m.result.Initiator {
 			p.InitiatorIndex = m.result.LocalIndex
+			p.InitiatorLanes = m.lanes
 		} else {
 			p.ResponderIndex = m.result.LocalIndex
 			p.InitiatorIndex = m.result.RemoteIndex
+			p.ResponderLanes = m.lanes
 		}
 		p.Time = uint64(time.Now().UnixNano())
 	}
