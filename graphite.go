@@ -124,7 +124,6 @@ func graphiteOnce(ctx context.Context, c graphiteConfigExport, timeout time.Dura
 			fmt.Fprintf(w, "%s.%s.fifteen-minute %.2f %d\n", c.Prefix, name, t.Rate15(), now)
 			fmt.Fprintf(w, "%s.%s.mean-rate %.2f %d\n", c.Prefix, name, t.RateMean(), now)
 		}
-		w.Flush()
 	})
 	// A failed write sticks, so this reports the first one
 	return w.Flush()
