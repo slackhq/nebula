@@ -30,14 +30,12 @@ package nebula
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"fmt"
-	"log/slog"
 	"net"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -46,6 +44,7 @@ import (
 // graphiteConfigExport provides a container with configuration parameters for
 // the Graphite exporter.
 type graphiteConfigExport struct {
+	Addr          *net.TCPAddr     // Network address to connect to
 	Registry      metrics.Registry // Registry to be exported
 	FlushInterval time.Duration    // Flush interval
 	DurationUnit  time.Duration    // Time conversion unit for durations
@@ -53,12 +52,30 @@ type graphiteConfigExport struct {
 	Percentiles   []float64        // Percentiles to export from timers and histograms
 }
 
-// graphiteFormat appends every metric in the registry to w in graphite's
-// plaintext format, stamped with at.
-func graphiteFormat(w *bytes.Buffer, c graphiteConfigExport, at time.Time) {
-	now := at.Unix()
+// graphiteTimeout bounds one submission, the connect and the write together. An export is a few KB, a host that can't
+// take that in this long isn't going to.
+const graphiteTimeout = 30 * time.Second
+
+// graphiteOnce performs a single submission to Graphite, returning a non-nil
+// error if it could not connect or write all of it within timeout. It gives up
+// as soon as ctx is done.
+func graphiteOnce(ctx context.Context, c graphiteConfigExport, timeout time.Duration) error {
+	now := time.Now().Unix()
 	du := float64(c.DurationUnit)
 	flushSeconds := float64(c.FlushInterval) / float64(time.Second)
+	deadline := time.Now().Add(timeout)
+	d := net.Dialer{Deadline: deadline}
+	conn, err := d.DialContext(ctx, "tcp", c.Addr.String())
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(deadline); err != nil {
+		return err
+	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	w := bufio.NewWriter(conn)
 	c.Registry.Each(func(name string, i any) {
 		switch metric := i.(type) {
 		case metrics.Counter:
@@ -107,105 +124,8 @@ func graphiteFormat(w *bytes.Buffer, c graphiteConfigExport, at time.Time) {
 			fmt.Fprintf(w, "%s.%s.fifteen-minute %.2f %d\n", c.Prefix, name, t.Rate15(), now)
 			fmt.Fprintf(w, "%s.%s.mean-rate %.2f %d\n", c.Prefix, name, t.RateMean(), now)
 		}
+		w.Flush()
 	})
-}
-
-// graphiteStallTimeout is how long a connect, or one chunk's write, may take before the send gives up. The whole export
-// has no limit, a host that keeps reading gets all of it. One that has stopped, or drains less than a write's worth of
-// its socket buffer in that time, is dropped and the next export tries again.
-const graphiteStallTimeout = 30 * time.Second
-
-// graphiteWriteChunk is how much is written between pushing the write deadline forward
-const graphiteWriteChunk = 64 << 10
-
-// graphiteSender formats and ships exports to graphite on its own goroutine, so
-// a slow or dead host never holds up a capture pass. It formats when it picks up
-// a request, stamped with the time the pass asked, into one buffer it reuses.
-type graphiteSender struct {
-	addr    *net.TCPAddr
-	cfg     graphiteConfigExport
-	l       *slog.Logger
-	timeout time.Duration
-	wake    chan time.Time
-	stalled atomic.Bool
-	buf     bytes.Buffer
-	// sent, when set, hears how each send ended. Only tests set it
-	sent func(error)
-}
-
-func newGraphiteSender(addr *net.TCPAddr, cfg graphiteConfigExport, l *slog.Logger) *graphiteSender {
-	return &graphiteSender{addr: addr, cfg: cfg, l: l, timeout: graphiteStallTimeout, wake: make(chan time.Time, 1)}
-}
-
-// request asks for an export stamped with the current time, without waiting. A request still waiting on a send in
-// progress is replaced, so a host that can't keep up gets the newest values and skips the rest.
-func (s *graphiteSender) request() {
-	at := time.Now()
-	for {
-		select {
-		case s.wake <- at:
-			return
-		default:
-		}
-		select {
-		case <-s.wake:
-		default:
-		}
-	}
-}
-
-// run exports on each request until ctx is done. A failed send is logged and the next export goes out on a fresh
-// connection. A send that outlasts the interval is still let finish, with one warning per stall.
-func (s *graphiteSender) run(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case at := <-s.wake:
-			if ctx.Err() != nil {
-				return
-			}
-			slow := time.AfterFunc(s.cfg.FlushInterval, func() {
-				if !s.stalled.Swap(true) {
-					s.l.Warn("Graphite export is taking longer than the stats interval",
-						"addr", s.addr, "interval", s.cfg.FlushInterval)
-				}
-			})
-			s.buf.Reset()
-			graphiteFormat(&s.buf, s.cfg, at)
-			err := graphiteSend(ctx, s.addr, s.buf.Bytes(), s.timeout)
-			if slow.Stop() && err == nil && s.stalled.Swap(false) {
-				s.l.Info("Graphite exports are keeping up again", "addr", s.addr)
-			}
-			if err != nil && ctx.Err() == nil {
-				s.l.Error("Graphite export failed", "error", err)
-			}
-			if s.sent != nil {
-				s.sent(err)
-			}
-		}
-	}
-}
-
-func graphiteSend(ctx context.Context, addr *net.TCPAddr, b []byte, timeout time.Duration) error {
-	d := net.Dialer{Timeout: timeout}
-	conn, err := d.DialContext(ctx, "tcp", addr.String())
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	// A stop or reload abandons a send in progress rather than waiting out the timeout
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	defer stop()
-	for len(b) > 0 {
-		n := min(len(b), graphiteWriteChunk)
-		if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
-			return err
-		}
-		if _, err := conn.Write(b[:n]); err != nil {
-			return err
-		}
-		b = b[n:]
-	}
-	return nil
+	// A failed write sticks, so this reports the first one
+	return w.Flush()
 }

@@ -237,7 +237,7 @@ func (s *statsServer) Stop() {
 
 // buildRuntime produces the capture functions and, for prometheus, an un-served
 // http.Server from cfg. cfg has already been validated by loadStatsConfig.
-// Anything it starts in the background stops with ctx.
+// A graphite send in progress is abandoned when ctx is done.
 func (s *statsServer) buildRuntime(ctx context.Context, cfg statsConfig) ([]func(), *http.Server) {
 	// rcrowley/go-metrics guards these registrations with a private sync.Once,
 	// so subsequent reloads are no-ops.
@@ -255,16 +255,18 @@ func (s *statsServer) buildRuntime(ctx context.Context, cfg statsConfig) ([]func
 		// the resolved form (no DNS lookup) to get a *net.TCPAddr.
 		addr, _ := net.ResolveTCPAddr(cfg.graphite.protocol, cfg.graphite.resolvedAddr)
 		gcfg := graphiteConfigExport{
+			Addr:          addr,
 			Registry:      metrics.DefaultRegistry,
 			FlushInterval: cfg.interval,
 			DurationUnit:  time.Nanosecond,
 			Prefix:        cfg.graphite.prefix,
 			Percentiles:   []float64{0.5, 0.75, 0.95, 0.99, 0.999},
 		}
-		// The pass only asks, formatting and sending happen on the sender's own goroutine
-		sender := newGraphiteSender(addr, gcfg, s.l)
-		go sender.run(ctx)
-		captureFns = append(captureFns, sender.request)
+		captureFns = append(captureFns, func() {
+			if err := graphiteOnce(ctx, gcfg, graphiteTimeout); err != nil && ctx.Err() == nil {
+				s.l.Error("Graphite export failed", "error", err)
+			}
+		})
 		s.l.Info("Starting graphite stats",
 			"interval", cfg.interval,
 			"prefix", cfg.graphite.prefix,
