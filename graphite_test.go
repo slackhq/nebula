@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,10 @@ import (
 type graphiteHost struct {
 	ln    net.Listener
 	conns chan net.Conn
+
+	mu     sync.Mutex
+	closed bool
+	open   []net.Conn
 }
 
 // newGraphiteHost accepts connections for the test. A non-zero window shrinks each connection's receive buffer, so a
@@ -29,18 +34,39 @@ func newGraphiteHost(t *testing.T, window int) *graphiteHost {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	h := &graphiteHost{ln: ln, conns: make(chan net.Conn, 8)}
-	t.Cleanup(func() { _ = ln.Close() })
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		_ = ln.Close()
+		h.mu.Lock()
+		h.closed = true
+		for _, c := range h.open {
+			_ = c.Close()
+		}
+		h.mu.Unlock()
+		close(done)
+	})
 	go func() {
 		for {
 			c, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			t.Cleanup(func() { _ = c.Close() })
+			h.mu.Lock()
+			if h.closed {
+				h.mu.Unlock()
+				_ = c.Close()
+				return
+			}
+			h.open = append(h.open, c)
+			h.mu.Unlock()
 			if tc, ok := c.(*net.TCPConn); ok && window > 0 {
 				_ = tc.SetReadBuffer(window)
 			}
-			h.conns <- c
+			select {
+			case h.conns <- c:
+			case <-done:
+				return
+			}
 		}
 	}()
 	return h
@@ -305,12 +331,29 @@ func TestStatsServer_graphiteSenderStopsWithRuntime(t *testing.T) {
 	require.NoError(t, err)
 
 	cancel()
-	// Give a stopped sender time to notice before asking again
-	time.Sleep(100 * time.Millisecond)
+	// The sender may still take this request, the dial fails on the cancelled ctx either way.
+	// TestGraphiteSender_runReturnsOnCancel covers the goroutine exiting
 	capture()
 	select {
 	case <-h.conns:
 		t.Fatal("the sender kept sending after its runtime stopped")
 	case <-time.After(500 * time.Millisecond):
+	}
+}
+
+func TestGraphiteSender_runReturnsOnCancel(t *testing.T) {
+	h := newGraphiteHost(t, 0)
+	s := newGraphiteSender(h.addr(t), graphiteConfigExport{Registry: metrics.NewRegistry()}, slog.New(slog.DiscardHandler))
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		s.run(ctx)
+		close(done)
+	}()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("run kept going after its ctx was done")
 	}
 }
