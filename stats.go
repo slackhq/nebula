@@ -153,8 +153,8 @@ func (s *statsServer) Start() {
 		return
 	}
 	cfg := *s.runCfg
-	captureFns, listener := s.buildRuntime(cfg)
 	runCtx, cancel := context.WithCancel(s.ctx)
+	captureFns, listener := s.buildRuntime(runCtx, cfg)
 	rt := &statsRuntime{cancel: cancel, listener: listener}
 	s.run = rt
 	s.runMu.Unlock()
@@ -237,7 +237,8 @@ func (s *statsServer) Stop() {
 
 // buildRuntime produces the capture functions and, for prometheus, an un-served
 // http.Server from cfg. cfg has already been validated by loadStatsConfig.
-func (s *statsServer) buildRuntime(cfg statsConfig) ([]func(), *http.Server) {
+// A graphite send in progress is abandoned when ctx is done.
+func (s *statsServer) buildRuntime(ctx context.Context, cfg statsConfig) ([]func(), *http.Server) {
 	// rcrowley/go-metrics guards these registrations with a private sync.Once,
 	// so subsequent reloads are no-ops.
 	metrics.RegisterDebugGCStats(metrics.DefaultRegistry)
@@ -262,7 +263,7 @@ func (s *statsServer) buildRuntime(cfg statsConfig) ([]func(), *http.Server) {
 			Percentiles:   []float64{0.5, 0.75, 0.95, 0.99, 0.999},
 		}
 		captureFns = append(captureFns, func() {
-			if err := graphiteOnce(gcfg); err != nil {
+			if err := graphiteOnce(ctx, gcfg, graphiteTimeout); err != nil && ctx.Err() == nil {
 				s.l.Error("Graphite export failed", "error", err)
 			}
 		})

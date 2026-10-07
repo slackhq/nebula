@@ -2,7 +2,6 @@ package nebula
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"net"
 	"strconv"
@@ -110,15 +109,14 @@ func TestStatsServer_reload_initial_prometheus(t *testing.T) {
 }
 
 func TestStatsServer_Start_graphite_blocksUntilStop(t *testing.T) {
-	sink := newGraphiteSink(t)
-	defer sink.Close()
+	h := newGraphiteHost(t, 0)
 
 	s, c := newTestStatsServer(t)
 	setStatsConfig(c, map[string]any{
 		"type":     "graphite",
 		"interval": "1s",
 		"protocol": "tcp",
-		"host":     sink.Addr(),
+		"host":     h.ln.Addr().String(),
 		"prefix":   "test",
 	})
 	require.NoError(t, s.reload(c, true))
@@ -370,35 +368,6 @@ func waitForListening(t *testing.T, addr string) {
 		return true
 	})
 }
-
-// graphiteSink is a minimal TCP accept-and-discard server so graphiteOnce
-// calls in tests don't spam error logs or wedge on connection refused.
-type graphiteSink struct {
-	ln net.Listener
-}
-
-func newGraphiteSink(t *testing.T) *graphiteSink {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	g := &graphiteSink{ln: ln}
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go func(c net.Conn) {
-				_, _ = io.Copy(io.Discard, c)
-				_ = c.Close()
-			}(conn)
-		}
-	}()
-	return g
-}
-
-func (g *graphiteSink) Addr() string { return g.ln.Addr().String() }
-func (g *graphiteSink) Close()       { _ = g.ln.Close() }
 
 func freeTCPPort(t *testing.T) string {
 	t.Helper()

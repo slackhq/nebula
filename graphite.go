@@ -31,6 +31,7 @@ package nebula
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net"
 	"strconv"
@@ -51,17 +52,29 @@ type graphiteConfigExport struct {
 	Percentiles   []float64        // Percentiles to export from timers and histograms
 }
 
+// graphiteTimeout bounds one submission, the connect and the write together. An export is a few KB, a host that can't
+// take that in this long isn't going to.
+const graphiteTimeout = 30 * time.Second
+
 // graphiteOnce performs a single submission to Graphite, returning a non-nil
-// error on failed connections.
-func graphiteOnce(c graphiteConfigExport) error {
+// error if it could not connect or write all of it within timeout. It gives up
+// as soon as ctx is done.
+func graphiteOnce(ctx context.Context, c graphiteConfigExport, timeout time.Duration) error {
 	now := time.Now().Unix()
 	du := float64(c.DurationUnit)
 	flushSeconds := float64(c.FlushInterval) / float64(time.Second)
-	conn, err := net.DialTCP("tcp", nil, c.Addr)
+	deadline := time.Now().Add(timeout)
+	d := net.Dialer{Deadline: deadline}
+	conn, err := d.DialContext(ctx, "tcp", c.Addr.String())
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
+	if err := conn.SetDeadline(deadline); err != nil {
+		return err
+	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 	w := bufio.NewWriter(conn)
 	c.Registry.Each(func(name string, i any) {
 		switch metric := i.(type) {
@@ -111,7 +124,7 @@ func graphiteOnce(c graphiteConfigExport) error {
 			fmt.Fprintf(w, "%s.%s.fifteen-minute %.2f %d\n", c.Prefix, name, t.Rate15(), now)
 			fmt.Fprintf(w, "%s.%s.mean-rate %.2f %d\n", c.Prefix, name, t.RateMean(), now)
 		}
-		w.Flush()
 	})
-	return nil
+	// A failed write sticks, so this reports the first one
+	return w.Flush()
 }
