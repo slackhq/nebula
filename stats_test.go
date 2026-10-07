@@ -371,8 +371,8 @@ func waitForListening(t *testing.T, addr string) {
 	})
 }
 
-// graphiteSink is a minimal TCP accept-and-discard server so graphiteOnce
-// calls in tests don't spam error logs or wedge on connection refused.
+// graphiteSink is a minimal TCP accept-and-discard server so graphite sends
+// in tests don't spam error logs or fail on connection refused.
 type graphiteSink struct {
 	ln net.Listener
 }
