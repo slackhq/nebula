@@ -263,11 +263,16 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 
 // closeTunnel closes a tunnel locally, it does not send a closeTunnel packet to the remote
 func (f *Interface) closeTunnel(hostInfo *HostInfo) {
-	final := f.hostMap.DeleteHostInfo(hostInfo)
-	if final {
-		// We no longer have any tunnels with this vpn addr, clear learned lighthouse state to lower memory usage
-		f.lightHouse.DeleteVpnAddrs(hostInfo.vpnAddrs)
+	// Hold the hostmap lock across both the delete and the lighthouse eviction,
+	// to avoid a race with handshake completion.
+	f.hostMap.Lock()
+	defer f.hostMap.Unlock()
+	if !f.hostMap.unlockedDeleteHostInfo(hostInfo) {
+		return
 	}
+
+	// We no longer have any tunnels with this vpn addr, clear learned lighthouse state to lower memory usage
+	f.lightHouse.DeleteVpnAddrs(hostInfo.vpnAddrs)
 }
 
 // sendCloseTunnel is a helper function to send a proper close tunnel packet to a remote

@@ -684,10 +684,14 @@ func sshCreateTunnel(ifce *Interface, fs any, a []string, w sshd.StringWriter) e
 		}
 	}
 
-	hostInfo = ifce.handshakeManager.StartHandshake(vpnAddr, nil)
-	if addr.IsValid() {
-		hostInfo.SetRemote(addr)
-	}
+	// Set the remote from the callback, which StartHandshake runs under the handshake manager lock
+	// before the hostinfo reaches the handshake loop or the static-host trigger, so the address is
+	// in the RemoteList before the first handshake is sent.
+	ifce.handshakeManager.StartHandshake(vpnAddr, func(hh *HandshakeHostInfo) {
+		if addr.IsValid() {
+			hh.hostinfo.SetRemote(addr)
+		}
+	})
 
 	return w.WriteLine("Created")
 }

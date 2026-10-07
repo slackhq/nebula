@@ -1244,10 +1244,13 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 // sendHostPunchNotification signals the other side to punch some zero byte udp packets
 func (lhh *LightHouseHandler) sendHostPunchNotification(n *NebulaMeta, fromVpnAddrs []netip.Addr, punchNotifDest netip.Addr, w EncWriter) {
 	whereToPunch := fromVpnAddrs[0]
+	// Resolve the target before taking the querier's RemoteList lock below. GetHostInfo takes the
+	// hostmap lock, and the hostmap is taken before the lighthouse, which is taken before a
+	// RemoteList, so looking it up inside the callback would deadlock.
+	targetHI := lhh.lh.ifce.GetHostInfo(punchNotifDest)
 	found, ln, err := lhh.lh.queryAndPrepMessage(whereToPunch, func(c *cache) (int, error) {
 		n = lhh.resetMeta()
 		n.Type = NebulaMeta_HostPunchNotification
-		targetHI := lhh.lh.ifce.GetHostInfo(punchNotifDest)
 		var useVersion cert.Version
 		if targetHI == nil {
 			useVersion = lhh.lh.ifce.GetCertState().initiatingVersion
