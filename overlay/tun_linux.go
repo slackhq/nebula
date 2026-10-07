@@ -253,6 +253,15 @@ func (t *tun) reload(c *config.C, initial bool) error {
 		return nil
 	}
 
+	// Only the mtu changed. The routes are the same, parse them again so the ones without their own mtu pick up the
+	// new default. Without this an mtu change would remove them all
+	if !routeChange {
+		_, routes, err = getAllRoutesFromConfig(c, t.vpnNetworks, true)
+		if err != nil {
+			return err
+		}
+	}
+
 	routeTree, err := makeRouteTree(t.l, routes, true)
 	if err != nil {
 		return err
@@ -274,7 +283,7 @@ func (t *tun) reload(c *config.C, initial bool) error {
 			routes[i].MTU = newDefaultMTU
 		}
 
-		if r.MTU > t.MaxMTU {
+		if r.MTU > newMaxMTU {
 			newMaxMTU = r.MTU
 		}
 	}
