@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	"github.com/armon/go-radix"
 	"golang.org/x/crypto/ssh"
@@ -29,6 +30,11 @@ type SSHServer struct {
 	helpCommand *Command
 	commands    *radix.Tree
 	listener    net.Listener
+
+	// hostKey is the key SetHostKey was last given, so a caller can tell whether a new one differs
+	hostKey []byte
+	// runs counts the Runs that are listening. A reload's Run can start before the one it replaced has returned
+	runs atomic.Int32
 
 	// ctx parents per-Run contexts. Cancelling it (e.g. via Control.Stop) tears the server down even
 	// across reloads, since each Run derives a fresh child rather than reusing this one directly.
@@ -108,7 +114,18 @@ func (s *SSHServer) SetHostKey(hostPrivateKey []byte) error {
 	}
 
 	s.config.AddHostKey(private)
+	s.hostKey = bytes.Clone(hostPrivateKey)
 	return nil
+}
+
+// HostKeyIs is true when key is the host key the server already has.
+func (s *SSHServer) HostKeyIs(key []byte) bool {
+	return bytes.Equal(s.hostKey, key)
+}
+
+// Running is true while a Run is listening.
+func (s *SSHServer) Running() bool {
+	return s.runs.Load() > 0
 }
 
 func (s *SSHServer) ClearTrustedCAs() {
@@ -182,9 +199,12 @@ func (s *SSHServer) Run(addr string) error {
 	// listener before this run's watcher fires, so each run must close its own listener via the local
 	// reference.
 	s.listener = listener
+	s.runs.Add(1)
 
 	runCtx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
+	// Deferred after cancel so it runs first, a run on its way out no longer counts as listening
+	defer s.runs.Add(-1)
 
 	// Close the listener when this run's context is cancelled. That can come from the parent
 	// (Control.Stop), from Run returning normally (defer cancel above), or transitively when a sibling

@@ -60,6 +60,13 @@ type sshDeviceInfoFlags struct {
 func wireSSHReload(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) {
 	c.RegisterReloadCallback(func(c *config.C) {
 		if c.GetBool("sshd.enabled", false) {
+			// Restarting the server drops every open session, the one that asked for this reload included. Only restart
+			// when it isn't running or something it reads changed, the sshd config or the host key file it points at
+			if ssh.Running() && !c.HasChanged("sshd") {
+				if key, err := loadSSHHostKey(c); err == nil && ssh.HostKeyIs(key) {
+					return
+				}
+			}
 			sshRun, err := configSSH(l, ssh, c)
 			if err != nil {
 				l.Error("Failed to reconfigure the sshd", "error", err)
@@ -72,6 +79,22 @@ func wireSSHReload(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) {
 			ssh.Stop()
 		}
 	})
+}
+
+// loadSSHHostKey returns sshd.host_key, read from its file when it names one.
+func loadSSHHostKey(c *config.C) ([]byte, error) {
+	hostKeyPathOrKey := c.GetString("sshd.host_key", "")
+	if hostKeyPathOrKey == "" {
+		return nil, fmt.Errorf("sshd.host_key must be provided")
+	}
+	if strings.Contains(hostKeyPathOrKey, "-----BEGIN") {
+		return []byte(hostKeyPathOrKey), nil
+	}
+	b, err := os.ReadFile(hostKeyPathOrKey)
+	if err != nil {
+		return nil, fmt.Errorf("error while loading sshd.host_key file: %s", err)
+	}
+	return b, nil
 }
 
 // configSSH reads the ssh info out of the passed-in Config and
@@ -92,19 +115,9 @@ func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error)
 		return nil, fmt.Errorf("sshd.listen can not use port 22")
 	}
 
-	hostKeyPathOrKey := c.GetString("sshd.host_key", "")
-	if hostKeyPathOrKey == "" {
-		return nil, fmt.Errorf("sshd.host_key must be provided")
-	}
-
-	var hostKeyBytes []byte
-	if strings.Contains(hostKeyPathOrKey, "-----BEGIN") {
-		hostKeyBytes = []byte(hostKeyPathOrKey)
-	} else {
-		hostKeyBytes, err = os.ReadFile(hostKeyPathOrKey)
-		if err != nil {
-			return nil, fmt.Errorf("error while loading sshd.host_key file: %s", err)
-		}
+	hostKeyBytes, err := loadSSHHostKey(c)
+	if err != nil {
+		return nil, err
 	}
 
 	err = ssh.SetHostKey(hostKeyBytes)
