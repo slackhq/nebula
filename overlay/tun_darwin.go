@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/bits"
 	"net/netip"
 	"os"
 	"sync/atomic"
@@ -394,6 +395,65 @@ func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 	return routing.Gateways{}
 }
 
+// routeInterface returns the index of the interface the system routes prefix through, or 0 if there is no route for
+// that exact prefix. macOS also lists copies of a route scoped to other interfaces. Those are ignored, because adding
+// our route only conflicts with the unscoped one.
+func routeInterface(prefix netip.Prefix) int {
+	family := unix.AF_INET
+	if prefix.Addr().Is6() {
+		family = unix.AF_INET6
+	}
+	rib, err := netroute.FetchRIB(family, unix.NET_RT_DUMP, 0)
+	if err != nil {
+		return 0
+	}
+	msgs, err := netroute.ParseRIB(unix.NET_RT_DUMP, rib)
+	if err != nil {
+		return 0
+	}
+	return routeInterfaceIn(msgs, prefix)
+}
+
+func routeInterfaceIn(msgs []netroute.Message, prefix netip.Prefix) int {
+	for _, msg := range msgs {
+		m, ok := msg.(*netroute.RouteMessage)
+		if !ok || len(m.Addrs) <= unix.RTAX_NETMASK || m.Flags&unix.RTF_IFSCOPE != 0 {
+			continue
+		}
+		if p, ok := routePrefix(m.Addrs[unix.RTAX_DST], m.Addrs[unix.RTAX_NETMASK]); ok && p == prefix.Masked() {
+			return m.Index
+		}
+	}
+	return 0
+}
+
+// routePrefix converts a route message's destination and netmask into a prefix. Host routes have no netmask.
+func routePrefix(dst, mask netroute.Addr) (netip.Prefix, bool) {
+	switch d := dst.(type) {
+	case *netroute.Inet4Addr:
+		bits := 32
+		if m, ok := mask.(*netroute.Inet4Addr); ok {
+			bits = maskBits(m.IP[:])
+		}
+		return netip.PrefixFrom(netip.AddrFrom4(d.IP), bits), true
+	case *netroute.Inet6Addr:
+		bits := 128
+		if m, ok := mask.(*netroute.Inet6Addr); ok {
+			bits = maskBits(m.IP[:])
+		}
+		return netip.PrefixFrom(netip.AddrFrom16(d.IP), bits), true
+	}
+	return netip.Prefix{}, false
+}
+
+func maskBits(mask []byte) int {
+	n := 0
+	for _, b := range mask {
+		n += bits.OnesCount8(b)
+	}
+	return n
+}
+
 // Get the LinkAddr for the interface of the given name
 // Is there an easier way to fetch this when we create the interface?
 // Maybe SIOCGIFINDEX? but this doesn't appear to exist in the darwin headers.
@@ -439,7 +499,11 @@ func (t *tun) addRoutes(logErrors bool) error {
 		err := addRoute(r.Cidr, t.linkAddr)
 		if err != nil {
 			if errors.Is(err, unix.EEXIST) {
-				t.l.Warn("unable to add unsafe_route, identical route already exists", "route", r.Cidr)
+				// A reload re-adds every route, so any route already going through our tun is one we added earlier.
+				// Routes through other interfaces belong to someone else and are left alone.
+				if routeInterface(r.Cidr) != t.linkAddr.Index {
+					t.l.Warn("unable to add unsafe_route, the destination is already routed through another interface", "route", r.Cidr)
+				}
 			} else {
 				retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
 				if logErrors {
