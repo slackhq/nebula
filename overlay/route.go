@@ -50,7 +50,13 @@ func (r Route) String() string {
 
 func makeRouteTree(l *slog.Logger, routes []Route, allowMTU bool) (*bart.Table[routing.Gateways], error) {
 	routeTree := new(bart.Table[routing.Gateways])
+	seen := make(map[netip.Prefix]bool, len(routes))
 	for _, r := range routes {
+		if seen[r.Cidr] {
+			l.Warn("route is listed more than once, only the last entry's via is used", "route", r)
+		}
+		seen[r.Cidr] = true
+
 		if !allowMTU && r.MTU > 0 {
 			l.Warn("route MTU is not supported on this platform",
 				"goos", runtime.GOOS,
@@ -98,7 +104,11 @@ func parseRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 
 		mtu, ok := rMtu.(int)
 		if !ok {
-			mtu, err = strconv.Atoi(rMtu.(string))
+			s, ok := rMtu.(string)
+			if !ok {
+				return nil, fmt.Errorf("entry %v.mtu in tun.routes is not an integer: %v", i+1, rMtu)
+			}
+			mtu, err = strconv.Atoi(s)
 			if err != nil {
 				return nil, fmt.Errorf("entry %v.mtu in tun.routes is not an integer: %v", i+1, err)
 			}
@@ -174,7 +184,11 @@ func parseUnsafeRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 		if rMtu, ok := m["mtu"]; ok {
 			mtu, ok = rMtu.(int)
 			if !ok {
-				mtu, err = strconv.Atoi(rMtu.(string))
+				s, ok := rMtu.(string)
+				if !ok {
+					return nil, fmt.Errorf("entry %v.mtu in tun.unsafe_routes is not an integer: %v", i+1, rMtu)
+				}
+				mtu, err = strconv.Atoi(s)
 				if err != nil {
 					return nil, fmt.Errorf("entry %v.mtu in tun.unsafe_routes is not an integer: %v", i+1, err)
 				}
@@ -192,10 +206,15 @@ func parseUnsafeRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 
 		metric, ok := rMetric.(int)
 		if !ok {
-			_, err = strconv.ParseInt(rMetric.(string), 10, 32)
+			s, ok := rMetric.(string)
+			if !ok {
+				return nil, fmt.Errorf("entry %v.metric in tun.unsafe_routes is not an integer: %v", i+1, rMetric)
+			}
+			n, err := strconv.ParseInt(s, 10, 32)
 			if err != nil {
 				return nil, fmt.Errorf("entry %v.metric in tun.unsafe_routes is not an integer: %v", i+1, err)
 			}
+			metric = int(n)
 		}
 
 		if metric < 0 || metric > math.MaxInt32 {
@@ -248,10 +267,15 @@ func parseUnsafeRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 
 				gatewayWeight, ok := rGatewayWeight.(int)
 				if !ok {
-					_, err = strconv.ParseInt(rGatewayWeight.(string), 10, 32)
+					s, ok := rGatewayWeight.(string)
+					if !ok {
+						return nil, fmt.Errorf("entry .weight in tun.unsafe_routes[%v].via[%v] is not an integer", i+1, ig+1)
+					}
+					w, err := strconv.ParseInt(s, 10, 32)
 					if err != nil {
 						return nil, fmt.Errorf("entry .weight in tun.unsafe_routes[%v].via[%v] is not an integer", i+1, ig+1)
 					}
+					gatewayWeight = int(w)
 				}
 
 				if gatewayWeight < 1 || gatewayWeight > math.MaxInt32 {

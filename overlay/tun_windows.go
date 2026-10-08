@@ -4,6 +4,7 @@ package overlay
 
 import (
 	"crypto"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -138,7 +139,7 @@ func (t *winTun) reload(c *config.C, initial bool) error {
 
 	if !initial {
 		// Remove first, if the system removes a wanted route hopefully it will be re-added next
-		err := t.removeRoutes(findRemovedRoutes(routes, *oldRoutes))
+		err := t.removeRoutes(findRemovedSystemRoutes(routes, *oldRoutes))
 		if err != nil {
 			util.LogWithContextIfNeeded("Failed to remove routes", err, t.l)
 		}
@@ -187,9 +188,19 @@ func (t *winTun) addRoutes(logErrors bool) error {
 	foundDefault4 := false
 	carriesV6 := slices.ContainsFunc(t.vpnNetworks, func(p netip.Prefix) bool { return p.Addr().Is6() })
 
-	for _, r := range routes {
+	// A CIDR listed twice routes by its last entry, install only that one or each reload would flip between them. The
+	// same rule as systemRoutes
+	last := make(map[netip.Prefix]int, len(routes))
+	for i, r := range routes {
+		last[r.Cidr] = i
+	}
+
+	for i, r := range routes {
 		if len(r.Via) == 0 || !r.Install {
 			// We don't allow route MTUs so only install routes with a via
+			continue
+		}
+		if last[r.Cidr] != i {
 			continue
 		}
 
@@ -197,7 +208,7 @@ func (t *winTun) addRoutes(logErrors bool) error {
 		carriesV6 = carriesV6 || r.Cidr.Addr().Is6()
 
 		// Add our unsafe route as an on-link route to the nebula tun device.
-		err := luid.AddRoute(r.Cidr, unspecifiedNextHop(r.Cidr), uint32(r.Metric))
+		result, err := addRoute(luid, r)
 		if err != nil {
 			retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
 			if logErrors {
@@ -207,7 +218,12 @@ func (t *winTun) addRoutes(logErrors bool) error {
 				return retErr
 			}
 		} else {
-			t.l.Info("Added route", "route", r)
+			switch result {
+			case routeAdded:
+				t.l.Info("Added route", "route", r)
+			case routeMetricUpdated:
+				t.l.Info("Updated route metric", "route", r)
+			}
 		}
 
 		if !foundDefault4 {
@@ -317,6 +333,61 @@ func (t *winTun) Close() error {
 	}
 
 	return t.tun.Close()
+}
+
+// systemRoutes maps each CIDR to the route that puts it in the system table. A CIDR's last entry decides, including
+// one that says not to install it
+func systemRoutes(routes []Route) map[netip.Prefix]Route {
+	out := make(map[netip.Prefix]Route, len(routes))
+	for _, r := range routes {
+		if len(r.Via) > 0 && r.Install {
+			out[r.Cidr] = r
+		} else {
+			delete(out, r.Cidr)
+		}
+	}
+	return out
+}
+
+// findRemovedSystemRoutes is the routes to delete from the system table. Windows deletes by destination and next hop,
+// so only a CIDR nothing installs anymore goes, a changed metric is set on the route in place by addRoute
+func findRemovedSystemRoutes(newRoutes, oldRoutes []Route) []Route {
+	keep := systemRoutes(newRoutes)
+	var removed []Route
+	for _, r := range systemRoutes(oldRoutes) {
+		if _, ok := keep[r.Cidr]; !ok {
+			removed = append(removed, r)
+		}
+	}
+	return removed
+}
+
+type routeResult int
+
+const (
+	routeAdded routeResult = iota
+	routeMetricUpdated
+	routeAlreadyInstalled
+)
+
+// addRoute installs r on the interface. A reload re-adds every route to catch any the system dropped, and Windows
+// refuses one it has with the same destination and next hop whatever its metric. One that is there with another
+// metric, ours from before a metric change or someone else's, is brought to ours in place
+func addRoute(luid winipcfg.LUID, r Route) (routeResult, error) {
+	nextHop := unspecifiedNextHop(r.Cidr)
+	err := luid.AddRoute(r.Cidr, nextHop, uint32(r.Metric))
+	if !errors.Is(err, windows.ERROR_OBJECT_ALREADY_EXISTS) {
+		return routeAdded, err
+	}
+	row, err := luid.Route(r.Cidr, nextHop)
+	if err != nil {
+		return routeAlreadyInstalled, err
+	}
+	if row.Metric != uint32(r.Metric) {
+		row.Metric = uint32(r.Metric)
+		return routeMetricUpdated, row.Set()
+	}
+	return routeAlreadyInstalled, nil
 }
 
 func unspecifiedNextHop(p netip.Prefix) netip.Addr {
