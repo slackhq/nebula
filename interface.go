@@ -639,17 +639,15 @@ func (f *Interface) reloadMisc(c *config.C) {
 	}
 }
 
-func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
-	ticker := time.NewTicker(i)
-	defer ticker.Stop()
-
+// statsEmitter updates the interface's gauges, the stats server runs it on its capture loop.
+func (f *Interface) statsEmitter() func() {
 	udpStats := udp.NewUDPStatsEmitter(f.writers)
 
 	certExpirationGauge := metrics.GetOrRegisterGauge("certificate.ttl_seconds", nil)
 	certInitiatingVersion := metrics.GetOrRegisterGauge("certificate.initiating_version", nil)
 	certMaxVersion := metrics.GetOrRegisterGauge("certificate.max_version", nil)
 
-	emit := func() {
+	return func() {
 		f.firewall.EmitStats()
 		f.handshakeManager.EmitStats()
 		udpStats()
@@ -664,19 +662,6 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 			certMaxVersion.Update(int64(certState.v2Cert.Version()))
 		} else {
 			certMaxVersion.Update(int64(certState.v1Cert.Version()))
-		}
-	}
-
-	// Prime gauges so a Prometheus scrape that lands before the first tick
-	// sees real values instead of the zero defaults (issue #907).
-	emit()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			emit()
 		}
 	}
 }
