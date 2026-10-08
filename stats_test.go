@@ -549,11 +549,11 @@ func TestStatsServer_reloadMovesTheInterval(t *testing.T) {
 
 	setStatsConfig(c, map[string]any{"type": "graphite", "interval": "1h", "host": host})
 	require.NoError(t, s.reload(c, false))
-	// The reload's Stop waited out the 20ms loop, the new runtime's prime is the only pass left to come
+	// The reload's Stop waited out the 20ms loop. The new runtime's prime may land either side of this read, it is the
+	// only pass left to come
 	stopped := passes.Load()
-	waitFor(t, func() bool { return passes.Load() == stopped+1 })
-	time.Sleep(200 * time.Millisecond)
-	assert.Equal(t, stopped+1, passes.Load(), "the 20ms loop kept running after the reload")
+	time.Sleep(300 * time.Millisecond)
+	assert.LessOrEqual(t, passes.Load()-stopped, int64(1), "the 20ms loop kept running after the reload")
 }
 
 // A reload's new runtime never captures while the old one is still in a pass, go-metrics keeps its GC capture state
@@ -617,4 +617,59 @@ func TestStatsServer_Stop_waitsForThePass(t *testing.T) {
 	}
 	s.Stop()
 	assert.False(t, inPass.Load(), "Stop returned with a pass still running")
+}
+
+// A Start that arrives while Stop waits out the last pass doesn't capture alongside it
+func TestStatsServer_Start_duringStopWaitsForThePass(t *testing.T) {
+	var active, most atomic.Int64
+	entered := make(chan struct{}, 1)
+	l := slog.New(slog.DiscardHandler)
+	c := config.NewC(l)
+	setStatsConfig(c, map[string]any{"type": "graphite", "interval": "1h", "host": "127.0.0.1:" + freeTCPPort(t)})
+	var s *statsServer
+	ctx := stopAtCleanup(t, &s)
+	s, err := newStatsServerFromConfig(ctx, l, c, "", false, func() {
+		n := active.Add(1)
+		for {
+			m := most.Load()
+			if n <= m || most.CompareAndSwap(m, n) {
+				break
+			}
+		}
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		time.Sleep(200 * time.Millisecond)
+		active.Add(-1)
+	})
+	require.NoError(t, err)
+
+	go s.Start()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("never captured")
+	}
+	stopped := make(chan struct{})
+	go func() {
+		s.Stop()
+		close(stopped)
+	}()
+	// Stop holds runMu for its whole wait, the next Start has to arrive after it took it
+	waitFor(t, func() bool {
+		if s.runMu.TryLock() {
+			s.runMu.Unlock()
+			return false
+		}
+		return true
+	})
+	go s.Start()
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not return")
+	}
+	waitFor(t, func() bool { return len(entered) == 1 })
+	assert.Equal(t, int64(1), most.Load(), "a Start captured alongside the pass Stop was waiting out")
 }

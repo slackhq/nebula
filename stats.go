@@ -231,11 +231,11 @@ func (s *statsServer) serveListener(listener *http.Server) bool {
 
 // Stop tears down the active runtime, if any. Idempotent.
 func (s *statsServer) Stop() {
+	// Held until the last pass is done, a Start that slipped in after s.run cleared would capture alongside it
 	s.runMu.Lock()
+	defer s.runMu.Unlock()
 	rt := s.run
 	s.run = nil
-	loopDone := s.loopDone
-	s.runMu.Unlock()
 	if rt != nil {
 		rt.cancel()
 		if rt.listener != nil {
@@ -247,9 +247,9 @@ func (s *statsServer) Stop() {
 		}
 	}
 	// Nothing captures once Stop returns. The last runtime is cancelled by now, whoever cleared it, so this is at most
-	// the pass it was in
-	if loopDone != nil {
-		<-loopDone
+	// the pass it was in. Nothing in a pass takes runMu
+	if s.loopDone != nil {
+		<-s.loopDone
 	}
 }
 
