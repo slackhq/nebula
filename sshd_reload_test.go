@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -24,7 +23,6 @@ type sshdReloadHarness struct {
 	server  *sshd.SSHServer
 	keyFile string
 	signer  ssh.Signer
-	addr    string
 	extra   string
 }
 
@@ -38,11 +36,6 @@ func newSSHDReloadHarness(t *testing.T) *sshdReloadHarness {
 	require.NoError(t, err)
 	h.signer, err = ssh.NewSignerFromKey(userKey)
 	require.NoError(t, err)
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	h.addr = ln.Addr().String()
-	require.NoError(t, ln.Close())
 
 	h.c = config.NewC(l)
 	require.NoError(t, h.c.LoadString(h.config()))
@@ -67,19 +60,31 @@ func (h *sshdReloadHarness) writeHostKey(t *testing.T) {
 }
 
 func (h *sshdReloadHarness) config() string {
-	return fmt.Sprintf("sshd:\n  enabled: true\n  listen: %s\n  host_key: %s\n  authorized_users:\n    - user: test\n      keys: [%q]\n%s",
-		h.addr, h.keyFile, string(ssh.MarshalAuthorizedKey(h.signer.PublicKey())), h.extra)
+	return fmt.Sprintf("sshd:\n  enabled: true\n  listen: 127.0.0.1:0\n  host_key: %s\n  authorized_users:\n    - user: test\n      keys: [%q]\n%s",
+		h.keyFile, string(ssh.MarshalAuthorizedKey(h.signer.PublicKey())), h.extra)
 }
 
+// connect dials wherever the server listens now, a restart on :0 moves it
 func (h *sshdReloadHarness) connect(t *testing.T) *ssh.Client {
 	t.Helper()
-	client, err := ssh.Dial("tcp", h.addr, &ssh.ClientConfig{
-		User:            "test",
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(h.signer)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         5 * time.Second,
-	})
-	require.NoError(t, err)
+	var client *ssh.Client
+	require.Eventually(t, func() bool {
+		addr := h.server.Addr()
+		if addr == nil {
+			return false
+		}
+		c, err := ssh.Dial("tcp", addr.String(), &ssh.ClientConfig{
+			User:            "test",
+			Auth:            []ssh.AuthMethod{ssh.PublicKeys(h.signer)},
+			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+			Timeout:         time.Second,
+		})
+		if err != nil {
+			return false
+		}
+		client = c
+		return true
+	}, 5*time.Second, 20*time.Millisecond)
 	t.Cleanup(func() { _ = client.Close() })
 	return client
 }

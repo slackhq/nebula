@@ -3,6 +3,7 @@ package sshd
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -31,10 +32,13 @@ type SSHServer struct {
 	commands    *radix.Tree
 	listener    net.Listener
 
-	// hostKey is the key SetHostKey was last given, so a caller can tell whether a new one differs
-	hostKey []byte
+	// hostKeySum identifies the key SetHostKey was last given, so a caller can tell whether a new one differs without a
+	// second copy of the private key
+	hostKeySum [sha256.Size]byte
 	// runs counts the Runs that are listening. A reload's Run can start before the one it replaced has returned
 	runs atomic.Int32
+	// addr is where the newest Run listens, nil when none is
+	addr atomic.Pointer[net.Addr]
 
 	// ctx parents per-Run contexts. Cancelling it (e.g. via Control.Stop) tears the server down even
 	// across reloads, since each Run derives a fresh child rather than reusing this one directly.
@@ -114,13 +118,21 @@ func (s *SSHServer) SetHostKey(hostPrivateKey []byte) error {
 	}
 
 	s.config.AddHostKey(private)
-	s.hostKey = bytes.Clone(hostPrivateKey)
+	s.hostKeySum = sha256.Sum256(hostPrivateKey)
 	return nil
 }
 
 // HostKeyIs is true when key is the host key the server already has.
 func (s *SSHServer) HostKeyIs(key []byte) bool {
-	return bytes.Equal(s.hostKey, key)
+	return s.hostKeySum == sha256.Sum256(key)
+}
+
+// Addr is the address the newest Run listens on, nil when none is.
+func (s *SSHServer) Addr() net.Addr {
+	if a := s.addr.Load(); a != nil {
+		return *a
+	}
+	return nil
 }
 
 // Running is true while a Run is listening.
@@ -200,11 +212,14 @@ func (s *SSHServer) Run(addr string) error {
 	// reference.
 	s.listener = listener
 	s.runs.Add(1)
+	bound := listener.Addr()
+	s.addr.Store(&bound)
 
 	runCtx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
-	// Deferred after cancel so it runs first, a run on its way out no longer counts as listening
+	// Deferred after cancel so they run first, a run on its way out no longer counts as listening
 	defer s.runs.Add(-1)
+	defer s.addr.CompareAndSwap(&bound, nil)
 
 	// Close the listener when this run's context is cancelled. That can come from the parent
 	// (Control.Stop), from Run returning normally (defer cancel above), or transitively when a sibling
@@ -217,7 +232,7 @@ func (s *SSHServer) Run(addr string) error {
 		}
 	}()
 
-	s.l.Info("SSH server is listening", "sshListener", addr)
+	s.l.Info("SSH server is listening", "sshListener", bound)
 
 	// Run loops until there is an error
 	s.run(runCtx, listener)
