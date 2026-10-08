@@ -410,16 +410,16 @@ func Test_getMTU(t *testing.T) {
 	c := config.NewC(l)
 
 	// unset
-	assert.Equal(t, DefaultMTU, getMTU(c))
+	assert.Equal(t, DefaultMTU, getMTU(l, c))
 
 	// the largest a relayed packet can carry in one underlay buffer
 	require.Equal(t, udp.MTU, MaxMTU+header.MaxOverhead)
 	c.Settings["tun"] = map[string]any{"mtu": MaxMTU}
-	assert.Equal(t, MaxMTU, getMTU(c))
+	assert.Equal(t, MaxMTU, getMTU(l, c))
 
 	// too big is capped
 	c.Settings["tun"] = map[string]any{"mtu": 9000}
-	assert.Equal(t, MaxMTU, getMTU(c))
+	assert.Equal(t, MaxMTU, getMTU(l, c))
 }
 
 func Test_getAllRoutesFromConfigCapsMTU(t *testing.T) {
@@ -435,7 +435,7 @@ func Test_getAllRoutesFromConfigCapsMTU(t *testing.T) {
 		},
 	}
 
-	changed, routes, err := getAllRoutesFromConfig(c, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")}, true)
+	changed, routes, err := getAllRoutesFromConfig(l, c, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")}, true)
 	require.NoError(t, err)
 	assert.True(t, changed)
 

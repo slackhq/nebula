@@ -244,7 +244,7 @@ func newTunGeneric(c *config.C, l *slog.Logger, fd int, vnetHdr bool, offloadFla
 }
 
 func (t *tun) reload(c *config.C, initial bool) error {
-	routeChange, routes, err := getAllRoutesFromConfig(c, t.vpnNetworks, initial)
+	routeChange, routes, err := getAllRoutesFromConfig(t.l, c, t.vpnNetworks, initial)
 	if err != nil {
 		return err
 	}
@@ -256,7 +256,7 @@ func (t *tun) reload(c *config.C, initial bool) error {
 	// Only the mtu changed. The routes are the same, parse them again so the ones without their own mtu pick up the
 	// new default. Without this an mtu change would remove them all
 	if !routeChange {
-		_, routes, err = getAllRoutesFromConfig(c, t.vpnNetworks, true)
+		_, routes, err = getAllRoutesFromConfig(t.l, c, t.vpnNetworks, true)
 		if err != nil {
 			return err
 		}
@@ -276,7 +276,7 @@ func (t *tun) reload(c *config.C, initial bool) error {
 
 	oldDefaultMTU := t.DefaultMTU
 	oldMaxMTU := t.MaxMTU
-	newDefaultMTU := getMTU(c)
+	newDefaultMTU := getMTU(t.l, c)
 	newMaxMTU := newDefaultMTU
 	for i, r := range routes {
 		if r.MTU == 0 {

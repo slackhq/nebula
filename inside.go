@@ -539,7 +539,9 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		need += header.Len + ci.eKey.Overhead()
 	}
 	if cap(out) < need {
-		hostinfo.logger(f.l).Error("Dropping outbound packet, out buffer not large enough", "outCap", cap(out), "payloadLen", len(p), "relayed", useRelay)
+		if l, ok := logging.RateLimited(f.l, f.txOversizeLimiter); ok {
+			hostinfo.logger(l).Error("Dropping outbound packet, out buffer not large enough", "outCap", cap(out), "payloadLen", len(p), "relayed", useRelay)
+		}
 		return
 	}
 

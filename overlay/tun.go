@@ -19,10 +19,10 @@ const DefaultMTU = 1300
 const MaxMTU = udp.MTU - header.MaxOverhead
 
 // getMTU reads tun.mtu, capping a value too big for the underlay to carry.
-func getMTU(c *config.C) int {
+func getMTU(l *slog.Logger, c *config.C) int {
 	mtu := c.GetInt("tun.mtu", DefaultMTU)
 	if mtu > MaxMTU {
-		c.Logger().Warn("tun.mtu is too big for the underlay to carry, capping it", "mtu", mtu, "maxMTU", MaxMTU)
+		l.Warn("tun.mtu is too big for the underlay to carry, capping it", "mtu", mtu, "maxMTU", MaxMTU)
 		return MaxMTU
 	}
 	return mtu
@@ -57,7 +57,7 @@ func NewFdDeviceFromConfig(fd *int) DeviceFactory {
 	}
 }
 
-func getAllRoutesFromConfig(c *config.C, vpnNetworks []netip.Prefix, initial bool) (bool, []Route, error) {
+func getAllRoutesFromConfig(l *slog.Logger, c *config.C, vpnNetworks []netip.Prefix, initial bool) (bool, []Route, error) {
 	if !initial && !c.HasChanged("tun.routes") && !c.HasChanged("tun.unsafe_routes") {
 		return false, nil, nil
 	}
@@ -75,7 +75,7 @@ func getAllRoutesFromConfig(c *config.C, vpnNetworks []netip.Prefix, initial boo
 	routes = append(routes, unsafeRoutes...)
 	for i, r := range routes {
 		if r.MTU > MaxMTU {
-			c.Logger().Warn("route mtu is too big for the underlay to carry, capping it", "route", r.Cidr, "mtu", r.MTU, "maxMTU", MaxMTU)
+			l.Warn("route mtu is too big for the underlay to carry, capping it", "route", r.Cidr, "mtu", r.MTU, "maxMTU", MaxMTU)
 			routes[i].MTU = MaxMTU
 		}
 	}

@@ -99,7 +99,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 		fd:          fd,
 		Device:      deviceName,
 		vpnNetworks: vpnNetworks,
-		MTU:         getMTU(c),
+		MTU:         getMTU(l, c),
 		l:           l,
 	}
 
@@ -340,7 +340,7 @@ func (t *tun) doIoctlByName(ctl uintptr, value uint32) error {
 }
 
 func (t *tun) reload(c *config.C, initial bool) error {
-	change, routes, err := getAllRoutesFromConfig(c, t.vpnNetworks, initial)
+	change, routes, err := getAllRoutesFromConfig(t.l, c, t.vpnNetworks, initial)
 	if err != nil {
 		return err
 	}

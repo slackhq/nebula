@@ -127,6 +127,7 @@ type Interface struct {
 
 	udpTxErrLimiter      *ratelimit.Limiter // udp direct transmit error log limiter
 	udpRelayTxErrLimiter *ratelimit.Limiter // udp relay transmit error log limiter
+	txOversizeLimiter    *ratelimit.Limiter // oversized outbound packet drop log limiter
 
 	// fatalErr holds the first unexpected reader error that caused shutdown.
 	// nil means "no fatal error" (yet)
@@ -210,6 +211,10 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	if err != nil {
 		return nil, err
 	}
+	txOversizeLimiter, err := ratelimit.New(1, time.Second)
+	if err != nil {
+		return nil, err
+	}
 
 	if c.routines <= 1 {
 		c.PinThreads = false //pinning is not useful unless there's more than one tun reader
@@ -245,6 +250,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		pinThreads:            c.PinThreads,
 		udpTxErrLimiter:       udpTxErrLimiter,
 		udpRelayTxErrLimiter:  udpRelayTxErrLimiter,
+		txOversizeLimiter:     txOversizeLimiter,
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		metricTxDropped:  metrics.GetOrRegisterCounter("udp.tx.dropped", nil),
