@@ -30,7 +30,7 @@ func procyield(cycles uint32)
 
 const (
 	packetsPerRing = 1024
-	// Caps tun.mtu at MTU-32 direct, MTU-64 relayed, unenforced anywhere else. 17.6MB page locked per socket.
+	// Fits a relayed packet at overlay.MaxMTU, which tun.mtu and route mtus are capped to. 17.6MB page locked per socket.
 	bytesPerPacket = MTU
 	receiveSpins   = 15
 )

@@ -68,7 +68,7 @@ func (t *tun) Activate() error {
 }
 
 func (t *tun) reload(c *config.C, initial bool) error {
-	change, routes, err := getAllRoutesFromConfig(c, t.vpnNetworks, initial)
+	change, routes, err := getAllRoutesFromConfig(t.l, c, t.vpnNetworks, initial)
 	if err != nil {
 		return err
 	}

@@ -265,6 +265,7 @@ tun:
   # Sets the transmit queue length, if you notice lots of transmit drops on the tun it may help to raise this number. Default is 500
   tx_queue: 500
   # Default MTU for every packet, safe setting is (and the default) 1300 for internet based traffic
+  # Anything above 8937, here or on a route below, is capped to 8937 with a warning
   mtu: 1300
 
   # the use_offloads setting controls if Nebula will attempt to enable GSO and GRO for the tun device. Linux only, not reloadable.

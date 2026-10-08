@@ -126,7 +126,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 		f:           os.NewFile(uintptr(fd), ""),
 		Device:      name,
 		vpnNetworks: vpnNetworks,
-		DefaultMTU:  c.GetInt("tun.mtu", DefaultMTU),
+		DefaultMTU:  getMTU(l, c),
 		l:           l,
 	}
 
@@ -167,7 +167,7 @@ func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip
 		f:           file,
 		Device:      utunNameFromFd(deviceFd),
 		vpnNetworks: vpnNetworks,
-		DefaultMTU:  c.GetInt("tun.mtu", DefaultMTU),
+		DefaultMTU:  getMTU(l, c),
 		hostOwned:   true,
 		l:           l,
 	}
@@ -350,7 +350,7 @@ func (t *tun) activate6(network netip.Prefix) error {
 }
 
 func (t *tun) reload(c *config.C, initial bool) error {
-	change, routes, err := getAllRoutesFromConfig(c, t.vpnNetworks, initial)
+	change, routes, err := getAllRoutesFromConfig(t.l, c, t.vpnNetworks, initial)
 	if err != nil {
 		return err
 	}

@@ -75,7 +75,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*w
 	t := &winTun{
 		Device:          deviceName,
 		vpnNetworks:     vpnNetworks,
-		MTU:             c.GetInt("tun.mtu", DefaultMTU),
+		MTU:             getMTU(l, c),
 		guid:            *guid,
 		networkCategory: cat,
 		setCategory:     setCat,
@@ -118,7 +118,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*w
 }
 
 func (t *winTun) reload(c *config.C, initial bool) error {
-	change, routes, err := getAllRoutesFromConfig(c, t.vpnNetworks, initial)
+	change, routes, err := getAllRoutesFromConfig(t.l, c, t.vpnNetworks, initial)
 	if err != nil {
 		return err
 	}
