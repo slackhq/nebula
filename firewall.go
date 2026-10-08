@@ -967,38 +967,51 @@ func convertRule(l *slog.Logger, p any, table string, i int) (rule, error) {
 	r.CAName = toString("ca_name", m)
 	r.CASha = toString("ca_sha", m)
 
-	// Make sure group isn't an array
-	if v, ok := m["group"].([]any); ok {
-		if len(v) > 1 {
-			return r, errors.New("group should contain a single value, an array with more than one entry was provided")
-		}
-		if len(v) == 0 {
-			return r, errors.New("group should contain a single value, an empty array was provided")
+	// A null value, `group:` with nothing after it, is the same as no group
+	var singleGroup string
+	if g, ok := m["group"]; ok && g != nil {
+		// Make sure group isn't an array
+		if v, ok := g.([]any); ok {
+			if len(v) > 1 {
+				return r, errors.New("group should contain a single value, an array with more than one entry was provided")
+			}
+			if len(v) == 0 {
+				return r, errors.New("group should contain a single value, an empty array was provided")
+			}
+
+			l.Warn("group was an array with a single value, converting to simple value",
+				"table", table,
+				"rule", i,
+			)
+			g = v[0]
 		}
 
-		l.Warn("group was an array with a single value, converting to simple value",
-			"table", table,
-			"rule", i,
-		)
-		m["group"] = v[0]
+		var err error
+		singleGroup, err = groupName(g)
+		if err != nil {
+			return r, fmt.Errorf("group should contain a single value, %w", err)
+		}
 	}
-
-	singleGroup := toString("group", m)
 
 	// A null value, `groups:` with nothing after it, is the same as no groups
 	if rg, ok := m["groups"]; ok && rg != nil {
 		switch reflect.TypeOf(rg).Kind() {
 		case reflect.Slice:
-			// Every entry is read as a string, as the other fields are, so `groups: [1, 2]` is the groups "1" and "2"
 			v := reflect.ValueOf(rg)
 			r.Groups = make([]string, v.Len())
-			for i := 0; i < v.Len(); i++ {
-				r.Groups[i] = fmt.Sprintf("%v", v.Index(i).Interface())
+			for gi := 0; gi < v.Len(); gi++ {
+				name, err := groupName(v.Index(gi).Interface())
+				if err != nil {
+					return r, fmt.Errorf("groups entry #%d should contain a single value, %w", gi, err)
+				}
+				r.Groups[gi] = name
 			}
-		case reflect.String:
-			r.Groups = []string{rg.(string)}
 		default:
-			r.Groups = []string{fmt.Sprintf("%v", rg)}
+			name, err := groupName(rg)
+			if err != nil {
+				return r, fmt.Errorf("groups should contain an array or a single value, %w", err)
+			}
+			r.Groups = []string{name}
 		}
 	}
 
@@ -1012,6 +1025,22 @@ func convertRule(l *slog.Logger, p any, table string, i int) (rule, error) {
 	}
 
 	return r, nil
+}
+
+// groupName reads a group name from config. A scalar is read as a string, as the other rule fields are, so `1` is the
+// group "1". A null, array, or map would only become a name that matches nothing, like "<nil>" or "map[a:b]", so
+// those are rejected. A group really named one of those can be quoted.
+func groupName(v any) (string, error) {
+	if v == nil {
+		return "", errors.New("a null was provided")
+	}
+	switch reflect.TypeOf(v).Kind() {
+	case reflect.Slice, reflect.Array:
+		return "", errors.New("an array was provided")
+	case reflect.Map:
+		return "", errors.New("a map was provided")
+	}
+	return fmt.Sprintf("%v", v), nil
 }
 
 // sanity returns an error if the rule would be evaluated in a way that would short-circuit a configured check on a wildcard value

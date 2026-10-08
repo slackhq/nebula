@@ -14,8 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pass attached one, and `create-tunnel -address` set the remote before that. The list is now attached when
   the handshake starts, so a pending hostinfo never exists without one.
 - A firewall rule with `group: []`, `groups:` with no value, or a `groups` entry that isn't a string, such as
-  `groups: [1, 2]`, no longer crashes Nebula on startup or reload. An empty `group` array is rejected, a null
-  `groups` means no groups, and non-string entries are read as strings.
+  `groups: [1, 2]`, no longer crashes Nebula on startup or reload. A null `group` or `groups` means none was
+  provided, numbers and other simple values are read as strings, and an empty array, a null entry, a nested
+  array, or a map is rejected with an error.
 
 ## [1.11.1] - 2026-08-21
 
