@@ -1439,6 +1439,52 @@ func TestAddFirewallRulesFromConfig(t *testing.T) {
 	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: true, proto: firewall.ProtoAny, startPort: 1, endPort: 1, groups: []string{"a", "b"}, ip: "", localIp: ""}, mf.lastCall)
 
+	// Test group and groups values that used to crash or become a group that matches nothing: an empty array,
+	// a null, an array, or a map is rejected
+	badGroups := []struct {
+		key   string
+		value any
+		err   string
+	}{
+		{"group", []any{}, "group should contain a single value, an empty array was provided"},
+		{"group", []any{nil}, "group should contain a single value, a null was provided"},
+		{"group", []any{[]any{"a"}}, "group should contain a single value, an array was provided"},
+		{"group", map[string]any{"a": "b"}, "group should contain a single value, a map was provided"},
+		{"groups", []any{nil}, "groups entry #0 should contain a single value, a null was provided"},
+		{"groups", []any{"a", []any{"b"}}, "groups entry #1 should contain a single value, an array was provided"},
+		{"groups", []any{map[string]any{"a": "b"}}, "groups entry #0 should contain a single value, a map was provided"},
+		{"groups", map[string]any{"a": "b"}, "groups should contain an array or a single value, a map was provided"},
+	}
+	for _, tc := range badGroups {
+		conf = config.NewC(test.NewLogger())
+		mf = &mockFirewall{}
+		conf.Settings["firewall"] = map[string]any{"inbound": []any{map[string]any{"port": "1", "proto": "any", tc.key: tc.value}}}
+		require.EqualError(t, AddFirewallRulesFromConfig(l, true, conf, mf), "firewall.inbound rule #0; "+tc.err, "%s: %v", tc.key, tc.value)
+	}
+
+	// Test scalar groups entries that aren't strings are read as strings
+	conf = config.NewC(test.NewLogger())
+	mf = &mockFirewall{}
+	conf.Settings["firewall"] = map[string]any{"inbound": []any{map[string]any{"port": "1", "proto": "any", "groups": []any{1, true}}}}
+	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf))
+	assert.Equal(t, []string{"1", "true"}, mf.lastCall.groups)
+
+	conf = config.NewC(test.NewLogger())
+	mf = &mockFirewall{}
+	conf.Settings["firewall"] = map[string]any{"inbound": []any{map[string]any{"port": "1", "proto": "any", "group": 1}}}
+	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf))
+	assert.Equal(t, []string{"1"}, mf.lastCall.groups)
+
+	// Test a null group or groups is the same as not providing it
+	for _, key := range []string{"group", "groups"} {
+		conf = config.NewC(test.NewLogger())
+		mf = &mockFirewall{}
+		conf.Settings["firewall"] = map[string]any{"inbound": []any{map[string]any{"port": "1", "proto": "any", key: nil, "host": "a"}}}
+		require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf))
+		assert.Empty(t, mf.lastCall.groups)
+		assert.Equal(t, "a", mf.lastCall.host)
+	}
+
 	// Test Add error
 	conf = config.NewC(test.NewLogger())
 	mf = &mockFirewall{}
