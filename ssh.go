@@ -61,11 +61,18 @@ func wireSSHReload(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) {
 	c.RegisterReloadCallback(func(c *config.C) {
 		if c.GetBool("sshd.enabled", false) {
 			// Restarting the server drops every open session, the one that asked for this reload included. Only restart
-			// when it isn't running or something it reads changed, the sshd config or the host key file it points at
+			// when it isn't running or its config changed. The host key file can change under the same config, new
+			// handshakes use the new key without a restart
 			if ssh.Running() && !c.HasChanged("sshd") {
-				if key, err := loadSSHHostKey(c); err == nil && ssh.HostKeyIs(key) {
-					return
+				key, err := loadSSHHostKey(c)
+				if err == nil {
+					err = ssh.SetHostKey(key)
 				}
+				if err != nil {
+					l.Error("Failed to reconfigure the sshd", "error", err)
+					ssh.Stop()
+				}
+				return
 			}
 			sshRun, err := configSSH(l, ssh, c)
 			if err != nil {

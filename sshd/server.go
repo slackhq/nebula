@@ -3,7 +3,6 @@ package sshd
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -16,8 +15,11 @@ import (
 )
 
 type SSHServer struct {
-	config *ssh.ServerConfig
-	l      *slog.Logger
+	// config is replaced whole when the host key changes, ssh.ServerConfig.AddHostKey only replaces a key of the same
+	// algorithm and appends any other
+	config       atomic.Pointer[ssh.ServerConfig]
+	authenticate func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error)
+	l            *slog.Logger
 
 	certChecker *ssh.CertChecker
 
@@ -30,11 +32,8 @@ type SSHServer struct {
 	// List of available commands
 	helpCommand *Command
 	commands    *radix.Tree
-	listener    net.Listener
+	listener    atomic.Pointer[net.Listener]
 
-	// hostKeySum identifies the key SetHostKey was last given, so a caller can tell whether a new one differs without a
-	// second copy of the private key
-	hostKeySum [sha256.Size]byte
 	// runs counts the Runs that are listening. A reload's Run can start before the one it replaced has returned
 	runs atomic.Int32
 	// addr is where the newest Run listens, nil when none is
@@ -95,10 +94,8 @@ func NewSSHServer(ctx context.Context, l *slog.Logger) (*SSHServer, error) {
 		},
 	}
 
-	s.config = &ssh.ServerConfig{
-		PublicKeyCallback: cc.Authenticate,
-		ServerVersion:     fmt.Sprintf("SSH-2.0-Nebula???"),
-	}
+	s.authenticate = cc.Authenticate
+	s.config.Store(s.newConfig())
 
 	s.RegisterCommand(&Command{
 		Name:             "help",
@@ -117,14 +114,17 @@ func (s *SSHServer) SetHostKey(hostPrivateKey []byte) error {
 		return fmt.Errorf("failed to parse private key: %s", err)
 	}
 
-	s.config.AddHostKey(private)
-	s.hostKeySum = sha256.Sum256(hostPrivateKey)
+	config := s.newConfig()
+	config.AddHostKey(private)
+	s.config.Store(config)
 	return nil
 }
 
-// HostKeyIs is true when key is the host key the server already has.
-func (s *SSHServer) HostKeyIs(key []byte) bool {
-	return s.hostKeySum == sha256.Sum256(key)
+func (s *SSHServer) newConfig() *ssh.ServerConfig {
+	return &ssh.ServerConfig{
+		PublicKeyCallback: s.authenticate,
+		ServerVersion:     fmt.Sprintf("SSH-2.0-Nebula???"),
+	}
 }
 
 // Addr is the address the newest Run listens on, nil when none is.
@@ -210,7 +210,7 @@ func (s *SSHServer) Run(addr string) error {
 	// this run owns. They start equal but a fast reload may overwrite s.listener with the next run's
 	// listener before this run's watcher fires, so each run must close its own listener via the local
 	// reference.
-	s.listener = listener
+	s.listener.Store(&listener)
 	s.runs.Add(1)
 	bound := listener.Addr()
 	s.addr.Store(&bound)
@@ -261,7 +261,7 @@ func (s *SSHServer) run(ctx context.Context, listener net.Listener) {
 				<-sessionContext.Done()
 				c.Close()
 			}()
-			conn, chans, reqs, err := ssh.NewServerConn(c, s.config)
+			conn, chans, reqs, err := ssh.NewServerConn(c, s.config.Load())
 			fp := ""
 			if conn != nil {
 				fp = conn.Permissions.Extensions["fp"]
@@ -299,8 +299,8 @@ func (s *SSHServer) run(ctx context.Context, listener net.Listener) {
 }
 
 func (s *SSHServer) Stop() {
-	if s.listener != nil {
-		if err := s.listener.Close(); err != nil {
+	if l := s.listener.Load(); l != nil {
+		if err := (*l).Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			s.l.Warn("Failed to close the sshd listener", "error", err)
 		}
 	}
