@@ -269,6 +269,10 @@ func (t *tun) Activate() error {
 	return t.addRoutes(false)
 }
 
+// activate4 and activate6 assign the address as a single host address and route the vpn network
+// explicitly. Software that treats interface prefixes as attached LANs leaves single address
+// interfaces alone; Tailscale with an exit node claims or excludes those prefixes, which has macOS
+// configd rewrite our network route away from the tun.
 func (t *tun) activate4(network netip.Prefix) error {
 	s, err := unix.Socket(
 		unix.AF_INET,
@@ -295,7 +299,7 @@ func (t *tun) activate4(network netip.Prefix) error {
 		MaskAddr: unix.RawSockaddrInet4{
 			Len:    unix.SizeofSockaddrInet4,
 			Family: unix.AF_INET,
-			Addr:   prefixToMask(network).As4(),
+			Addr:   prefixToMask(netip.PrefixFrom(network.Addr(), 32)).As4(),
 		},
 	}
 
@@ -303,12 +307,7 @@ func (t *tun) activate4(network netip.Prefix) error {
 		return fmt.Errorf("failed to set tun v4 address: %s", err)
 	}
 
-	err = addRoute(network, t.linkAddr)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return t.addNetworkRoute(network)
 }
 
 func (t *tun) activate6(network netip.Prefix) error {
@@ -332,7 +331,7 @@ func (t *tun) activate6(network netip.Prefix) error {
 		PrefixMask: unix.RawSockaddrInet6{
 			Len:    unix.SizeofSockaddrInet6,
 			Family: unix.AF_INET6,
-			Addr:   prefixToMask(network).As16(),
+			Addr:   prefixToMask(netip.PrefixFrom(network.Addr(), 128)).As16(),
 		},
 		Lifetime: addrLifetime{
 			// never expires
@@ -346,7 +345,23 @@ func (t *tun) activate6(network netip.Prefix) error {
 		return fmt.Errorf("failed to set tun address: %s", err)
 	}
 
-	return nil
+	return t.addNetworkRoute(network)
+}
+
+// addNetworkRoute points the vpn network at the tun, replacing any route already holding the same
+// prefix. Other software can leave one behind (configd keeps routes it installed for a VPN after
+// our previous tun is gone), and failing here would keep nebula from starting.
+func (t *tun) addNetworkRoute(network netip.Prefix) error {
+	err := addRoute(network, t.linkAddr)
+	if !errors.Is(err, unix.EEXIST) {
+		return err
+	}
+
+	t.l.Warn("Replacing an existing route for the vpn network", "network", network.Masked())
+	if err := delRoute(network, nil); err != nil {
+		return fmt.Errorf("failed to remove existing route for %v: %w", network.Masked(), err)
+	}
+	return addRoute(network, t.linkAddr)
 }
 
 func (t *tun) reload(c *config.C, initial bool) error {
