@@ -4,6 +4,7 @@ import (
 	"crypto/ecdh"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/slackhq/nebula/pkclient"
 
@@ -23,6 +24,32 @@ func newNISTP11Curve(name string, curve ecdh.Curve, byteLen int) nistP11Curve {
 	}
 }
 
+// Cache one long-lived client per pkcs11 URI. PKCS#11 sessions are not safe
+// for concurrent operations, so each client's derives are serialized under its
+// own mutex, which also matches the token, which serializes regardless. A
+// derive error (stale session after a token reset / re-init) drops the cached
+// client so the next handshake transparently re-opens it.
+type p11Client struct {
+	mu     sync.Mutex
+	client *pkclient.PKClient
+}
+
+var (
+	p11mu    sync.Mutex
+	p11cache = map[string]*p11Client{}
+)
+
+func getP11Client(uri string) *p11Client {
+	p11mu.Lock()
+	defer p11mu.Unlock()
+	c := p11cache[uri]
+	if c == nil {
+		c = &p11Client{}
+		p11cache[uri] = c
+	}
+	return c
+}
+
 func (c nistP11Curve) DH(privkey, pubkey []byte) ([]byte, error) {
 	//for this function "privkey" is actually a pkcs11 URI
 	pkStr := string(privkey)
@@ -36,15 +63,24 @@ func (c nistP11Curve) DH(privkey, pubkey []byte) ([]byte, error) {
 		return nil, fmt.Errorf("unable to unmarshal pubkey: %w", err)
 	}
 
-	//this is not the most performant way to do this (a long-lived client would be better)
-	//but, it works, and helps avoid problems with stale sessions and HSMs used by multiple users.
-	client, err := pkclient.FromUrl(pkStr)
+	pc := getP11Client(pkStr)
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+
+	if pc.client == nil {
+		pc.client, err = pkclient.FromUrl(pkStr)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	out, err := pc.client.DeriveNoise(ecdhPubKey.Bytes())
 	if err != nil {
+		// The session may be stale (token reset / re-init). Drop it so the
+		// next handshake re-opens a fresh client.
+		_ = pc.client.Close()
+		pc.client = nil
 		return nil, err
 	}
-	defer func(client *pkclient.PKClient) {
-		_ = client.Close()
-	}(client)
-
-	return client.DeriveNoise(ecdhPubKey.Bytes())
+	return out, nil
 }
