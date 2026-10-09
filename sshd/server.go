@@ -8,14 +8,18 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	"github.com/armon/go-radix"
 	"golang.org/x/crypto/ssh"
 )
 
 type SSHServer struct {
-	config *ssh.ServerConfig
-	l      *slog.Logger
+	// config is replaced whole when the host key changes, ssh.ServerConfig.AddHostKey only replaces a key of the same
+	// algorithm and appends any other
+	config       atomic.Pointer[ssh.ServerConfig]
+	authenticate func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error)
+	l            *slog.Logger
 
 	certChecker *ssh.CertChecker
 
@@ -28,7 +32,12 @@ type SSHServer struct {
 	// List of available commands
 	helpCommand *Command
 	commands    *radix.Tree
-	listener    net.Listener
+	listener    atomic.Pointer[net.Listener]
+
+	// runs counts the Runs that are listening. A reload's Run can start before the one it replaced has returned
+	runs atomic.Int32
+	// addr is where the newest Run listens, nil when none is
+	addr atomic.Pointer[net.Addr]
 
 	// ctx parents per-Run contexts. Cancelling it (e.g. via Control.Stop) tears the server down even
 	// across reloads, since each Run derives a fresh child rather than reusing this one directly.
@@ -85,10 +94,8 @@ func NewSSHServer(ctx context.Context, l *slog.Logger) (*SSHServer, error) {
 		},
 	}
 
-	s.config = &ssh.ServerConfig{
-		PublicKeyCallback: cc.Authenticate,
-		ServerVersion:     fmt.Sprintf("SSH-2.0-Nebula???"),
-	}
+	s.authenticate = cc.Authenticate
+	s.config.Store(s.newConfig())
 
 	s.RegisterCommand(&Command{
 		Name:             "help",
@@ -107,8 +114,30 @@ func (s *SSHServer) SetHostKey(hostPrivateKey []byte) error {
 		return fmt.Errorf("failed to parse private key: %s", err)
 	}
 
-	s.config.AddHostKey(private)
+	config := s.newConfig()
+	config.AddHostKey(private)
+	s.config.Store(config)
 	return nil
+}
+
+func (s *SSHServer) newConfig() *ssh.ServerConfig {
+	return &ssh.ServerConfig{
+		PublicKeyCallback: s.authenticate,
+		ServerVersion:     fmt.Sprintf("SSH-2.0-Nebula???"),
+	}
+}
+
+// Addr is the address the newest Run listens on, nil when none is.
+func (s *SSHServer) Addr() net.Addr {
+	if a := s.addr.Load(); a != nil {
+		return *a
+	}
+	return nil
+}
+
+// Running is true while a Run is listening.
+func (s *SSHServer) Running() bool {
+	return s.runs.Load() > 0
 }
 
 func (s *SSHServer) ClearTrustedCAs() {
@@ -181,10 +210,16 @@ func (s *SSHServer) Run(addr string) error {
 	// this run owns. They start equal but a fast reload may overwrite s.listener with the next run's
 	// listener before this run's watcher fires, so each run must close its own listener via the local
 	// reference.
-	s.listener = listener
+	s.listener.Store(&listener)
+	s.runs.Add(1)
+	bound := listener.Addr()
+	s.addr.Store(&bound)
 
 	runCtx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
+	// Deferred after cancel so they run first, a run on its way out no longer counts as listening
+	defer s.runs.Add(-1)
+	defer s.addr.CompareAndSwap(&bound, nil)
 
 	// Close the listener when this run's context is cancelled. That can come from the parent
 	// (Control.Stop), from Run returning normally (defer cancel above), or transitively when a sibling
@@ -197,7 +232,7 @@ func (s *SSHServer) Run(addr string) error {
 		}
 	}()
 
-	s.l.Info("SSH server is listening", "sshListener", addr)
+	s.l.Info("SSH server is listening", "sshListener", bound)
 
 	// Run loops until there is an error
 	s.run(runCtx, listener)
@@ -226,7 +261,7 @@ func (s *SSHServer) run(ctx context.Context, listener net.Listener) {
 				<-sessionContext.Done()
 				c.Close()
 			}()
-			conn, chans, reqs, err := ssh.NewServerConn(c, s.config)
+			conn, chans, reqs, err := ssh.NewServerConn(c, s.config.Load())
 			fp := ""
 			if conn != nil {
 				fp = conn.Permissions.Extensions["fp"]
@@ -264,8 +299,8 @@ func (s *SSHServer) run(ctx context.Context, listener net.Listener) {
 }
 
 func (s *SSHServer) Stop() {
-	if s.listener != nil {
-		if err := s.listener.Close(); err != nil {
+	if l := s.listener.Load(); l != nil {
+		if err := (*l).Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			s.l.Warn("Failed to close the sshd listener", "error", err)
 		}
 	}
