@@ -135,12 +135,23 @@ func (u *StdConn) Rebind() error {
 	return nil
 }
 
+// SetRecvBuffer tries SO_RCVBUFFORCE, which needs CAP_NET_ADMIN. Without it we
+// fall back to SO_RCVBUF, which the kernel clamps to net.core.rmem_max.
 func (u *StdConn) SetRecvBuffer(n int) error {
-	return unix.SetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_RCVBUFFORCE, n)
+	err := unix.SetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_RCVBUFFORCE, n)
+	if errors.Is(err, unix.EPERM) {
+		err = unix.SetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_RCVBUF, n)
+	}
+	return err
 }
 
+// SetSendBuffer is SetRecvBuffer for SO_SNDBUFFORCE/SO_SNDBUF and net.core.wmem_max.
 func (u *StdConn) SetSendBuffer(n int) error {
-	return unix.SetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_SNDBUFFORCE, n)
+	err := unix.SetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_SNDBUFFORCE, n)
+	if errors.Is(err, unix.EPERM) {
+		err = unix.SetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_SNDBUF, n)
+	}
+	return err
 }
 
 func (u *StdConn) SetSoMark(mark int) error {
@@ -396,8 +407,13 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 	b := c.GetInt("listen.read_buffer", 0)
 	if b > 0 {
 		if err := u.SetRecvBuffer(b); err == nil {
-			if s, err := u.GetRecvBuffer(); err == nil {
+			// The kernel reports double the requested size
+			if s, err := u.GetRecvBuffer(); err == nil && s >= 2*b {
 				u.l.Info("listen.read_buffer was set", "size", s)
+			} else if err == nil {
+				u.l.Warn("listen.read_buffer was limited by the system",
+					"requested", b, "size", s,
+					"hint", "raise net.core.rmem_max or grant CAP_NET_ADMIN")
 			} else {
 				u.l.Warn("Failed to get listen.read_buffer", "error", err)
 			}
@@ -409,8 +425,12 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 	b = c.GetInt("listen.write_buffer", 0)
 	if b > 0 {
 		if err := u.SetSendBuffer(b); err == nil {
-			if s, err := u.GetSendBuffer(); err == nil {
+			if s, err := u.GetSendBuffer(); err == nil && s >= 2*b {
 				u.l.Info("listen.write_buffer was set", "size", s)
+			} else if err == nil {
+				u.l.Warn("listen.write_buffer was limited by the system",
+					"requested", b, "size", s,
+					"hint", "raise net.core.wmem_max or grant CAP_NET_ADMIN")
 			} else {
 				u.l.Warn("Failed to get listen.write_buffer", "error", err)
 			}
