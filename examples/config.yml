@@ -135,7 +135,7 @@ listen:
   # superpacket, so the receive scratch is batch * 64KiB per listening socket (~4MiB per routine at the
   # default of 64). Lower this to trade peak per-syscall throughput for memory on constrained hosts.
   #batch: 64
-  # Configure socket buffers for the udp side (outside), leave unset to use the system defaults. Values will be doubled by the kernel
+  # Linux only. Configure socket buffers for the udp side (outside), leave unset to use the system defaults. Values will be doubled by the kernel
   # Default is net.core.rmem_default and net.core.wmem_default (/proc/sys/net/core/rmem_default and /proc/sys/net/core/rmem_default)
   # Maximum is limited by memory in the system, SO_RCVBUFFORCE and SO_SNDBUFFORCE is used to avoid having to raise the system wide
   # max, net.core.rmem_max and net.core.wmem_max
@@ -262,7 +262,7 @@ tun:
   drop_local_broadcast: false
   # Toggles forwarding of multicast packets
   drop_multicast: false
-  # Sets the transmit queue length, if you notice lots of transmit drops on the tun it may help to raise this number. Default is 500
+  # Sets the transmit queue length, if you notice lots of transmit drops on the tun it may help to raise this number. Default is 500; 5000 recommended for high throughput
   tx_queue: 5000
   # Default MTU for every packet, safe setting is (and the default) 1300 for internet based traffic
   # Anything above 8937, here or on a route below, is capped to 8937 with a warning
