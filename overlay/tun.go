@@ -43,7 +43,7 @@ type DeviceFactory func(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix,
 func NewDeviceFromConfig(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error) {
 	switch {
 	case c.GetBool("tun.disabled", false):
-		tun := newDisabledTun(vpnNetworks, c.GetInt("tun.tx_queue", 500), c.GetBool("stats.message_metrics", false), l)
+		tun := newDisabledTun(vpnNetworks, c.GetInt("tun.tx_queue", 5000), c.GetBool("stats.message_metrics", false), l)
 		return tun, nil
 
 	default:

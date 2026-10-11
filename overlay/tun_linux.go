@@ -221,7 +221,7 @@ func newTunGeneric(c *config.C, l *slog.Logger, fd int, vnetHdr bool, offloadFla
 		vnetHdr:                   vnetHdr,
 		offloadFlags:              offloadFlags,
 		vpnNetworks:               vpnNetworks,
-		TXQueueLen:                c.GetInt("tun.tx_queue", 500),
+		TXQueueLen:                c.GetInt("tun.tx_queue", 5000),
 		useSystemRoutes:           c.GetBool("tun.use_system_route_table", false),
 		useSystemRoutesBufferSize: c.GetInt("tun.use_system_route_table_buffer_size", 0),
 		routesFromSystem:          map[netip.Prefix]routing.Gateways{},
