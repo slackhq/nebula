@@ -269,10 +269,7 @@ func (t *tun) Activate() error {
 	return t.addRoutes(false)
 }
 
-// activate4 and activate6 assign the address as a single host address and route the vpn network
-// explicitly. Software that treats interface prefixes as attached LANs leaves single address
-// interfaces alone; Tailscale with an exit node claims or excludes those prefixes, which has macOS
-// configd rewrite our network route away from the tun.
+// activate4 assigns our vpn address as a /32 and routes the vpn network to the tun explicitly.
 func (t *tun) activate4(network netip.Prefix) error {
 	s, err := unix.Socket(
 		unix.AF_INET,
@@ -299,17 +296,29 @@ func (t *tun) activate4(network netip.Prefix) error {
 		MaskAddr: unix.RawSockaddrInet4{
 			Len:    unix.SizeofSockaddrInet4,
 			Family: unix.AF_INET,
-			Addr:   prefixToMask(netip.PrefixFrom(network.Addr(), 32)).As4(),
+			Addr:   [4]byte{255, 255, 255, 255}, //always make the address a /32
 		},
 	}
+
+	// On Darwin, VPNs don't edit the routing table directly.
+	// A network extension hands its routes to the system, and configd installs them.
+	// configd replaces any route already holding the same prefix, including ours.
+	// As an example, Tailscale with an exit node treats any interface prefix wider than one address as a LAN.
+	// With LAN access off, it routes each LAN into Tailscale's utun.
+	// With LAN access on, it excludes each LAN from its tunnel.
+	// configd routes an excluded prefix like its own routes would, ignoring ours, so it goes out the default route.
+	// Either way our route is replaced, and traffic for the vpn network no longer reaches nebula.
+	// A single address isn't a LAN to Tailscale, so our route is left alone.
+	// We route the vpn network to the tun explicitly instead.
 
 	if err := ioctl(uintptr(s), unix.SIOCAIFADDR, uintptr(unsafe.Pointer(&ifr))); err != nil {
 		return fmt.Errorf("failed to set tun v4 address: %s", err)
 	}
 
-	return t.addNetworkRoute(network)
+	return addRoute(network, t.linkAddr)
 }
 
+// activate6 is activate4 for IPv6
 func (t *tun) activate6(network netip.Prefix) error {
 	s, err := unix.Socket(
 		unix.AF_INET6,
@@ -331,36 +340,21 @@ func (t *tun) activate6(network netip.Prefix) error {
 		PrefixMask: unix.RawSockaddrInet6{
 			Len:    unix.SizeofSockaddrInet6,
 			Family: unix.AF_INET6,
-			Addr:   prefixToMask(netip.PrefixFrom(network.Addr(), 128)).As16(),
+			// Always set the netmask to be a /128. See activate4 for why we do this.
+			Addr: [16]byte{255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255},
 		},
 		Lifetime: addrLifetime{
 			// never expires
 			Vltime: 0xffffffff,
 			Pltime: 0xffffffff,
 		},
-		Flags: _IN6_IFF_NODAD,
+		Flags: _IN6_IFF_NODAD, // No DAD, a utun has no neighbors.
 	}
 
 	if err := ioctl(uintptr(s), _SIOCAIFADDR_IN6, uintptr(unsafe.Pointer(&ifr))); err != nil {
 		return fmt.Errorf("failed to set tun address: %s", err)
 	}
 
-	return t.addNetworkRoute(network)
-}
-
-// addNetworkRoute points the vpn network at the tun, replacing any route already holding the same
-// prefix. Other software can leave one behind (configd keeps routes it installed for a VPN after
-// our previous tun is gone), and failing here would keep nebula from starting.
-func (t *tun) addNetworkRoute(network netip.Prefix) error {
-	err := addRoute(network, t.linkAddr)
-	if !errors.Is(err, unix.EEXIST) {
-		return err
-	}
-
-	t.l.Warn("Replacing an existing route for the vpn network", "network", network.Masked())
-	if err := delRoute(network, nil); err != nil {
-		return fmt.Errorf("failed to remove existing route for %v: %w", network.Masked(), err)
-	}
 	return addRoute(network, t.linkAddr)
 }
 
