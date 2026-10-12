@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/bits"
 	"net/netip"
 	"os"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
@@ -28,7 +30,7 @@ type tun struct {
 	DefaultMTU  int
 	Routes      atomic.Pointer[[]Route]
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
-	linkAddr    *netroute.LinkAddr
+	linkAddr    atomic.Pointer[netroute.LinkAddr]
 	// hostOwned means the fd arrived from the OS, which has already configured addressing, mtu
 	// and routes for it. NEPacketTunnelProvider on darwin does this.
 	hostOwned bool
@@ -243,7 +245,7 @@ func (t *tun) Activate() error {
 	if linkAddr == nil {
 		return fmt.Errorf("unable to discover link_addr for tun interface")
 	}
-	t.linkAddr = linkAddr
+	t.linkAddr.Store(linkAddr)
 
 	for _, network := range t.vpnNetworks {
 		if network.Addr().Is4() {
@@ -303,7 +305,7 @@ func (t *tun) activate4(network netip.Prefix) error {
 		return fmt.Errorf("failed to set tun v4 address: %s", err)
 	}
 
-	err = addRoute(network, t.linkAddr)
+	err = addRoute(network, t.linkAddr.Load())
 	if err != nil {
 		return err
 	}
@@ -394,6 +396,56 @@ func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 	return routing.Gateways{}
 }
 
+func fetchRoutes() ([]netroute.Message, error) {
+	rib, err := netroute.FetchRIB(unix.AF_UNSPEC, unix.NET_RT_DUMP, 0)
+	if err != nil {
+		return nil, err
+	}
+	return netroute.ParseRIB(unix.NET_RT_DUMP, rib)
+}
+
+// routeInterfaceIn returns the index of the interface prefix is routed through, or 0 if msgs has no route for exactly
+// that prefix. Routes scoped to an interface are skipped, they don't stop us adding ours.
+func routeInterfaceIn(msgs []netroute.Message, prefix netip.Prefix) int {
+	for _, msg := range msgs {
+		m, ok := msg.(*netroute.RouteMessage)
+		if !ok || len(m.Addrs) <= unix.RTAX_NETMASK || m.Flags&unix.RTF_IFSCOPE != 0 {
+			continue
+		}
+		if p, ok := routePrefix(m.Addrs[unix.RTAX_DST], m.Addrs[unix.RTAX_NETMASK]); ok && p == prefix.Masked() {
+			return m.Index
+		}
+	}
+	return 0
+}
+
+// routePrefix returns the prefix a route covers. Host routes have no netmask.
+func routePrefix(dst, mask netroute.Addr) (netip.Prefix, bool) {
+	switch d := dst.(type) {
+	case *netroute.Inet4Addr:
+		bits := 32
+		if m, ok := mask.(*netroute.Inet4Addr); ok {
+			bits = maskBits(m.IP[:])
+		}
+		return netip.PrefixFrom(netip.AddrFrom4(d.IP), bits), true
+	case *netroute.Inet6Addr:
+		bits := 128
+		if m, ok := mask.(*netroute.Inet6Addr); ok {
+			bits = maskBits(m.IP[:])
+		}
+		return netip.PrefixFrom(netip.AddrFrom16(d.IP), bits), true
+	}
+	return netip.Prefix{}, false
+}
+
+func maskBits(mask []byte) int {
+	n := 0
+	for _, b := range mask {
+		n += bits.OnesCount8(b)
+	}
+	return n
+}
+
 // Get the LinkAddr for the interface of the given name
 // Is there an easier way to fetch this when we create the interface?
 // Maybe SIOCGIFINDEX? but this doesn't appear to exist in the darwin headers.
@@ -428,7 +480,14 @@ func (t *tun) addRoutes(logErrors bool) error {
 		return nil
 	}
 
+	// Activate hasn't run yet, it will install the routes
+	linkAddr := t.linkAddr.Load()
+	if linkAddr == nil {
+		return nil
+	}
+
 	routes := *t.Routes.Load()
+	systemRoutes := sync.OnceValues(fetchRoutes)
 
 	for _, r := range routes {
 		if len(r.Via) == 0 || !r.Install {
@@ -436,10 +495,16 @@ func (t *tun) addRoutes(logErrors bool) error {
 			continue
 		}
 
-		err := addRoute(r.Cidr, t.linkAddr)
+		err := addRoute(r.Cidr, linkAddr)
 		if err != nil {
 			if errors.Is(err, unix.EEXIST) {
-				t.l.Warn("unable to add unsafe_route, identical route already exists", "route", r.Cidr)
+				// Every route we added already exists on a reload, only warn about someone else's
+				msgs, err := systemRoutes()
+				if err != nil {
+					t.l.Warn("unable to add unsafe_route, a route already exists but its interface could not be determined", "route", r.Cidr, "error", err)
+				} else if routeInterfaceIn(msgs, r.Cidr) != linkAddr.Index {
+					t.l.Warn("unable to add unsafe_route, the destination is already routed through another interface", "route", r.Cidr)
+				}
 			} else {
 				retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
 				if logErrors {
@@ -450,6 +515,8 @@ func (t *tun) addRoutes(logErrors bool) error {
 			}
 		} else {
 			t.l.Info("Added route", "route", r)
+			// A cidr listed twice would otherwise find our own route missing from an older fetch
+			systemRoutes = sync.OnceValues(fetchRoutes)
 		}
 	}
 
@@ -457,7 +524,8 @@ func (t *tun) addRoutes(logErrors bool) error {
 }
 
 func (t *tun) removeRoutes(routes []Route) error {
-	if t.hostOwned {
+	linkAddr := t.linkAddr.Load()
+	if t.hostOwned || linkAddr == nil {
 		return nil
 	}
 
@@ -466,7 +534,7 @@ func (t *tun) removeRoutes(routes []Route) error {
 			continue
 		}
 
-		err := delRoute(r.Cidr, t.linkAddr)
+		err := delRoute(r.Cidr, linkAddr)
 		if err != nil {
 			t.l.Error("Failed to remove route", "error", err, "route", r)
 		} else {
