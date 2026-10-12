@@ -1,13 +1,17 @@
 package overlay
 
 import (
+	"bytes"
 	"fmt"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/test"
+	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -401,4 +405,116 @@ func Test_makeMultipathUnsafeRouteTree(t *testing.T) {
 
 	routing.CalculateBucketsForGateways(expectedGateways)
 	assert.ElementsMatch(t, expectedGateways, r)
+}
+
+func Test_getMTU(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+
+	// unset
+	assert.Equal(t, DefaultMTU, getMTU(l, c))
+
+	// the largest a relayed packet can carry in one underlay buffer
+	require.Equal(t, udp.MTU, MaxMTU+header.MaxOverhead)
+	c.Settings["tun"] = map[string]any{"mtu": MaxMTU}
+	assert.Equal(t, MaxMTU, getMTU(l, c))
+
+	// too big is capped
+	c.Settings["tun"] = map[string]any{"mtu": 9000}
+	assert.Equal(t, MaxMTU, getMTU(l, c))
+}
+
+func Test_getAllRoutesFromConfigCapsMTU(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	c.Settings["tun"] = map[string]any{
+		"routes": []any{
+			map[string]any{"mtu": "9000", "route": "10.0.0.0/29"},
+			map[string]any{"mtu": "1300", "route": "10.0.0.8/29"},
+		},
+		"unsafe_routes": []any{
+			map[string]any{"via": "127.0.0.1", "mtu": "9000", "route": "1.0.0.0/29"},
+		},
+	}
+
+	changed, routes, err := getAllRoutesFromConfig(l, c, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")}, true)
+	require.NoError(t, err)
+	assert.True(t, changed)
+
+	mtus := map[string]int{}
+	for _, r := range routes {
+		mtus[r.Cidr.String()] = r.MTU
+	}
+	assert.Equal(t, map[string]int{"10.0.0.0/29": MaxMTU, "10.0.0.8/29": 1300, "1.0.0.0/29": MaxMTU}, mtus)
+}
+
+// The route tree keeps one entry per CIDR, so a CIDR listed twice only routes by the last one. Say so instead of
+// letting the earlier via, or on Windows the earlier metric, quietly lose
+func Test_makeRouteTree_WarnsOnDuplicate(t *testing.T) {
+	buf := &bytes.Buffer{}
+	l := test.NewLoggerWithOutput(buf)
+	via := func(s string) routing.Gateways {
+		return routing.Gateways{routing.NewGateway(netip.MustParseAddr(s), 1)}
+	}
+	cidr := netip.MustParsePrefix("10.251.1.0/24")
+
+	_, err := makeRouteTree(l, []Route{
+		{Cidr: cidr, Via: via("10.250.0.2"), Install: true, Metric: 100},
+		{Cidr: netip.MustParsePrefix("10.251.2.0/24"), Via: via("10.250.0.2"), Install: true},
+	}, false)
+	require.NoError(t, err)
+	assert.Empty(t, buf.String())
+
+	tree, err := makeRouteTree(l, []Route{
+		{Cidr: cidr, Via: via("10.250.0.2"), Install: true, Metric: 100},
+		{Cidr: cidr, Via: via("10.250.0.3"), Install: true, Metric: 200},
+	}, false)
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(buf.String(), "route is listed more than once, only the last entry's via is used"))
+	gw, ok := tree.Lookup(netip.MustParseAddr("10.251.1.1"))
+	require.True(t, ok)
+	assert.Equal(t, netip.MustParseAddr("10.250.0.3"), gw[0].Addr(), "the last entry wins")
+}
+
+// A quoted metric or weight is a number written as a string, it means that number. Anything else is an error, not a
+// panic
+func Test_parseUnsafeRoutes_QuotedNumbers(t *testing.T) {
+	c := config.NewC(test.NewLogger())
+	n := netip.MustParsePrefix("10.0.0.1/24")
+	route := func(metric, weight any) {
+		c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{
+			"route":  "1.0.0.0/8",
+			"metric": metric,
+			"via":    []any{map[string]any{"gateway": "10.0.0.2", "weight": weight}},
+		}}}
+	}
+
+	route("100", "5")
+	routes, err := parseUnsafeRoutes(c, []netip.Prefix{n})
+	require.NoError(t, err)
+	require.Len(t, routes, 1)
+	assert.Equal(t, 100, routes[0].Metric)
+	assert.Equal(t, "{addr: 10.0.0.2, weight: 5}", routes[0].Via[0].String())
+
+	route(1.5, 1)
+	_, err = parseUnsafeRoutes(c, []netip.Prefix{n})
+	require.EqualError(t, err, "entry 1.metric in tun.unsafe_routes is not an integer: 1.5")
+
+	route(1, true)
+	_, err = parseUnsafeRoutes(c, []netip.Prefix{n})
+	require.EqualError(t, err, "entry .weight in tun.unsafe_routes[1].via[1] is not an integer")
+}
+
+// An mtu that is neither a number nor a quoted one is an error, not a panic
+func Test_parseRoutes_MTUNotANumber(t *testing.T) {
+	c := config.NewC(test.NewLogger())
+	n := netip.MustParsePrefix("10.0.0.1/24")
+
+	c.Settings["tun"] = map[string]any{"routes": []any{map[string]any{"route": "1.0.0.0/8", "mtu": 1500.5}}}
+	_, err := parseRoutes(c, []netip.Prefix{n})
+	require.EqualError(t, err, "entry 1.mtu in tun.routes is not an integer: 1500.5")
+
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"route": "1.0.0.0/8", "via": "10.0.0.2", "mtu": 1500.5}}}
+	_, err = parseUnsafeRoutes(c, []netip.Prefix{n})
+	require.EqualError(t, err, "entry 1.mtu in tun.unsafe_routes is not an integer: 1500.5")
 }

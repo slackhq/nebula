@@ -127,6 +127,7 @@ type Interface struct {
 
 	udpTxErrLimiter      *ratelimit.Limiter // udp direct transmit error log limiter
 	udpRelayTxErrLimiter *ratelimit.Limiter // udp relay transmit error log limiter
+	txOversizeLimiter    *ratelimit.Limiter // oversized outbound packet drop log limiter
 
 	// fatalErr holds the first unexpected reader error that caused shutdown.
 	// nil means "no fatal error" (yet)
@@ -210,6 +211,10 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	if err != nil {
 		return nil, err
 	}
+	txOversizeLimiter, err := ratelimit.New(1, time.Second)
+	if err != nil {
+		return nil, err
+	}
 
 	if c.routines <= 1 {
 		c.PinThreads = false //pinning is not useful unless there's more than one tun reader
@@ -245,6 +250,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		pinThreads:            c.PinThreads,
 		udpTxErrLimiter:       udpTxErrLimiter,
 		udpRelayTxErrLimiter:  udpRelayTxErrLimiter,
+		txOversizeLimiter:     txOversizeLimiter,
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		metricTxDropped:  metrics.GetOrRegisterCounter("udp.tx.dropped", nil),
@@ -639,17 +645,15 @@ func (f *Interface) reloadMisc(c *config.C) {
 	}
 }
 
-func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
-	ticker := time.NewTicker(i)
-	defer ticker.Stop()
-
+// statsEmitter updates the interface's gauges, the stats server runs it on its capture loop.
+func (f *Interface) statsEmitter() func() {
 	udpStats := udp.NewUDPStatsEmitter(f.writers)
 
 	certExpirationGauge := metrics.GetOrRegisterGauge("certificate.ttl_seconds", nil)
 	certInitiatingVersion := metrics.GetOrRegisterGauge("certificate.initiating_version", nil)
 	certMaxVersion := metrics.GetOrRegisterGauge("certificate.max_version", nil)
 
-	emit := func() {
+	return func() {
 		f.firewall.EmitStats()
 		f.handshakeManager.EmitStats()
 		udpStats()
@@ -664,19 +668,6 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 			certMaxVersion.Update(int64(certState.v2Cert.Version()))
 		} else {
 			certMaxVersion.Update(int64(certState.v1Cert.Version()))
-		}
-	}
-
-	// Prime gauges so a Prometheus scrape that lands before the first tick
-	// sees real values instead of the zero defaults (issue #907).
-	emit()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			emit()
 		}
 	}
 }

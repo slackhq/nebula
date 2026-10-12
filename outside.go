@@ -160,9 +160,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxCont
 		case header.TestReply:
 			// No-op, useful for the Roaming and connectionManager side-effects above
 		case header.TestRequest:
-			const maxCipherOverhead = 16 //todo we use this too often, needs a real importable const
-			const maxOverhead = header.Len + header.Len + maxCipherOverhead + maxCipherOverhead
-			if maxOverhead+len(out) > len(rxc.scratch) {
+			if header.MaxOverhead+len(out) > len(rxc.scratch) {
 				// A reply that cannot fit in scratch is dropped no matter the log level.
 				if f.l.Enabled(context.Background(), slog.LevelDebug) {
 					hostinfo.logger(f.l).Debug("dropping oversized test request", "payloadLen", len(out), "from", via)

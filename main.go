@@ -300,6 +300,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	}
 
 	var ifce *Interface
+	var emitStats func()
 	if !configTest {
 		ifce, err = NewInterface(ctx, ifConfig)
 		if err != nil {
@@ -318,9 +319,12 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		go handshakeManager.Run(ctx)
 
 		punchy.Start(ctx, ifce, hostMap, lightHouse)
+
+		// On the stats server's loop, so the gauges follow the interval it accepted
+		emitStats = ifce.statsEmitter()
 	}
 
-	stats, err := newStatsServerFromConfig(ctx, l, c, buildVersion, configTest)
+	stats, err := newStatsServerFromConfig(ctx, l, c, buildVersion, configTest, emitStats)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to start stats emitter", err)
 	}
@@ -328,8 +332,6 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	if configTest {
 		return nil, nil
 	}
-
-	go ifce.emitStats(ctx, c.GetDuration("stats.interval", time.Second*10))
 
 	attachCommands(l, c, ssh, ifce)
 
