@@ -420,7 +420,8 @@ func (t *tun) addRoutes(logErrors bool) error {
 
 func (t *tun) removeRoutes(routes []Route) error {
 	for _, r := range routes {
-		if !r.Install {
+		if len(r.Via) == 0 || !r.Install {
+			// addRoutes never installs these
 			continue
 		}
 
