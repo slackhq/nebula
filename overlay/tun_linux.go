@@ -311,7 +311,7 @@ func (t *tun) reload(c *config.C, initial bool, r *config.Reload) error {
 			for i := range t.vpnNetworks {
 				err := t.setDefaultRoute(t.vpnNetworks[i])
 				if err != nil {
-					t.l.Warn(err.Error())
+					t.l.Error(err.Error())
 					r.Failed()
 				} else {
 					t.l.Info("Set default MTU", "mtu", t.DefaultMTU, "oldMTU", oldDefaultMTU)
