@@ -26,9 +26,12 @@ type C struct {
 	files       []string
 	Settings    map[string]any
 	oldSettings map[string]any
-	callbacks   []func(*C)
+	callbacks   []func(*C, *Reload)
 	l           *slog.Logger
 	reloadLock  sync.Mutex
+
+	// Set by the first reload that needs a restart and never cleared. Guarded by reloadLock
+	needsRestart bool
 }
 
 func NewC(l *slog.Logger) *C {
@@ -72,8 +75,9 @@ func (c *C) LoadString(raw string) error {
 // RegisterReloadCallback stores a function to be called when a config reload is triggered. The functions registered
 // here should decide if they need to make a change to the current process before making the change. HasChanged can be
 // used to help decide if a change is necessary.
-// These functions should return quickly or spawn their own go routine if they will take a while
-func (c *C) RegisterReloadCallback(f func(*C)) {
+// These functions should return quickly or spawn their own go routine if they will take a while.
+// Use r to report anything that failed or needs a restart to apply.
+func (c *C) RegisterReloadCallback(f func(c *C, r *Reload)) {
 	c.callbacks = append(c.callbacks, f)
 }
 
@@ -144,50 +148,54 @@ func (c *C) CatchHUP(ctx context.Context) {
 				return
 			case <-ch:
 				c.l.Info("Caught HUP, reloading config")
-				c.ReloadConfig()
+				c.ReloadConfig().Log(c.l)
 			}
 		}
 	}()
 }
 
-func (c *C) ReloadConfig() {
+// ReloadConfig reloads the config from the path provided to Load and runs every registered callback.
+func (c *C) ReloadConfig() ReloadResult {
 	c.reloadLock.Lock()
 	defer c.reloadLock.Unlock()
 
 	c.oldSettings = make(map[string]any)
 	maps.Copy(c.oldSettings, c.Settings)
 
-	err := c.Load(c.path)
-	if err != nil {
-		c.l.Error("Error occurred while reloading config",
-			"config_path", c.path,
-			"error", err,
-		)
-		return
+	if err := c.Load(c.path); err != nil {
+		c.l.Error("Error occurred while reloading config", "config_path", c.path, "error", err)
+		return ReloadResult{Err: err, RestartRequired: c.needsRestart}
 	}
 
-	for _, v := range c.callbacks {
-		v(c)
-	}
+	return c.runCallbacks()
 }
 
-func (c *C) ReloadConfigString(raw string) error {
+// ReloadConfigString is ReloadConfig for a config held in memory rather than on disk.
+func (c *C) ReloadConfigString(raw string) ReloadResult {
 	c.reloadLock.Lock()
 	defer c.reloadLock.Unlock()
 
 	c.oldSettings = make(map[string]any)
 	maps.Copy(c.oldSettings, c.Settings)
 
-	err := c.LoadString(raw)
-	if err != nil {
-		return err
+	if err := c.LoadString(raw); err != nil {
+		c.l.Error("Error occurred while reloading config", "error", err)
+		return ReloadResult{Err: err, RestartRequired: c.needsRestart}
 	}
 
+	return c.runCallbacks()
+}
+
+func (c *C) runCallbacks() ReloadResult {
+	r := &Reload{c: c}
 	for _, v := range c.callbacks {
-		v(c)
+		v(c, r)
 	}
 
-	return nil
+	if r.restart {
+		c.needsRestart = true
+	}
+	return ReloadResult{Failed: r.failed, RestartRequired: c.needsRestart, RestartKeys: r.keys}
 }
 
 // GetString will get the string for k or return the default d if not found or invalid
@@ -391,7 +399,7 @@ func (c *C) parse() error {
 		var nm map[string]any
 		err = yaml.Unmarshal(b, &nm)
 		if err != nil {
-			return err
+			return fmt.Errorf("%s: %w", path, err)
 		}
 
 		// We need to use WithAppendSlice so that firewall rules in separate

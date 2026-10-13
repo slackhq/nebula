@@ -197,7 +197,7 @@ func (u *TesterConn) ListenOut(r EncReader, flush func()) error {
 	}
 }
 
-func (u *TesterConn) ReloadConfig(*config.C) {}
+func (u *TesterConn) ReloadConfig(*config.C, *config.Reload) {}
 
 func NewUDPStatsEmitter(_ []Conn) func() {
 	// No UDP stats for non-linux

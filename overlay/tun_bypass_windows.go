@@ -10,6 +10,9 @@ import (
 	"github.com/slackhq/nebula/wfp"
 )
 
+// interfaceBypassKeys are only read when the interface bypass is installed
+var interfaceBypassKeys = []string{"tun.windows_bypass_wdf"}
+
 // installInterfaceBypass installs a WFP PERMIT filter scoped to the wintun interface LUID so inbound traffic on the
 // nebula adapter bypasses Windows Defender Firewall.
 func installInterfaceBypass(l *slog.Logger, luid uint64) closer {

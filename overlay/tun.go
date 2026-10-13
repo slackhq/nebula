@@ -44,6 +44,9 @@ func NewDeviceFromConfig(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix
 	switch {
 	case c.GetBool("tun.disabled", false):
 		tun := newDisabledTun(vpnNetworks, c.GetInt("tun.tx_queue", 5000), c.GetBool("stats.message_metrics", false), l)
+		c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+			r.RestartRequiredIfChanged("tun.disabled", "tun.tx_queue", "stats.message_metrics")
+		})
 		return tun, nil
 
 	default:

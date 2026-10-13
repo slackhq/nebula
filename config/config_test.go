@@ -19,7 +19,7 @@ func TestConfig_Load(t *testing.T) {
 	// invalid yaml
 	c := NewC(l)
 	os.WriteFile(filepath.Join(dir, "01.yaml"), []byte(" invalid yaml"), 0644)
-	require.EqualError(t, c.Load(dir), "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `invalid...` into map[string]interface {}")
+	require.EqualError(t, c.Load(dir), filepath.Join(dir, "01.yaml")+": yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `invalid...` into map[string]interface {}")
 
 	// simple multi config merge
 	c = NewC(l)
@@ -129,7 +129,7 @@ func TestConfig_ReloadConfig(t *testing.T) {
 
 	os.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: ho"), 0644)
 
-	c.RegisterReloadCallback(func(c *C) {
+	c.RegisterReloadCallback(func(c *C, _ *Reload) {
 		done <- true
 	})
 

@@ -185,6 +185,10 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue 
 	}
 
 	t.Device = name
+	// Only read when we create the device, an fd handed to us already has its name and offloads
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		r.RestartRequiredIfChanged("tun.disabled", "tun.dev", "tun.use_offloads")
+	})
 
 	return t, nil
 }
@@ -228,22 +232,24 @@ func newTunGeneric(c *config.C, l *slog.Logger, fd int, vnetHdr bool, offloadFla
 		l:                         l,
 	}
 
-	if err = t.reload(c, true); err != nil {
+	if err = t.reload(c, true, nil); err != nil {
 		_ = t.Close()
 		return nil, err
 	}
 
-	c.RegisterReloadCallback(func(c *config.C) {
-		err := t.reload(c, false)
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		r.RestartRequiredIfChanged("tun.tx_queue", "tun.use_system_route_table", "tun.use_system_route_table_buffer_size")
+		err := t.reload(c, false, r)
 		if err != nil {
 			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
+			r.Failed()
 		}
 	})
 
 	return t, nil
 }
 
-func (t *tun) reload(c *config.C, initial bool) error {
+func (t *tun) reload(c *config.C, initial bool, r *config.Reload) error {
 	routeChange, routes, err := getAllRoutesFromConfig(t.l, c, t.vpnNetworks, initial)
 	if err != nil {
 		return err
@@ -297,7 +303,7 @@ func (t *tun) reload(c *config.C, initial bool) error {
 
 	if !initial {
 		if oldMaxMTU != newMaxMTU {
-			t.setMTU()
+			t.setMTU(r)
 			t.l.Info("Set max MTU", "mtu", t.MaxMTU, "oldMTU", oldMaxMTU)
 		}
 
@@ -306,6 +312,7 @@ func (t *tun) reload(c *config.C, initial bool) error {
 				err := t.setDefaultRoute(t.vpnNetworks[i])
 				if err != nil {
 					t.l.Warn(err.Error())
+					r.Failed()
 				} else {
 					t.l.Info("Set default MTU", "mtu", t.DefaultMTU, "oldMTU", oldDefaultMTU)
 				}
@@ -313,13 +320,14 @@ func (t *tun) reload(c *config.C, initial bool) error {
 		}
 
 		// Remove first, if the system removes a wanted route hopefully it will be re-added next
-		t.removeRoutes(findRemovedRoutes(routes, *oldRoutes))
+		t.removeRoutes(findRemovedRoutes(routes, *oldRoutes), r)
 
 		// Ensure any routes we actually want are installed
-		err = t.addRoutes(true)
+		err = t.addRoutes(true, r)
 		if err != nil {
 			// This should never be called since addRoutes should log its own errors in a reload condition
 			util.LogWithContextIfNeeded("Failed to refresh routes", err, t.l)
+			r.Failed()
 		}
 	}
 
@@ -474,7 +482,7 @@ func (t *tun) Activate() error {
 	t.deviceIndex = link.Attrs().Index
 
 	// Setup our default MTU
-	t.setMTU()
+	t.setMTU(nil)
 
 	// Set the transmit queue length
 	ifrq := ifreqQLEN{Name: devName, Value: int32(t.TXQueueLen)}
@@ -506,7 +514,7 @@ func (t *tun) Activate() error {
 	}
 
 	// Set the routes
-	if err = t.addRoutes(false); err != nil {
+	if err = t.addRoutes(false, nil); err != nil {
 		return err
 	}
 
@@ -519,12 +527,13 @@ func (t *tun) Activate() error {
 	return nil
 }
 
-func (t *tun) setMTU() {
+func (t *tun) setMTU(r *config.Reload) {
 	// Set the MTU on the device
 	ifm := ifreqMTU{Name: t.deviceBytes(), MTU: int32(t.MaxMTU)}
 	if err := ioctl(t.ioctlFd, unix.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifm))); err != nil {
 		// This is currently a non fatal condition because the route table must have the MTU set appropriately as well
 		t.l.Error("Failed to set tun mtu", "error", err)
+		r.Failed()
 	}
 }
 
@@ -577,7 +586,7 @@ func (t *tun) setDefaultRoute(cidr netip.Prefix) error {
 	return nil
 }
 
-func (t *tun) addRoutes(logErrors bool) error {
+func (t *tun) addRoutes(logErrors bool, rl *config.Reload) error {
 	// Path routes
 	routes := *t.Routes.Load()
 	for _, r := range routes {
@@ -607,6 +616,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 			retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
 			if logErrors {
 				retErr.Log(t.l)
+				rl.Failed()
 			} else {
 				return retErr
 			}
@@ -618,7 +628,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 	return nil
 }
 
-func (t *tun) removeRoutes(routes []Route) {
+func (t *tun) removeRoutes(routes []Route, rl *config.Reload) {
 	for _, r := range routes {
 		if !r.Install {
 			continue
@@ -644,6 +654,7 @@ func (t *tun) removeRoutes(routes []Route) {
 		err := netlink.RouteDel(&nr)
 		if err != nil {
 			t.l.Error("Failed to remove route", "error", err, "route", r)
+			rl.Failed()
 		} else {
 			t.l.Info("Removed route", "route", r)
 		}

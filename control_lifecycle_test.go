@@ -151,9 +151,9 @@ func (c *fakeConn) WriteTo(_ []byte, _ netip.AddrPort) error  { return nil }
 func (c *fakeConn) WriteBatch(bufs [][]byte, _ []netip.AddrPort) (int, error) {
 	return len(bufs), nil
 }
-func (c *fakeConn) ReloadConfig(_ *config.C)      {}
-func (c *fakeConn) SupportsMultipleReaders() bool { return true }
-func (c *fakeConn) Close() error                  { c.closed = true; return nil }
+func (c *fakeConn) ReloadConfig(_ *config.C, _ *config.Reload) {}
+func (c *fakeConn) SupportsMultipleReaders() bool              { return true }
+func (c *fakeConn) Close() error                               { c.closed = true; return nil }
 
 type multiqueueDevice struct {
 	*fakeDevice

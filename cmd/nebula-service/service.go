@@ -34,9 +34,10 @@ func (p *program) Start(s service.Service) error {
 	if err := logging.ApplyConfig(l, c); err != nil {
 		return fmt.Errorf("failed to apply logging config: %s", err)
 	}
-	c.RegisterReloadCallback(func(c *config.C) {
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
 		if err := logging.ApplyConfig(l, c); err != nil {
 			l.Error("Failed to reconfigure logger on reload", "error", err)
+			r.Failed()
 		}
 	})
 

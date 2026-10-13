@@ -57,7 +57,8 @@ func newConnectionManagerFromConfig(l *slog.Logger, c *config.C, hm *HostMap, p 
 	}
 
 	cm.reload(c, true)
-	c.RegisterReloadCallback(func(c *config.C) {
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		r.RestartRequiredIfChanged("timers.connection_alive_interval", "timers.pending_deletion_interval")
 		cm.reload(c, false)
 	})
 
