@@ -317,7 +317,10 @@ func (t *tun) activate4(network netip.Prefix) error {
 		return fmt.Errorf("failed to set tun v4 address: %s", err)
 	}
 
-	return addRoute(network, t.linkAddr.Load())
+	if err := addRoute(network, t.linkAddr.Load()); err != nil {
+		return fmt.Errorf("failed to add route for %v: %w", network.Masked(), err)
+	}
+	return nil
 }
 
 // activate6 is activate4 for IPv6
@@ -357,7 +360,10 @@ func (t *tun) activate6(network netip.Prefix) error {
 		return fmt.Errorf("failed to set tun address: %s", err)
 	}
 
-	return addRoute(network, t.linkAddr.Load())
+	if err := addRoute(network, t.linkAddr.Load()); err != nil {
+		return fmt.Errorf("failed to add route for %v: %w", network.Masked(), err)
+	}
+	return nil
 }
 
 func (t *tun) reload(c *config.C, initial bool) error {
