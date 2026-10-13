@@ -5,10 +5,12 @@ package overlay
 import (
 	"net"
 	"net/netip"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
 
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
@@ -72,4 +74,30 @@ func TestTunRoutesBeforeActivate(t *testing.T) {
 
 	assert.NoError(t, tn.addRoutes(true))
 	assert.NoError(t, tn.removeRoutes(routes))
+}
+
+// A tun.routes entry with no via is never installed, so removing it must not delete a route for the same cidr that
+// belongs to someone else
+func TestTunReloadLeavesRoutesItNeverInstalled(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("creating a utun and adding routes needs root")
+	}
+	lo0, err := net.InterfaceByName("lo0")
+	require.NoError(t, err)
+	cidr := "10.250.0.128/25"
+	require.NoError(t, exec.Command("route", "-q", "-n", "add", "-net", cidr, "-interface", "lo0").Run())
+	t.Cleanup(func() { _ = exec.Command("route", "-q", "-n", "delete", "-net", cidr).Run() })
+
+	l := test.NewLogger()
+	c := config.NewC(l)
+	require.NoError(t, c.LoadString("tun:\n  routes:\n    - route: "+cidr+"\n      mtu: 1300\n"))
+	tn, err := newTun(c, l, []netip.Prefix{netip.MustParsePrefix("10.250.0.1/24")}, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tn.Close() })
+	require.NoError(t, tn.Activate())
+
+	require.NoError(t, c.ReloadConfigString("tun: {}\n"))
+	msgs, err := fetchRoutes()
+	require.NoError(t, err)
+	assert.Equal(t, lo0.Index, routeInterfaceIn(msgs, netip.MustParsePrefix(cidr)))
 }
