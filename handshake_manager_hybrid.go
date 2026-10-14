@@ -303,7 +303,10 @@ func (hm *HandshakeManager) completeHybridResponder(via ViaSender, hh *Handshake
 }
 
 func (hm *HandshakeManager) sendHybridConfirmation(hostinfo *HostInfo) {
-	hm.f.send(header.Test, header.TestReply, hostinfo.ConnectionState, hostinfo, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
+	// The reply is empty, so even relayed it is just two headers and two tags.
+	cs := hostinfo.ConnectionState
+	out := make([]byte, 2*(header.Len+cs.eKey.Overhead()))
+	hm.f.send(header.Test, header.TestReply, cs, hostinfo, []byte{}, make([]byte, 12, 12), out)
 }
 
 // reconfirmHybrid answers a msg3 for a hybrid tunnel this responder already
