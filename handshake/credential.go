@@ -35,7 +35,9 @@ func NewCredential(
 }
 
 // buildHandshakeState creates a noise.HandshakeState from this credential.
-func (hc *Credential) buildHandshakeState(initiator bool, pattern noise.HandshakePattern) (*noise.HandshakeState, error) {
+// pskPlacement selects the noise psk modifier; 0 means none. A psk for
+// placements 2 and up is supplied later with SetPresharedKey.
+func (hc *Credential) buildHandshakeState(initiator bool, pattern noise.HandshakePattern, pskPlacement int) (*noise.HandshakeState, error) {
 	return noise.NewHandshakeState(noise.Config{
 		CipherSuite:           hc.cipherSuite,
 		Random:                rand.Reader,
@@ -43,7 +45,7 @@ func (hc *Credential) buildHandshakeState(initiator bool, pattern noise.Handshak
 		Initiator:             initiator,
 		StaticKeypair:         noise.DHKey{Private: hc.privateKey, Public: hc.Cert.PublicKey()},
 		PresharedKey:          []byte{},
-		PresharedKeyPlacement: 0,
+		PresharedKeyPlacement: pskPlacement,
 	})
 }
 

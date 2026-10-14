@@ -20,6 +20,7 @@ type Payload struct {
 	ResponderIndex uint32
 	Time           uint64
 	CertVersion    uint32
+	KEMKey         []byte // ML-KEM encapsulation key, only in subtypes that carry one
 }
 
 // Proto field numbers for NebulaHandshakeDetails
@@ -29,6 +30,7 @@ const (
 	fieldResponderIndex = 3 // uint32
 	fieldTime           = 5 // uint64
 	fieldCertVersion    = 8 // uint32
+	fieldKEMKey         = 9 // bytes
 )
 
 // MarshalPayload encodes a handshake payload in protobuf wire format compatible
@@ -56,6 +58,10 @@ func MarshalPayload(out []byte, p Payload) []byte {
 	if p.CertVersion != 0 {
 		details = protowire.AppendTag(details, fieldCertVersion, protowire.VarintType)
 		details = protowire.AppendVarint(details, uint64(p.CertVersion))
+	}
+	if len(p.KEMKey) > 0 {
+		details = protowire.AppendTag(details, fieldKEMKey, protowire.BytesType)
+		details = protowire.AppendBytes(details, p.KEMKey)
 	}
 
 	out = protowire.AppendTag(out, 1, protowire.BytesType)
@@ -160,6 +166,16 @@ func unmarshalPayloadDetails(p *Payload, b []byte) error {
 				return errInvalidHandshakeDetails
 			}
 			p.CertVersion = uint32(v)
+			b = b[n:]
+		case fieldKEMKey:
+			if typ != protowire.BytesType {
+				return errInvalidHandshakeDetails
+			}
+			v, n := protowire.ConsumeBytes(b)
+			if n < 0 {
+				return errInvalidHandshakeDetails
+			}
+			p.KEMKey = append([]byte(nil), v...)
 			b = b[n:]
 		default:
 			n := protowire.ConsumeFieldValue(num, typ, b)
