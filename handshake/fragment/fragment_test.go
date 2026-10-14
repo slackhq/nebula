@@ -97,9 +97,28 @@ func TestParse(t *testing.T) {
 	_, _, err = Parse(bad)
 	require.ErrorIs(t, err, ErrMsgLen)
 
-	bad = Header{FragID: 1, MsgLen: 3000, Flags: 1}.Encode(nil)
+	bad = Header{FragID: 1, MsgLen: 3000, Flags: 0x02}.Encode(nil)
 	_, _, err = Parse(append(bad, make([]byte, 1000)...))
 	require.ErrorIs(t, err, ErrFlags)
+
+	t.Run("cookie", func(t *testing.T) {
+		h := Header{FragID: 7, MsgLen: 3000, Index: 4, Flags: FlagCookie}
+		for i := range h.Cookie {
+			h.Cookie[i] = byte(i + 1)
+		}
+		b := h.Encode(nil)
+		require.Len(t, b, HeaderLen+CookieLen)
+		b = append(b, make([]byte, 1000)...)
+
+		got, sym, err := Parse(b)
+		require.NoError(t, err)
+		assert.Equal(t, h, got)
+		assert.True(t, got.HasCookie())
+		assert.Len(t, sym, 1000)
+
+		_, _, err = Parse(b[:HeaderLen+CookieLen-1])
+		require.ErrorIs(t, err, ErrNoCookie)
+	})
 }
 
 func TestDefaultRepair(t *testing.T) {
@@ -157,6 +176,20 @@ func TestSender(t *testing.T) {
 	assert.Equal(t, []int{24, 25, 26, 27, 28, 29, 30, 31, 32}, indexes(now2))
 	s2.SetNext(-1)
 	assert.Equal(t, 255, s2.Next())
+
+	// A cookie rides on every later packet, which still fits MaxPacketLen even
+	// with a full size symbol.
+	full, err := NewSender(make([]byte, 2*MaxSymbolSize), testSubtype, 0, 1, 9)
+	require.NoError(t, err)
+	full.SetCookie(Cookie{1, 2, 3})
+	pkts, _, err := full.Attempt(1)
+	require.NoError(t, err)
+	for _, p := range pkts {
+		assert.Len(t, p, MaxPacketLen)
+		_, h, _ := parse(t, p)
+		assert.True(t, h.HasCookie())
+		assert.Equal(t, Cookie{1, 2, 3}, h.Cookie)
+	}
 
 	// Indexes wrap once the space is used up.
 	for range 19 {
@@ -378,6 +411,22 @@ func TestTableLimits(t *testing.T) {
 		assert.Zero(t, tb.Len())
 		assert.Zero(t, tb.Bytes())
 		checkInvariants(t, tb)
+	})
+
+	t.Run("load", func(t *testing.T) {
+		cfg := testConfig()
+		cfg.MaxEntries = 4
+		cfg.MaxBytes = 10000
+		tb := NewTable[testKey, string](cfg)
+		assert.Zero(t, tb.Load())
+		h, sym := firstFragment(t, 5000, 1)
+		_, err := tb.Add(testKey{"a", 1}, "a", now, h, sym)
+		require.NoError(t, err)
+		assert.InDelta(t, 0.25, tb.Load(), 0.001, "one of four entries")
+		h, sym = firstFragment(t, 5000, 2)
+		_, err = tb.Add(testKey{"b", 2}, "b", now, h, sym)
+		require.NoError(t, err)
+		assert.InDelta(t, 0.5, tb.Load(), 0.001)
 	})
 
 	t.Run("ttl", func(t *testing.T) {

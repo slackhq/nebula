@@ -30,6 +30,7 @@ type Sender struct {
 	counter     uint64
 	fragID      uint32
 	next        int
+	cookie      *Cookie
 }
 
 // NewSender prepares msg for sending. subtype, remoteIndex and counter fill the
@@ -64,6 +65,11 @@ func (s *Sender) SetNext(index int) {
 	s.next = ((index % fec.MaxSymbols) + fec.MaxSymbols) % fec.MaxSymbols
 }
 
+// SetCookie attaches a cookie from a responder under load to every later packet.
+func (s *Sender) SetCookie(c Cookie) {
+	s.cookie = &c
+}
+
 // Next returns the index the next attempt starts from.
 func (s *Sender) Next() int {
 	return s.next
@@ -96,12 +102,17 @@ func (s *Sender) Attempt(repair int) (now, later [][]byte, err error) {
 
 func (s *Sender) packet(index int) ([]byte, error) {
 	l := s.enc.Layout()
-	p := make([]byte, header.Len, header.Len+HeaderLen+l.SymbolSize)
+	p := make([]byte, header.Len, header.Len+HeaderLen+CookieLen+l.SymbolSize)
 	header.Encode(p, header.Version, header.Handshake, s.subtype, s.remoteIndex, s.counter)
-	p = Header{
+	h := Header{
 		FragID: s.fragID,
 		MsgLen: uint16(l.MsgLen),
 		Index:  uint8(index),
-	}.Encode(p)
+	}
+	if s.cookie != nil {
+		h.Flags |= FlagCookie
+		h.Cookie = *s.cookie
+	}
+	p = h.Encode(p)
 	return s.enc.Symbol(p, index)
 }

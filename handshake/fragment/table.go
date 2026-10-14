@@ -137,6 +137,14 @@ func (t *Table[K, S]) Len() int {
 	return len(t.entries)
 }
 
+// Load returns how full the table is, from 0 to 1, by whichever of its byte and
+// entry limits is closer.
+func (t *Table[K, S]) Load() float64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return max(float64(t.bytes)/float64(t.cfg.MaxBytes), float64(len(t.entries))/float64(t.cfg.MaxEntries))
+}
+
 // Bytes returns the number of symbol bytes held.
 func (t *Table[K, S]) Bytes() int {
 	t.mu.Lock()
