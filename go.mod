@@ -1,6 +1,6 @@
 module github.com/slackhq/nebula
 
-go 1.26.0
+go 1.27.2
 
 require (
 	dario.cat/mergo v1.0.2
@@ -33,7 +33,7 @@ require (
 	golang.zx2c4.com/wireguard/windows v1.0.1
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
-	gvisor.dev/gvisor v0.0.0-20240423190808-9d7a357edefe
+	gvisor.dev/gvisor v0.0.0-20261014193016-04d31b385980
 )
 
 require (
@@ -45,5 +45,6 @@ require (
 	github.com/prometheus/common v0.70.1 // indirect
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
-	golang.org/x/time v0.5.0 // indirect
+	golang.org/x/exp v0.0.0-20250711185948-6ae5c78190dc // indirect
+	golang.org/x/time v0.15.0 // indirect
 )
