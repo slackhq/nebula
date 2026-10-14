@@ -2,6 +2,7 @@ package handshake
 
 import (
 	"crypto/mlkem"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"io"
@@ -41,6 +42,22 @@ func (kemMLKEM1024) Decapsulate(privkey, ciphertext []byte) ([]byte, error) {
 		return nil, fmt.Errorf("mlkem1024: NewDecapsulationKey: %w", err)
 	}
 	return dk.Decapsulate(ciphertext)
+}
+
+// mlkem1024Keys is KEMMLKEM1024 for one handshake. It decapsulates with the
+// static key the Credential holds expanded, rather than expanding it again from
+// the seed noise hands back; any other private key is expanded as usual.
+type mlkem1024Keys struct {
+	kemMLKEM1024
+	static     *mlkem.DecapsulationKey1024
+	staticSeed []byte
+}
+
+func (k *mlkem1024Keys) Decapsulate(privkey, ciphertext []byte) ([]byte, error) {
+	if k.static != nil && subtle.ConstantTimeCompare(privkey, k.staticSeed) == 1 {
+		return k.static.Decapsulate(ciphertext)
+	}
+	return k.kemMLKEM1024.Decapsulate(privkey, ciphertext)
 }
 
 func (kemMLKEM1024) PublicKeyLen() int  { return mlkem.EncapsulationKeySize1024 }

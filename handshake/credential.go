@@ -1,6 +1,7 @@
 package handshake
 
 import (
+	"crypto/mlkem"
 	"crypto/rand"
 
 	"github.com/DefinedNet/noise"
@@ -11,12 +12,13 @@ import (
 // at a given cert version. Version and Curve are read from Cert; the public
 // half of the static keypair likewise comes from Cert.PublicKey().
 type Credential struct {
-	Cert        cert.Certificate  // the certificate
-	Bytes       []byte            // pre-marshaled certificate bytes
-	privateKey  []byte            // static private key (public half lives in Cert)
-	publicKey   []byte            // static public key, the classical half for a v3 Cert
-	kemKey      noise.KEMKey      // static KEM keypair of the Cert's suite, only for a v3 Cert
-	cipherSuite noise.CipherSuite // pre-built cipher suite (DH + cipher + hash)
+	Cert        cert.Certificate            // the certificate
+	Bytes       []byte                      // pre-marshaled certificate bytes
+	privateKey  []byte                      // static private key (public half lives in Cert)
+	publicKey   []byte                      // static public key, the classical half for a v3 Cert
+	kemKey      noise.KEMKey                // static KEM keypair of the Cert's suite, only for a v3 Cert
+	kemDK       *mlkem.DecapsulationKey1024 // kemKey expanded, when the suite's KEM is ML-KEM-1024
+	cipherSuite noise.CipherSuite           // pre-built cipher suite (DH + cipher + hash)
 }
 
 // NewCredential creates a Credential with all material needed for handshake
@@ -43,6 +45,10 @@ func NewCredential(
 		// The pki checked the private key against the certificate, so both split.
 		hc.publicKey, hc.kemKey.Public, _ = suite.SplitPublicKey(false, c.PublicKey())
 		hc.privateKey, hc.kemKey.Private, _ = suite.SplitPrivateKey(false, privateKey)
+		// Expand the static KEM key once rather than in every handshake.
+		if st, ok := HybridSubtype(suite); ok && subtypeInfos[st].kem == KEMMLKEM1024 {
+			hc.kemDK, _ = mlkem.NewDecapsulationKey1024(hc.kemKey.Private)
+		}
 	}
 	return hc
 }
@@ -60,6 +66,9 @@ func (hc *Credential) buildHandshakeState(initiator bool, info subtypeInfo) (*no
 	if info.kem != nil {
 		cfg.KEMFunc = info.kem
 		cfg.StaticKEMKeypair = hc.kemKey
+		if info.kem == KEMMLKEM1024 {
+			cfg.KEMFunc = &mlkem1024Keys{static: hc.kemDK, staticSeed: hc.kemKey.Private}
+		}
 	}
 	return noise.NewHandshakeState(cfg)
 }
