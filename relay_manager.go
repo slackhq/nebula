@@ -119,7 +119,7 @@ func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hh *Handshak
 					InitiatorRelayIndex: idx,
 				}
 
-				switch relayHostInfo.GetCert().Certificate.Version() {
+				switch protocolVersion(relayHostInfo.GetCert().Certificate.Version()) {
 				case cert.Version1:
 					if !f.myVpnAddrs[0].Is4() {
 						hl.Error("can not establish v1 relay with a v6 network because the relay is not running a current nebula version")
@@ -178,7 +178,7 @@ func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hh *Handshak
 				InitiatorRelayIndex: existingRelay.LocalIndex,
 			}
 
-			switch relayHostInfo.GetCert().Certificate.Version() {
+			switch protocolVersion(relayHostInfo.GetCert().Certificate.Version()) {
 			case cert.Version1:
 				if !f.myVpnAddrs[0].Is4() {
 					hl.Error("can not establish v1 relay with a v6 network because the relay is not running a current nebula version")

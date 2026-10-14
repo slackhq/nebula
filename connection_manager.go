@@ -272,7 +272,7 @@ func (cm *connectionManager) migrateRelayUsed(oldhostinfo, newhostinfo *HostInfo
 			InitiatorRelayIndex: index,
 		}
 
-		switch newhostinfo.GetCert().Certificate.Version() {
+		switch protocolVersion(newhostinfo.GetCert().Certificate.Version()) {
 		case cert.Version1:
 			if !relayFrom.Is4() {
 				cm.l.Error("can not migrate v1 relay with a v6 network because the relay is not running a current nebula version")

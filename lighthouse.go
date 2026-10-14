@@ -839,7 +839,7 @@ func (lh *LightHouse) innerQueryServer(addr netip.Addr, nb, out []byte) {
 	for _, lhVpnAddr := range lighthouses {
 		hi := lh.ifce.GetHostInfo(lhVpnAddr)
 		if hi != nil {
-			v = hi.ConnectionState.myCert.Version()
+			v = protocolVersion(hi.ConnectionState.myCert.Version())
 		} else {
 			v = lh.ifce.GetCertState().initiatingVersion
 		}
@@ -1001,7 +1001,7 @@ func (lh *LightHouse) SendUpdate() {
 		var v cert.Version
 		hi := lh.ifce.GetHostInfo(lhVpnAddr)
 		if hi != nil {
-			v = hi.ConnectionState.myCert.Version()
+			v = protocolVersion(hi.ConnectionState.myCert.Version())
 		} else {
 			v = lh.ifce.GetCertState().initiatingVersion
 		}

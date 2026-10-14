@@ -38,6 +38,11 @@ type CertState struct {
 	v2Cert       cert.Certificate
 	v2Credential *handshake.Credential
 
+	// v3Cert, when present, is what v2Cert is the v2 form of. It is only used by
+	// hybrid handshakes, every other handshake presents v2Cert.
+	v3Cert       cert.Certificate
+	v3Credential *handshake.Credential
+
 	initiatingVersion cert.Version
 	privateKey        []byte
 	pkcs11Backed      bool
@@ -223,6 +228,8 @@ func (cs *CertState) GetCredential(v cert.Version) *handshake.Credential {
 		return cs.v1Credential
 	case cert.Version2:
 		return cs.v2Credential
+	case cert.Version3:
+		return cs.v3Credential
 	}
 	return nil
 }
@@ -233,9 +240,21 @@ func (cs *CertState) getCertificate(v cert.Version) cert.Certificate {
 		return cs.v1Cert
 	case cert.Version2:
 		return cs.v2Cert
+	case cert.Version3:
+		return cs.v3Cert
 	}
 
 	return nil
+}
+
+// protocolVersion is the version of the messages spoken over a tunnel built on a
+// certificate of version v. Version 3 only changes the handshake, everything
+// after it is version 2.
+func protocolVersion(v cert.Version) cert.Version {
+	if v == cert.Version3 {
+		return cert.Version2
+	}
+	return v
 }
 
 // newCipherSuite builds the noise.CipherSuite for the given curve and cipher.
@@ -287,7 +306,14 @@ func (cs *CertState) MarshalJSON() ([]byte, error) {
 		msg = append(msg, b)
 	}
 
-	if cs.v2Cert != nil {
+	// A v3 certificate shows its v2 form's fingerprint itself.
+	if cs.v3Cert != nil {
+		b, err := cs.v3Cert.MarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		msg = append(msg, b)
+	} else if cs.v2Cert != nil {
 		b, err := cs.v2Cert.MarshalJSON()
 		if err != nil {
 			return nil, err
@@ -329,7 +355,7 @@ func newCertStateFromConfig(c *config.C, cipher string) (*CertState, error) {
 		}
 	}
 
-	var crt, v1, v2 cert.Certificate
+	var crt, v1, v2, v3 cert.Certificate
 	for {
 		// Load the certificate
 		crt, rawCert, err = loadCertificate(rawCert)
@@ -352,6 +378,11 @@ func newCertStateFromConfig(c *config.C, cipher string) (*CertState, error) {
 				return nil, fmt.Errorf("v2 certificate already found in pki.cert")
 			}
 			v2 = crt
+		case cert.Version3:
+			if v3 != nil {
+				return nil, fmt.Errorf("v3 certificate already found in pki.cert")
+			}
+			v3 = crt
 		default:
 			return nil, fmt.Errorf("unknown certificate version %v", crt.Version())
 		}
@@ -359,6 +390,25 @@ func newCertStateFromConfig(c *config.C, cipher string) (*CertState, error) {
 		if len(rawCert) == 0 || strings.TrimSpace(string(rawCert)) == "" {
 			break
 		}
+	}
+
+	if v3 != nil {
+		// A v3 certificate brings its own v2 form. Listing that too is fine, anything else is a mistake.
+		form := cert.V2Form(v3)
+		if v2 != nil {
+			want, err := form.Fingerprint()
+			if err != nil {
+				return nil, err
+			}
+			got, err := v2.Fingerprint()
+			if err != nil {
+				return nil, err
+			}
+			if want != got {
+				return nil, errors.New("the v2 certificate in pki.cert is not the v2 form of the v3 certificate")
+			}
+		}
+		v2 = form
 	}
 
 	if v1 == nil && v2 == nil {
@@ -386,10 +436,12 @@ func newCertStateFromConfig(c *config.C, cipher string) (*CertState, error) {
 		return nil, fmt.Errorf("unknown pki.initiating_version: %v", rawInitiatingVersion)
 	}
 
-	return newCertState(initiatingVersion, v1, v2, isPkcs11, curve, rawKey, cipher)
+	return newCertState(initiatingVersion, v1, v2, v3, isPkcs11, curve, rawKey, cipher)
 }
 
-func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, privateKeyCurve cert.Curve, privateKey []byte, cipher string) (*CertState, error) {
+// newCertState builds the handshake credentials. v3, when present, must be what v2 is the v2 form of. privateKey is
+// then the composite key, classical || ML-KEM-1024 seed, and v1 and v2 get its classical half.
+func newCertState(dv cert.Version, v1, v2, v3 cert.Certificate, pkcs11backed bool, privateKeyCurve cert.Curve, privateKey []byte, cipher string) (*CertState, error) {
 	cs := CertState{
 		privateKey:               privateKey,
 		pkcs11Backed:             pkcs11backed,
@@ -415,11 +467,36 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 		cs.initiatingVersion = dv
 	}
 
+	classicalKey := privateKey
+	if !pkcs11backed && len(privateKey) > cert.MLKEM1024PrivateKeySize {
+		classicalKey = privateKey[:len(privateKey)-cert.MLKEM1024PrivateKeySize]
+	}
+
+	if v3 != nil {
+		if pkcs11backed {
+			return nil, errors.New("v3 certificates need their private key in pki.key, not a PKCS#11 token")
+		}
+		if err := v3.VerifyPrivateKey(privateKeyCurve, privateKey); err != nil {
+			return nil, fmt.Errorf("private key is not a pair with public key in v3 nebula cert: %w", err)
+		}
+
+		v3hs, err := v3.MarshalForHandshakes()
+		if err != nil {
+			return nil, fmt.Errorf("error marshalling v3 certificate for handshake: %w", err)
+		}
+		ncs, err := newCipherSuite(v3.Curve(), false, cipher, fips140.Enforced())
+		if err != nil {
+			return nil, err
+		}
+		cs.v3Cert = v3
+		cs.v3Credential = handshake.NewCredential(v3, v3hs, privateKey, ncs)
+	}
+
 	if v1 != nil {
 		if pkcs11backed {
 			//NOTE: We do not currently have a method to verify a public private key pair when the private key is in an hsm
 		} else {
-			if err := v1.VerifyPrivateKey(privateKeyCurve, privateKey); err != nil {
+			if err := v1.VerifyPrivateKey(privateKeyCurve, classicalKey); err != nil {
 				return nil, fmt.Errorf("private key is not a pair with public key in nebula cert: %w", err)
 			}
 		}
@@ -433,7 +510,7 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 			return nil, err
 		}
 		cs.v1Cert = v1
-		cs.v1Credential = handshake.NewCredential(v1, v1hs, privateKey, ncs)
+		cs.v1Credential = handshake.NewCredential(v1, v1hs, classicalKey, ncs)
 
 		if cs.initiatingVersion == 0 {
 			cs.initiatingVersion = cert.Version1
@@ -444,7 +521,7 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 		if pkcs11backed {
 			//NOTE: We do not currently have a method to verify a public private key pair when the private key is in an hsm
 		} else {
-			if err := v2.VerifyPrivateKey(privateKeyCurve, privateKey); err != nil {
+			if err := v2.VerifyPrivateKey(privateKeyCurve, classicalKey); err != nil {
 				return nil, fmt.Errorf("private key is not a pair with public key in nebula cert: %w", err)
 			}
 		}
@@ -458,7 +535,7 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 			return nil, err
 		}
 		cs.v2Cert = v2
-		cs.v2Credential = handshake.NewCredential(v2, v2hs, privateKey, ncs)
+		cs.v2Credential = handshake.NewCredential(v2, v2hs, classicalKey, ncs)
 
 		if cs.initiatingVersion == 0 {
 			cs.initiatingVersion = cert.Version2

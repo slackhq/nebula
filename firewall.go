@@ -764,6 +764,14 @@ func (fc *FirewallCA) match(p firewall.Packet, c *cert.CachedCertificate, caPool
 		return false
 	}
 
+	// A version 3 certificate names its CA by the fingerprint of the CA's v2 form,
+	// which is matched above. A rule may also use the v3 CA's own fingerprint.
+	if c.Certificate.Version() == cert.Version3 {
+		if t, ok := fc.CAShas[s.Fingerprint]; ok && t.match(p, c) {
+			return true
+		}
+	}
+
 	return fc.CANames[s.Certificate.Name()].match(p, c)
 }
 
