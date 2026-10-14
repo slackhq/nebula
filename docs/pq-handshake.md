@@ -255,9 +255,17 @@ does not downgrade.
 - Separate settings for initiating and accepting PQ handshakes, both off by default:
   `handshakes.pq.initiate`, `handshakes.pq.accept`. `handshakes.pq.repair_delay` (default
   10ms) sets how long repair fragments trail the data fragments.
+- `handshakes.pq.require` makes every handshake PQ: it implies `initiate` and `accept`,
+  never offers a classical attempt, and drops classical msg1s.
 - Old nodes silently drop unknown subtypes, so discovery is speculative: an initiator with
-  `initiate` enabled alternates PQ and classical attempts on successive retries, keeping
-  both pending, and the first to complete wins.
+  `initiate` enabled alternates PQ and classical attempts on successive timer retries,
+  keeping both pending, and the first to complete wins. A path nothing has been sent over
+  yet gets the PQ attempt first: an early resend triggered by a lighthouse reply is PQ, and
+  a relay that comes up pushes the PQ attempt through at once, counting as the PQ turn.
+  Without that, relays set up during the first attempt handed every relayed handshake to
+  the classical retry (seen on real hosts: 11 of 11). Once a msg2 fragment or cookie reply
+  arrives for the PQ attempt the peer evidently speaks PQ, and classical stops getting
+  turns.
 - All `handshakes.pq` settings reload without a restart. Handshakes in flight carry on;
   the new settings apply to the next attempt and the next packet.
 - `handshakes.pq.sticky` (default off): once a peer has completed a PQ handshake, never fall

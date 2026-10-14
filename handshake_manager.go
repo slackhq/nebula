@@ -106,6 +106,7 @@ type HandshakeHostInfo struct {
 	hostinfo *HostInfo
 	machine  *handshake.Machine // The handshake state machine, set during stage 0 (initiator) or beginHandshake (responder multi-message)
 	pq       *pqAttempt         // The initiator's post-quantum attempt, pending alongside the classical one
+	lastPQ   bool               // Whether the latest attempt was post-quantum
 }
 
 func (hh *HandshakeHostInfo) cachePacket(l *slog.Logger, t header.MessageType, st header.MessageSubType, packet []byte, f packetCallback, m *cachedPacketMetrics) {
@@ -214,6 +215,10 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 				"from", via, "remoteIndex", h.RemoteIndex)
 			return
 		}
+		if hm.pqConfig().require {
+			hm.l.Debug("dropping classical handshake, post-quantum handshakes are required", "from", via)
+			return
+		}
 		hm.beginHandshake(via, packet, h, 0)
 		return
 	}
@@ -280,7 +285,8 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 	// repair delay, and every attempt offers fresh repair symbols.
 	var now, later [][]byte
 	var machine *handshake.Machine
-	if hm.usePQ(hh, vpnIp) {
+	hh.lastPQ = hm.usePQ(hh, vpnIp, lighthouseTriggered)
+	if hh.lastPQ {
 		if hh.pq == nil && !hm.buildPQAttempt(hh) {
 			hm.OutboundHandshakeTimer.Add(vpnIp, hm.config.tryInterval*time.Duration(hh.counter))
 			return

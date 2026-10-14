@@ -43,17 +43,24 @@ var pqTableConfig = fragment.TableConfig{
 type pqHandshakeConfig struct {
 	initiate    bool          // start PQ handshakes
 	accept      bool          // answer PQ handshakes
+	require     bool          // only PQ handshakes, in either direction
 	sticky      bool          // never fall back to classical for a peer that completed PQ
 	repairDelay time.Duration // delay between data and repair fragments
 }
 
 func pqHandshakeConfigFrom(c *config.C) pqHandshakeConfig {
-	return pqHandshakeConfig{
+	cfg := pqHandshakeConfig{
 		initiate:    c.GetBool("handshakes.pq.initiate", false),
 		accept:      c.GetBool("handshakes.pq.accept", false),
+		require:     c.GetBool("handshakes.pq.require", false),
 		sticky:      c.GetBool("handshakes.pq.sticky", false),
 		repairDelay: c.GetDuration("handshakes.pq.repair_delay", DefaultPQRepairDelay),
 	}
+	if cfg.require {
+		cfg.initiate = true
+		cfg.accept = true
+	}
+	return cfg
 }
 
 // pqConfig returns the post-quantum settings in effect.
@@ -73,6 +80,7 @@ func (hm *HandshakeManager) reloadPQ(c *config.C) {
 	hm.l.Info("Post-quantum handshake settings changed",
 		"initiate", cfg.initiate, "oldInitiate", old.initiate,
 		"accept", cfg.accept, "oldAccept", old.accept,
+		"require", cfg.require, "oldRequire", old.require,
 		"sticky", cfg.sticky, "oldSticky", old.sticky,
 		"repairDelay", cfg.repairDelay, "oldRepairDelay", old.repairDelay,
 	)
@@ -87,6 +95,7 @@ type pqAttempt struct {
 	sender         *fragment.Sender
 	msg2           *fragment.Assembly
 	cookieResendAt time.Time // last resend prompted by a cookie reply
+	heard          bool      // a msg2 fragment or cookie reply arrived, so the peer speaks PQ
 }
 
 // pqFragKey identifies one msg1 being reassembled.
@@ -125,21 +134,69 @@ func reassembled(h *header.H, msg []byte) []byte {
 	return append(p, msg...)
 }
 
-// usePQ decides whether this outbound attempt is post-quantum. Attempts
-// alternate, starting with PQ, because a peer that does not speak PQ silently
-// drops it. A peer that already completed a PQ handshake never gets a classical
-// attempt when sticky is on.
-func (hm *HandshakeManager) usePQ(hh *HandshakeHostInfo, vpnIp netip.Addr) bool {
+// usePQ decides whether this outbound attempt is post-quantum. A peer that does
+// not speak PQ silently drops it, so timer retries alternate between PQ and
+// classical, starting with PQ. An attempt triggered early by a lighthouse reply
+// is sending to addresses nothing has been sent to yet, and a new path gets the
+// PQ attempt first. With require, or for a peer that completed a PQ handshake
+// when sticky is on, every attempt is PQ. Once anything has come back for the PQ
+// attempt the peer evidently speaks PQ, and a classical attempt would only race
+// it, so classical stops getting turns.
+func (hm *HandshakeManager) usePQ(hh *HandshakeHostInfo, vpnIp netip.Addr, triggered bool) bool {
 	cfg := hm.pqConfig()
-	if !cfg.initiate {
+	switch {
+	case !cfg.initiate:
 		return false
-	}
-	if cfg.sticky {
+	case cfg.require:
+		return true
+	case hh.pq != nil && hh.pq.heard:
+		return true
+	case cfg.sticky:
 		if _, ok := hm.pqPeers.Load(vpnIp); ok {
 			return true
 		}
 	}
-	return hh.counter%2 == 1
+	return hh.counter <= 1 || triggered || !hh.lastPQ
+}
+
+// relayEstablished pushes the pending handshake with target through a relay that
+// just came up, rather than leaving it for the next retry. Nothing has gone over
+// the relay yet, so like any new path it gets the PQ attempt first, which then
+// counts as the PQ turn: the next retry is classical, as if it had been sent on
+// schedule. Without this, relays coming up while the first attempt is in flight
+// handed every relayed handshake to the classical retry.
+func (hm *HandshakeManager) relayEstablished(target netip.Addr, relayHI *HostInfo, relay *Relay) {
+	hh := hm.queryVpnIp(target)
+	if hh == nil {
+		return
+	}
+	hh.Lock()
+	defer hh.Unlock()
+	if hm.queryVpnIp(target) != hh {
+		return
+	}
+
+	var now, later [][]byte
+	switch {
+	case hh.pq != nil:
+		var err error
+		now, later, err = hh.pq.sender.Attempt(fragment.DefaultRepair(hh.pq.sender.Layout().K))
+		if err != nil {
+			return
+		}
+		hh.lastPQ = true
+	case hh.ready:
+		now = [][]byte{hh.hostinfo.HandshakePacket[handshakePacketStage0]}
+	default:
+		return
+	}
+
+	f := hm.f
+	hh.hostinfo.logger(hm.l).Info("Send handshake via new relay", "relay", relayHI.vpnAddrs[0])
+	_ = hm.sendFragmented(now, later, func(p []byte) error {
+		f.SendVia(relayHI, relay, p, make([]byte, 12), make([]byte, mtu), false, 0)
+		return nil
+	})
 }
 
 // buildPQAttempt creates the initiator's PQ Machine and msg1 sender.
@@ -305,6 +362,7 @@ func (hm *HandshakeManager) continuePQ(via ViaSender, hh *HandshakeHostInfo, h *
 	if pq == nil || pq.index != h.RemoteIndex || !hm.stillPending(hh, pq.index) {
 		return
 	}
+	pq.heard = true
 
 	if pq.msg2 == nil {
 		a, err := fragment.NewAssembly(fh)
@@ -605,6 +663,7 @@ func (hm *HandshakeManager) handleCookie(via ViaSender, packet []byte, h *header
 	var c fragment.Cookie
 	copy(c[:], packet[header.Len:])
 	pq.sender.SetCookie(c)
+	pq.heard = true
 
 	now := time.Now()
 	if now.Sub(pq.cookieResendAt) < hm.config.tryInterval {

@@ -295,6 +295,7 @@ func TestPQHandleCookie(t *testing.T) {
 	require.NoError(t, h.Parse(reply))
 
 	hm.handleFragment(via, reply, &h)
+	assert.True(t, hh.pq.heard, "a cookie reply shows the peer speaks PQ")
 	sent := conn.take()
 	require.Len(t, sent, 4, "an immediate resend of fresh symbols")
 	for i, p := range sent {
@@ -347,4 +348,51 @@ func TestReloadPQ(t *testing.T) {
 
 	require.NoError(t, c.ReloadConfigString(`handshakes: {}`))
 	assert.Equal(t, pqHandshakeConfig{repairDelay: DefaultPQRepairDelay}, *hm.pqConfig(), "removing the section restores the defaults")
+
+	require.NoError(t, c.ReloadConfigString(`handshakes: {pq: {require: true}}`))
+	assert.Equal(t, pqHandshakeConfig{initiate: true, accept: true, require: true, repairDelay: DefaultPQRepairDelay}, *hm.pqConfig(), "require implies initiate and accept")
+}
+
+func TestUsePQ(t *testing.T) {
+	hm, _ := newPQTestManager(t)
+	peer := netip.MustParseAddr("10.1.0.1")
+	set := func(cfg pqHandshakeConfig) { hm.pq.Store(&cfg) }
+
+	// attempts plays a run of attempts, given whether each was triggered early,
+	// and returns which were PQ.
+	attempts := func(triggered ...bool) []bool {
+		hh := &HandshakeHostInfo{}
+		var out []bool
+		for _, tr := range triggered {
+			hh.counter++
+			hh.lastPQ = hm.usePQ(hh, peer, tr)
+			out = append(out, hh.lastPQ)
+		}
+		return out
+	}
+
+	set(pqHandshakeConfig{})
+	assert.Equal(t, []bool{false, false, false}, attempts(false, false, false), "off")
+
+	set(pqHandshakeConfig{initiate: true})
+	assert.Equal(t, []bool{true, false, true, false}, attempts(false, false, false, false), "timer retries alternate, PQ first")
+	assert.Equal(t, []bool{true, true, false, true, false}, attempts(false, true, false, true, false), "an early trigger is a new path, which gets PQ first")
+	assert.Equal(t, []bool{true, true, false}, attempts(true, true, false), "a triggered first attempt is PQ")
+
+	t.Run("hearing back stops the classical turns", func(t *testing.T) {
+		hh := &HandshakeHostInfo{pq: &pqAttempt{}}
+		hh.counter, hh.lastPQ = 1, true
+		hh.counter++
+		assert.False(t, hm.usePQ(hh, peer, false), "unheard, the classical attempt gets its turn")
+		hh.pq.heard = true
+		assert.True(t, hm.usePQ(hh, peer, false))
+	})
+
+	set(pqHandshakeConfig{initiate: true, accept: true, require: true})
+	assert.Equal(t, []bool{true, true, true, true}, attempts(false, false, true, false), "require never offers classical")
+
+	set(pqHandshakeConfig{initiate: true, sticky: true})
+	assert.Equal(t, []bool{true, false}, attempts(false, false), "sticky alternates until the peer has done PQ")
+	hm.notePQPeer(pqSubtype, []netip.Addr{peer})
+	assert.Equal(t, []bool{true, true, true}, attempts(false, false, false), "then only PQ")
 }

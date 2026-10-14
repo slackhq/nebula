@@ -19,6 +19,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func pqRequire() m {
+	return m{"handshakes": m{"pq": m{"require": true, "repair_delay": "0s"}}}
+}
+
 func pqConfig(initiate, accept, sticky bool) m {
 	return m{"handshakes": m{"pq": m{
 		"initiate":     initiate,
@@ -299,7 +303,7 @@ func TestPQRelays(t *testing.T) {
 	theirControl.Start()
 
 	var tally handshakeTally
-	var relayedPQ int
+	var relayedPQ, relayedClassical int
 	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me")))
 	require.True(t, r.RouteForAllExitFuncOrTimeout(10*time.Second, func(p *udp.Packet, receiver *nebula.Control) router.ExitType {
 		tally.observe(p)
@@ -308,6 +312,8 @@ func TestPQRelays(t *testing.T) {
 			if h, fh := handshakeOf(p); h != nil && fh != nil {
 				relayedPQ++
 				assert.LessOrEqual(t, len(p.Data), fragment.MaxPacketLen+32, "a relayed fragment fits the IPv6 minimum MTU")
+			} else if h != nil {
+				relayedClassical++
 			}
 		}
 		if isTunnelData(p, receiver, theirControl) {
@@ -318,6 +324,7 @@ func TestPQRelays(t *testing.T) {
 
 	assertUdpPacket(t, []byte("Hi from me"), theirControl.GetFromTun(true), myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), 80, 80)
 	assert.Positive(t, relayedPQ, "the end to end handshake is PQ through the relay")
+	assert.Zero(t, relayedClassical, "the relay coming up carries the PQ attempt, not the classical retry")
 	r.RenderHostmaps("Final hostmaps", myControl, relayControl, theirControl)
 
 	myControl.Stop()
@@ -400,4 +407,70 @@ func TestPQCookieUnderLoad(t *testing.T) {
 
 	myControl.Stop()
 	theirControl.Stop()
+}
+
+// TestPQRequire checks require mode never handshakes classically, in either
+// direction.
+func TestPQRequire(t *testing.T) {
+	t.Parallel()
+
+	t.Run("initiator", func(t *testing.T) {
+		// They neither speak PQ nor require it; we never fall back.
+		myControl, theirControl, myVpn, theirVpn, _, _, r := newPQPair(t, pqRequire(), nil)
+		defer r.RenderFlow()
+
+		var tally handshakeTally
+		myControl.InjectTunPacket(BuildTunUDPPacket(theirVpn[0].Addr(), 80, myVpn[0].Addr(), 80, []byte("Hi from me")))
+		r.RouteForAllExitFuncOrTimeout(time.Second, func(p *udp.Packet, receiver *nebula.Control) router.ExitType {
+			tally.observe(p)
+			return router.KeepRouting
+		})
+		assert.Positive(t, tally.pq)
+		assert.Zero(t, tally.classical)
+		assert.Nil(t, theirControl.GetHostInfoByVpnAddr(myVpn[0].Addr(), false), "no tunnel without PQ")
+
+		myControl.Stop()
+		theirControl.Stop()
+	})
+
+	t.Run("responder", func(t *testing.T) {
+		// We only speak classical; they refuse it.
+		myControl, theirControl, myVpn, theirVpn, _, _, r := newPQPair(t, nil, pqRequire())
+		defer r.RenderFlow()
+
+		var answers int
+		myControl.InjectTunPacket(BuildTunUDPPacket(theirVpn[0].Addr(), 80, myVpn[0].Addr(), 80, []byte("Hi from me")))
+		r.RouteForAllExitFuncOrTimeout(time.Second, func(p *udp.Packet, receiver *nebula.Control) router.ExitType {
+			if h, _ := handshakeOf(p); h != nil && h.MessageCounter == 2 {
+				answers++
+			}
+			return router.KeepRouting
+		})
+		assert.Zero(t, answers, "a classical msg1 gets no answer")
+		assert.Nil(t, theirControl.GetHostInfoByVpnAddr(myVpn[0].Addr(), false))
+
+		myControl.Stop()
+		theirControl.Stop()
+	})
+
+	t.Run("both", func(t *testing.T) {
+		myControl, theirControl, myVpn, theirVpn, _, _, r := newPQPair(t, pqRequire(), pqRequire())
+		defer r.RenderFlow()
+
+		var tally handshakeTally
+		myControl.InjectTunPacket(BuildTunUDPPacket(theirVpn[0].Addr(), 80, myVpn[0].Addr(), 80, []byte("Hi from me")))
+		require.True(t, r.RouteForAllExitFuncOrTimeout(5*time.Second, func(p *udp.Packet, receiver *nebula.Control) router.ExitType {
+			tally.observe(p)
+			if isTunnelData(p, receiver, theirControl) {
+				return router.RouteAndExit
+			}
+			return router.KeepRouting
+		}), "tunnel never came up")
+		assertUdpPacket(t, []byte("Hi from me"), theirControl.GetFromTun(true), myVpn[0].Addr(), theirVpn[0].Addr(), 80, 80)
+		assert.Zero(t, tally.classical)
+		assertTunnel(t, myVpn[0].Addr(), theirVpn[0].Addr(), myControl, theirControl, r)
+
+		myControl.Stop()
+		theirControl.Stop()
+	})
 }

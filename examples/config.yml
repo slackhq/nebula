@@ -427,6 +427,9 @@ logging:
     #initiate: false
     # accept answers post-quantum handshakes from peers.
     #accept: false
+    # require makes every handshake post-quantum: it implies initiate and accept, never offers a classical handshake
+    # and refuses classical handshakes from peers. Only enable it once every host can speak post-quantum handshakes.
+    #require: false
     # sticky never falls back to a classical handshake with a peer that has completed a post-quantum one since
     # nebula started, which defeats an attacker who drops post-quantum handshakes to force a downgrade.
     #sticky: false
