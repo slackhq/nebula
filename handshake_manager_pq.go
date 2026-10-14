@@ -462,7 +462,7 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 			return
 		}
 		if existing := hm.pqAnswered.lookup(res.Hash, time.Now()); existing != nil {
-			// Already answered: resend, rate limited, with fresh symbols.
+			// Already answered: resend with fresh symbols on the path this copy came by.
 			if msg := existing.HandshakePacket[handshakePacketStage2]; msg != nil {
 				hm.sendHandshakeResponse(via, msg, existing, true, res.Received)
 			}
@@ -557,22 +557,15 @@ func (hm *HandshakeManager) sendFragmentedAfter(now, later [][]byte, send func([
 	return first
 }
 
-// sendFragmentedResponse sends the responder's msg2 as fragments. A resend of a
-// cached response (cached) offers fresh symbols and is rate limited to one per
-// retry interval. received is how many bytes the triggering msg1 took, which
-// bounds what may be sent back before the address is validated.
-func (hm *HandshakeManager) sendFragmentedResponse(via ViaSender, msg []byte, hostinfo *HostInfo, cached bool, received int) error {
-	now := time.Now()
-	if cached {
-		last := hostinfo.handshakeResendAt.Load()
-		if now.UnixNano()-last < int64(hm.config.tryInterval) ||
-			!hostinfo.handshakeResendAt.CompareAndSwap(last, now.UnixNano()) {
-			return errors.New("handshake response resend rate limited")
-		}
-	} else {
-		hostinfo.handshakeResendAt.Store(now.UnixNano())
-	}
-
+// sendFragmentedResponse sends the responder's msg2 as fragments, each send
+// offering symbols the hostinfo has not sent before. The clock on resends is
+// per path and lives in the fragment table: a copy of msg1 arriving by a second
+// path (the other address family, a relay) is answered on that path at once,
+// which carries the handshake when the first path only works one way, and a
+// retry on a path is reported as a repeat at most once per retry interval.
+// received is how many bytes the triggering msg1 took, which bounds what may be
+// sent back before the address is validated.
+func (hm *HandshakeManager) sendFragmentedResponse(via ViaSender, msg []byte, hostinfo *HostInfo, received int) error {
 	var h header.H
 	if err := h.Parse(msg); err != nil {
 		return err

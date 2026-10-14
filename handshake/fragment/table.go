@@ -24,6 +24,10 @@ type TableConfig struct {
 	MaxPerSource int           // messages in progress per source
 	MaxMsgLen    int           // largest message accepted
 	TTL          time.Duration // an entry idle this long is dropped
+
+	// RepeatInterval is how often, at most, an answered message is reported as a
+	// repeat on one key. Zero reports every K fresh symbols.
+	RepeatInterval time.Duration
 }
 
 // Table reassembles messages from senders that have not authenticated yet, the
@@ -38,7 +42,10 @@ type TableConfig struct {
 // still arriving for it do not start it over. Without that, the repair
 // fragments trailing a message whose data fragments already completed it would
 // open a new entry that, for K above the repair count, never completes: it holds
-// symbols and a source's quota until it expires.
+// symbols and a source's quota until it expires. A retry of an answered message
+// is reported as a repeat, at most once per RepeatInterval on that key. Keys
+// include the path a message arrives by, so the same message arriving by two
+// paths is two keys with two clocks.
 //
 // A Table is safe for concurrent use.
 type Table[K, S comparable] struct {
@@ -55,13 +62,14 @@ type Table[K, S comparable] struct {
 // indexes have been seen, so a retry's fresh symbols can be told apart from
 // stragglers of an attempt already decoded.
 type answeredEntry struct {
-	hash     [sha256.Size]byte
-	msgLen   uint16
-	k        int
-	seen     [fec.MaxSymbols]bool
-	fresh    int
-	received int
-	lastSeen time.Time
+	hash       [sha256.Size]byte
+	msgLen     uint16
+	k          int
+	seen       [fec.MaxSymbols]bool
+	fresh      int
+	received   int
+	lastSeen   time.Time
+	lastRepeat time.Time // when it was answered, or last reported as a repeat
 }
 
 type tableEntry[K, S comparable] struct {
@@ -107,7 +115,7 @@ func (t *Table[K, S]) Add(key K, source S, now time.Time, h Header, sym []byte) 
 	t.mu.Lock()
 	if a, ok := t.answered[key]; ok {
 		if now.Sub(a.lastSeen) <= t.cfg.TTL {
-			res := a.add(now, h, sym)
+			res := a.add(now, h, sym, t.cfg.RepeatInterval)
 			t.mu.Unlock()
 			return res, nil
 		}
@@ -165,7 +173,7 @@ func (t *Table[K, S]) Add(key K, source S, now time.Time, h Header, sym []byte) 
 	}, nil
 }
 
-func (a *answeredEntry) add(now time.Time, h Header, sym []byte) *Result {
+func (a *answeredEntry) add(now time.Time, h Header, sym []byte, interval time.Duration) *Result {
 	if h.MsgLen != a.msgLen {
 		return nil
 	}
@@ -176,12 +184,16 @@ func (a *answeredEntry) add(now time.Time, h Header, sym []byte) *Result {
 	}
 	a.seen[h.Index] = true
 	a.fresh++
-	if a.fresh < a.k {
+	if a.fresh < a.k || now.Sub(a.lastRepeat) < interval {
+		// Not enough fresh symbols yet, or this key was answered within the
+		// interval. The fresh symbols keep counting, so the first one to arrive
+		// once the interval is up reports the repeat.
 		return nil
 	}
 	r := &Result{Hash: a.hash, Received: a.received, Repeat: true}
 	a.fresh = 0
 	a.received = 0
+	a.lastRepeat = now
 	return r
 }
 
@@ -205,7 +217,7 @@ func (t *Table[K, S]) Answered(key K, res *Result, now time.Time) {
 			break
 		}
 	}
-	t.answered[key] = &answeredEntry{hash: res.Hash, msgLen: res.msgLen, k: res.k, seen: res.seen, lastSeen: now}
+	t.answered[key] = &answeredEntry{hash: res.Hash, msgLen: res.msgLen, k: res.k, seen: res.seen, lastSeen: now, lastRepeat: now}
 }
 
 // Forget drops what Answered recorded for key, so its fragments are reassembled

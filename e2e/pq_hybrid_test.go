@@ -589,3 +589,63 @@ func TestHybridWrongResponder(t *testing.T) {
 		})
 	}
 }
+
+// TestHybridMsg2LostDirect loses every msg2 fragment the responder sends
+// directly, as a responder answering from the wrong interface would. msg1 also
+// reaches it through a relay, and that copy must be answered on the relay as
+// soon as it completes, not refused because the direct copy was just answered.
+// The relay takes a few retry ticks to come up in this harness, so the check is
+// that the first copy of msg1 through the relay is enough once it does.
+func TestHybridMsg2LostDirect(t *testing.T) {
+	t.Parallel()
+	ca := newHybridCA(t)
+	useRelays := pqRequire()
+	useRelays["relay"] = m{"use_relays": true}
+	amRelay := pqRequire()
+	amRelay["relay"] = m{"am_relay": true}
+	myControl, myVpn, _, _ := newSimpleServer(cert.Version3, ca.ca, ca.key, "me     ", "10.128.0.1/24", useRelays)
+	relayControl, relayVpn, relayUdp, _ := newSimpleServer(cert.Version3, ca.ca, ca.key, "relay  ", "10.128.0.128/24", amRelay)
+	theirControl, theirVpn, theirUdp, _ := newSimpleServer(cert.Version3, ca.ca, ca.key, "them   ", "10.128.0.2/24", useRelays)
+
+	myControl.InjectLightHouseAddr(theirVpn[0].Addr(), theirUdp)
+	myControl.InjectLightHouseAddr(relayVpn[0].Addr(), relayUdp)
+	myControl.InjectRelays(theirVpn[0].Addr(), []netip.Addr{relayVpn[0].Addr()})
+	relayControl.InjectLightHouseAddr(theirVpn[0].Addr(), theirUdp)
+
+	r := router.NewR(t, myControl, relayControl, theirControl)
+	defer r.RenderFlow()
+	myControl.Start()
+	relayControl.Start()
+	theirControl.Start()
+
+	var relayedMsg1, directMsg2, relayedMsg2 int
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpn[0].Addr(), 80, myVpn[0].Addr(), 80, []byte("Hi from me")))
+	require.True(t, routeUntilData(t, r, theirControl, 10*time.Second, func(p *udp.Packet, receiver *nebula.Control) router.ExitType {
+		h, fh := handshakeOf(p)
+		if h == nil || fh == nil {
+			return router.KeepRouting
+		}
+		outer := &header.H{}
+		relayed := outer.Parse(p.Data) == nil && outer.Type == header.Message && outer.Subtype == header.MessageRelay
+		switch {
+		case h.MessageCounter == 1 && relayed && receiver == theirControl:
+			relayedMsg1++
+		case h.MessageCounter == 2 && !relayed && p.From == theirUdp && receiver == myControl:
+			directMsg2++
+			return router.Drop
+		case h.MessageCounter == 2 && relayed && receiver == myControl:
+			relayedMsg2++
+		}
+		return router.KeepRouting
+	}), "tunnel never came up")
+
+	assertUdpPacket(t, []byte("Hi from me"), theirControl.GetFromTun(true), myVpn[0].Addr(), theirVpn[0].Addr(), 80, 80)
+	assert.GreaterOrEqual(t, directMsg2, 9, "the direct answer was sent and lost")
+	assert.GreaterOrEqual(t, relayedMsg2, 9, "the relayed copy of msg1 got its own answer")
+	assert.LessOrEqual(t, relayedMsg1, 7+3, "the first copy of msg1 through the relay is answered, no relayed retry is needed")
+	r.RenderHostmaps("Final hostmaps", myControl, relayControl, theirControl)
+
+	myControl.Stop()
+	relayControl.Stop()
+	theirControl.Stop()
+}

@@ -106,35 +106,25 @@ func TestSendFragmentedResponse(t *testing.T) {
 	const pktLen = header.Len + fragment.HeaderLen + 1000
 
 	t.Run("first send", func(t *testing.T) {
-		require.NoError(t, hm.sendFragmentedResponse(via, msg, hostinfo, false, 0))
+		require.NoError(t, hm.sendFragmentedResponse(via, msg, hostinfo, 0))
 		assert.Equal(t, []int{0, 1, 2, 3}, fragmentIndexes(t, conn.take(), 77, 5))
 	})
 
-	t.Run("resends are rate limited", func(t *testing.T) {
-		require.Error(t, hm.sendFragmentedResponse(via, msg, hostinfo, true, 10*pktLen))
-		assert.Empty(t, conn.take())
-	})
-
-	allowResend := func() {
-		hostinfo.handshakeResendAt.Store(time.Now().Add(-time.Second).UnixNano())
-	}
-
-	t.Run("resend offers fresh symbols", func(t *testing.T) {
-		allowResend()
-		require.NoError(t, hm.sendFragmentedResponse(via, msg, hostinfo, true, 10*pktLen))
+	t.Run("a repeat is answered at once with fresh symbols", func(t *testing.T) {
+		// No clock gates a resend: a repeat already cost the initiator K fresh
+		// symbols on that path, and the amplification budget bounds the answer.
+		require.NoError(t, hm.sendFragmentedResponse(via, msg, hostinfo, 10*pktLen))
 		assert.Equal(t, []int{4, 5, 6, 7}, fragmentIndexes(t, conn.take(), 77, 5))
 	})
 
 	t.Run("amplification budget trims repair", func(t *testing.T) {
-		allowResend()
 		// 3x of a little over one packet allows 3 packets: both data and 1 repair.
-		require.NoError(t, hm.sendFragmentedResponse(via, msg, hostinfo, true, pktLen+10))
+		require.NoError(t, hm.sendFragmentedResponse(via, msg, hostinfo, pktLen+10))
 		assert.Equal(t, []int{8, 9, 10}, fragmentIndexes(t, conn.take(), 77, 5))
 	})
 
 	t.Run("amplification budget below the data refuses", func(t *testing.T) {
-		allowResend()
-		require.Error(t, hm.sendFragmentedResponse(via, msg, hostinfo, true, pktLen/2))
+		require.Error(t, hm.sendFragmentedResponse(via, msg, hostinfo, pktLen/2))
 		assert.Empty(t, conn.take())
 	})
 }

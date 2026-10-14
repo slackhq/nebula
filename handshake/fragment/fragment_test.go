@@ -597,3 +597,84 @@ func TestTableAnswered(t *testing.T) {
 	assert.Empty(t, tb.answered)
 	tb.mu.Unlock()
 }
+
+// TestTableRepeatInterval checks that an answered message is reported as a
+// repeat at most once per RepeatInterval on one key, while another key, a
+// second path the same message arrives by, keeps its own clock.
+func TestTableRepeatInterval(t *testing.T) {
+	r := rand.New(rand.NewPCG(4, 4))
+	cfg := testConfig()
+	cfg.RepeatInterval = 100 * time.Millisecond
+	tb := NewTable[testKey, string](cfg)
+	now := time.Unix(1000, 0)
+	msg := randMsg(r, 8009) // K=7, 3 repair
+
+	attempt := func(s *Sender) [][]byte {
+		data, repair, err := s.Attempt(DefaultRepair(s.Layout().K))
+		require.NoError(t, err)
+		return append(data, repair...)
+	}
+	repeats := func(key testKey, pkts [][]byte) int {
+		n := 0
+		for _, p := range pkts {
+			_, h, sym := parse(t, p)
+			res, err := tb.Add(key, key.src, now, h, sym)
+			require.NoError(t, err)
+			if res != nil {
+				require.True(t, res.Repeat)
+				n++
+			}
+		}
+		return n
+	}
+	answer := func(key testKey, s *Sender) {
+		var res *Result
+		for _, p := range attempt(s) {
+			_, h, sym := parse(t, p)
+			got, err := tb.Add(key, key.src, now, h, sym)
+			require.NoError(t, err)
+			if got != nil {
+				res = got
+			}
+		}
+		require.NotNil(t, res)
+		tb.Answered(key, res, now)
+	}
+
+	// Two paths carry the same message. Each has its own sender here because
+	// the initiator offers the same symbols on every path.
+	direct := testKey{"direct", 1}
+	relayed := testKey{"relay", 1}
+	sd, err := NewSender(msg, testSubtype, 0, 1, 1)
+	require.NoError(t, err)
+	sr, err := NewSender(msg, testSubtype, 0, 1, 1)
+	require.NoError(t, err)
+	answer(direct, sd)
+	answer(relayed, sr)
+
+	// A retry right after the answer carries K fresh symbols, but the clock on
+	// that path has not run out.
+	now = now.Add(10 * time.Millisecond)
+	assert.Zero(t, repeats(direct, attempt(sd)), "a repeat inside the interval is not reported")
+
+	// Once it has, the first fresh symbol of the next retry is enough: the
+	// fresh symbols kept counting.
+	now = now.Add(100 * time.Millisecond)
+	retry := attempt(sd)
+	assert.Equal(t, 1, repeats(direct, retry[:1]), "the held repeat is reported at once")
+	assert.Zero(t, repeats(direct, retry[1:]), "and only once per retry")
+
+	// The other path has its own clock, which only its own answer started.
+	assert.Equal(t, 1, repeats(relayed, attempt(sr)), "a repeat on another path is independent")
+	assert.Zero(t, repeats(relayed, attempt(sr)), "and is itself clocked")
+
+	// Without an interval every K fresh symbols is a repeat, which is what the
+	// other tests rely on.
+	tb = NewTable[testKey, string](testConfig())
+	s2, err := NewSender(msg, testSubtype, 0, 1, 2)
+	require.NoError(t, err)
+	k2 := testKey{"a", 2}
+	answer(k2, s2)
+	assert.Equal(t, 1, repeats(k2, attempt(s2)))
+	assert.Equal(t, 1, repeats(k2, attempt(s2)))
+}

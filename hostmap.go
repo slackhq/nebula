@@ -261,8 +261,9 @@ type HostInfo struct {
 	HandshakePacket map[uint8][]byte
 
 	// A responder resending a fragmented handshake response offers symbols it has
-	// not sent before, at most once per retry interval.
-	handshakeResendAt   atomic.Int64  // unix nanos of the last send
+	// not sent before. Once complete, a hybrid responder confirms again for a
+	// resent msg3 at most once per retry interval.
+	handshakeResendAt   atomic.Int64  // unix nanos of the last confirmation
 	handshakeNextSymbol atomic.Uint32 // next fragment symbol index to offer
 
 	// nextLHQuery is the earliest we can ask the lighthouse for new information.

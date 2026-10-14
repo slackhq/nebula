@@ -140,6 +140,10 @@ func (hh *HandshakeHostInfo) cachePacket(l *slog.Logger, t header.MessageType, s
 }
 
 func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *LightHouse, outside udp.Conn, config HandshakeConfig) *HandshakeManager {
+	// A retrying initiator is answered again at most once per retry interval on
+	// each path its msg1 arrives by.
+	tableCfg := pqTableConfig
+	tableCfg.RepeatInterval = config.tryInterval
 	hm := &HandshakeManager{
 		vpnIps:                 map[netip.Addr]*HandshakeHostInfo{},
 		indexes:                map[uint32]*HandshakeHostInfo{},
@@ -153,7 +157,7 @@ func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *Light
 		metricInitiated:        metrics.GetOrRegisterCounter("handshake_manager.initiated", nil),
 		metricTimedOut:         metrics.GetOrRegisterCounter("handshake_manager.timed_out", nil),
 		l:                      l,
-		pqTable:                fragment.NewTable[pqFragKey, pqFragSource](pqTableConfig),
+		pqTable:                fragment.NewTable[pqFragKey, pqFragSource](tableCfg),
 		pqAnswered:             newPQAnswered(hsTimeout(config.retries, config.tryInterval)),
 		hybrid:                 newHybridState(),
 	}
@@ -1247,7 +1251,7 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 
 	if header.IsFragmented(subtype) {
 		fields := append(logFields, "from", via)
-		if err := hm.sendFragmentedResponse(via, msg, hostinfo, cached, received); err != nil {
+		if err := hm.sendFragmentedResponse(via, msg, hostinfo, received); err != nil {
 			f.l.Debug("Did not send handshake message", append(fields, "error", err)...)
 		} else {
 			f.l.Info("Handshake message sent", fields...)

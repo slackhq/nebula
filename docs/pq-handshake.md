@@ -346,9 +346,17 @@ Implemented in `handshake/fragment` (`Sender`, `Assembly`, and the capped `Table
 
 ### Retransmission and amplification
 
-- Only timers cause transmission. Reactive resends (the responder resending its cached
-  msg2 when a duplicate msg1 completes) are rate limited to one per handshake per retry
-  interval, to avoid TFTP's Sorcerer's Apprentice amplification.
+- Only timers cause transmission, with one reactive exception: the responder resends its
+  cached msg2 when a copy of msg1 completes again. An initiator sends msg1 to every address
+  it knows and through its relays, the responder reassembles each path separately, and each
+  path's first completion is answered on that path at once. A path that only works one way,
+  say a responder answering from the wrong interface, is then covered by the others in the
+  same attempt, and the initiator keeps the union of the msg2 symbols that reach it. After
+  that a path is answered again at most once per retry interval, and only once K symbols not
+  seen before on it arrive: duplicates do nothing, and there are 256 symbols per message, so
+  a resend costs the initiator K packets on that path and the answer is held to the 3x
+  budget below. That is TFTP's Sorcerer's Apprentice bound, per path rather than per
+  handshake.
 - Duplicate msg1 detection compares the decoded message to the cached one **before**
   running Noise or certificate verification.
 - Before an address is validated, a responder sends at most 3x the bytes it received from
@@ -483,17 +491,18 @@ in every scenario above, and within three at least 99.99%.
     certificate work: the trailing repair fragments of an attempt rebuild a msg1 its data
     fragments already completed, and a retrying initiator offers fresh symbols for the
     same msg1. A repeat goes straight to the cached-response resend, which offers fresh
-    msg2 symbols, is rate limited to one per retry interval and is held to the 3x
-    amplification budget.
+    msg2 symbols on the path the repeat came by and is held to the 3x amplification
+    budget.
   - **Relays** carry fragments unchanged; repair fragments trail via a timer.
 - The pre-authentication table is capped at 4 MiB, 1024 entries, 4 per source (IPv4 /32,
   IPv6 /64, or relay channel), 16 KiB messages and a 3 s idle timeout. Cookies are
   demanded from half full.
 - Tests: codec and fragment tests and fuzzers, manager unit tests
-  for the response budget and rate limit, and e2e tests for a clean handshake, loss of
+  for the response budget, table tests for the per-path repeat clock, and e2e tests for a clean handshake, loss of
   data fragments in both directions, fallback to a peer that does not accept PQ, a lost
   msg2 recovered by fresh symbols, sticky mode under an attacker dropping PQ packets,
-  relays, index cleanup on completion, fallback and timeout, and a responder flooded from
+  relays, a direct msg2 lost on every attempt and answered through a relay instead, index
+  cleanup on completion, fallback and timeout, and a responder flooded from
   spoofed sources demanding and accepting a cookie. Unit tests cover cookie binding and
   rotation, the never-amplify rule, the initiator's rate limited resend, and reload. ML-KEM also
   passes under `GOEXPERIMENT=boringcrypto` and `GODEBUG=fips140=on`.
