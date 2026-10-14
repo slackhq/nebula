@@ -4,10 +4,17 @@
 # PKI defines the location of credentials for this node. Each of these can also be inlined by using the yaml ": |" syntax.
 pki:
   # The CAs that are accepted by this node. Must contain one or more certificates created by 'nebula-cert ca'
+  # A version 3 CA only accepts version 3 certificates, which only post-quantum hybrid handshakes use. To also
+  # accept version 2 certificates from it, list its v2 form as well (nebula-cert print shows its v2Fingerprint).
+  # Leaving the v2 form out is how a node requires post-quantum authentication.
   ca: /etc/nebula/ca.crt
+  # cert may hold a version 3 certificate, which also serves as its v2 form for classical handshakes. key then
+  # holds the version 3 key from 'nebula-cert keygen -version 3' or 'nebula-cert sign'.
   cert: /etc/nebula/host.crt
   key: /etc/nebula/host.key
   # blocklist is a list of certificate fingerprints that we will refuse to talk to
+  # A version 3 certificate has two fingerprints, its own and its v2 form's. Blocking the v2 one blocks both,
+  # blocking the v3 one leaves the v2 form usable in classical handshakes, so list both.
   #blocklist:
   #  - c99d4e650533b92061b09918e838a5a0a6aaee21eed1d12fd937682865936c72
   # disconnect_invalid is a toggle to force a client to be disconnected if the certificate is expired or invalid.
@@ -419,8 +426,11 @@ logging:
   #trigger_buffer: 64
 
   # pq enables handshakes that mix an ephemeral ML-KEM-1024 key exchange into the session keys, protecting
-  # recorded traffic against a future quantum computer. Authentication is unchanged. These handshakes are too
-  # large for one packet and travel as fragments with forward error correction.
+  # recorded traffic against a future quantum computer. These handshakes are too large for one packet and travel
+  # as fragments with forward error correction.
+  # With a version 3 certificate in pki.cert they are hybrid handshakes, also authenticated post-quantum with the
+  # certificates' ML-KEM-1024 keys, and need a version 3 certificate on both ends. Without one, authentication is
+  # unchanged.
   #pq:
     # initiate starts post-quantum handshakes. Attempts alternate between post-quantum and classical until one is
     # answered, so peers that do not support them still connect.
@@ -429,6 +439,7 @@ logging:
     #accept: false
     # require makes every handshake post-quantum: it implies initiate and accept, never offers a classical handshake
     # and refuses classical handshakes from peers. Only enable it once every host can speak post-quantum handshakes.
+    # With a version 3 certificate only hybrid handshakes are made or answered, so every peer needs one too.
     #require: false
     # sticky never falls back to a classical handshake with a peer that has completed a post-quantum one since
     # nebula started, which defeats an attacker who drops post-quantum handshakes to force a downgrade.

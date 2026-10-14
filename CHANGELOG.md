@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Version 3 certificates and post-quantum hybrid handshakes (`ix_hybrid_mlkem1024`). A version 3 certificate is a
+  version 2 certificate extended with an ML-KEM-1024 key (hosts) or an ML-DSA-87 key (CAs) and an ML-DSA-87 CA
+  signature, and a node holding one still presents the version 2 certificate it extends to peers that need it.
+  `nebula-cert pq-extend` upgrades existing CAs and hosts in place. See `docs/pq-handshake.md`.
+
+### Changed
+
+- A version 3 certificate has two fingerprints: its own, and that of the version 2 certificate it extends. Each
+  identifies it in logs and to `pki.blocklist`. Blocking the v2 fingerprint blocks both forms, but blocking only the
+  v3 fingerprint leaves the v2 form usable in classical handshakes. **Operators must list and block both
+  fingerprints**; `nebula-cert print` shows them as `fingerprint` and `v2Fingerprint`.
+- Firewall `ca_sha` rules match a version 3 peer by either fingerprint of its CA.
+
 ### Fixed
 
 - `create-tunnel -address <ip:port>` panicked on a nil RemoteList and, over the ssh debug server, took nebula

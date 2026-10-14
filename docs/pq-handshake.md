@@ -1,7 +1,8 @@
 # Post-quantum handshakes
 
-Status: draft. Decisions below were made on 2026-10-13; open items are listed at the end.
-Phase 1 is implemented (see [Implementation](#implementation-phase-1)).
+Status: draft. Decisions below were made on 2026-10-13 (phase 1) and 2026-10-14 (phase 2); open
+items are listed at the end. Both phases are implemented (see
+[phase 1](#implementation-phase-1) and [phase 2](#implementation-phase-2)).
 
 ## Goals
 
@@ -25,8 +26,8 @@ The only signature in the system stays the CA signature inside the certificate.
 | ML-DSA-87 public key / signature | 2592 B / 4627 B |
 | Today's IX msg1 / msg2 (v2 cert, 151 B) | 252 B / 287 B |
 
-`crypto/mlkem` is available in Go 1.26 (the current `go.mod`); `crypto/mldsa` arrives in
-Go 1.27 and is only needed for phase 2.
+`crypto/mlkem` is available in Go 1.26; `crypto/mldsa` arrives in Go 1.27, which `go.mod`
+requires since phase 2.
 
 ## Phase 1: ephemeral ML-KEM on today's certificates
 
@@ -54,49 +55,139 @@ about 1.84 KB each, so each travels as 2 data and 2 repair fragments of about 93
 A KEM key on the classical subtype, or a missing or malformed one on this subtype, is a fatal
 protocol error; a forged ciphertext only fails that packet.
 
-## Phase 2: pqIX hybrid with certificate v3
+## Phase 2: hybrid IX with certificate v3
 
-Certificate v3 is hybrid: the classical static key and CA signature plus a static
-ML-KEM-1024 key and an ML-DSA-87 CA signature. Host authentication is by KEM rather than by
-signature, following PQNoise's pqIX, while keeping the classical DH tokens:
+Phase 2 adds post-quantum authentication. Decisions were made on 2026-10-14; it is implemented on
+the `pq-identity` branch (see [Implementation](#implementation-phase-2)).
 
-- **msg1** (I to R): `e, s`, ephemeral ML-KEM key, initiator cert.
-- **msg2** (R to I): `e, s`, ciphertext to I's ephemeral KEM key, ciphertext to I's static
-  KEM key, responder cert.
-- **msg3** (I to R): ciphertext to R's static KEM key, plus first data. R authenticates I
-  when msg3 decrypts; I authenticates R implicitly when R's first reply decrypts.
+### Certificate v3
 
-msg3 is about 1.6 KB, 2 data and 2 repair fragments, and adds no new message types:
+A version 3 certificate is a version 2 certificate extended with post-quantum keys. It is its own
+format, with its own PEM banner (`NEBULA CERTIFICATE V3`) and a strict parser, but its first
+fields are exactly the fields of a v2 certificate:
 
-- **Responder.** After sending msg2 the responder keeps a pending Machine, found by its
-  local index like the initiator's today; this is the multi-message responder support the
-  manager lacks now. A repeat msg1 maps to it through the answered-msg1 cache and gets msg2
-  resent with fresh symbols, exactly as in phase 1. Until msg3 verifies, data for that
-  index is dropped silently: it must not draw a RecvError, which would tear down the
-  initiator's new tunnel. On completing it sends an empty `Test`/`TestReply` under the
-  new keys, so the initiator hears back even when there is no traffic.
-- **Initiator.** Writing msg3 yields the transport keys, so the hostinfo moves to the main
-  hostmap and data flows at once, readable only by the real responder. The handshake entry
-  stays behind in a confirming state: each retry tick resends msg3 with fresh symbols until
-  any packet from the responder decrypts on the new tunnel, and if that never happens
-  within the handshake timeout the tunnel is torn down. Losing msg3 costs the data sent
-  behind it, which the overlay's own transport retransmits.
-- msg3's fragments use the responder's index as RemoteIndex and land on the responder's
-  pending entry, so they never enter the pre-authentication table.
+```
+CertificateV3 ::= SEQUENCE {
+    details      [0] Details,        -- v2 details, unchanged
+    curve        [1] Curve DEFAULT curve25519,
+    publicKey    [2] OCTET STRING,   -- classical: X25519 / P256 for hosts, Ed25519 / ECDSA P256 for CAs
+    signature    [3] OCTET STRING,   -- classical CA signature over details || curve || publicKey, as in v2
+    pqPublicKey  [4] OCTET STRING,   -- ML-KEM-1024 encapsulation key for hosts, ML-DSA-87 public key for CAs
+    pqSignature  [5] OCTET STRING    -- ML-DSA-87 by the issuing CA, context "nebula certificate v3",
+                                     -- over the DER of fields 0 to 4, curve always present
+}
+```
 
-The initiator never caches the responder's certificate, so every handshake has three
-messages and carries both full certificates. With ML-DSA-87:
+- **The v2 form.** Fields 0 to 3 are a byte exact v2 certificate, signed by the v2 form of the CA.
+  A v3 holder presents it in classical and phase 1 handshakes, so peers that only speak v2 accept
+  it as they always have, and old parsers never see v3 bytes. A node therefore needs one
+  certificate, not a v2 and v3 pair.
+- **Signatures.** Both must verify. The ML-DSA-87 signature covers the classical signature too, so
+  neither signature can be swapped out (which also makes P256 low/high-s alternates moot for v3).
+  If ML-DSA fell classically and someone swapped `pqPublicKey`, the hybrid handshake still needs
+  the classical static key, which only the classical signature covers.
+- **Issuer and fingerprints.** The details are v2-shaped, so the issuer is the fingerprint of the
+  CA's v2 form. A v3 certificate's own fingerprint is the SHA-256 of its whole encoding and differs
+  from its v2 form's. Both identify it: the blocklist checks both, and operators must list both,
+  since blocking only the v3 fingerprint leaves the v2 form usable in classical handshakes. Firewall
+  `ca_sha` rules match a v3 peer by either fingerprint of its CA.
+- **CA pool.** A v3 CA verifies only v3 certificates. To accept v2 certificates as well the pool
+  must also list the CA's v2 form. Dropping the v2 form is how a node requires post-quantum
+  authentication; there is no separate setting. Two different v3 extensions of one v2 CA are
+  rejected as ambiguous.
+- **Keys are composite**, classical followed by post-quantum, wherever a v3 certificate deals in
+  them: `PublicKey()` returns `classical || pq`, and private keys are `classical || seed` (64 byte
+  ML-KEM seed for hosts, 32 byte ML-DSA seed for CAs), in one PEM block in `pki.key` with banners
+  such as `NEBULA X25519 MLKEM1024 PRIVATE KEY` and `NEBULA ED25519 MLDSA87 PRIVATE KEY`.
+- **Both curves.** Curve25519 and P256; the post-quantum half does not depend on the curve.
+- **In-place upgrade.** `nebula-cert pq-extend` turns an existing v2 CA into a v3 CA whose v2 form
+  is the old CA certificate, byte for byte, and extends existing host certificates the same way.
+  Fingerprints, blocklists and trust in the v2 forms carry over unchanged. Hosts get their ML-KEM
+  key with `nebula-cert keygen -in-key`, which keeps the classical key.
 
-| Message | Size | Data fragments (k) |
+| Certificate | Full | In a handshake | v2 form |
+|---|---|---|---|
+| CA, Curve25519 | 7362 B | n/a | 134 B |
+| Host, Curve25519 | 6375 B | 4769 B | 171 B |
+
+`crypto/mldsa` is new in Go 1.27, so `go.mod` moves to Go 1.27.
+
+### Handshake
+
+A new subtype, `ix_hybrid_mlkem1024` (3), runs `HandshakeHybridIX` from
+[github.com/DefinedNet/noise](https://github.com/DefinedNet/noise) (its `PQ_RESEARCH.md` gives the
+design rationale and security argument), with ML-KEM-1024 supplied by nebula:
+
+```
+-> e, s
+<- ekem, skem, e, ee, se, s, es
+-> skem
+```
+
+- `e` and `s` carry composite keys, X25519 (or P256) followed by ML-KEM-1024. DH tokens use the
+  classical halves, `ekem` and `skem` encapsulate to the ML-KEM halves, and every secret goes into
+  the one chaining key. The static ML-KEM key is the post-quantum half of the certificate's public
+  key, so it travels in `s` and the handshake form of the certificate leaves out both keys.
+- **KEM tokens first.** msg2 starts with `ekem, skem`, so the responder's static key and
+  certificate are encrypted under keys that already include both KEM secrets: the responder's
+  identity is protected against harvest-now-decrypt-later, as TLS 1.3 with `X25519MLKEM768`
+  protects the server certificate. (OpenSSH offers no comparison: its hybrid key exchange sends the
+  host key in the clear.) The initiator's certificate travels in msg1 in the clear, as in IX today.
+- **Authentication.** The responder authenticates the initiator when msg3 decrypts (it depends on
+  msg2's `skem` to the initiator's static key); the initiator authenticates the responder when the
+  first packet under the new keys decrypts (it depends on msg3's `skem`). Neither side needs a
+  signature. Knowing only a peer's classical private key gets an impersonator nowhere: as an
+  initiator it cannot read msg2, as a responder it cannot read msg3.
+- v3 certificates go with this subtype and nothing else: a v3 certificate on any other subtype, or
+  a v2 one on this one, is a protocol error.
+
+| Message | Size (Curve25519) | Data fragments (k) |
 |---|---|---|
-| msg1 | ~8.2 KB | 8 |
-| msg2 | ~9.8 KB | 9 |
-| msg3 | ~1.6 KB | 2 |
+| msg1 | 8006 B | 7 |
+| msg2 | 11193 B | 10 |
+| msg3 | 1616 B | 2 |
 
-flynn/noise cannot mix multiple KEM secrets into the chaining key, so phase 2 needs a
-KEM-aware Noise symmetric state written in this repository. Both subtypes coexist.
+**TODO:** the noise library's responder `e` also carries an ephemeral ML-KEM key that no token
+encapsulates to: 1568 bytes of msg2 (which would otherwise be 9 fragments) and a key generation
+for nothing. Removing it is a change to DefinedNet/noise.
 
-Cryptographic review of the hybrid composition will be done by in-house cryptographers.
+**Dependency.** DefinedNet/noise is a private repository today. `go.mod` points at a local clone
+with a `replace` directive; the module has to be published (or the hybrid patterns upstreamed to
+flynn/noise) before this can merge.
+
+### Three messages in the manager
+
+- **Responder.** After msg2 the responder keeps the handshake pending under its local index, the
+  multi-message responder the manager lacked before. A repeated msg1 maps to it through the
+  answered-msg1 cache and gets msg2 resent with fresh symbols, as in phase 1. msg3's fragments name
+  the responder's index, so they reach the pending entry and never the pre-authentication table;
+  its reassembly is capped at 4 KiB. Until msg3 verifies, data for that index is dropped quietly:
+  a RecvError would tear down the initiator's new tunnel. On completing, the responder sends an
+  empty `Test`/`TestReply` under the new keys so the initiator hears back without traffic. A
+  pending responder expires after the handshake timeout.
+- **Initiator.** Writing msg3 yields the transport keys, so the tunnel goes live at once, readable
+  only by the real responder; msg3 goes out before any packets cached during the handshake. Until
+  anything from the responder decrypts on the new tunnel, msg3 is resent with fresh symbols on a
+  linear backoff, and if nothing has decrypted by the handshake timeout the tunnel is closed.
+  Losing msg3 costs the data sent right behind it, which the overlay retransmits.
+- **Lost confirmation.** A msg3 fragment for a v3 tunnel the responder already completed means the
+  initiator is still waiting, so the responder confirms again, at most once per retry interval and
+  only to the tunnel's own remote, never to the fragment's source.
+- **A failed attempt.** A post-quantum attempt can fail fatally where the classical one would not,
+  for example a v3 certificate from a CA the initiator trusts only in its v2 form. The failed
+  attempt is dropped and the handshake continues classical. With `require` the handshake ends.
+
+### Rollout with v3
+
+- A node with a v3 certificate initiates hybrid handshakes in place of phase 1 ones, alternating
+  with classical as before. It never initiates phase 1, but still answers phase 1 handshakes with
+  its v2 form, so a peer with only a v2 certificate gets a classical tunnel from it.
+- A responder without a v3 certificate drops hybrid msg1s before reassembly.
+- `handshakes.pq.require` with a v3 certificate means hybrid only, in both directions: phase 1
+  msg1s are dropped too, so every peer needs a v3 certificate.
+- Post-quantum authentication is required through the CA pool, by not listing the CA's v2 form.
+  A sticky or `require` initiator resists active downgrade of the key exchange; only the CA pool
+  resists downgrade of authentication, since a quantum attacker could forge a v2 form.
 
 ## Fragment transport
 
@@ -207,7 +298,7 @@ Implemented in `handshake/fragment` (`Sender`, `Assembly`, and the capped `Table
 - Before an address is validated, a responder sends at most 3x the bytes it received from
   it (QUIC's rule). Normal handshakes sit near 1.1-1.2x.
 - In phase 2 the initiator retransmits msg3 until any authenticated packet arrives from
-  the responder; the responder sends a small confirmation on completion and holds tunnel
+  the responder; the responder sends a small confirmation on completion and drops tunnel
   traffic until msg3 verifies.
 
 ### Denial of service
@@ -288,6 +379,9 @@ mean burst length in packets. First-attempt success for the whole handshake with
 | phase 2 (7, 9, 2) FEC | 5% | 99.6% | 94.2% | 90.4% | 88.8% |
 | phase 2 (7, 9, 2) FEC | 10% | 95.9% | 84.6% | 79.0% | 77.3% |
 
+The phase 2 rows assume (7, 9, 2) data fragments; as built it is (7, 10, 2), the extra msg2
+fragment being the unused ephemeral ML-KEM key noted above.
+
 With fresh repair symbols, phase 2 completes within two attempts at least 99.1% of the time
 in every scenario above, and within three at least 99.99%.
 
@@ -338,7 +432,32 @@ in every scenario above, and within three at least 99.99%.
   rotation, the never-amplify rule, the initiator's rate limited resend, and reload. ML-KEM and HKDF also
   pass under `GOEXPERIMENT=boringcrypto` and `GODEBUG=fips140=on`.
 
+## Implementation (phase 2)
+
+- `cert`: `cert_v3.go` (format, `V2Form`, `ExtendToV3`, `SignPQ`), `SignHybridWith` and the
+  composite `Sign` path, the CA pool's v3 index and v2-form blocklisting, and the composite key
+  PEM banners.
+- `handshake`: the `ix_hybrid_mlkem1024` subtype on `noise.HandshakeHybridIX`, `KEMMLKEM1024`,
+  composite credentials, cipher states ordered by role for three message patterns, and
+  `Machine.PeerCert` for a responder that has to act before completion.
+- `pki.go` loads a v3 certificate with its composite key and derives the v2 form; messages after
+  the handshake treat v3 tunnels as v2 (`protocolVersion`).
+- `handshake_manager_hybrid.go`: pending responders, confirmation and reconfirmation, and the
+  initiator's msg3 resends and teardown; `outside.go` keeps quiet about pending responder indexes.
+- `nebula-cert`: `ca`, `keygen` and `sign` take `-version 3`, `keygen -in-key` extends an existing
+  host key, `sign -version 2` with a v3 CA signs as its v2 form, and `pq-extend` upgrades v2
+  certificates in place, keeping an encrypted CA key encrypted.
+- Tests: certificate format, strictness, tampering, pool and blocklist rules and in-place
+  extension on both curves; Machine-level hybrid handshakes including corrupted msg3 and
+  impersonation with only the classical key; e2e tests for a clean hybrid handshake, a lost
+  confirmation, a never confirmed handshake (no RecvErrors, teardown, expiry), a v2-only peer, an
+  initiator that trusts only the v2 form, `require` both ways, and relays; pki loading; firewall
+  `ca_sha`; and the `nebula-cert` flows.
+
 ## Open items
 
-None for phase 1. Phase 2 needs certificate v3, the KEM-aware Noise symmetric state, and
-the msg3 design above.
+- Publish DefinedNet/noise, or upstream the hybrid patterns, and drop the `replace` in `go.mod`.
+- The unused responder ephemeral ML-KEM key in msg2 (see the TODO above).
+- Cryptographic review of the hybrid composition and of the v3 certificate signatures.
+- A tunnel that came up classical between two v3 holders (say, the hybrid attempt was dropped)
+  stays classical until it rehandshakes for another reason.
