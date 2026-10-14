@@ -274,6 +274,38 @@ func TestStopDetachesTheWatcher(t *testing.T) {
 	require.Eventually(t, func() bool { return s.Path() == "" }, time.Second, 10*time.Millisecond, "the second run's context stops it")
 }
 
+// TestGivingUpTheSocketDetachesTheWatcher: when the node is gone from under the endpoint
+// and the bind that follows fails, the run is over and its watcher went with it, so a
+// later Rebind is watched on the ctx it was given, as after a Stop.
+func TestGivingUpTheSocketDetachesTheWatcher(t *testing.T) {
+	s := NewServer(test.NewLogger(), basicRegistry())
+	path := testSocket(t)
+
+	ctxA, cancelA := context.WithCancel(context.Background())
+	t.Cleanup(cancelA)
+	require.NoError(t, s.Rebind(ctxA, path, ownerOnly()))
+
+	// The node goes and a directory takes its place, so the bind that follows fails.
+	require.NoError(t, os.Remove(path))
+	require.NoError(t, os.Mkdir(path, 0700))
+	err := s.Rebind(ctxA, path, ownerOnly())
+	require.ErrorContains(t, err, "is not a socket")
+	assert.Empty(t, s.Path(), "the socket was given up before the bind failed")
+	require.NoError(t, os.Remove(path))
+
+	ctxB, cancelB := context.WithCancel(context.Background())
+	t.Cleanup(cancelB)
+	require.NoError(t, s.Rebind(ctxB, path, ownerOnly()))
+	t.Cleanup(s.Stop)
+
+	cancelA()
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, path, s.Path(), "the first run's context has nothing to do with the second run")
+
+	cancelB()
+	require.Eventually(t, func() bool { return s.Path() == "" }, time.Second, 10*time.Millisecond, "the second run's context stops it")
+}
+
 func TestVersionMismatchIsExplained(t *testing.T) {
 	_, path := serve(t, basicRegistry())
 

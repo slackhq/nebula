@@ -103,3 +103,21 @@ func TestResultShapes(t *testing.T) {
 	assert.Equal(t, Outcome{OK: true, Reason: "done"}, Did("done").Payload())
 	assert.Equal(t, Outcome{Reason: "no"}, Failed("no").Payload())
 }
+
+// TestNotFoundIsARefusalLikeAnyOther: NotFound renders and marshals exactly as Failed
+// does, so no surface's output changes by a command adopting it. The mark is on the
+// Result alone, for a surface whose protocol has a word for it.
+func TestNotFoundIsARefusalLikeAnyOther(t *testing.T) {
+	r := NotFound("No active tunnel for vpn addr: %s", "10.0.0.5")
+	assert.False(t, r.OK)
+	assert.True(t, r.NotFound)
+	assert.False(t, Failed("nope").NotFound)
+
+	out := &bytes.Buffer{}
+	require.NoError(t, Render(&Command{Name: "look"}, r, FormatText, out))
+	assert.Equal(t, "No active tunnel for vpn addr: 10.0.0.5\n", out.String())
+
+	out.Reset()
+	require.NoError(t, Render(&Command{Name: "look"}, r, FormatJSON, out))
+	assert.JSONEq(t, `{"ok":false,"reason":"No active tunnel for vpn addr: 10.0.0.5"}`, out.String(), "the mark never reaches the wire")
+}

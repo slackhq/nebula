@@ -112,6 +112,13 @@ func renderJSON(v any, w io.Writer, indent bool) error {
 type Result struct {
 	Outcome
 	Value any
+
+	// NotFound marks a refusal that is about the thing asked for rather than the asking:
+	// a vpn address with no tunnel behind it, as opposed to one that would not parse. It
+	// renders exactly as any other refusal, and never reaches the wire; the distinction
+	// is for a surface whose protocol has a word for it, so an HTTP client is told 404
+	// rather than 400 and never has to parse the sentence.
+	NotFound bool
 }
 
 // Outcome is the part of a Result that says whether the command worked and, in words a
@@ -135,6 +142,14 @@ func Value(v any) Result {
 // Failed is a convenience for the common "it did not work, here is why" case.
 func Failed(format string, args ...any) Result {
 	return Result{Outcome: Outcome{Reason: fmt.Sprintf(format, args...)}}
+}
+
+// NotFound is Failed for a command asked about something that does not exist. See
+// Result.NotFound.
+func NotFound(format string, args ...any) Result {
+	r := Failed(format, args...)
+	r.NotFound = true
+	return r
 }
 
 // Did is a convenience for the common "it worked, here is what happened" case.

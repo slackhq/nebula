@@ -101,6 +101,18 @@ func TestCommandOutput(t *testing.T) {
 		{"print-cert", []string{"10.222.0.9", "-json"}},
 		{"print-cert", []string{"10.222.0.250"}},
 		{"print-cert", []string{"not-an-address"}},
+		{"whoami", nil},
+		{"whoami", []string{"x"}},
+		// No address is a refusal that names whoami, never this node's identity.
+		{"identity", nil},
+		// Our own address, which the hostmap never holds, answers from our certificate.
+		{"identity", []string{"-address", "10.222.0.1"}},
+		{"identity", []string{"-address", "10.222.0.1:4242"}},
+		// A pending tunnel has no certificate yet.
+		{"identity", []string{"-address", "10.222.0.9"}},
+		{"identity", []string{"-address", "not-an-address"}},
+		{"identity", []string{"-address", ""}},
+		{"identity", []string{"10.222.0.9"}},
 		{"print-tunnel", nil},
 		{"print-tunnel", []string{"10.222.0.9"}},
 		{"print-tunnel", []string{"10.222.0.250"}},

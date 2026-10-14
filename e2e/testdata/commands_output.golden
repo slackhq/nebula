@@ -202,6 +202,195 @@ $ print-cert -pretty not-an-address
 }
 exit status 1
 
+$ whoami
+name: output-golden
+vpn addrs: 10.222.0.1
+networks: 10.222.0.1/24
+unsafe networks: 
+groups: 
+fingerprint: <hex>
+issuer: <hex>
+not before: <time>
+not after: <time>
+cert version: 1
+
+$ whoami -json
+{"name":"output-golden","vpnAddrs":["10.222.0.1"],"networks":["10.222.0.1/24"],"unsafeNetworks":[],"groups":[],"fingerprint":"<hex>","issuer":"<hex>","notBefore":"<time>","notAfter":"<time>","certVersion":1}
+
+$ whoami -pretty
+{
+    "name": "output-golden",
+    "vpnAddrs": [
+        "10.222.0.1"
+    ],
+    "networks": [
+        "10.222.0.1/24"
+    ],
+    "unsafeNetworks": [],
+    "groups": [],
+    "fingerprint": "<hex>",
+    "issuer": "<hex>",
+    "notBefore": "<time>",
+    "notAfter": "<time>",
+    "certVersion": 1
+}
+
+$ whoami x
+whoami takes no arguments
+exit status 1
+
+$ whoami -json x
+{"ok":false,"reason":"whoami takes no arguments"}
+exit status 1
+
+$ whoami -pretty x
+{
+    "ok": false,
+    "reason": "whoami takes no arguments"
+}
+exit status 1
+
+$ identity
+No vpn addr was provided, use -address <vpn addr>[:port]; whoami prints this node's own identity
+exit status 1
+
+$ identity -json
+{"ok":false,"reason":"No vpn addr was provided, use -address \u003cvpn addr\u003e[:port]; whoami prints this node's own identity"}
+exit status 1
+
+$ identity -pretty
+{
+    "ok": false,
+    "reason": "No vpn addr was provided, use -address \u003cvpn addr\u003e[:port]; whoami prints this node's own identity"
+}
+exit status 1
+
+$ identity -address 10.222.0.1
+name: output-golden
+vpn addrs: 10.222.0.1
+networks: 10.222.0.1/24
+unsafe networks: 
+groups: 
+fingerprint: <hex>
+issuer: <hex>
+not before: <time>
+not after: <time>
+cert version: 1
+
+$ identity -json -address 10.222.0.1
+{"name":"output-golden","vpnAddrs":["10.222.0.1"],"networks":["10.222.0.1/24"],"unsafeNetworks":[],"groups":[],"fingerprint":"<hex>","issuer":"<hex>","notBefore":"<time>","notAfter":"<time>","certVersion":1}
+
+$ identity -pretty -address 10.222.0.1
+{
+    "name": "output-golden",
+    "vpnAddrs": [
+        "10.222.0.1"
+    ],
+    "networks": [
+        "10.222.0.1/24"
+    ],
+    "unsafeNetworks": [],
+    "groups": [],
+    "fingerprint": "<hex>",
+    "issuer": "<hex>",
+    "notBefore": "<time>",
+    "notAfter": "<time>",
+    "certVersion": 1
+}
+
+$ identity -address 10.222.0.1:4242
+name: output-golden
+vpn addrs: 10.222.0.1
+networks: 10.222.0.1/24
+unsafe networks: 
+groups: 
+fingerprint: <hex>
+issuer: <hex>
+not before: <time>
+not after: <time>
+cert version: 1
+
+$ identity -json -address 10.222.0.1:4242
+{"name":"output-golden","vpnAddrs":["10.222.0.1"],"networks":["10.222.0.1/24"],"unsafeNetworks":[],"groups":[],"fingerprint":"<hex>","issuer":"<hex>","notBefore":"<time>","notAfter":"<time>","certVersion":1}
+
+$ identity -pretty -address 10.222.0.1:4242
+{
+    "name": "output-golden",
+    "vpnAddrs": [
+        "10.222.0.1"
+    ],
+    "networks": [
+        "10.222.0.1/24"
+    ],
+    "unsafeNetworks": [],
+    "groups": [],
+    "fingerprint": "<hex>",
+    "issuer": "<hex>",
+    "notBefore": "<time>",
+    "notAfter": "<time>",
+    "certVersion": 1
+}
+
+$ identity -address 10.222.0.9
+No active tunnel for vpn addr: 10.222.0.9
+exit status 1
+
+$ identity -json -address 10.222.0.9
+{"ok":false,"reason":"No active tunnel for vpn addr: 10.222.0.9"}
+exit status 1
+
+$ identity -pretty -address 10.222.0.9
+{
+    "ok": false,
+    "reason": "No active tunnel for vpn addr: 10.222.0.9"
+}
+exit status 1
+
+$ identity -address not-an-address
+The provided vpn addr could not be parsed: not-an-address
+exit status 1
+
+$ identity -json -address not-an-address
+{"ok":false,"reason":"The provided vpn addr could not be parsed: not-an-address"}
+exit status 1
+
+$ identity -pretty -address not-an-address
+{
+    "ok": false,
+    "reason": "The provided vpn addr could not be parsed: not-an-address"
+}
+exit status 1
+
+$ identity -address 
+The provided vpn addr could not be parsed: 
+exit status 1
+
+$ identity -json -address 
+{"ok":false,"reason":"The provided vpn addr could not be parsed: "}
+exit status 1
+
+$ identity -pretty -address 
+{
+    "ok": false,
+    "reason": "The provided vpn addr could not be parsed: "
+}
+exit status 1
+
+$ identity 10.222.0.9
+identity takes the vpn addr as -address, not as an operand: identity -address 10.222.0.9
+exit status 1
+
+$ identity -json 10.222.0.9
+{"ok":false,"reason":"identity takes the vpn addr as -address, not as an operand: identity -address 10.222.0.9"}
+exit status 1
+
+$ identity -pretty 10.222.0.9
+{
+    "ok": false,
+    "reason": "identity takes the vpn addr as -address, not as an operand: identity -address 10.222.0.9"
+}
+exit status 1
+
 $ print-tunnel
 No vpn address was provided
 exit status 1
@@ -573,6 +762,7 @@ close-tunnel - Closes a tunnel for the provided vpn addr
 create-tunnel - Creates a tunnel for the provided vpn address
 device-info - Prints information about the network device.
 help - prints available commands or help <command> for specific usage info
+identity - Prints the certificate identity of the host owning the provided vpn addr
 list-hostmap - List all known previously connected hosts
 list-lighthouse-addrmap - List all lighthouse map entries
 list-pending-hostmap - List all handshaking hosts
@@ -585,10 +775,11 @@ print-tunnel - Prints json details about a tunnel for the provided vpn addr
 query-lighthouse - Query the lighthouses for the provided vpn address
 reload - Reloads configuration from disk, same as sending HUP to the process
 version - Prints the currently running version of nebula
+whoami - Prints the certificate identity of this node
 
 
 $ help -json
-[{"name":"change-remote","short":"Changes the remote address used in the tunnel for the provided vpn addr","flags":[{"name":"address","usage":"The new remote address, ip:port"},{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"close-tunnel","short":"Closes a tunnel for the provided vpn addr","flags":[{"name":"local-only","bool":true,"default":"false","usage":"Disables notifying the remote that the tunnel is shutting down"},{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"create-tunnel","short":"Creates a tunnel for the provided vpn address","help":"The lighthouses will be queried for real addresses but you can provide one as well.","flags":[{"name":"address","usage":"Optionally provide a real remote address, ip:port "},{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"device-info","short":"Prints information about the network device.","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"help","short":"prints available commands or help \u003ccommand\u003e for specific usage info","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"list-hostmap","short":"List all known previously connected hosts","flags":[{"name":"by-index","bool":true,"default":"false","usage":"gets all hosts in the hostmap from the index table"},{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"list-lighthouse-addrmap","short":"List all lighthouse map entries","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"list-pending-hostmap","short":"List all handshaking hosts","flags":[{"name":"by-index","bool":true,"default":"false","usage":"gets all hosts in the hostmap from the index table"},{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"log-format","short":"Gets or sets the current log format","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"log-level","short":"Gets or sets the current log level","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"logout","short":"Ends the current session","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"print-cert","short":"Prints the current certificate being used or the certificate for the provided vpn addr","flags":[{"name":"raw","bool":true,"default":"false","usage":"prints the PEM encoded certificate; with -json, an object holding it"},{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"print-relays","short":"Prints json details about all relay info","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"print-tunnel","short":"Prints json details about a tunnel for the provided vpn addr","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"query-lighthouse","short":"Query the lighthouses for the provided vpn address","help":"This command is asynchronous. Only currently known udp addresses will be printed.","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"reload","short":"Reloads configuration from disk, same as sending HUP to the process","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"version","short":"Prints the currently running version of nebula","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]}]
+[{"name":"change-remote","short":"Changes the remote address used in the tunnel for the provided vpn addr","flags":[{"name":"address","usage":"The new remote address, ip:port"},{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"close-tunnel","short":"Closes a tunnel for the provided vpn addr","flags":[{"name":"local-only","bool":true,"default":"false","usage":"Disables notifying the remote that the tunnel is shutting down"},{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"create-tunnel","short":"Creates a tunnel for the provided vpn address","help":"The lighthouses will be queried for real addresses but you can provide one as well.","flags":[{"name":"address","usage":"Optionally provide a real remote address, ip:port "},{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"device-info","short":"Prints information about the network device.","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"help","short":"prints available commands or help \u003ccommand\u003e for specific usage info","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"identity","short":"Prints the certificate identity of the host owning the provided vpn addr","help":"The printed identity includes: name, vpn addrs, networks, groups, fingerprint, issuer and validity. The query address may include a port. For this node's own identity use whoami.","flags":[{"name":"address","usage":"The vpn addr to look up, optionally with a port"},{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"list-hostmap","short":"List all known previously connected hosts","flags":[{"name":"by-index","bool":true,"default":"false","usage":"gets all hosts in the hostmap from the index table"},{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"list-lighthouse-addrmap","short":"List all lighthouse map entries","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"list-pending-hostmap","short":"List all handshaking hosts","flags":[{"name":"by-index","bool":true,"default":"false","usage":"gets all hosts in the hostmap from the index table"},{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"log-format","short":"Gets or sets the current log format","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"log-level","short":"Gets or sets the current log level","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"logout","short":"Ends the current session","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"print-cert","short":"Prints the current certificate being used or the certificate for the provided vpn addr","flags":[{"name":"raw","bool":true,"default":"false","usage":"prints the PEM encoded certificate; with -json, an object holding it"},{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"print-relays","short":"Prints json details about all relay info","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"print-tunnel","short":"Prints json details about a tunnel for the provided vpn addr","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"query-lighthouse","short":"Query the lighthouses for the provided vpn address","help":"This command is asynchronous. Only currently known udp addresses will be printed.","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"reload","short":"Reloads configuration from disk, same as sending HUP to the process","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"version","short":"Prints the currently running version of nebula","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"whoami","short":"Prints the certificate identity of this node","help":"Prints the name, vpn addrs, networks, groups, fingerprint, issuer and validity for this node's certificate.","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]}]
 
 $ help -pretty
 [
@@ -683,6 +874,29 @@ $ help -pretty
         "name": "help",
         "short": "prints available commands or help \u003ccommand\u003e for specific usage info",
         "flags": [
+            {
+                "name": "json",
+                "bool": true,
+                "default": "false",
+                "usage": "outputs as json"
+            },
+            {
+                "name": "pretty",
+                "bool": true,
+                "default": "false",
+                "usage": "pretty prints json, assumes -json"
+            }
+        ]
+    },
+    {
+        "name": "identity",
+        "short": "Prints the certificate identity of the host owning the provided vpn addr",
+        "help": "The printed identity includes: name, vpn addrs, networks, groups, fingerprint, issuer and validity. The query address may include a port. For this node's own identity use whoami.",
+        "flags": [
+            {
+                "name": "address",
+                "usage": "The vpn addr to look up, optionally with a port"
+            },
             {
                 "name": "json",
                 "bool": true,
@@ -931,6 +1145,25 @@ $ help -pretty
                 "usage": "pretty prints json, assumes -json"
             }
         ]
+    },
+    {
+        "name": "whoami",
+        "short": "Prints the certificate identity of this node",
+        "help": "Prints the name, vpn addrs, networks, groups, fingerprint, issuer and validity for this node's certificate.",
+        "flags": [
+            {
+                "name": "json",
+                "bool": true,
+                "default": "false",
+                "usage": "outputs as json"
+            },
+            {
+                "name": "pretty",
+                "bool": true,
+                "default": "false",
+                "usage": "pretty prints json, assumes -json"
+            }
+        ]
     }
 ]
 
@@ -1031,6 +1264,7 @@ close-tunnel - Closes a tunnel for the provided vpn addr
 create-tunnel - Creates a tunnel for the provided vpn address
 device-info - Prints information about the network device.
 help - prints available commands or help <command> for specific usage info
+identity - Prints the certificate identity of the host owning the provided vpn addr
 list-hostmap - List all known previously connected hosts
 list-lighthouse-addrmap - List all lighthouse map entries
 list-pending-hostmap - List all handshaking hosts
@@ -1043,6 +1277,7 @@ print-tunnel - Prints json details about a tunnel for the provided vpn addr
 query-lighthouse - Query the lighthouses for the provided vpn address
 reload - Reloads configuration from disk, same as sending HUP to the process
 version - Prints the currently running version of nebula
+whoami - Prints the certificate identity of this node
 
 exit status 1
 
@@ -1054,6 +1289,7 @@ close-tunnel - Closes a tunnel for the provided vpn addr
 create-tunnel - Creates a tunnel for the provided vpn address
 device-info - Prints information about the network device.
 help - prints available commands or help <command> for specific usage info
+identity - Prints the certificate identity of the host owning the provided vpn addr
 list-hostmap - List all known previously connected hosts
 list-lighthouse-addrmap - List all lighthouse map entries
 list-pending-hostmap - List all handshaking hosts
@@ -1066,6 +1302,7 @@ print-tunnel - Prints json details about a tunnel for the provided vpn addr
 query-lighthouse - Query the lighthouses for the provided vpn address
 reload - Reloads configuration from disk, same as sending HUP to the process
 version - Prints the currently running version of nebula
+whoami - Prints the certificate identity of this node
 
 exit status 1
 
@@ -1077,6 +1314,7 @@ close-tunnel - Closes a tunnel for the provided vpn addr
 create-tunnel - Creates a tunnel for the provided vpn address
 device-info - Prints information about the network device.
 help - prints available commands or help <command> for specific usage info
+identity - Prints the certificate identity of the host owning the provided vpn addr
 list-hostmap - List all known previously connected hosts
 list-lighthouse-addrmap - List all lighthouse map entries
 list-pending-hostmap - List all handshaking hosts
@@ -1089,6 +1327,7 @@ print-tunnel - Prints json details about a tunnel for the provided vpn addr
 query-lighthouse - Query the lighthouses for the provided vpn address
 reload - Reloads configuration from disk, same as sending HUP to the process
 version - Prints the currently running version of nebula
+whoami - Prints the certificate identity of this node
 
 exit status 1
 
