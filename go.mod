@@ -1,14 +1,14 @@
 module github.com/slackhq/nebula
 
-go 1.26.0
+go 1.27.0
 
 require (
 	dario.cat/mergo v1.0.2
 	filippo.io/bigmod v0.1.0
 	github.com/DefinedNet/netlink v1.3.2-dn.1
+	github.com/DefinedNet/noise v0.0.0-00010101000000-000000000000
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
 	github.com/armon/go-radix v1.0.0
-	github.com/flynn/noise v1.1.0
 	github.com/gaissmai/bart v0.29.0
 	github.com/gogo/protobuf v1.3.2
 	github.com/google/gopacket v1.1.19
@@ -47,3 +47,5 @@ require (
 	github.com/vishvananda/netns v0.0.5 // indirect
 	golang.org/x/time v0.5.0 // indirect
 )
+
+replace github.com/DefinedNet/noise => /home/jack/work/git/DefinedNet-noise

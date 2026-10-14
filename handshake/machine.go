@@ -8,7 +8,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/flynn/noise"
+	"github.com/DefinedNet/noise"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
 )
