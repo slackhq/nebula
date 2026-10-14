@@ -425,12 +425,11 @@ logging:
   # after receiving the response for lighthouse queries
   #trigger_buffer: 64
 
-  # pq enables handshakes that mix an ephemeral ML-KEM-1024 key exchange into the session keys, protecting
-  # recorded traffic against a future quantum computer. These handshakes are too large for one packet and travel
-  # as fragments with forward error correction.
-  # With a version 3 certificate in pki.cert they are hybrid handshakes, also authenticated post-quantum with the
-  # certificates' ML-KEM-1024 keys, and need a version 3 certificate on both ends. Without one, authentication is
-  # unchanged.
+  # pq enables hybrid handshakes: ML-KEM-1024 alongside the classical key exchange, so recorded traffic stays
+  # secret against a future quantum computer, and authentication by the version 3 certificates' ML-KEM-1024 keys.
+  # Both ends need a version 3 certificate in pki.cert; without one these settings are ignored with a warning, and
+  # require is refused. These handshakes are too large for one packet and travel as fragments with forward error
+  # correction.
   #pq:
     # initiate starts post-quantum handshakes. Attempts alternate between post-quantum and classical until one is
     # answered, so peers that do not support them still connect.
@@ -438,8 +437,7 @@ logging:
     # accept answers post-quantum handshakes from peers.
     #accept: false
     # require makes every handshake post-quantum: it implies initiate and accept, never offers a classical handshake
-    # and refuses classical handshakes from peers. Only enable it once every host can speak post-quantum handshakes.
-    # With a version 3 certificate only hybrid handshakes are made or answered, so every peer needs one too.
+    # and refuses classical handshakes from peers. Only enable it once every host has a version 3 certificate.
     #require: false
     # sticky never falls back to a classical handshake with a peer that has completed a post-quantum one since
     # nebula started, which defeats an attacker who drops post-quantum handshakes to force a downgrade.

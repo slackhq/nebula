@@ -1,16 +1,17 @@
 # Post-quantum handshakes
 
-Status: draft. Decisions below were made on 2026-10-13 (phase 1) and 2026-10-14 (phase 2); open
-items are listed at the end. Both phases are implemented (see
-[phase 1](#implementation-phase-1) and [phase 2](#implementation-phase-2)).
+Status: draft. Decisions below were made on 2026-10-13 and 2026-10-14; open items are listed at
+the end. Post-quantum handshakes ship hybrid only, on version 3 certificates (decided
+2026-10-14); see [Implementation](#implementation-certificates-and-the-hybrid-handshake).
 
 ## Goals
 
 1. **Confidentiality against harvest-now-decrypt-later.** Traffic recorded today must stay
    secret after a cryptographically relevant quantum computer exists. This needs a
    post-quantum key exchange now.
-2. **Post-quantum authentication, later.** Needs certificates whose CA signature and host
-   keys are post-quantum. This requires reissuing certificates, so it ships second.
+2. **Post-quantum authentication.** Needs certificates whose CA signature and host keys are
+   post-quantum, so certificates have to be reissued or extended. Post-quantum key exchange
+   ships only together with it: there is no post-quantum handshake on version 2 certificates.
 3. **Never rely on IP fragmentation.** ML-KEM and ML-DSA do not fit in one packet, so the
    handshake must carry messages larger than the path MTU itself.
 
@@ -27,43 +28,30 @@ The only signature in the system stays the CA signature inside the certificate.
 | Today's IX msg1 / msg2 (v2 cert, 151 B) | 252 B / 287 B |
 
 `crypto/mlkem` is available in Go 1.26; `crypto/mldsa` arrives in Go 1.27, which `go.mod`
-requires since phase 2.
+requires.
 
-## Phase 1: ephemeral ML-KEM on today's certificates
+## An ephemeral-KEM handshake, built and dropped
 
-A new handshake subtype, `ix_psk2_mlkem1024` (2), IX-shaped (2 messages; the responder
-completes on msg1 as today), using the flynn/noise `psk2` modifier. The Noise protocol name
-becomes `Noise_IXpsk2_...`, which separates it from the classical subtype.
+The first design was `ix_psk2_mlkem1024`: classical IX on version 2 certificates with an ephemeral
+ML-KEM-1024 exchange mixed in through the `psk2` slot, so recorded traffic was protected without
+reissuing certificates. It was built, field tested and then dropped on 2026-10-14, before any
+release. Post-quantum handshakes ship hybrid only, for three reasons:
 
-- **msg1**: the initiator generates a fresh ML-KEM-1024 key pair and places the
-  encapsulation key in `NebulaHandshakeDetails.KEMKey` (field 9). msg1's payload is mixed
-  into the Noise transcript, so it cannot be stripped or replaced without msg2 failing.
-  With the psk modifier Noise also mixes `e` into the cipher key, so msg1's static key and
-  payload are encrypted, though only under a key derived from the public ephemeral.
-- **Responder**: after `ReadMessage(msg1)` it encapsulates to that key, obtaining
-  `(ct, ss)`, and calls `HandshakeState.SetPresharedKey(psk)` before writing msg2, with
-  `psk = HKDF-Extract(SHA-256, salt = "nebula ix_psk2_mlkem1024 v1", ikm = ss || ct)`.
-  The ciphertext is bound in because, unlike the encapsulation key, it is not part of the
-  Noise transcript.
-- **msg2** on the wire is `ct || noise_msg2`. The ciphertext travels outside the Noise
-  message because the initiator needs `ss` before processing msg2's `psk` token. Any change
-  to `ct` yields a different `ss` (ML-KEM implicit rejection) and the handshake fails.
+- It left authentication classical, which a deployment wanting quantum safety needs anyway, and
+  a second post-quantum handshake would be twice the code to review and keep.
+- It completes in two messages, so the responder could not tell which of two crossing attempts
+  the initiator kept (see [Crossing attempts](#three-messages-in-the-manager)); on real hosts 5 of
+  100 first pings failed at 50 ms round trip for that reason.
+- Its `psk` token came last in msg2, so the responder's static key travelled under classical keys
+  only.
 
-Transport keys depend on both the X25519 DH outputs and the ML-KEM shared secret.
-Authentication is unchanged and classical. With a minimal v2 certificate msg1 and msg2 are
-about 1.84 KB each, so each travels as 2 data and 2 repair fragments of about 936 bytes.
-A KEM key on the classical subtype, or a missing or malformed one on this subtype, is a fatal
-protocol error; a forged ciphertext only fails that packet.
+Subtype 2 and payload field 9 (its encapsulation key) stay reserved. The code is on the
+`pq-handshake` branch for reference.
 
-The `psk` token is the last in msg2, so the responder's static key `s` is encrypted under `ee` and
-`se` only, and a future quantum attacker can read it from a recording; the certificate and indexes
-follow the psk and stay protected. Identity hiding is a non-goal, and phase 2's KEM-first ordering
-closes this anyway.
+## Hybrid IX with certificate v3
 
-## Phase 2: hybrid IX with certificate v3
-
-Phase 2 adds post-quantum authentication. Decisions were made on 2026-10-14; it is implemented on
-the `pq-identity` branch (see [Implementation](#implementation-phase-2)).
+Decided on 2026-10-14 and implemented on the `pq-identity` branch (see
+[Implementation](#implementation-certificates-and-the-hybrid-handshake)).
 
 ### Certificate v3
 
@@ -95,7 +83,7 @@ CertificateV3 ::= SEQUENCE {
   form that replaces the old one, since one v2 CA has one v3 extension.
 
 - **The v2 form.** Fields 0 to 3 are a byte exact v2 certificate, signed by the v2 form of the CA.
-  A v3 holder presents it in classical and phase 1 handshakes, so peers that only speak v2 accept
+  A v3 holder presents it in classical handshakes, so peers that only speak v2 accept
   it as they always have, and old parsers never see v3 bytes. A node therefore needs one
   certificate, not a v2 and v3 pair.
 - **Signatures.** Both must verify. The ML-DSA-87 signature covers the classical signature too, so
@@ -197,7 +185,7 @@ flynn/noise) before this can merge.
 
 - **Responder.** After msg2 the responder keeps the handshake pending under its local index, the
   multi-message responder the manager lacked before. A repeated msg1 maps to it through the
-  answered-msg1 cache and gets msg2 resent with fresh symbols, as in phase 1. msg3's fragments name
+  answered-msg1 cache and gets msg2 resent with fresh symbols. msg3's fragments name
   the responder's index, so they reach the pending entry and never the pre-authentication table;
   its reassembly is capped at 4 KiB. Until msg3 verifies, data for that index is dropped quietly:
   a RecvError would tear down the initiator's new tunnel. On completing, the responder sends an
@@ -211,22 +199,33 @@ flynn/noise) before this can merge.
 - **Lost confirmation.** A msg3 fragment for a v3 tunnel the responder already completed means the
   initiator is still waiting, so the responder confirms again, at most once per retry interval and
   only to the tunnel's own remote, never to the fragment's source.
-- **Crossing attempts.** The initiator's classical attempt can reach the responder, which
-  completes it at once, while the hybrid handshake still waits for msg3. If the initiator got the
-  hybrid msg2 first it has committed to hybrid and sends msg3, so the responder takes the hybrid
-  tunnel even though the classical one is newer, rather than rejecting it as too old.
+- **Crossing attempts.** The initiator alternates, and its first classical attempt follows the
+  hybrid msg1 anywhere from right away to three retry intervals later (the retry timer lands two
+  slots ahead on the timer wheel, which moves on whole ticks), so at real round-trip times it
+  often goes out before msg2 is back. Answered, it would complete at once on the responder while
+  the hybrid handshake waits for msg3. So for four retry intervals after answering a peer's new
+  hybrid msg1, the responder leaves that peer's classical msg1s unanswered: the crossing one
+  arrives within the window whatever the round trip, because both take the same path. The
+  window is short so an initiator whose hybrid attempt fails on its own side (one that does not
+  yet trust our v3 CA, during a rollout) still gets a classical answer to a later attempt; a
+  block lasting as long as the hybrid state would refuse it until its handshake timed out, and
+  its next handshake would start with a hybrid msg1 again. A classical msg1 that still crosses,
+  past the window on a very slow path, is answered, but msg3 settles it: the initiator only
+  sends msg3 after committing to hybrid, so the responder takes the hybrid tunnel even though
+  the classical one is newer, rather than rejecting it as too old.
 - **A failed attempt.** A post-quantum attempt can fail fatally where the classical one would not,
   for example a v3 certificate from a CA the initiator trusts only in its v2 form. The failed
   attempt is dropped and the handshake continues classical. With `require` the handshake ends.
 
 ### Rollout with v3
 
-- A node with a v3 certificate initiates hybrid handshakes in place of phase 1 ones, alternating
-  with classical as before. It never initiates phase 1, but still answers phase 1 handshakes with
-  its v2 form, so a peer with only a v2 certificate gets a classical tunnel from it.
-- A responder without a v3 certificate drops hybrid msg1s before reassembly.
-- `handshakes.pq.require` with a v3 certificate means hybrid only, in both directions: phase 1
-  msg1s are dropped too, so every peer needs a v3 certificate.
+- `handshakes.pq` only does anything on a node with a v3 certificate. Without one, `initiate`,
+  `accept` and `sticky` log a warning and are ignored, and `require` is refused at startup and
+  on reload, since such a node could reach no one.
+- A responder without a v3 certificate, or whose suite uses another KEM, drops hybrid msg1s
+  before reassembly, and the initiator falls back to classical.
+- `handshakes.pq.require` means hybrid only, in both directions, so every peer needs a v3
+  certificate.
 - Post-quantum authentication is required through the CA pool, by not listing the CA's v2 form.
   A sticky or `require` initiator resists active downgrade of the key exchange; only the CA pool
   resists downgrade of authentication, since a quantum attacker could forge a v2 form.
@@ -354,7 +353,7 @@ Implemented in `handshake/fragment` (`Sender`, `Assembly`, and the capped `Table
   running Noise or certificate verification.
 - Before an address is validated, a responder sends at most 3x the bytes it received from
   it (QUIC's rule). Normal handshakes sit near 1.1-1.2x.
-- In phase 2 the initiator retransmits msg3 until any authenticated packet arrives from
+- The initiator retransmits msg3 until any authenticated packet arrives from
   the responder; the responder sends a small confirmation on completion and drops tunnel
   traffic until msg3 verifies.
 
@@ -419,7 +418,7 @@ does not downgrade.
   `handshakes.pq.initiate`, `handshakes.pq.accept`. `handshakes.pq.repair_delay` (default
   10ms) sets how long repair fragments trail the data fragments.
 - `handshakes.pq.require` makes every handshake PQ: it implies `initiate` and `accept`,
-  never offers a classical attempt, and drops classical msg1s.
+  never offers a classical attempt, and drops classical msg1s. It needs a v3 certificate.
 - Old nodes silently drop unknown subtypes, so discovery is speculative: an initiator with
   `initiate` enabled alternates PQ and classical attempts on successive timer retries,
   keeping both pending, and the first to complete wins. A path nothing has been sent over
@@ -444,14 +443,14 @@ mean burst length in packets. First-attempt success for the whole handshake with
 
 | Handshake | Loss | Burst 1 | Burst 2 | Burst 4 | Burst 8 |
 |---|---|---|---|---|---|
-| phase 1 (2, 2) no FEC | 5% | 81.4% | 85.6% | 87.9% | 89.0% |
-| phase 1 (2, 2) FEC | 5% | 99.9% | 99.4% | 99.3% | 98.6% |
-| phase 1 (2, 2) FEC | 10% | 99.3% | 97.5% | 97.4% | 96.3% |
-| phase 2 (7, 9, 2) no FEC | 5% | 39.8% | 57.5% | 70.4% | 77.7% |
-| phase 2 (7, 9, 2) FEC | 5% | 99.6% | 94.2% | 90.4% | 88.8% |
-| phase 2 (7, 9, 2) FEC | 10% | 95.9% | 84.6% | 79.0% | 77.3% |
+| two messages (2, 2) no FEC | 5% | 81.4% | 85.6% | 87.9% | 89.0% |
+| two messages (2, 2) FEC | 5% | 99.9% | 99.4% | 99.3% | 98.6% |
+| two messages (2, 2) FEC | 10% | 99.3% | 97.5% | 97.4% | 96.3% |
+| hybrid (7, 9, 2) no FEC | 5% | 39.8% | 57.5% | 70.4% | 77.7% |
+| hybrid (7, 9, 2) FEC | 5% | 99.6% | 94.2% | 90.4% | 88.8% |
+| hybrid (7, 9, 2) FEC | 10% | 95.9% | 84.6% | 79.0% | 77.3% |
 
-With fresh repair symbols, phase 2 completes within two attempts at least 99.1% of the time
+With fresh repair symbols, the hybrid handshake completes within two attempts at least 99.1% of the time
 in every scenario above, and within three at least 99.99%.
 
 ## Prior art
@@ -471,10 +470,8 @@ in every scenario above, and within three at least 99.99%.
 - **TFTP, NFS duplicate request cache, memcached UDP, IP reassembly bugs**: retransmit
   storms, ID-wrap misassembly, reflection amplification, and allocation from claimed sizes.
 
-## Implementation (phase 1)
+## Implementation: fragment transport and manager
 
-- `handshake`: the `ix_psk2_mlkem1024` subtype (`patterns.go`, `kem.go`), the `KEMKey`
-  payload field, and the psk2 plumbing in `Machine`.
 - `handshake/fec`, `handshake/fragment`: the code and the fragment transport.
 - `handshake_manager_pq.go` and the manager:
   - **Initiator.** Attempts alternate PQ and classical, starting with PQ (sticky peers get
@@ -492,16 +489,16 @@ in every scenario above, and within three at least 99.99%.
 - The pre-authentication table is capped at 4 MiB, 1024 entries, 4 per source (IPv4 /32,
   IPv6 /64, or relay channel), 16 KiB messages and a 3 s idle timeout. Cookies are
   demanded from half full.
-- Tests: Noise-level KEM tests, codec and fragment tests and fuzzers, manager unit tests
+- Tests: codec and fragment tests and fuzzers, manager unit tests
   for the response budget and rate limit, and e2e tests for a clean handshake, loss of
   data fragments in both directions, fallback to a peer that does not accept PQ, a lost
   msg2 recovered by fresh symbols, sticky mode under an attacker dropping PQ packets,
   relays, index cleanup on completion, fallback and timeout, and a responder flooded from
   spoofed sources demanding and accepting a cookie. Unit tests cover cookie binding and
-  rotation, the never-amplify rule, the initiator's rate limited resend, and reload. ML-KEM and HKDF also
-  pass under `GOEXPERIMENT=boringcrypto` and `GODEBUG=fips140=on`.
+  rotation, the never-amplify rule, the initiator's rate limited resend, and reload. ML-KEM also
+  passes under `GOEXPERIMENT=boringcrypto` and `GODEBUG=fips140=on`.
 
-## Implementation (phase 2)
+## Implementation: certificates and the hybrid handshake
 
 - `cert`: `cert_v3.go` (format, `V2Form`, `ExtendToV3`, `SignPQ`), `pq_suite.go` (`PQSuite` and
   the suite table), `SignHybridWith` and the composite `Sign` path, the CA pool's v3 index, suite
@@ -512,8 +509,9 @@ in every scenario above, and within three at least 99.99%.
   `Machine.PeerCert` for a responder that has to act before completion.
 - `pki.go` loads a v3 certificate with its composite key and derives the v2 form; messages after
   the handshake treat v3 tunnels as v2 (`protocolVersion`).
-- `handshake_manager_hybrid.go`: pending responders, confirmation and reconfirmation, and the
-  initiator's msg3 resends and teardown; `outside.go` keeps quiet about pending responder indexes.
+- `handshake_manager_hybrid.go`: pending responders, confirmation and reconfirmation, the
+  initiator's msg3 resends and teardown, and the crossing window; `outside.go` keeps quiet about
+  pending responder indexes.
 - `nebula-cert`: `ca`, `keygen` and `sign` take `-version 3`, `keygen -in-key` extends an existing
   host key, `sign -version 2` with a v3 CA signs as its v2 form, and `pq-extend` upgrades v2
   certificates in place, keeping an encrypted CA key encrypted. `ca`, `keygen` and `pq-extend` of a
@@ -538,21 +536,13 @@ in every scenario above, and within three at least 99.99%.
   it times out, and the Machine reports it as recoverable. Blocks publishing the module; the fix is
   a deferred rollback that also restores `k`, `n` and `hasK`. Smaller pre-publish items are in
   [DefinedNet/noise#3](https://github.com/DefinedNet/noise/issues/3).
-- The initiator's first classical retry can fire 0-100 ms after the post-quantum attempt, so at
-  real round-trip times it often crosses it. For hybrid, msg3 settles which tunnel the responder
-  keeps, but the crossing classical tunnel lingers on the responder until it is found dead. The
-  ephemeral-KEM handshake has no msg3: the responder keeps the newer classical tunnel while the
-  initiator keeps the KEM one, and replies go to a released index (field test: 5 of 100 first
-  pings failed at 50 ms round trip, no loss). Options: no classical turn until one retry interval
-  after the post-quantum attempt, and/or complete a losing attempt's late msg2 only to send it a
-  CloseTunnel.
-
 Field tested on real hosts on 2026-10-14 (`pq-lab/2026-10-14-hybrid/`, untracked): LAN median 3.2 ms
 against 1.4 ms classical, +2.0 ms at 50 ms round trip, no fallbacks with `require` under loss.
 
 The cryptographic review of 2026-10-14 found no break in the composition or the certificate
 chain. Its outcomes are folded in above: deterministic ML-DSA signing, the fingerprint guidance,
-the `skem` oracle note, the psk2 note, the pending-responder exposure and the `sticky` default.
+the `skem` oracle note, the psk2 note (moot now that handshake is dropped), the pending-responder
+exposure and the `sticky` default.
 
 Accepted as is: a tunnel that came up classical between two v3 holders (say, the hybrid attempt
 was dropped) stays classical until it rehandshakes for another reason. `require`, `sticky` and a
