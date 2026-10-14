@@ -289,9 +289,17 @@ func (hm *HandshakeManager) relayEstablished(target netip.Addr, relayHI *HostInf
 	f := hm.f
 	hh.hostinfo.logger(hm.l).Info("Send handshake via new relay", "relay", relayHI.vpnAddrs[0])
 	_ = hm.sendFragmented(now, later, func(p []byte) error {
-		f.SendVia(relayHI, relay, p, make([]byte, 12), make([]byte, mtu), false, 0)
+		f.sendHandshakeVia(relayHI, relay, p)
 		return nil
 	})
+}
+
+// sendHandshakeVia sends a handshake packet through a relay, with buffers sized
+// for the packet rather than the mtu: a relayed post-quantum handshake is
+// dozens of fragments.
+func (f *Interface) sendHandshakeVia(via *HostInfo, relay *Relay, p []byte) {
+	out := make([]byte, header.Len+len(p)+via.ConnectionState.eKey.Overhead())
+	f.SendVia(via, relay, p, make([]byte, 12), out, false, 0)
 }
 
 // buildPQAttempt creates the initiator's PQ Machine and msg1 sender. A node with
@@ -824,7 +832,7 @@ func (hm *HandshakeManager) sendTo(via ViaSender) func([]byte) error {
 		if via.relay == nil {
 			return errors.New("both addr and via.relay are nil")
 		}
-		f.SendVia(via.relayHI, via.relay, p, make([]byte, 12), make([]byte, mtu), false, 0)
+		f.sendHandshakeVia(via.relayHI, via.relay, p)
 		return nil
 	}
 }

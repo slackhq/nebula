@@ -163,7 +163,7 @@ func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hh *Handshak
 		case Established:
 			hl.Log(context.Background(), level, "Send handshake via relay", "relay", relay.String())
 			_ = f.handshakeManager.sendFragmented(now, later, func(p []byte) error {
-				f.SendVia(relayHostInfo, existingRelay, p, make([]byte, 12), make([]byte, mtu), false, 0)
+				f.sendHandshakeVia(relayHostInfo, existingRelay, p)
 				return nil
 			})
 		case Disestablished:
