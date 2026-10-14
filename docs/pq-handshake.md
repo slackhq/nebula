@@ -126,7 +126,12 @@ design rationale and security argument), with ML-KEM-1024 supplied by nebula:
 
 - `e` and `s` carry composite keys, X25519 (or P256) followed by ML-KEM-1024. DH tokens use the
   classical halves, `ekem` and `skem` encapsulate to the ML-KEM halves, and every secret goes into
-  the one chaining key. The static ML-KEM key is the post-quantum half of the certificate's public
+  the one chaining key.
+- **The responder's `e` is classical only.** It follows the responder's `ekem`, which already
+  completed the ephemeral KEM exchange, so it carries only the X25519 (or P256) key that `ee` and
+  `se` need. A second ephemeral KEM exchange would add nothing: one `ekem` is lost only if the
+  initiator's ephemeral private key or the responder's encapsulation randomness is, and a reverse
+  one would be lost in the same cases. PQNoise's pqIX has no responder `e` at all. The static ML-KEM key is the post-quantum half of the certificate's public
   key, so it travels in `s` and the handshake form of the certificate leaves out both keys.
 - **KEM tokens first.** msg2 starts with `ekem, skem`, so the responder's static key and
   certificate are encrypted under keys that already include both KEM secrets: the responder's
@@ -144,12 +149,8 @@ design rationale and security argument), with ML-KEM-1024 supplied by nebula:
 | Message | Size (Curve25519) | Data fragments (k) |
 |---|---|---|
 | msg1 | 8006 B | 7 |
-| msg2 | 11193 B | 10 |
+| msg2 | 9625 B | 9 |
 | msg3 | 1616 B | 2 |
-
-**TODO:** the noise library's responder `e` also carries an ephemeral ML-KEM key that no token
-encapsulates to: 1568 bytes of msg2 (which would otherwise be 9 fragments) and a key generation
-for nothing. Removing it is a change to DefinedNet/noise.
 
 **Dependency.** DefinedNet/noise is a private repository today. `go.mod` points at a local clone
 with a `replace` directive; the module has to be published (or the hybrid patterns upstreamed to
@@ -379,9 +380,6 @@ mean burst length in packets. First-attempt success for the whole handshake with
 | phase 2 (7, 9, 2) FEC | 5% | 99.6% | 94.2% | 90.4% | 88.8% |
 | phase 2 (7, 9, 2) FEC | 10% | 95.9% | 84.6% | 79.0% | 77.3% |
 
-The phase 2 rows assume (7, 9, 2) data fragments; as built it is (7, 10, 2), the extra msg2
-fragment being the unused ephemeral ML-KEM key noted above.
-
 With fresh repair symbols, phase 2 completes within two attempts at least 99.1% of the time
 in every scenario above, and within three at least 99.99%.
 
@@ -457,7 +455,8 @@ in every scenario above, and within three at least 99.99%.
 ## Open items
 
 - Publish DefinedNet/noise, or upstream the hybrid patterns, and drop the `replace` in `go.mod`.
-- The unused responder ephemeral ML-KEM key in msg2 (see the TODO above).
+  The classical-only responder `e` is on the local clone's `drop-responder-ekem-key` branch
+  (b4a892b), not yet in DefinedNet/noise.
 - Cryptographic review of the hybrid composition and of the v3 certificate signatures.
 - A tunnel that came up classical between two v3 holders (say, the hybrid attempt was dropped)
   stays classical until it rehandshakes for another reason.

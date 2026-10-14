@@ -59,15 +59,13 @@ var subtypeInfos = map[header.MessageSubType]subtypeInfo{
 	//   msg1 (I->R): e, s                          payload + cert
 	//   msg2 (R->I): ekem, skem, e, ee, se, s, es  payload + cert
 	//   msg3 (I->R): skem
-	// e and s are composite, classical || ML-KEM-1024. The static ML-KEM key is
+	// e and s are composite, classical || ML-KEM-1024, except the responder's e:
+	// it follows the responder's ekem, which already completed the ephemeral KEM
+	// exchange, so it carries only the classical key. The static ML-KEM key is
 	// the post-quantum half of the v3 certificate's public key, so it travels in
 	// s and the certificate leaves it out. The responder authenticates the
 	// initiator when msg3 decrypts, and the initiator the responder when the
 	// first packet under the new keys does.
-	//
-	// TODO: the responder's e also carries an ephemeral ML-KEM key that no token
-	// ever encapsulates to, 1568 bytes of msg2 and a key generation for nothing.
-	// Dropping it needs a change to the noise library.
 	header.HandshakeIXHybridMLKEM1024: {
 		pattern: noise.HandshakeHybridIX,
 		hybrid:  true,
