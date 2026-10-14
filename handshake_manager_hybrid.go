@@ -214,7 +214,10 @@ func (hm *HandshakeManager) completeHybridResponder(via ViaSender, hh *Handshake
 	remoteCert := result.RemoteCert
 	hostinfo.buildNetworks(f.myVpnNetworksTable, remoteCert.Certificate)
 
-	existing, err := hm.CheckAndComplete(hostinfo, handshakePacketStage0, f)
+	// The initiator only sends msg3 once it settled on this handshake, so this
+	// tunnel wins even over a newer one: a classical attempt that crossed it, say,
+	// which the initiator has already given up on.
+	existing, err := hm.checkAndComplete(hostinfo, handshakePacketStage0, f, true)
 	if err != nil {
 		hm.handleCheckAndCompleteError(err, existing, hostinfo, via, machine.Subtype(), 0)
 		return

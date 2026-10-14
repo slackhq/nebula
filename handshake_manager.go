@@ -495,6 +495,13 @@ var (
 // ErrLocalIndexCollision if we already have an entry in the main or pending
 // hostmap for the hostinfo.localIndexId.
 func (hm *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket uint8, f *Interface) (*HostInfo, error) {
+	return hm.checkAndComplete(hostinfo, handshakePacket, f, false)
+}
+
+// checkAndComplete is CheckAndComplete. committed means the initiator has shown it
+// uses this tunnel, as a hybrid msg3 does, so an existing tunnel is replaced even
+// when its handshake is newer.
+func (hm *HandshakeManager) checkAndComplete(hostinfo *HostInfo, handshakePacket uint8, f *Interface, committed bool) (*HostInfo, error) {
 	hm.mainHostMap.Lock()
 	defer hm.mainHostMap.Unlock()
 	hm.Lock()
@@ -511,7 +518,7 @@ func (hm *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket
 		}
 
 		// Is this a newer handshake?
-		if existingHostInfo.lastHandshakeTime >= hostinfo.lastHandshakeTime && !existingHostInfo.ConnectionState.initiator {
+		if !committed && existingHostInfo.lastHandshakeTime >= hostinfo.lastHandshakeTime && !existingHostInfo.ConnectionState.initiator {
 			return existingHostInfo, ErrExistingHostInfo
 		}
 
