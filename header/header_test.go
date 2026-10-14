@@ -96,8 +96,9 @@ func TestTypeMap(t *testing.T) {
 		Test:        &subTypeTestMap,
 		CloseTunnel: &subTypeNoneMap,
 		Handshake: {
-			HandshakeIXPSK0:          "ix_psk0",
-			HandshakeIXPSK2MLKEM1024: "ix_psk2_mlkem1024",
+			HandshakeIXPSK0:            "ix_psk0",
+			HandshakeIXPSK2MLKEM1024:   "ix_psk2_mlkem1024",
+			HandshakeIXHybridMLKEM1024: "ix_hybrid_mlkem1024",
 		},
 		Control: &subTypeNoneMap,
 	}, subTypeMap)

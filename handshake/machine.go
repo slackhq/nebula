@@ -65,6 +65,7 @@ type Machine struct {
 	msgs           []msgFlags
 	myVersion      cert.Version
 	subtype        header.MessageSubType
+	hybrid         bool
 	indexAllocated bool
 	remoteCertSet  bool
 	payloadSet     bool
@@ -91,12 +92,18 @@ func NewMachine(
 		return nil, err
 	}
 
+	// Version 3 certificates go with hybrid patterns and nothing else, the
+	// classical and phase 1 subtypes use the v2 form instead.
+	if info.hybrid != (version == cert.Version3) {
+		return nil, fmt.Errorf("%w: %v", ErrCertVersionMismatch, version)
+	}
+
 	cred := getCred(version)
 	if cred == nil {
 		return nil, fmt.Errorf("%w: %v", ErrNoCredential, version)
 	}
 
-	hs, err := cred.buildHandshakeState(initiator, info.pattern, info.pskPlacement)
+	hs, err := cred.buildHandshakeState(initiator, info)
 	if err != nil {
 		return nil, fmt.Errorf("build noise state: %w", err)
 	}
@@ -105,6 +112,7 @@ func NewMachine(
 		hs:         hs,
 		subtype:    subtype,
 		msgs:       info.msgs,
+		hybrid:     info.hybrid,
 		getCred:    getCred,
 		allocIndex: allocIndex,
 		verifier:   verifier,
@@ -226,11 +234,6 @@ func (m *Machine) ProcessPacket(out, packet []byte) ([]byte, *Result, error) {
 		return nil, nil, ErrInitiateNotCalled
 	}
 
-	// The (eKey, dKey) ordering here is correct for IX, where the initiator
-	// completes the handshake by reading the responder's stage-2 message.
-	// noise returns (cs1, cs2) where cs1 is the initiator->responder cipher.
-	// For 3-message patterns where a responder finishes by reading the final
-	// message, this ordering would be wrong; revisit when XX/pqIX lands.
 	noiseMsg := packet[header.Len:]
 	if m.myMsgFlags().kemCiphertext {
 		var err error
@@ -242,7 +245,8 @@ func (m *Machine) ProcessPacket(out, packet []byte) ([]byte, *Result, error) {
 		}
 	}
 
-	msg, eKey, dKey, err := m.hs.ReadMessage(nil, noiseMsg)
+	msg, cs1, cs2, err := m.hs.ReadMessage(nil, noiseMsg)
+	eKey, dKey := m.cipherStates(cs1, cs2)
 	if err != nil {
 		// Noise ReadMessage failed. The noise library checkpoints and rolls back
 		// on failure, so the Machine is still alive. The caller can retry with
@@ -272,7 +276,7 @@ func (m *Machine) ProcessPacket(out, packet []byte) ([]byte, *Result, error) {
 	}
 
 	// ReadMessage didn't complete, produce the next outgoing message
-	out, dk, ek, err := m.buildResponse(out)
+	out, ek, dk, err := m.buildResponse(out)
 	if err != nil {
 		m.failed = true
 		return nil, nil, err
@@ -290,6 +294,15 @@ func (m *Machine) ProcessPacket(out, packet []byte) ([]byte, *Result, error) {
 	}
 
 	return out, nil, nil
+}
+
+// cipherStates orders the cipher states noise returns, (cs1, cs2) with cs1 the
+// initiator to responder direction, into this side's (eKey, dKey).
+func (m *Machine) cipherStates(cs1, cs2 *noise.CipherState) (*noise.CipherState, *noise.CipherState) {
+	if m.result.Initiator {
+		return cs1, cs2
+	}
+	return cs2, cs1
 }
 
 func (m *Machine) completed(eKey, dKey *noise.CipherState) *Result {
@@ -372,6 +385,14 @@ func (m *Machine) processPayload(msg []byte, flags msgFlags) error {
 }
 
 func (m *Machine) validateCert(payload Payload) error {
+	// A v3 certificate only ever comes with a hybrid pattern, and a hybrid
+	// pattern only ever with one. The composite static key would not recombine
+	// with anything else anyway, but say so plainly.
+	if m.hybrid != (cert.Version(payload.CertVersion) == cert.Version3) {
+		m.failed = true
+		return fmt.Errorf("%w: %v", ErrCertVersionMismatch, payload.CertVersion)
+	}
+
 	cred := m.getCred(m.myVersion)
 	if cred == nil {
 		m.failed = true
@@ -487,17 +508,11 @@ func (m *Machine) buildResponse(out []byte) ([]byte, *noise.CipherState, *noise.
 
 	// noise.WriteMessage appends the encrypted handshake message to out,
 	// reusing capacity when present.
-	//
-	// The (dKey, eKey) ordering here is correct for IX, where the responder
-	// completes the handshake by writing the stage-2 message. noise returns
-	// (cs1, cs2) where cs1 is the initiator->responder cipher (which is the
-	// responder's decrypt key). For 3-message patterns where an initiator
-	// finishes by writing the final message, this ordering would be wrong;
-	// revisit when XX/pqIX lands.
-	out, dKey, eKey, err := m.hs.WriteMessage(out, hsBytes)
+	out, cs1, cs2, err := m.hs.WriteMessage(out, hsBytes)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("noise WriteMessage: %w", err)
 	}
 
-	return out, dKey, eKey, nil
+	eKey, dKey := m.cipherStates(cs1, cs2)
+	return out, eKey, dKey, nil
 }

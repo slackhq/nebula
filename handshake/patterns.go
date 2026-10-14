@@ -21,6 +21,10 @@ type subtypeInfo struct {
 	pattern      noise.HandshakePattern
 	pskPlacement int // noise psk modifier position, 0 means no psk token
 	msgs         []msgFlags
+
+	// hybrid patterns carry composite static keys and need version 3
+	// certificates on both sides; every other pattern refuses them.
+	hybrid bool
 }
 
 // subtypeInfos defines the noise pattern and message content layout for each
@@ -48,6 +52,29 @@ var subtypeInfos = map[header.MessageSubType]subtypeInfo{
 		msgs: []msgFlags{
 			{expectsPayload: true, expectsCert: true, kemKey: true},
 			{expectsPayload: true, expectsCert: true, kemCiphertext: true},
+		},
+	},
+
+	// Hybrid IX (github.com/DefinedNet/noise, see its PQ_RESEARCH.md):
+	//   msg1 (I->R): e, s                          payload + cert
+	//   msg2 (R->I): ekem, skem, e, ee, se, s, es  payload + cert
+	//   msg3 (I->R): skem
+	// e and s are composite, classical || ML-KEM-1024. The static ML-KEM key is
+	// the post-quantum half of the v3 certificate's public key, so it travels in
+	// s and the certificate leaves it out. The responder authenticates the
+	// initiator when msg3 decrypts, and the initiator the responder when the
+	// first packet under the new keys does.
+	//
+	// TODO: the responder's e also carries an ephemeral ML-KEM key that no token
+	// ever encapsulates to, 1568 bytes of msg2 and a key generation for nothing.
+	// Dropping it needs a change to the noise library.
+	header.HandshakeIXHybridMLKEM1024: {
+		pattern: noise.HandshakeHybridIX,
+		hybrid:  true,
+		msgs: []msgFlags{
+			{expectsPayload: true, expectsCert: true},
+			{expectsPayload: true, expectsCert: true},
+			{},
 		},
 	},
 
