@@ -128,6 +128,11 @@ func (d *Decoder) Has(index int) bool {
 	return index >= 0 && index < MaxSymbols && d.have[index]
 }
 
+// Seen returns which symbol indexes are held.
+func (d *Decoder) Seen() [MaxSymbols]bool {
+	return d.have
+}
+
 // Ready reports whether enough symbols have arrived to decode.
 func (d *Decoder) Ready() bool {
 	return len(d.syms) >= d.layout.K

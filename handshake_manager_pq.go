@@ -362,14 +362,23 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 		if res == nil {
 			return
 		}
-		if existing := hm.pqAnswered.lookup(res.Msg, time.Now()); existing != nil {
+		if existing := hm.pqAnswered.lookup(res.Hash, time.Now()); existing != nil {
 			// Already answered: resend, rate limited, with fresh symbols.
 			if msg := existing.HandshakePacket[handshakePacketStage2]; msg != nil {
 				hm.sendHandshakeResponse(via, msg, existing, true, res.Received)
 			}
+			hm.pqTable.Answered(key, res, now)
+			return
+		}
+		if res.Repeat {
+			// Answered once, but long enough ago to be forgotten: start over.
+			hm.pqTable.Forget(key)
 			return
 		}
 		hm.beginHandshake(via, reassembled(h, res.Msg), h, res.Received)
+		if hm.pqAnswered.lookup(res.Hash, now) != nil {
+			hm.pqTable.Answered(key, res, now)
+		}
 
 	case 2:
 		if hh := hm.queryIndex(h.RemoteIndex); hh != nil {
@@ -553,10 +562,11 @@ func (a *pqAnswered) add(msg1 []byte, hostinfo *HostInfo, now time.Time) {
 	a.entries[sha256.Sum256(msg1)] = pqAnsweredEntry{hostinfo: hostinfo, at: now}
 }
 
-func (a *pqAnswered) lookup(msg1 []byte, now time.Time) *HostInfo {
+// lookup finds the hostinfo that answered the msg1 with this sha256.
+func (a *pqAnswered) lookup(hash [sha256.Size]byte, now time.Time) *HostInfo {
 	a.Lock()
 	defer a.Unlock()
-	e, ok := a.entries[sha256.Sum256(msg1)]
+	e, ok := a.entries[hash]
 	if !ok || now.Sub(e.at) > a.ttl {
 		return nil
 	}

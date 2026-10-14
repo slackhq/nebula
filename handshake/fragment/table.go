@@ -1,10 +1,14 @@
 package fragment
 
 import (
+	"crypto/sha256"
 	"errors"
 	"math/rand/v2"
 	"sync"
 	"time"
+
+	"github.com/slackhq/nebula/handshake/fec"
+	"github.com/slackhq/nebula/header"
 )
 
 var (
@@ -30,6 +34,12 @@ type TableConfig struct {
 // K identifies one message, typically the source plus FragID. S identifies the
 // source for quotas, typically the address masked to /32 or /64.
 //
+// A message the caller answered is remembered, see Answered, so the fragments
+// still arriving for it do not start it over. Without that, the repair
+// fragments trailing a message whose data fragments already completed it would
+// open a new entry that, for K above the repair count, never completes: it holds
+// symbols and a source's quota until it expires.
+//
 // A Table is safe for concurrent use.
 type Table[K, S comparable] struct {
 	mu        sync.Mutex
@@ -38,6 +48,20 @@ type Table[K, S comparable] struct {
 	order     []K
 	perSource map[S]int
 	bytes     int
+	answered  map[K]*answeredEntry
+}
+
+// answeredEntry is what is kept of an answered message: no symbols, only which
+// indexes have been seen, so a retry's fresh symbols can be told apart from
+// stragglers of an attempt already decoded.
+type answeredEntry struct {
+	hash     [sha256.Size]byte
+	msgLen   uint16
+	k        int
+	seen     [fec.MaxSymbols]bool
+	fresh    int
+	received int
+	lastSeen time.Time
 }
 
 type tableEntry[K, S comparable] struct {
@@ -52,13 +76,24 @@ func NewTable[K, S comparable](cfg TableConfig) *Table[K, S] {
 		cfg:       cfg,
 		entries:   make(map[K]*tableEntry[K, S]),
 		perSource: make(map[S]int),
+		answered:  make(map[K]*answeredEntry),
 	}
 }
 
 // Result describes a completed message.
 type Result struct {
-	Msg      []byte // the decoded message
-	Received int    // packet bytes received for it, for the amplification budget
+	Msg      []byte            // the decoded message, nil for a repeat
+	Hash     [sha256.Size]byte // sha256 of the message
+	Received int               // packet bytes received for it, for the amplification budget
+
+	// Repeat means a message marked Answered was sent again: as many fresh
+	// symbols as it has data symbols arrived, which a retry offers and stragglers
+	// of an attempt already decoded do not.
+	Repeat bool
+
+	msgLen uint16
+	k      int
+	seen   [fec.MaxSymbols]bool
 }
 
 // Add records a fragment parsed by Parse. When the message is complete its entry
@@ -70,6 +105,15 @@ func (t *Table[K, S]) Add(key K, source S, now time.Time, h Header, sym []byte) 
 	}
 
 	t.mu.Lock()
+	if a, ok := t.answered[key]; ok {
+		if now.Sub(a.lastSeen) <= t.cfg.TTL {
+			res := a.add(now, h, sym)
+			t.mu.Unlock()
+			return res, nil
+		}
+		delete(t.answered, key)
+	}
+
 	e, ok := t.entries[key]
 	if ok && now.Sub(e.lastSeen) > t.cfg.TTL {
 		t.remove(key, e)
@@ -111,7 +155,65 @@ func (t *Table[K, S]) Add(key K, source S, now time.Time, h Header, sym []byte) 
 	if err != nil {
 		return nil, err
 	}
-	return &Result{Msg: msg, Received: e.a.Received()}, nil
+	return &Result{
+		Msg:      msg,
+		Hash:     sha256.Sum256(msg),
+		Received: e.a.Received(),
+		msgLen:   e.a.msgLen,
+		k:        e.a.dec.Layout().K,
+		seen:     e.a.dec.Seen(),
+	}, nil
+}
+
+func (a *answeredEntry) add(now time.Time, h Header, sym []byte) *Result {
+	if h.MsgLen != a.msgLen {
+		return nil
+	}
+	a.lastSeen = now
+	a.received += header.Len + HeaderLen + len(sym)
+	if a.seen[h.Index] {
+		return nil
+	}
+	a.seen[h.Index] = true
+	a.fresh++
+	if a.fresh < a.k {
+		return nil
+	}
+	r := &Result{Hash: a.hash, Received: a.received, Repeat: true}
+	a.fresh = 0
+	a.received = 0
+	return r
+}
+
+// Answered records that the caller answered res, the result of Add for key, so
+// later fragments of it are counted rather than reassembled. A message is kept
+// for the TTL after its last fragment, outside the entry, byte and source caps;
+// at most MaxEntries are kept.
+func (t *Table[K, S]) Answered(key K, res *Result, now time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	// A straggler may have opened an entry while the caller worked.
+	if e, ok := t.entries[key]; ok {
+		t.remove(key, e)
+	}
+	if res.Repeat {
+		return
+	}
+	if _, ok := t.answered[key]; !ok && len(t.answered) >= t.cfg.MaxEntries {
+		for k := range t.answered {
+			delete(t.answered, k)
+			break
+		}
+	}
+	t.answered[key] = &answeredEntry{hash: res.Hash, msgLen: res.msgLen, k: res.k, seen: res.seen, lastSeen: now}
+}
+
+// Forget drops what Answered recorded for key, so its fragments are reassembled
+// again.
+func (t *Table[K, S]) Forget(key K) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.answered, key)
 }
 
 // Expire drops every entry idle for longer than the TTL.
@@ -127,6 +229,11 @@ func (t *Table[K, S]) Expire(now time.Time) {
 			continue
 		}
 		i++
+	}
+	for key, a := range t.answered {
+		if now.Sub(a.lastSeen) > t.cfg.TTL {
+			delete(t.answered, key)
+		}
 	}
 }
 

@@ -2,6 +2,7 @@ package fragment
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"math/rand/v2"
 	"sync"
 	"testing"
@@ -512,4 +513,87 @@ func FuzzTable(f *testing.F) {
 			checkInvariants(t, tb)
 		}
 	})
+}
+
+// TestTableAnswered sends many large messages from one source the way a responder
+// sees back to back handshakes: each attempt's data fragments complete the
+// message and its repair fragments trail. Remembering answered messages keeps the
+// stragglers from piling up against the source quota, and a retry with fresh
+// symbols still reports the message again.
+func TestTableAnswered(t *testing.T) {
+	r := rand.New(rand.NewPCG(3, 3))
+	tb := NewTable[testKey, string](testConfig())
+	now := time.Unix(1000, 0)
+	const msgLen = 8006 // a hybrid msg1: K=7 data symbols, 3 repair
+
+	sendAll := func(key testKey, pkts [][]byte) []*Result {
+		var out []*Result
+		for _, p := range pkts {
+			_, h, sym := parse(t, p)
+			res, err := tb.Add(key, key.src, now, h, sym)
+			require.NoError(t, err)
+			if res != nil {
+				out = append(out, res)
+			}
+			checkInvariants(t, tb)
+		}
+		return out
+	}
+
+	for i := range 3 * testConfig().MaxPerSource {
+		msg := randMsg(r, msgLen)
+		key := testKey{"a", uint32(i + 1)}
+		s, err := NewSender(msg, testSubtype, 0, 1, key.fragID)
+		require.NoError(t, err)
+		data, repair, err := s.Attempt(DefaultRepair(s.Layout().K))
+		require.NoError(t, err)
+		require.Len(t, data, 7)
+		require.Len(t, repair, 3)
+
+		res := sendAll(key, data)
+		require.Len(t, res, 1, "message %d was refused", i)
+		require.Equal(t, msg, res[0].Msg)
+		tb.Answered(key, res[0], now)
+
+		assert.Empty(t, sendAll(key, repair), "stragglers are not a new message")
+		assert.Zero(t, tb.Len(), "and hold no entry")
+		now = now.Add(100 * time.Millisecond)
+	}
+
+	// A retry offers fresh symbols, and once K of them arrive it is a repeat.
+	msg := randMsg(r, msgLen)
+	key := testKey{"b", 99}
+	s, err := NewSender(msg, testSubtype, 0, 1, key.fragID)
+	require.NoError(t, err)
+	data, repair, err := s.Attempt(DefaultRepair(s.Layout().K))
+	require.NoError(t, err)
+	res := sendAll(key, data)
+	require.Len(t, res, 1)
+	tb.Answered(key, res[0], now)
+	require.Empty(t, sendAll(key, repair))
+
+	data, repair, err = s.Attempt(DefaultRepair(s.Layout().K))
+	require.NoError(t, err)
+	res = sendAll(key, append(data, repair...))
+	require.Len(t, res, 1)
+	assert.True(t, res[0].Repeat)
+	assert.Nil(t, res[0].Msg)
+	assert.Equal(t, sha256.Sum256(msg), res[0].Hash)
+	assert.Positive(t, res[0].Received)
+
+	// Forgotten, the message is reassembled from scratch again.
+	tb.Forget(key)
+	data, _, err = s.Attempt(DefaultRepair(s.Layout().K))
+	require.NoError(t, err)
+	res = sendAll(key, data)
+	require.Len(t, res, 1)
+	assert.False(t, res[0].Repeat)
+	assert.Equal(t, msg, res[0].Msg)
+
+	// Answered messages expire with the TTL like entries do.
+	tb.Answered(key, res[0], now)
+	tb.Expire(now.Add(time.Hour))
+	tb.mu.Lock()
+	assert.Empty(t, tb.answered)
+	tb.mu.Unlock()
 }

@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"crypto/sha256"
 	"math/rand/v2"
 	"net/netip"
 	"sync"
@@ -126,11 +127,11 @@ func TestPQAnswered(t *testing.T) {
 	a := newPQAnswered(5 * time.Second)
 	hi := &HostInfo{}
 
-	assert.Nil(t, a.lookup([]byte("msg1"), now))
+	assert.Nil(t, a.lookup(sha256.Sum256([]byte("msg1")), now))
 	a.add([]byte("msg1"), hi, now)
-	assert.Same(t, hi, a.lookup([]byte("msg1"), now.Add(time.Second)))
-	assert.Nil(t, a.lookup([]byte("other"), now))
-	assert.Nil(t, a.lookup([]byte("msg1"), now.Add(6*time.Second)), "stale entries are not answered")
+	assert.Same(t, hi, a.lookup(sha256.Sum256([]byte("msg1")), now.Add(time.Second)))
+	assert.Nil(t, a.lookup(sha256.Sum256([]byte("other")), now))
+	assert.Nil(t, a.lookup(sha256.Sum256([]byte("msg1")), now.Add(6*time.Second)), "stale entries are not answered")
 
 	a.expire(now.Add(6 * time.Second))
 	assert.Empty(t, a.entries)
