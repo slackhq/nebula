@@ -1,10 +1,15 @@
 package nebula
 
 import (
+	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/cert_test"
+	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -91,4 +96,45 @@ func TestNewCipherSuiteUnsupportedCurve(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, strings.HasPrefix(err.Error(), "unsupported curve:"), "got: %v", err)
 	assert.Nil(t, cs)
+}
+
+func TestNewCertStateFromConfig_V3(t *testing.T) {
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version3, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	host, _, keyPEM, certPEM := cert_test.NewTestCert(cert.Version3, cert.Curve_CURVE25519, ca, caKey, "host", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.1/16")}, nil, nil)
+	v2PEM, err := cert.V2Form(host).MarshalPEM()
+	require.NoError(t, err)
+	key, _, _, err := cert.UnmarshalPrivateKeyFromPEM(keyPEM)
+	require.NoError(t, err)
+	classicalPEM := cert.MarshalPrivateKeyToPEM(cert.Curve_CURVE25519, key[:len(key)-cert.MLKEM1024PrivateKeySize])
+
+	load := func(certPEM, keyPEM []byte) (*CertState, error) {
+		c := config.NewC(test.NewLogger())
+		c.Settings["pki"] = map[string]any{"cert": string(certPEM), "key": string(keyPEM)}
+		return newCertStateFromConfig(c, "aes")
+	}
+
+	cs, err := load(certPEM, keyPEM)
+	require.NoError(t, err)
+	assert.Equal(t, host, cs.GetCredential(cert.Version3).Cert)
+	assert.Equal(t, cert.V2Form(host), cs.GetCredential(cert.Version2).Cert, "the v2 form comes with it")
+	assert.Equal(t, cert.Version2, cs.DefaultVersion(), "classical handshakes still start with v2")
+
+	// Listing the v2 form as well is fine.
+	_, err = load(append(append([]byte{}, certPEM...), v2PEM...), keyPEM)
+	require.NoError(t, err)
+
+	// Any other v2 certificate is not.
+	_, _, _, otherPEM := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, cert.V2Form(ca), caKey[:len(caKey)-cert.MLDSA87PrivateKeySize], "other", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.1/16")}, nil, nil)
+	_, err = load(append(append([]byte{}, certPEM...), otherPEM...), keyPEM)
+	require.ErrorContains(t, err, "not the v2 form of the v3 certificate")
+
+	// A v3 certificate needs the composite key.
+	_, err = load(certPEM, classicalPEM)
+	require.ErrorContains(t, err, "not a pair")
+
+	// A composite key also serves a lone v2 certificate.
+	cs, err = load(v2PEM, keyPEM)
+	require.NoError(t, err)
+	assert.Nil(t, cs.GetCredential(cert.Version3))
+	assert.NotNil(t, cs.GetCredential(cert.Version2))
 }
