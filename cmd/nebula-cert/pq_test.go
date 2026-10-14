@@ -156,6 +156,18 @@ func TestPQ_Extend(t *testing.T) {
 			require.NoError(t, verifiedBy(t, host3, ca3))
 			require.NoError(t, verifiedBy(t, host2, ca2), "existing trust is untouched")
 
+			// print leads a version 3 certificate with both fingerprints and says which one blocks both forms.
+			ob.Reset()
+			require.NoError(t, printCert([]string{"-path", p("host3.crt")}, ob, eb))
+			fp3, err := host3.Fingerprint()
+			require.NoError(t, err)
+			fp2, err := host2.Fingerprint()
+			require.NoError(t, err)
+			printed := ob.String()
+			lead := "Fingerprint:    " + fp3 + "\nv2 fingerprint: " + fp2 + "  (block this one in pki.blocklist, it covers both forms)\n"
+			require.Greater(t, len(printed), len(lead))
+			assert.Equal(t, lead, printed[:len(lead)])
+
 			// Someone else's key does not extend this host.
 			require.NoError(t, keygen([]string{"-version", "3", "-out-key", p("other.key"), "-out-pub", p("other.pub")}, ob, eb))
 			require.ErrorContains(t, pqExtend([]string{"-in-crt", p("host.crt"), "-in-pub", p("other.pub"), "-ca-crt", p("ca3.crt"), "-ca-key", p("ca3.key"), "-out-crt", p("bad.crt")}, ob, eb, pw), "does not extend the key")
