@@ -1,10 +1,12 @@
-// Package localapi serves the nebula command registry over a local IPC endpoint so the
-// user who ran nebula can inspect and control it from a CLI on the same machine.
+// Package localapi serves the nebula command registry over local IPC endpoints: the
+// control socket, so the user who ran nebula can inspect and control it from a CLI on
+// the same machine, and the info API, so other programs on the machine can ask who is
+// behind a vpn address.
 //
-// Access is restricted by the filesystem (a 0600 socket) and by a peer credential check
-// on every connection. Which commands are served is decided by the caller that builds
-// the Server, and the filtering happens here, on the serving side, rather than in the
-// client.
+// The control socket's access is restricted by the filesystem (a 0600 socket) and by a
+// peer credential check on every connection. The info API is opt in, HTTP, and as open as the operator makes its
+// socket; see InfoServer for what it serves and why that is safe. Which commands each
+// serves is decided here, on the serving side, rather than in any client.
 //
 // # Protocol
 //

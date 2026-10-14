@@ -37,6 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns `{"pem": ...}` where `-json` used to silently win. A flag may come before or after an operand, so
   `print-tunnel 10.0.0.1 -json` asks for JSON rather than dropping the flag; a negative number is still an
   operand, so `mutex-profile-fraction -1` keeps working; and `--` ends the flags as it always has.
+- `identity [-address <vpn addr>[:port]]` prints the certificate identity of this node, or of the host owning the
+  address when a tunnel to it is up: name, vpn addresses, networks, unsafe networks, groups, fingerprint, issuer,
+  validity window and cert version. The port is ignored so a connection's remote address can be passed through
+  as is. It is available over the ssh debug server and `nebula ctl`, and is what the new opt-in info API serves,
+  and all it serves: `local_api.info` names a unix socket and a mode, and `GET /v1/identity?address=<addr>` on it
+  answers with the same JSON, 404 when no tunnel to the address is up, so a program on the host can resolve the
+  source of a connection arriving over the overlay to an identity without a client library. The socket's mode is
+  the access control; the section is reloadable and the API is not yet served on Windows.
 
 ### Fixed
 

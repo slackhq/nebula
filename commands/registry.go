@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -62,15 +63,16 @@ func (r *Registry) registerHelp() {
 				return Value(r.Schema()), nil
 			}
 
-			if c := r.Get(Name(args[0])); c != nil {
-				return Value(r.schemaFor(c)), nil
+			c, err := r.Resolve(Name(args[0]))
+			if err != nil {
+				var withheld *WithheldError
+				if errors.As(err, &withheld) {
+					return Failed("%s", err), nil
+				}
+				return Failed("Command not available %s", args[0]), nil
 			}
 
-			if err := r.unavailable(Name(args[0])); err != nil {
-				return Failed("%s", err), nil
-			}
-
-			return Failed("Command not available %s", args[0]), nil
+			return Value(r.schemaFor(c)), nil
 		},
 		Text: renderHelp,
 	})
@@ -234,10 +236,9 @@ func (r *Registry) Clone() *Registry {
 
 // Filter returns a filtered copy of the registry.
 //
-// Keep should return true for commands that should be included in the copy.
-//
-// reason says, to an operator who names a command the copy left out, why this surface
-// does not serve it; "" leaves the registry to say only that it does not.
+// Keep should return true for commands that should be included in the copy. reason
+// says, to an operator who names a command the copy left out, why this surface does
+// not serve it; "" leaves the registry to say only that it does not.
 func (r *Registry) Filter(keep func(*Command) bool, reason string) *Registry {
 	out := &Registry{commands: map[Name]*Command{}, full: r, reason: reason, DefaultFormat: r.DefaultFormat}
 
@@ -275,9 +276,10 @@ func (r *Registry) DispatchArgs(args []string, orig string, w Output) error {
 		args = []string{"help"}
 	}
 
-	c := r.Get(Name(args[0]))
-	if c == nil {
-		if err := r.unavailable(Name(args[0])); err != nil {
+	c, err := r.Resolve(Name(args[0]))
+	if err != nil {
+		var withheld *WithheldError
+		if errors.As(err, &withheld) {
 			// Saying why, rather than "did not understand", keeps the rule legible and
 			// points at a surface that will actually run the command.
 			_, _ = fmt.Fprintln(w.Err, err)
@@ -317,8 +319,18 @@ func (r *Registry) unavailable(name Name) error {
 		reason = "this surface does not serve it"
 	}
 
-	return fmt.Errorf("%s is not available on this surface: %s", c.Name, reason)
+	return &WithheldError{msg: fmt.Sprintf("%s is not available on this surface: %s", c.Name, reason)}
 }
+
+// WithheldError is what Resolve returns for a command that exists and this surface does
+// not serve. It is the filter's refusal rather than a typo, and a surface with status
+// codes tells the two apart by it, so no surface has to look past its own registry to
+// find out which it was told.
+type WithheldError struct {
+	msg string
+}
+
+func (e *WithheldError) Error() string { return e.msg }
 
 // Resolve returns the command registered under name, or says why there is none. A
 // command this surface withholds is reported with the filter's reason, and one that
@@ -337,6 +349,20 @@ func (r *Registry) Resolve(name Name) (*Command, error) {
 	return nil, fmt.Errorf("unknown command %q", name)
 }
 
+// ParamError is what Invoke returns for a parameter the command would not take: one it
+// does not have, or a value its flag would not parse. It is the caller's mistake rather
+// than the command's failure, and a surface with status codes tells the two apart by
+// it; every other error from Invoke came out of Run.
+type ParamError struct {
+	msg string
+}
+
+func (e *ParamError) Error() string { return e.msg }
+
+func paramErrorf(format string, args ...any) error {
+	return &ParamError{msg: fmt.Sprintf(format, args...)}
+}
+
 // setParams sets each named parameter on fl, in the order of names, and stops at the
 // first that is unknown or does not parse. own says whether the command declared flags
 // of its own, which decides between "takes no parameters" and "has no parameter".
@@ -348,27 +374,34 @@ func (r *Registry) Resolve(name Name) (*Command, error) {
 func setParams(fl *flag.FlagSet, name string, names []string, params map[string]string, own bool) error {
 	for _, k := range names {
 		if isPresentationFlag(k) {
-			return fmt.Errorf("%s is a command line flag, not a parameter; choose the rendering with the request's format field", k)
+			return paramErrorf("%s is a command line flag, not a parameter; choose the rendering with the request's format field", k)
 		}
 
 		f := fl.Lookup(k)
 		if f == nil {
 			if !own {
-				return fmt.Errorf("%s takes no parameters", name)
+				return paramErrorf("%s takes no parameters", name)
 			}
-			return fmt.Errorf("%s has no parameter %q", name, k)
+			return paramErrorf("%s has no parameter %q", name, k)
 		}
 
-		v := params[k]
-		if err := fl.Set(k, v); err != nil {
-			if isBoolFlag(f) {
-				// The flag package's own words for this are "parse error".
-				return fmt.Errorf("%s: expected a boolean, got %q", k, v)
-			}
-			return fmt.Errorf("%s: %w", k, err)
+		if err := setFlag(fl, f, params[k]); err != nil {
+			return err
 		}
 	}
 
+	return nil
+}
+
+// setFlag applies one value to f, reporting a refusal as a ParamError in words that
+// name the value: the flag package's own words for a bad boolean are "parse error".
+func setFlag(fl *flag.FlagSet, f *flag.Flag, v string) error {
+	if err := fl.Set(f.Name, v); err != nil {
+		if isBoolFlag(f) {
+			return paramErrorf("%s: expected a boolean, got %q", f.Name, v)
+		}
+		return paramErrorf("%s: %v", f.Name, err)
+	}
 	return nil
 }
 

@@ -26,7 +26,7 @@ func TestWireRecoversFromBadPathAtStartup(t *testing.T) {
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(fmt.Sprintf("local_api:\n  control:\n    socket: /%s\n", strings.Repeat("x", sunPathMax))))
 
-	srv := Wire(ctx, test.NewLogger(), c, basicRegistry(), "/etc/nebula/config.yml")
+	srv := Wire(ctx, test.NewLogger(), c, basicRegistry(), "/etc/nebula/config.yml").Control
 	t.Cleanup(srv.Stop)
 	assert.Empty(t, srv.Path(), "an over-long path must not produce a socket")
 
@@ -85,7 +85,7 @@ func TestWireRetriesAFailedMoveOnPlainReload(t *testing.T) {
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(section(first)))
 
-	srv := Wire(ctx, test.NewLogger(), c, basicRegistry(), "/etc/nebula/config.yml")
+	srv := Wire(ctx, test.NewLogger(), c, basicRegistry(), "/etc/nebula/config.yml").Control
 	t.Cleanup(srv.Stop)
 	require.Equal(t, first, srv.Path())
 
@@ -122,7 +122,7 @@ func TestWireRecoversOnPlainReloadAfterBadBind(t *testing.T) {
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(cfg))
 
-	srv := Wire(ctx, test.NewLogger(), c, basicRegistry(), "/etc/nebula/config.yml")
+	srv := Wire(ctx, test.NewLogger(), c, basicRegistry(), "/etc/nebula/config.yml").Control
 	t.Cleanup(srv.Stop)
 	assert.Empty(t, srv.Path(), "listen creates one level only, so a missing runtime dir fails the bind")
 

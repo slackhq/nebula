@@ -502,7 +502,7 @@ func (f *flakyListener) Accept() (net.Conn, error) {
 func TestAcceptSurvivesTransientErrors(t *testing.T) {
 	path := testSocket(t)
 	require.NoError(t, os.Mkdir(filepath.Dir(path), 0700))
-	ln, err := listen(path)
+	ln, err := listen(path, ctlSocketMode)
 	require.NoError(t, err)
 
 	s := NewServer(test.NewLogger(), basicRegistry())

@@ -36,6 +36,13 @@ type Command struct {
 
 	ForProfiling bool
 
+	// Identity declares that the command reports only what a certificate says about a
+	// host: its name, addresses, groups and validity. Nothing operational: no underlay
+	// addresses, no configuration, nothing a command could change. The info API, which
+	// an operator may open to other users on the host, serves these and help alone; see
+	// localapi.
+	Identity bool
+
 	Flags CommandFlags
 
 	// Run produces the command's Result, leaving presentation to Render.

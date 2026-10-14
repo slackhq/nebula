@@ -18,7 +18,7 @@ type program struct {
 	configPath *string
 	build      string
 	control    *nebula.Control
-	ctl        *localapi.Server
+	local      *localapi.Endpoints
 }
 
 func (p *program) Start(s service.Service) error {
@@ -51,16 +51,16 @@ func (p *program) Start(s service.Service) error {
 		return err
 	}
 
-	// Now that we're started, stand up the local control socket.
-	p.ctl = localapi.Wire(p.control.Context(), l, c, p.control.Commands(), *p.configPath)
+	// Now that we're started, stand up the local APIs.
+	p.local = localapi.Wire(p.control.Context(), l, c, p.control.Commands(), *p.configPath)
 
 	// Nebula can stop itself on a fatal packet reader error, make sure to log it if it happens.
 	go func() {
 		if err := p.control.Wait(); err != nil {
 			logger.Error(fmt.Sprintf("Nebula stopped due to fatal error: %v", err))
-			// os.Exit skips deferred calls and races the socket's own context watcher,
-			// so the socket is removed here, as cmd/nebula does.
-			p.ctl.Stop()
+			// os.Exit skips deferred calls and races the sockets' own context watchers,
+			// so they are removed here, as cmd/nebula does.
+			p.local.Stop()
 			os.Exit(2)
 		}
 	}()
@@ -71,8 +71,8 @@ func (p *program) Start(s service.Service) error {
 func (p *program) Stop(s service.Service) error {
 	logger.Info("Nebula service stopping.")
 
-	if p.ctl != nil {
-		p.ctl.Stop()
+	if p.local != nil {
+		p.local.Stop()
 	}
 
 	if p.control == nil {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -44,8 +45,15 @@ func logListening(l *slog.Logger, path string) {
 	)
 }
 
+// infoSupported is false here. A pipe has no mode to open to other accounts, and the
+// security descriptor listen builds admits the daemon's account alone, which is the
+// opposite of what the info API is for. Serving it on windows means designing which
+// accounts a pipe admits, and that has not been done.
+const infoSupported = false
+
 // listen creates the named pipe at path with a security descriptor that admits only the
-// user nebula runs as, SYSTEM and Administrators.
+// user nebula runs as, SYSTEM and Administrators. mode is the unix socket's mode and
+// means nothing to a pipe; see infoSupported.
 //
 // The first instance is created, never opened, so a name some other process already
 // holds is refused rather than joined: that process would otherwise answer clients in
@@ -55,7 +63,7 @@ func logListening(l *slog.Logger, path string) {
 // daemon that is not an administrator cannot create under protectedPrefix at all, and
 // that is told apart so the operator is sent to elevate or to name a pipe elsewhere
 // rather than to look for a process that is not there.
-func listen(path string) (net.Listener, error) {
+func listen(path string, mode os.FileMode) (net.Listener, error) {
 	sddl, err := ownerOnlySDDL()
 	if err != nil {
 		return nil, fmt.Errorf("could not build a security descriptor for %s: %w", path, err)

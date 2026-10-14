@@ -87,9 +87,9 @@ func TestReleaseRemovesTheDirectoryItMade(t *testing.T) {
 	base := privateBase(t)
 
 	made := filepath.Join(base, DirName)
-	first, err := listen(filepath.Join(made, "a.sock"))
+	first, err := listen(filepath.Join(made, "a.sock"), ctlSocketMode)
 	require.NoError(t, err)
-	second, err := listen(filepath.Join(made, "b.sock"))
+	second, err := listen(filepath.Join(made, "b.sock"), ctlSocketMode)
 	require.NoError(t, err)
 
 	release(first, filepath.Join(made, "a.sock"))
@@ -99,7 +99,7 @@ func TestReleaseRemovesTheDirectoryItMade(t *testing.T) {
 
 	given := filepath.Join(base, "given")
 	require.NoError(t, os.Mkdir(given, 0755))
-	ln, err := listen(filepath.Join(given, "s.sock"))
+	ln, err := listen(filepath.Join(given, "s.sock"), ctlSocketMode)
 	require.NoError(t, err)
 	release(ln, filepath.Join(given, "s.sock"))
 	assert.DirExists(t, given)
@@ -114,12 +114,12 @@ func TestListenRestoresTheUmask(t *testing.T) {
 	t.Cleanup(func() { syscall.Umask(old) })
 
 	base := privateBase(t)
-	ln, err := listen(filepath.Join(base, DirName, "s.sock"))
+	ln, err := listen(filepath.Join(base, DirName, "s.sock"), ctlSocketMode)
 	require.NoError(t, err)
 	t.Cleanup(func() { ln.Close() })
 	assert.Equal(t, 0022, syscall.Umask(0022), "umask after a successful listen")
 
-	_, err = listen(filepath.Join(base, DirName, "s.sock"))
+	_, err = listen(filepath.Join(base, DirName, "s.sock"), ctlSocketMode)
 	require.Error(t, err, "the path is already bound")
 	assert.Equal(t, 0022, syscall.Umask(0022), "umask after a failed listen")
 }
@@ -381,7 +381,7 @@ func TestAnotherUsersSocketIsRefused(t *testing.T) {
 // bound its own, and a second unlink would take that daemon's socket from under it.
 func TestListenerDoesNotUnlinkOnClose(t *testing.T) {
 	path := filepath.Join(privateBase(t), DirName, "s.sock")
-	old, err := listen(path)
+	old, err := listen(path, ctlSocketMode)
 	require.NoError(t, err)
 
 	// A newer daemon's start, with the old node gone and the path bound afresh.

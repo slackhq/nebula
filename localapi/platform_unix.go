@@ -45,18 +45,23 @@ func withPeerFD(conn net.Conn, f func(fd int) error) error {
 // in for root, or for a stranger, without owning a second account on the host.
 var currentUID = func() uint32 { return uint32(os.Geteuid()) }
 
-// listen binds the socket at path.
+// infoSupported reports that the info API can be served here: a unix socket takes the
+// mode an operator configures, which is the whole of its access control.
+const infoSupported = true
+
+// listen binds the socket at path with the given mode.
 //
-// Access control is the socket's own mode, 0600, which the node is created with and
-// which is pinned after bind, together with the peer check the server applies on accept:
-// connect(2) needs write permission on the socket file on every unix we build for. The
-// directory is not part of that, and is never chmoded: a directory a service manager
-// made for us is served from at whatever mode it came with (systemd's
-// RuntimeDirectoryMode= is 0755 by default), and one an operator pointed us into keeps
-// whatever else it holds readable. The one we make ourselves is 0755, searchable by
-// everyone, so that an unprivileged nebula ctl can see a root daemon's socket and say
-// so; see ServedByRootFor.
-func listen(path string) (net.Listener, error) {
+// Access control is the socket's own mode, which the node is created no looser than and
+// which is pinned after bind: connect(2) needs write permission on the socket file on
+// every unix we build for. The control socket is 0600 and adds the peer check the
+// server applies on accept; the info socket is whatever the operator configured, since
+// opening it to others is its purpose. The directory is not part of that, and is never
+// chmoded: a directory a service manager made for us is served from at whatever mode it
+// came with (systemd's RuntimeDirectoryMode= is 0755 by default), and one an operator
+// pointed us into keeps whatever else it holds readable. The one we make ourselves is
+// 0755, searchable by everyone, so that an unprivileged nebula ctl can see a root
+// daemon's socket and say so; see ServedByRootFor.
+func listen(path string, mode os.FileMode) (net.Listener, error) {
 	// The kernel silently truncates an over long sun_path and bind then fails with
 	// "invalid argument", which tells an operator nothing. Say what is actually wrong.
 	if pathTooLong(path) {
@@ -70,10 +75,10 @@ func listen(path string) (net.Listener, error) {
 	// mistake to report, not a tree to build. A directory made here is remembered, so
 	// that removeSocket can take it away again once nothing is left in it.
 	//
-	// 0755 gives nothing away: the socket is 0600. What it gives is a directory others
-	// can look into, which is what ServedByRootFor needs. Mkdir applies the umask, so
-	// the mode is pinned afterwards, as the socket's is; only on a directory this call
-	// created.
+	// 0755 gives nothing away: the socket's own mode is the access control. What it
+	// gives is a directory others can look into, which is what ServedByRootFor needs.
+	// Mkdir applies the umask, so the mode is pinned afterwards, as the socket's is;
+	// only on a directory this call created.
 	switch err := os.Mkdir(dir, 0755); {
 	case err == nil:
 		if err := os.Chmod(dir, 0755); err != nil {
@@ -90,9 +95,10 @@ func listen(path string) (net.Listener, error) {
 
 	// bind creates the socket node at the process umask, and a connect(2) between that
 	// and a later chmod would be queued for accept. Tighten the umask around the bind so
-	// the node is never looser than 0600, however briefly. umask is process wide, so
-	// another goroutine creating a file during this one syscall gets 0600 too: stricter
-	// than it asked for, never looser, and nothing here creates files on a hot path.
+	// the node is never looser than 0600, however briefly, whatever mode it ends up at.
+	// umask is process wide, so another goroutine creating a file during this one syscall
+	// gets 0600 too: stricter than it asked for, never looser, and nothing here creates
+	// files on a hot path.
 	old := syscall.Umask(0077)
 	ln, err := net.Listen(network, path)
 	syscall.Umask(old)
@@ -110,7 +116,7 @@ func listen(path string) (net.Listener, error) {
 
 	// The umask only promises no looser than 0600; this pins the mode exactly, and is
 	// the one place a failure to secure the socket is reported.
-	if err := os.Chmod(path, 0600); err != nil {
+	if err := os.Chmod(path, mode); err != nil {
 		release(ln, path)
 		return nil, fmt.Errorf("could not secure %s: %w", path, err)
 	}

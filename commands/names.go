@@ -21,6 +21,7 @@ const (
 	CreateTunnel          Name = "create-tunnel"
 	DeviceInfo            Name = "device-info"
 	Help                  Name = "help"
+	Identity              Name = "identity"
 	ListHostmap           Name = "list-hostmap"
 	ListLighthouseAddrmap Name = "list-lighthouse-addrmap"
 	ListPendingHostmap    Name = "list-pending-hostmap"
@@ -49,6 +50,7 @@ var Known = [...]Name{
 	CreateTunnel,
 	DeviceInfo,
 	Help,
+	Identity,
 	ListHostmap,
 	ListLighthouseAddrmap,
 	ListPendingHostmap,

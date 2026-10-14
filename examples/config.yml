@@ -274,6 +274,38 @@ punchy:
     # This setting is reloadable. The socket moves to the new path on SIGHUP.
     #socket: /var/run/nebula/ctl.sock
 
+  # The info API lets other programs on this host ask who is behind a vpn address, so a
+  # service can make an authorization decision about a connection arriving over the
+  # overlay without presenting a login form. It is off by default. When enabled it serves
+  # the `identity` command, and nothing else nebula can do, over HTTP on a unix socket
+  # (not yet available on Windows):
+  #   GET /v1/identity                            this node's identity
+  #   GET /v1/identity?address=<vpn addr>[:port]  the identity of the host owning the
+  #                                               address: a peer with an established
+  #                                               tunnel, or this node. The port is
+  #                                               ignored, so a connection's remote
+  #                                               address passes through as is. 404 when
+  #                                               no tunnel to the address is up.
+  #   GET /v1                                     describes what is served
+  # The answer is the certificate's identity and nothing else: name, vpn addresses,
+  # networks, unsafe networks, groups, fingerprint, issuer, validity window and cert
+  # version. It can be trusted because nebula drops inbound packets whose source address
+  # is not in the sender's certificate. The same command is `identity` over the ssh debug
+  # server and `nebula ctl`.
+  #
+  # There is no authentication; the socket's mode is the access control. The socket is
+  # created by the user and group nebula runs as, in the directory named here. To open
+  # the API to a group of services, put the socket in a directory they can search and
+  # set socket_mode to "0660"; "0666" opens it to everyone on the host.
+  #
+  # This whole section is reloadable.
+  #info:
+    #enabled: false
+    # Required when enabled. A relative path is taken from this file's directory.
+    #socket: /var/run/nebula/info.sock
+    # Octal mode for the socket, as a quoted string. "0600" admits only nebula's user.
+    #socket_mode: "0600"
+
 # EXPERIMENTAL: relay support for networks that can't establish direct connections.
 relay:
   # Relays are a list of Nebula IP's that peers can use to relay packets to me.
