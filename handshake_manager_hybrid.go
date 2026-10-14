@@ -145,8 +145,9 @@ func (hm *HandshakeManager) awaitMsg3(via ViaSender, hh *HandshakeHostInfo, mach
 	now := time.Now()
 	hostinfo.vpnAddrs = vpnAddrs
 	hostinfo.remoteIndexId = rh.RemoteIndex
-	// packet aliases the listener's incoming buffer, so this copy must stay.
-	hostinfo.HandshakePacket[handshakePacketStage0] = append([]byte(nil), packet[header.Len:]...)
+	// A hybrid msg1 is always fragmented, so packet is the one the fragment
+	// table reassembled, not the listener's buffer, and nothing else holds it.
+	hostinfo.HandshakePacket[handshakePacketStage0] = packet[header.Len:]
 	hostinfo.HandshakePacket[handshakePacketStage2] = response
 	hostinfo.remotes = f.lightHouse.QueryCache(vpnAddrs)
 	if !via.IsRelayed {
