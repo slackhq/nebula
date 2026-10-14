@@ -88,9 +88,23 @@ var mlkem1024 = pqKEM{
 		return dk.EncapsulationKey().Bytes(), nil
 	},
 	checkPublicKey: func(pub []byte) bool {
-		_, err := mlkem.NewEncapsulationKey1024(pub)
-		return err == nil
+		return len(pub) == mlkem.EncapsulationKeySize1024 && mlkemModulusOK(pub[:len(pub)-32])
 	},
+}
+
+// mlkemModulusOK is the modulus check of FIPS 203 section 7.2, the one crypto/mlkem runs on an encapsulation key: t,
+// the key less its trailing 32 byte seed, packs 12 bit coefficients that must all be below q. crypto/mlkem would also
+// expand the seed into the ~10KB matrix of an encapsulation key, which a certificate check has no use for.
+func mlkemModulusOK(t []byte) bool {
+	const q = 3329
+	for i := 0; i+3 <= len(t); i += 3 {
+		d1 := uint16(t[i]) | uint16(t[i+1]&0x0f)<<8
+		d2 := uint16(t[i+1]>>4) | uint16(t[i+2])<<4
+		if d1 >= q || d2 >= q {
+			return false
+		}
+	}
+	return true
 }
 
 var mldsa87 = pqDSA{

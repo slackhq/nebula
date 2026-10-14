@@ -1,6 +1,9 @@
 package cert
 
 import (
+	"bytes"
+	"crypto/mlkem"
+	"crypto/rand"
 	"net/netip"
 	"strings"
 	"testing"
@@ -166,4 +169,43 @@ func TestPQSuite_Mismatch(t *testing.T) {
 			require.ErrorIs(t, err, ErrPQSuiteMismatch)
 		})
 	}
+}
+
+func TestMLKEMModulusOK(t *testing.T) {
+	stdlib := func(pub []byte) bool {
+		_, err := mlkem.NewEncapsulationKey1024(pub)
+		return err == nil
+	}
+	setCoeff := func(pub []byte, i int, v uint16) {
+		b := pub[i/2*3:]
+		if i%2 == 0 {
+			b[0] = byte(v)
+			b[1] = b[1]&0xf0 | byte(v>>8)
+		} else {
+			b[1] = b[1]&0x0f | byte(v<<4)
+			b[2] = byte(v >> 4)
+		}
+	}
+
+	for range 8 {
+		dk, err := mlkem.GenerateKey1024()
+		require.NoError(t, err)
+		pub := dk.EncapsulationKey().Bytes()
+		require.True(t, mlkem1024.checkPublicKey(pub))
+		for _, i := range []int{0, 1, 2, 3, 511, 512, 1022, 1023} {
+			for _, v := range []uint16{0, 3328, 3329, 4095} {
+				p := bytes.Clone(pub)
+				setCoeff(p, i, v)
+				assert.Equal(t, stdlib(p), mlkem1024.checkPublicKey(p), "coefficient %d = %d", i, v)
+				assert.Equal(t, v < 3329, mlkem1024.checkPublicKey(p), "coefficient %d = %d", i, v)
+			}
+		}
+	}
+
+	pub := make([]byte, mlkem.EncapsulationKeySize1024)
+	for range 64 {
+		_, _ = rand.Read(pub)
+		assert.Equal(t, stdlib(pub), mlkem1024.checkPublicKey(pub))
+	}
+	assert.False(t, mlkem1024.checkPublicKey(pub[:len(pub)-1]))
 }
