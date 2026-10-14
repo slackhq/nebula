@@ -86,8 +86,11 @@ func (s *Sender) Attempt(repair int) (now, later [][]byte, err error) {
 	k := s.enc.Layout().K
 	now = make([][]byte, 0, k)
 	later = make([][]byte, 0, repair)
+	// One allocation backs every packet of the attempt.
+	pktCap := header.Len + HeaderLen + CookieLen + s.enc.Layout().SymbolSize
+	buf := make([]byte, (k+repair)*pktCap)
 	for i := range k + repair {
-		p, err := s.packet(s.next)
+		p, err := s.packet(buf[i*pktCap:i*pktCap:(i+1)*pktCap], s.next)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -101,10 +104,11 @@ func (s *Sender) Attempt(repair int) (now, later [][]byte, err error) {
 	return now, later, nil
 }
 
-func (s *Sender) packet(index int) ([]byte, error) {
+// packet builds the packet for the symbol at index in the capacity of p, which
+// must have room for it.
+func (s *Sender) packet(p []byte, index int) ([]byte, error) {
 	l := s.enc.Layout()
-	p := make([]byte, header.Len, header.Len+HeaderLen+CookieLen+l.SymbolSize)
-	header.Encode(p, header.Version, header.Handshake, s.subtype, s.remoteIndex, s.counter)
+	p = header.Encode(p[:header.Len], header.Version, header.Handshake, s.subtype, s.remoteIndex, s.counter)
 	h := Header{
 		FragID: s.fragID,
 		MsgLen: uint16(l.MsgLen),
