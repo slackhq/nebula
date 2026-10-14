@@ -98,6 +98,21 @@ func (e *Encoder) Symbol(dst []byte, index int) ([]byte, error) {
 // Decoder collects symbols for one message until it can reconstruct it.
 // It stores at most K symbols, so its memory is bounded by the layout no matter
 // how many symbols arrive.
+//
+// TODO(in-place decode): for receivers that already hold state for the message,
+// the initiator's msg2 slots and a pending responder's msg3, store into one
+// buffer of K*SymbolSize (plus room for the Nebula header) allocated from the
+// layout: data symbol i at offset i*SymbolSize, repair symbols parked in the
+// slots of data symbols not seen yet (moved to another empty slot if that data
+// symbol arrives; one always exists while fewer than K are held). Decode then
+// folds the known columns into each parked repair symbol in place and runs
+// Gauss-Jordan across those rows in place; a Cauchy submatrix needs no
+// pivoting, so each solution lands in the slot of its own column and the
+// buffer is the packet. That removes the per-symbol copies, the output buffer
+// and reassembled()'s copy, about 20KB and a dozen allocations per msg2, at the
+// cost of holding K*SymbolSize from the first fragment and destroying the
+// input on a failed decode. It is not for the responder's msg1 table, which
+// must never allocate from a claimed size.
 type Decoder struct {
 	layout Layout
 	have   [MaxSymbols]bool

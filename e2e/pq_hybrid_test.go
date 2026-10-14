@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"fmt"
 	"net/netip"
 	"sync"
 	"testing"
@@ -500,4 +501,85 @@ func TestHybridRaceWithClassical(t *testing.T) {
 
 	myControl.Stop()
 	theirControl.Stop()
+}
+
+// TestHybridWrongResponder gives the initiator a stale address for its peer
+// that belongs to another v3 host now, so both answer its msg1. Their msg2
+// bursts interleave at the initiator and each must fill its own slot: the
+// tunnel to the right host comes up within two attempts, one if its answer
+// completes first and two if the other host's does, which the initiator
+// blocks and retries past as it would for a classical handshake. With require
+// there is no classical turn to fall back on, so a single slot that emptied
+// on every FragID change would run to the handshake timeout.
+func TestHybridWrongResponder(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		cfg    m
+		pqOnly bool
+	}{
+		{"taking turns", pqConfig(true, true, false), false},
+		{"pq only", pqRequire(), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ca := newHybridCA(t)
+			myControl, myVpn, myUdp, _ := newSimpleServer(cert.Version3, ca.ca, ca.key, "me", "10.128.0.1/24", tc.cfg)
+			theirControl, theirVpn, theirUdp, _ := newSimpleServer(cert.Version3, ca.ca, ca.key, "them", "10.128.0.2/24", tc.cfg)
+			otherControl, otherVpn, otherUdp, _ := newSimpleServer(cert.Version3, ca.ca, ca.key, "other", "10.128.0.3/24", tc.cfg)
+			myControl.InjectLightHouseAddr(theirVpn[0].Addr(), otherUdp)
+			myControl.InjectLightHouseAddr(theirVpn[0].Addr(), theirUdp)
+
+			r := router.NewR(t, myControl, theirControl, otherControl)
+			defer r.RenderFlow()
+			myControl.Start()
+			theirControl.Start()
+			otherControl.Start()
+
+			var tally hybridTally
+			msg1ToThem := 0
+			msg2ByFragID := map[uint32]int{}
+			var classical []string
+			myControl.InjectTunPacket(BuildTunUDPPacket(theirVpn[0].Addr(), 80, myVpn[0].Addr(), 80, []byte("Hi from me")))
+			require.True(t, routeUntilData(t, r, theirControl, 5*time.Second, func(p *udp.Packet, receiver *nebula.Control) router.ExitType {
+				tally.observe(p)
+				if h, fh := handshakeOf(p); h != nil {
+					switch {
+					case fh == nil:
+						classical = append(classical, fmt.Sprintf("counter=%d to=%s", h.MessageCounter, p.To))
+					case h.MessageCounter == 1 && p.To == theirUdp:
+						msg1ToThem++
+					case h.MessageCounter == 2 && receiver == myControl:
+						msg2ByFragID[fh.FragID]++
+					}
+				}
+				return router.KeepRouting
+			}), "tunnel never came up")
+			t.Logf("msg1 fragments to them: %d, msg2 fragments by FragID: %v, classical: %v", msg1ToThem, msg2ByFragID, classical)
+
+			assertUdpPacket(t, []byte("Hi from me"), theirControl.GetFromTun(true), myVpn[0].Addr(), theirVpn[0].Addr(), 80, 80)
+			assert.GreaterOrEqual(t, len(msg2ByFragID), 2, "both hosts answered")
+			// A responder only resends msg2 when the initiator retries, so every
+			// FragID staying at one burst means each interleaved answer completed in
+			// its own slot. (The msg1 count is not a clean measure: a restart after
+			// the wrong host answers leaves the old handshake's timer entry in place,
+			// so the new one ticks twice, a few milliseconds apart.)
+			for fragID, n := range msg2ByFragID {
+				assert.LessOrEqual(t, n, 9+3, "responder %d had to resend msg2", fragID)
+			}
+			if tc.pqOnly {
+				assert.Empty(t, classical, "require never offers a classical attempt")
+			}
+
+			assertHostInfoPair(t, myUdp, theirUdp, myVpn, theirVpn, myControl, theirControl)
+			assertTunnel(t, myVpn[0].Addr(), theirVpn[0].Addr(), myControl, theirControl, r)
+			assert.Nil(t, myControl.GetHostInfoByVpnAddr(otherVpn[0].Addr(), false), "no tunnel to the other host")
+			assert.Empty(t, myControl.ListHostmapIndexes(true), "no pending index may outlive the handshake")
+			assert.Equal(t, cert.Version3, myControl.GetHostInfoByVpnAddr(theirVpn[0].Addr(), false).Cert.Version(), "the hybrid handshake won")
+
+			myControl.Stop()
+			theirControl.Stop()
+			otherControl.Stop()
+		})
+	}
 }

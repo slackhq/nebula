@@ -319,6 +319,12 @@ Implemented in `handshake/fragment` (`Sender`, `Assembly`, and the capped `Table
   FragID) with a total memory cap, per-source quotas (/32 for IPv4, /64 for IPv6), a
   sliding TTL of about 2 s refreshed by progress, and random eviction under pressure.
   msg2 and msg3 reassembly attaches to the existing pending handshake found by RemoteIndex.
+  The initiator keeps two msg2 slots keyed by the responder's FragID, each capped at 16 KiB.
+  When a stale lighthouse address for the peer belongs to another host now, both hosts answer
+  the same msg1, and their interleaved bursts would wipe each other out of a single slot that
+  emptied on every FragID change; with a slot each, whichever completes first is processed, and
+  a wrong host's answer takes the usual block-and-retry path. The responder's msg3 slot needs no
+  such care: it checks FragID against the initiator's index it learned from msg2.
 
 ### Retransmission and amplification
 

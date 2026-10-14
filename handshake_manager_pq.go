@@ -28,13 +28,19 @@ const (
 	pqAmplification = 3
 )
 
+// pqMaxMsgLen bounds the fragmented handshake messages a node reassembles:
+// msg1 in the responder's table and msg2 in an initiator's slots. The largest
+// is msg2 at about 9.6KB, which leaves room for certificates carrying many
+// names and routes.
+const pqMaxMsgLen = 16384
+
 // pqTableConfig bounds the responder's reassembly of msg1 fragments from senders
 // that have not authenticated yet.
 var pqTableConfig = fragment.TableConfig{
 	MaxBytes:     4 << 20,
 	MaxEntries:   1024,
 	MaxPerSource: 4,
-	MaxMsgLen:    16384,
+	MaxMsgLen:    pqMaxMsgLen,
 	TTL:          3 * time.Second,
 }
 
@@ -84,6 +90,24 @@ func (hm *HandshakeManager) reloadPQ(c *config.C) {
 	)
 }
 
+// pqMsg2Slots is how many responders' msg2s one attempt reassembles at once.
+// Two hosts answer the same msg1 when a stale lighthouse address for the peer
+// belongs to another node now. Both answers name this attempt in RemoteIndex
+// and differ only in FragID, the responder's own index. A single assembly that
+// emptied on a FragID change let the two interleaved bursts wipe each other
+// out, and since hearing any msg2 fragment stops the classical turns, the
+// retries only repeated it (up to three extra attempts in e2e). One slot per
+// FragID lets whichever answer completes first be processed; a wrong host's
+// answer then takes the existing block-and-retry path.
+const pqMsg2Slots = 2
+
+// msg2Slot reassembles one responder's msg2.
+type msg2Slot struct {
+	fragID uint32
+	msgLen uint16
+	a      *fragment.Assembly
+}
+
 // pqAttempt is the initiator's post-quantum attempt for a pending handshake. It
 // lives alongside the classical attempt in HandshakeHostInfo and has its own
 // local index, so whichever answer arrives first wins.
@@ -92,9 +116,62 @@ type pqAttempt struct {
 	subtype        header.MessageSubType
 	index          uint32
 	sender         *fragment.Sender
-	msg2           *fragment.Assembly
-	cookieResendAt time.Time // last resend prompted by a cookie reply
-	heard          bool      // a msg2 fragment or cookie reply arrived, so the peer speaks PQ
+	msg2           [pqMsg2Slots]msg2Slot // an array, not a map: one slot is used nearly always
+	cookieResendAt time.Time             // last resend prompted by a cookie reply
+	heard          bool                  // a msg2 fragment or cookie reply arrived, so the peer speaks PQ
+}
+
+// slotFor returns the assembly collecting msg2 fragments with fh's FragID,
+// starting one if there is none. A responder never changes its FragID or
+// MsgLen, so a fragment whose MsgLen disagrees with its slot is a stray or a
+// forgery and starts that slot over. When every slot is taken the one holding
+// the least is replaced: a third responder is vanishingly rare, and a forged
+// FragID could already spoil an attempt. It returns nil if no assembly can be
+// made for fh.
+func (pq *pqAttempt) slotFor(fh fragment.Header) *fragment.Assembly {
+	victim := -1
+	for i := range pq.msg2 {
+		s := &pq.msg2[i]
+		if s.a != nil && s.fragID == fh.FragID {
+			if s.msgLen == fh.MsgLen {
+				return s.a
+			}
+			victim = i
+			break
+		}
+	}
+	if victim < 0 {
+		for i := range pq.msg2 {
+			if pq.msg2[i].a == nil {
+				victim = i
+				break
+			}
+		}
+	}
+	if victim < 0 {
+		victim = 0
+		for i := 1; i < len(pq.msg2); i++ {
+			if pq.msg2[i].a.Stored() < pq.msg2[victim].a.Stored() {
+				victim = i
+			}
+		}
+	}
+
+	a, err := fragment.NewAssembly(fh)
+	if err != nil {
+		return nil
+	}
+	pq.msg2[victim] = msg2Slot{fragID: fh.FragID, msgLen: fh.MsgLen, a: a}
+	return a
+}
+
+// dropSlot releases the slot holding a.
+func (pq *pqAttempt) dropSlot(a *fragment.Assembly) {
+	for i := range pq.msg2 {
+		if pq.msg2[i].a == a {
+			pq.msg2[i] = msg2Slot{}
+		}
+	}
 }
 
 // pqFragKey identifies one msg1 being reassembled.
@@ -392,8 +469,13 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 	}
 }
 
-// continuePQ collects msg2 fragments for the initiator's PQ attempt.
+// continuePQ collects msg2 fragments for the initiator's PQ attempt, one slot
+// per responder FragID, and processes the first msg2 to complete.
 func (hm *HandshakeManager) continuePQ(via ViaSender, hh *HandshakeHostInfo, h *header.H, fh fragment.Header, sym []byte) {
+	if int(fh.MsgLen) > pqMaxMsgLen {
+		return
+	}
+
 	hh.Lock()
 	defer hh.Unlock()
 
@@ -403,26 +485,17 @@ func (hm *HandshakeManager) continuePQ(via ViaSender, hh *HandshakeHostInfo, h *
 	}
 	pq.heard = true
 
-	if pq.msg2 == nil {
-		a, err := fragment.NewAssembly(fh)
-		if err != nil {
-			return
-		}
-		pq.msg2 = a
-	}
-	ready, err := pq.msg2.Add(fh, sym)
-	if errors.Is(err, fragment.ErrMismatch) {
-		// The responder's FragID and MsgLen never change, so this is a stray or a
-		// forgery. Start over from this fragment rather than wedge.
-		pq.msg2 = nil
+	a := pq.slotFor(fh)
+	if a == nil {
 		return
 	}
+	ready, err := a.Add(fh, sym)
 	if err != nil || !ready {
 		return
 	}
 
-	msg, err := pq.msg2.Decode()
-	pq.msg2 = nil
+	msg, err := a.Decode()
+	pq.dropSlot(a)
 	if err != nil {
 		hm.l.Debug("failed to decode handshake fragments", "from", via, "error", err)
 		return

@@ -397,3 +397,134 @@ func TestUsePQ(t *testing.T) {
 	hm.notePQPeer(header.HandshakeIXPSK2MLKEM1024, []netip.Addr{peer})
 	assert.Equal(t, []bool{true, true, true}, attempts(false, false, false), "then only PQ")
 }
+
+// msg2Fragments returns one attempt's packets carrying msg as a responder's msg2
+// under fragID, data symbols first and then repair.
+func msg2Fragments(t *testing.T, msg []byte, fragID uint32) [][]byte {
+	t.Helper()
+	s, err := fragment.NewSender(msg, header.HandshakeIXHybridMLKEM1024, 7, 2, fragID)
+	require.NoError(t, err)
+	now, later, err := s.Attempt(fragment.DefaultRepair(s.Layout().K))
+	require.NoError(t, err)
+	return append(now, later...)
+}
+
+// feedMsg2 puts one packet through an attempt's slots.
+func feedMsg2(t *testing.T, pq *pqAttempt, p []byte) (*fragment.Assembly, fragment.Header, bool) {
+	t.Helper()
+	fh, sym, err := fragment.Parse(p[header.Len:])
+	require.NoError(t, err)
+	a := pq.slotFor(fh)
+	require.NotNil(t, a)
+	ready, err := a.Add(fh, sym)
+	require.NoError(t, err)
+	return a, fh, ready
+}
+
+func slotsUsed(pq *pqAttempt) (n int, ids []uint32) {
+	for _, s := range pq.msg2 {
+		if s.a != nil {
+			n++
+			ids = append(ids, s.fragID)
+		}
+	}
+	return n, ids
+}
+
+// TestPQMsg2Slots interleaves two responders' msg2 bursts, the shape two hosts
+// answering the same msg1 produce on a LAN, and checks each fills its own slot.
+func TestPQMsg2Slots(t *testing.T) {
+	msgB := make([]byte, 9625) // the hybrid msg2: k = 9
+	msgC := make([]byte, 9625)
+	for i := range msgB {
+		msgB[i], msgC[i] = 'b', 'c'
+	}
+	pktsB := msg2Fragments(t, msgB, 1001)
+	pktsC := msg2Fragments(t, msgC, 2002)
+	require.Len(t, pktsB, 12)
+
+	// B0 B1 C0 B2 B3 B4 C1 C2 B5 B6 B7 B8 C3: no run of one FragID reaches nine,
+	// so a single slot emptied on every change would never complete.
+	order := []struct {
+		fromC bool
+		i     int
+	}{{false, 0}, {false, 1}, {true, 0}, {false, 2}, {false, 3}, {false, 4}, {true, 1}, {true, 2}, {false, 5}, {false, 6}, {false, 7}, {false, 8}, {true, 3}}
+
+	pq := &pqAttempt{}
+	var got []byte
+	for n, o := range order {
+		p := pktsB[o.i]
+		if o.fromC {
+			p = pktsC[o.i]
+		}
+		a, _, ready := feedMsg2(t, pq, p)
+		if !ready {
+			continue
+		}
+		require.Equal(t, 11, n, "B completes on its ninth symbol")
+		msg, err := a.Decode()
+		require.NoError(t, err)
+		got = msg
+		pq.dropSlot(a)
+	}
+	require.Equal(t, msgB, got)
+
+	n, ids := slotsUsed(pq)
+	assert.Equal(t, 1, n)
+	assert.Equal(t, []uint32{2002}, ids, "B's slot was released, C's kept")
+
+	// C's four symbols survived B's completion, so five more finish it.
+	var c *fragment.Assembly
+	var ready bool
+	for i := 4; i < 9; i++ {
+		c, _, ready = feedMsg2(t, pq, pktsC[i])
+		assert.Equal(t, i == 8, ready, "symbol %d", i)
+	}
+	msg, err := c.Decode()
+	require.NoError(t, err)
+	assert.Equal(t, msgC, msg)
+
+	t.Run("a third responder takes the slot holding the least", func(t *testing.T) {
+		pq := &pqAttempt{}
+		feedMsg2(t, pq, pktsB[0])
+		feedMsg2(t, pq, pktsB[1])
+		feedMsg2(t, pq, pktsC[0])
+		pktsD := msg2Fragments(t, msgC, 3003)
+		d, fh, _ := feedMsg2(t, pq, pktsD[0])
+		_, ids := slotsUsed(pq)
+		assert.ElementsMatch(t, []uint32{1001, 3003}, ids)
+
+		l, err := fh.Layout()
+		require.NoError(t, err)
+		b, _, _ := feedMsg2(t, pq, pktsB[2])
+		assert.Equal(t, 3*l.SymbolSize, b.Stored(), "B kept its symbols")
+		assert.Equal(t, l.SymbolSize, d.Stored())
+	})
+
+	t.Run("a different MsgLen under the same FragID starts the slot over", func(t *testing.T) {
+		pq := &pqAttempt{}
+		feedMsg2(t, pq, pktsB[0])
+		feedMsg2(t, pq, pktsB[1])
+		shorter := msg2Fragments(t, msgB[:9000], 1001)
+		a, fh, _ := feedMsg2(t, pq, shorter[0])
+		l, err := fh.Layout()
+		require.NoError(t, err)
+		assert.Equal(t, l.SymbolSize, a.Stored())
+		n, ids := slotsUsed(pq)
+		assert.Equal(t, 1, n)
+		assert.Equal(t, []uint32{1001}, ids)
+	})
+
+	t.Run("an oversize claim is dropped before it takes a slot", func(t *testing.T) {
+		hm, _ := newPQTestManager(t)
+		hh := &HandshakeHostInfo{hostinfo: &HostInfo{}, pq: &pqAttempt{index: 42}}
+		hm.indexes[42] = hh
+		fh := fragment.Header{FragID: 1001, MsgLen: pqMaxMsgLen + 1}
+		l, err := fh.Layout()
+		require.NoError(t, err)
+		hm.continuePQ(ViaSender{}, hh, &header.H{RemoteIndex: 42, MessageCounter: 2}, fh, make([]byte, l.SymbolSize))
+		n, _ := slotsUsed(hh.pq)
+		assert.Zero(t, n)
+		assert.False(t, hh.pq.heard)
+	})
+}
