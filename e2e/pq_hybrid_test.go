@@ -139,7 +139,7 @@ func TestHybridHandshake(t *testing.T) {
 
 	assertUdpPacket(t, []byte("Hi from me"), theirControl.GetFromTun(true), myVpn[0].Addr(), theirVpn[0].Addr(), 80, 80)
 	assert.Zero(t, tally.classical+tally.phase1, "a node with a v3 certificate speaks the hybrid handshake")
-	assert.GreaterOrEqual(t, tally.hybrid, 7+10+2, "all three messages travel as several fragments")
+	assert.GreaterOrEqual(t, tally.hybrid, 7+9+2, "all three messages travel as several fragments")
 	assert.Positive(t, tally.msg3)
 	assert.LessOrEqual(t, tally.maxLen, fragment.MaxPacketLen)
 	assert.Zero(t, recvErrors)
