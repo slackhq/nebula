@@ -649,3 +649,60 @@ func TestHybridMsg2LostDirect(t *testing.T) {
 	relayControl.Stop()
 	theirControl.Stop()
 }
+
+// TestHybridOneWayDirect loses everything the responder sends directly, not
+// just msg2, so only the relay carries anything back. msg3 comes by the relay,
+// since that is where msg2 got through, and the responder must then send by the
+// relay too: its confirmation, and its replies. Keeping the direct address it
+// learned from msg1 would lose both, and the initiator would close the tunnel as
+// never confirmed.
+func TestHybridOneWayDirect(t *testing.T) {
+	t.Parallel()
+	ca := newHybridCA(t)
+	useRelays := pqRequire()
+	useRelays["relay"] = m{"use_relays": true}
+	// The relay takes about a second to come up in this harness; 8 retries make the
+	// handshake timeout 3.6s, which the end of the test waits out.
+	useRelays["handshakes"].(m)["retries"] = 8
+	amRelay := pqRequire()
+	amRelay["relay"] = m{"am_relay": true}
+	myControl, myVpn, _, _ := newSimpleServer(cert.Version3, ca.ca, ca.key, "me     ", "10.128.0.1/24", useRelays)
+	relayControl, relayVpn, relayUdp, _ := newSimpleServer(cert.Version3, ca.ca, ca.key, "relay  ", "10.128.0.128/24", amRelay)
+	theirControl, theirVpn, theirUdp, _ := newSimpleServer(cert.Version3, ca.ca, ca.key, "them   ", "10.128.0.2/24", useRelays)
+
+	myControl.InjectLightHouseAddr(theirVpn[0].Addr(), theirUdp)
+	myControl.InjectLightHouseAddr(relayVpn[0].Addr(), relayUdp)
+	myControl.InjectRelays(theirVpn[0].Addr(), []netip.Addr{relayVpn[0].Addr()})
+	relayControl.InjectLightHouseAddr(theirVpn[0].Addr(), theirUdp)
+
+	r := router.NewR(t, myControl, relayControl, theirControl)
+	defer r.RenderFlow()
+	myControl.Start()
+	relayControl.Start()
+	theirControl.Start()
+
+	oneWay := func(p *udp.Packet, receiver *nebula.Control) router.ExitType {
+		if p.From == theirUdp && receiver == myControl {
+			return router.Drop
+		}
+		return router.KeepRouting
+	}
+
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpn[0].Addr(), 80, myVpn[0].Addr(), 80, []byte("Hi from me")))
+	require.True(t, routeUntilData(t, r, theirControl, 10*time.Second, oneWay), "tunnel never came up")
+	assertUdpPacket(t, []byte("Hi from me"), theirControl.GetFromTun(true), myVpn[0].Addr(), theirVpn[0].Addr(), 80, 80)
+
+	theirControl.InjectTunPacket(BuildTunUDPPacket(myVpn[0].Addr(), 80, theirVpn[0].Addr(), 80, []byte("Hi from them")))
+	require.True(t, routeUntilData(t, r, myControl, 3*time.Second, oneWay), "the reply never came back")
+	assertUdpPacket(t, []byte("Hi from them"), myControl.GetFromTun(true), theirVpn[0].Addr(), myVpn[0].Addr(), 80, 80)
+
+	// Well past the handshake timeout, the initiator must still have the tunnel.
+	r.RouteForAllExitFuncOrTimeout(4*time.Second, oneWay)
+	mine := myControl.GetHostInfoByVpnAddr(theirVpn[0].Addr(), false)
+	require.NotNil(t, mine, "the initiator heard back, so it kept the tunnel")
+	assert.Equal(t, cert.Version3, mine.Cert.Version())
+
+	myControl.Stop()
+	relayControl.Stop()
+	theirControl.Stop()
+}

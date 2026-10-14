@@ -255,9 +255,14 @@ func (hm *HandshakeManager) completeHybridResponder(via ViaSender, hh *Handshake
 	hostinfo.ConnectionState = cs
 	hostinfo.remoteIndexId = result.RemoteIndex
 	hostinfo.lastHandshakeTime = result.HandshakeTime
+	// The initiator sends msg3 by the path its msg2 got through, so that path
+	// works both ways: send by it. A relayed msg3 also means the direct address
+	// learned from msg1 may only work toward us, so forget it and let traffic,
+	// the confirmation first, go by the relay.
 	if !via.IsRelayed {
 		hostinfo.SetRemote(via.UdpAddr)
 	} else {
+		hostinfo.remote.Store(nil)
 		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnAddrs[0])
 	}
 	remoteCert := result.RemoteCert
