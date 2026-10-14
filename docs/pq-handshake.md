@@ -55,6 +55,11 @@ about 1.84 KB each, so each travels as 2 data and 2 repair fragments of about 93
 A KEM key on the classical subtype, or a missing or malformed one on this subtype, is a fatal
 protocol error; a forged ciphertext only fails that packet.
 
+The `psk` token is the last in msg2, so the responder's static key `s` is encrypted under `ee` and
+`se` only, and a future quantum attacker can read it from a recording; the certificate and indexes
+follow the psk and stay protected. Identity hiding is a non-goal, and phase 2's KEM-first ordering
+closes this anyway.
+
 ## Phase 2: hybrid IX with certificate v3
 
 Phase 2 adds post-quantum authentication. Decisions were made on 2026-10-14; it is implemented on
@@ -85,12 +90,18 @@ CertificateV3 ::= SEQUENCE {
 - **Signatures.** Both must verify. The ML-DSA-87 signature covers the classical signature too, so
   neither signature can be swapped out (which also makes P256 low/high-s alternates moot for v3).
   If ML-DSA fell classically and someone swapped `pqPublicKey`, the hybrid handshake still needs
-  the classical static key, which only the classical signature covers.
+  the classical static key, which only the classical signature covers. The ML-DSA-87 signature is
+  deterministic (FIPS 204 section 3.4), so extending the same v2 certificate with the same key twice
+  gives the same v3 certificate and fingerprint: `pq-extend` is idempotent. The hedged variant
+  guards signers an attacker can fault physically, which a CA key in a file is not, and the Ed25519
+  signature beside it is deterministic too.
 - **Issuer and fingerprints.** The details are v2-shaped, so the issuer is the fingerprint of the
   CA's v2 form. A v3 certificate's own fingerprint is the SHA-256 of its whole encoding and differs
-  from its v2 form's. Both identify it: the blocklist checks both, and operators must list both,
-  since blocking only the v3 fingerprint leaves the v2 form usable in classical handshakes. Firewall
-  `ca_sha` rules match a v3 peer by either fingerprint of its CA.
+  from its v2 form's. Both identify it. To block a v3 certificate, block its v2 fingerprint: the
+  pool checks it for the v3 certificate and for its v2 form alike, so one entry covers both forms,
+  while blocking only the v3 fingerprint leaves the v2 form usable in classical handshakes.
+  `nebula-cert print` leads with both fingerprints and says which one to block. Firewall `ca_sha`
+  rules match a v3 peer by either fingerprint of its CA.
 - **CA pool.** A v3 CA verifies only v3 certificates. To accept v2 certificates as well the pool
   must also list the CA's v2 form. Dropping the v2 form is how a node requires post-quantum
   authentication; there is no separate setting. Two different v3 extensions of one v2 CA are
@@ -143,6 +154,13 @@ design rationale and security argument), with ML-KEM-1024 supplied by nebula:
   first packet under the new keys decrypts (it depends on msg3's `skem`). Neither side needs a
   signature. Knowing only a peer's classical private key gets an impersonator nowhere: as an
   initiator it cannot read msg2, as a responder it cannot read msg3.
+- **The two static ML-KEM keys see different ciphertexts.** msg2's `skem` ciphertext is encrypted
+  under a key derived from the `ekem` secret, which whoever sent msg2 chose, so anyone who can
+  address a pending initiator's index can have the initiator decapsulate a ciphertext of their
+  choosing with its static key. That is the IND-CCA setting ML-KEM is designed for, and
+  `crypto/mlkem` is constant time. The responder decrypts msg3's `skem` ciphertext under the keys of
+  a completed msg2 before decapsulating, so it only ever decapsulates ciphertexts the genuine
+  initiator sealed.
 - v3 certificates go with this subtype and nothing else: a v3 certificate on any other subtype, or
   a v2 one on this one, is a protocol error.
 
@@ -193,6 +211,9 @@ flynn/noise) before this can merge.
 - Post-quantum authentication is required through the CA pool, by not listing the CA's v2 form.
   A sticky or `require` initiator resists active downgrade of the key exchange; only the CA pool
   resists downgrade of authentication, since a quantum attacker could forge a v2 form.
+- `sticky` stays off by default for v3 holders too (decided 2026-10-14): a peer re-issued back to a
+  v2-only certificate would otherwise be unreachable until this process restarts. Deployments that
+  want downgrade resistance turn on `sticky` or `require`, or drop the CA's v2 form from the pool.
 
 ## Fragment transport
 
@@ -337,6 +358,21 @@ WireGuard's mac2, QUIC Retry and the SCTP state cookie:
 
 A CA-keyed pre-filter MAC was considered and rejected: networks commonly trust many CAs.
 
+#### Pending hybrid responders
+
+A hybrid responder that answered msg1 keeps a pending entry, keyed by its local index, until
+msg3 arrives or the handshake timeout (5.5 s by default) passes. msg1 is cleartext and nothing
+covers `e` or `Time`, so from one captured v3 msg1 an attacker can mint distinct valid msg1s
+with a fresh `e` and a bumped `Time`. Each misses the answered-msg1 cache, costs the responder
+the whole msg1 (two signature verifications, two encapsulations, four DH operations, the
+certificate checks) and a pending entry, and the fragment table stays near empty because a
+complete burst arrives together, so cookies are never demanded and spoofed sources work.
+Pending entries are not bounded per peer or in total. Accepted as is (2026-10-14): the per-msg1
+work is the same class as classical IX's pre-authentication cost, the expiry bounds the state in
+time and the fragment table bounds bytes in flight. If it needs tightening, cap pending
+responders per certificate fingerprint and in total, and count them toward the cookie
+threshold.
+
 #### Injected symbols
 
 The decoder keeps the first K distinct symbols it sees, so one forged symbol in those K
@@ -467,8 +503,19 @@ in every scenario above, and within three at least 99.99%.
 - Publish DefinedNet/noise and drop the `replace` in `go.mod`, once Nate says the fork is ready to
   ship. The classical-only responder `e` is on the local clone's `drop-responder-ekem-key` branch
   (b4a892b), not yet in DefinedNet/noise.
-- Cryptographic review of the hybrid composition and of the v3 certificate signatures.
+- DefinedNet/noise `ReadMessage` returns `ErrShortMessage` without rolling back the symmetric
+  state ([DefinedNet/noise#2](https://github.com/DefinedNet/noise/issues/2), inherited from
+  flynn/noise). A message that fails a length check after a key-mixing token leaves `ck` and `h`
+  advanced, so the genuine message can never be read: one spoofed short packet to a pending
+  initiator's index, which msg1 carries in the clear in every IX variant, kills that attempt until
+  it times out, and the Machine reports it as recoverable. Blocks publishing the module; the fix is
+  a deferred rollback that also restores `k`, `n` and `hasK`. Smaller pre-publish items are in
+  [DefinedNet/noise#3](https://github.com/DefinedNet/noise/issues/3).
 - Field test of hybrid handshakes on real hosts, as was done for phase 1.
+
+The cryptographic review of 2026-10-14 found no break in the composition or the certificate
+chain. Its outcomes are folded in above: deterministic ML-DSA signing, the fingerprint guidance,
+the `skem` oracle note, the psk2 note, the pending-responder exposure and the `sticky` default.
 
 Accepted as is: a tunnel that came up classical between two v3 holders (say, the hybrid attempt
 was dropped) stays classical until it rehandshakes for another reason. `require`, `sticky` and a

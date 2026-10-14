@@ -10,16 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Version 3 certificates and post-quantum hybrid handshakes (`ix_hybrid_mlkem1024`). A version 3 certificate is a
-  version 2 certificate extended with an ML-KEM-1024 key (hosts) or an ML-DSA-87 key (CAs) and an ML-DSA-87 CA
-  signature, and a node holding one still presents the version 2 certificate it extends to peers that need it.
-  `nebula-cert pq-extend` upgrades existing CAs and hosts in place. See `docs/pq-handshake.md`.
+  version 2 certificate extended with an ML-KEM-1024 key (hosts) or an ML-DSA-87 key (CAs) and a deterministic
+  ML-DSA-87 CA signature, and a node holding one still presents the version 2 certificate it extends to peers that
+  need it. `nebula-cert pq-extend` upgrades existing CAs and hosts in place, and extending a certificate twice gives
+  the same certificate. See `docs/pq-handshake.md`.
 
 ### Changed
 
-- A version 3 certificate has two fingerprints: its own, and that of the version 2 certificate it extends. Each
-  identifies it in logs and to `pki.blocklist`. Blocking the v2 fingerprint blocks both forms, but blocking only the
-  v3 fingerprint leaves the v2 form usable in classical handshakes. **Operators must list and block both
-  fingerprints**; `nebula-cert print` shows them as `fingerprint` and `v2Fingerprint`.
+- A version 3 certificate has two fingerprints: its own, and that of the version 2 certificate it extends. Both
+  identify it in logs and to `pki.blocklist`. **To block a version 3 certificate, block its v2 fingerprint**: the
+  pool checks it for the v3 certificate and for its v2 form alike, so that one entry covers both forms. Blocking only
+  the v3 fingerprint leaves the v2 form usable in classical handshakes. `nebula-cert print` leads with both
+  fingerprints and says which one to block; in JSON they are `fingerprint` and `v2Fingerprint`.
 - Firewall `ca_sha` rules match a version 3 peer by either fingerprint of its CA.
 
 ### Fixed
