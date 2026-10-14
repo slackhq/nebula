@@ -454,9 +454,12 @@ in every scenario above, and within three at least 99.99%.
 
 ## Open items
 
-- Publish DefinedNet/noise, or upstream the hybrid patterns, and drop the `replace` in `go.mod`.
-  The classical-only responder `e` is on the local clone's `drop-responder-ekem-key` branch
+- Publish DefinedNet/noise and drop the `replace` in `go.mod`, once Nate says the fork is ready to
+  ship. The classical-only responder `e` is on the local clone's `drop-responder-ekem-key` branch
   (b4a892b), not yet in DefinedNet/noise.
 - Cryptographic review of the hybrid composition and of the v3 certificate signatures.
-- A tunnel that came up classical between two v3 holders (say, the hybrid attempt was dropped)
-  stays classical until it rehandshakes for another reason.
+- Field test of hybrid handshakes on real hosts, as was done for phase 1.
+
+Accepted as is: a tunnel that came up classical between two v3 holders (say, the hybrid attempt
+was dropped) stays classical until it rehandshakes for another reason. `require`, `sticky` and a
+CA pool without v2 forms cover deployments that need more. PKCS#11 keys do not support v3.
