@@ -50,7 +50,7 @@ func TestStartRelaysLogDedupe(t *testing.T) {
 		var buf bytes.Buffer
 		rm := newRM(&buf)
 		hh := newHH()
-		rm.StartRelays(f, vpnIp, hh, nil)
+		rm.StartRelays(f, vpnIp, hh, nil, nil)
 		assert.Equal(t, []netip.Addr{vpnIp}, hh.lastRelays, "lastRelays should record the relay set we just attempted")
 		assert.Contains(t, buf.String(), "level=INFO "+msg, "expected Info level on first attempt")
 	})
@@ -59,10 +59,10 @@ func TestStartRelaysLogDedupe(t *testing.T) {
 		var buf bytes.Buffer
 		rm := newRM(&buf)
 		hh := newHH()
-		rm.StartRelays(f, vpnIp, hh, nil)
+		rm.StartRelays(f, vpnIp, hh, nil, nil)
 		first := append([]netip.Addr(nil), hh.lastRelays...)
 		buf.Reset()
-		rm.StartRelays(f, vpnIp, hh, nil)
+		rm.StartRelays(f, vpnIp, hh, nil, nil)
 		assert.Equal(t, first, hh.lastRelays)
 		assert.Contains(t, buf.String(), "level=DEBUG "+msg, "expected Debug level on identical retry")
 		assert.NotContains(t, buf.String(), "level=INFO "+msg, "Info should not fire on identical retry")
@@ -72,13 +72,13 @@ func TestStartRelaysLogDedupe(t *testing.T) {
 		var buf bytes.Buffer
 		rm := newRM(&buf)
 		hh := newHH()
-		rm.StartRelays(f, vpnIp, hh, nil)
+		rm.StartRelays(f, vpnIp, hh, nil, nil)
 		buf.Reset()
 
 		// The lighthouse handed us a new set this round.
 		hh.hostinfo.remotes.relays = []netip.Addr{vpnIp, otherRelay}
 
-		rm.StartRelays(f, vpnIp, hh, nil)
+		rm.StartRelays(f, vpnIp, hh, nil, nil)
 		assert.Equal(t, []netip.Addr{vpnIp, otherRelay}, hh.lastRelays)
 		assert.Contains(t, buf.String(), "level=INFO "+msg, "expected Info when the relay list changes")
 	})
@@ -90,7 +90,7 @@ func TestStartRelaysLogDedupe(t *testing.T) {
 		hh := newHH()
 		hh.lastRelays = []netip.Addr{vpnIp}
 
-		rm.StartRelays(f, vpnIp, hh, nil)
+		rm.StartRelays(f, vpnIp, hh, nil, nil)
 		assert.Nil(t, hh.lastRelays, "with relays disabled lastRelays should be cleared")
 		assert.NotContains(t, buf.String(), msg, "should not log when we shortcut out")
 	})

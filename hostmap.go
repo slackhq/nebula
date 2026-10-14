@@ -260,6 +260,11 @@ type HostInfo struct {
 	// We need these to avoid replayed handshake packets creating new hostinfos which causes churn
 	HandshakePacket map[uint8][]byte
 
+	// A responder resending a fragmented handshake response offers symbols it has
+	// not sent before, at most once per retry interval.
+	handshakeResendAt   atomic.Int64  // unix nanos of the last send
+	handshakeNextSymbol atomic.Uint32 // next fragment symbol index to offer
+
 	// nextLHQuery is the earliest we can ask the lighthouse for new information.
 	// This is used to limit lighthouse re-queries in chatty clients
 	nextLHQuery atomic.Int64

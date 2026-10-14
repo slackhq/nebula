@@ -418,6 +418,21 @@ logging:
   # after receiving the response for lighthouse queries
   #trigger_buffer: 64
 
+  # pq enables handshakes that mix an ephemeral ML-KEM-1024 key exchange into the session keys, protecting
+  # recorded traffic against a future quantum computer. Authentication is unchanged. These handshakes are too
+  # large for one packet and travel as fragments with forward error correction.
+  #pq:
+    # initiate starts post-quantum handshakes. Attempts alternate between post-quantum and classical until one is
+    # answered, so peers that do not support them still connect.
+    #initiate: false
+    # accept answers post-quantum handshakes from peers.
+    #accept: false
+    # sticky never falls back to a classical handshake with a peer that has completed a post-quantum one since
+    # nebula started, which defeats an attacker who drops post-quantum handshakes to force a downgrade.
+    #sticky: false
+    # repair_delay is how long the forward error correction fragments trail the rest of a handshake message.
+    #repair_delay: 10ms
+
 # Tunnel manager settings
 #tunnels:
   # drop_inactive controls whether inactive tunnels are maintained or dropped after the inactive_timeout period has
