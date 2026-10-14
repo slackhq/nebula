@@ -284,12 +284,16 @@ mean burst length in packets. First-attempt success for the whole handshake with
 | phase 1 (2, 2) no FEC | 5% | 81.4% | 85.6% | 87.9% | 89.0% |
 | phase 1 (2, 2) FEC | 5% | 99.9% | 99.4% | 99.3% | 98.6% |
 | phase 1 (2, 2) FEC | 10% | 99.3% | 97.5% | 97.4% | 96.3% |
-| phase 2 (7, 9, 2) no FEC | 5% | 39.8% | 57.5% | 70.4% | 77.7% |
-| phase 2 (7, 9, 2) FEC | 5% | 99.6% | 94.2% | 90.4% | 88.8% |
-| phase 2 (7, 9, 2) FEC | 10% | 95.9% | 84.6% | 79.0% | 77.3% |
+| phase 2 (8, 9, 2) no FEC | 5% | 37.8% | 56.0% | 69.3% | 77.1% |
+| phase 2 (8, 9, 2) FEC | 5% | 99.6% | 93.7% | 89.9% | 88.4% |
+| phase 2 (8, 9, 2) FEC | 10% | 95.3% | 83.5% | 77.9% | 76.7% |
 
 With fresh repair symbols, phase 2 completes within two attempts at least 99.1% of the time
-in every scenario above, and within three at least 99.99%.
+in every scenario above, and within three at least 99.98%.
+
+The simulators and their outputs are in [pq-handshake-sim](pq-handshake-sim/README.md),
+including a comparison with classical handshakes and a model of time to a working tunnel
+under Nebula's retry schedule.
 
 ## Prior art
 
