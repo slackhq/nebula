@@ -43,21 +43,25 @@ func withPeerFD(conn net.Conn, f func(fd int) error) error {
 // in for root, or for a stranger, without owning a second account on the host.
 var currentUID = func() uint32 { return uint32(os.Geteuid()) }
 
+// infoSupported reports that the info API can be served here: a unix socket takes the
+// mode an operator configures, which is the whole of its access control.
+const infoSupported = true
+
 // listen binds the socket at path with the given access.
 //
 // Access control is the socket's own mode and group, which the node is created no
-// looser than and which are set after bind, together with the peer check the server
-// applies on accept unless a group shares the socket, in which case the kernel's check
-// is the whole of it: connect(2) needs write permission on the socket file on every
-// unix we build for.
+// looser than and which are set after bind: connect(2) needs write permission on the
+// socket file on every unix we build for. The control socket is 0600 and adds the peer
+// check the server applies on accept, unless a group shares it, in which case it is
+// 0660 with that group and the kernel's check is the whole of it; the info socket is
+// whatever the operator configured, since opening it to others is its purpose.
 //
-// The directory is not part of that, and is never chmoded: a directory a service
-// manager made for us is served from at whatever mode it came with (systemd's
-// RuntimeDirectoryMode= is 0755 by default), and one an operator pointed us into keeps
-// whatever else it holds readable. The one we make ourselves is 0755, searchable by
-// everyone, so that a nebula ctl run as another user reaches the socket and gets the
-// kernel's answer, which for a member of the configured group is a connection and for
-// anyone else is permission denied.
+// The directory is not part of that, and is never chmoded: a directory a service manager made for us is served from at whatever mode it
+// came with (systemd's RuntimeDirectoryMode= is 0755 by default), and one an operator
+// pointed us into keeps whatever else it holds readable. The one we make ourselves is
+// 0755, searchable by everyone, so that a nebula ctl run as another user reaches the
+// socket and gets the kernel's answer, which for a member of the configured group is
+// a connection and for anyone else is permission denied.
 func listen(path string, acc Access) (net.Listener, error) {
 	// The kernel silently truncates an over long sun_path and bind then fails with
 	// "invalid argument", which tells an operator nothing. Say what is actually wrong.
@@ -98,7 +102,8 @@ func listen(path string, acc Access) (net.Listener, error) {
 
 	// bind creates the socket node at the process umask, and a connect(2) between that
 	// and a later chmod would be queued for accept. Tighten the umask around the bind so
-	// the node is never looser than 0600, however briefly; see umaskMu.
+	// the node is never looser than 0600, however briefly, whatever mode it ends up at;
+	// see umaskMu.
 	umaskMu.Lock()
 	old = syscall.Umask(0077)
 	ln, err := net.Listen(network, path)
@@ -107,6 +112,10 @@ func listen(path string, acc Access) (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// What was just bound, so that a failure below gives up that node and not whatever
+	// has been put at the path since.
+	id, _ := identifySocket(path)
 
 	// The node at path is given up by release, which unlinks it before the listener
 	// closes; see there for why the order matters. Go's listener would unlink on Close
@@ -119,26 +128,47 @@ func listen(path string, acc Access) (net.Listener, error) {
 	// The umask only promises no looser than 0600; this pins the mode and the group
 	// exactly, and is the one place a failure to secure the socket is reported.
 	if err := applyAccess(path, acc); err != nil {
-		release(ln, path)
+		release(ln, path, id)
 		return nil, fmt.Errorf("could not secure %s: %w", path, err)
 	}
 
 	return ln, nil
 }
 
-// applyAccess sets the owning group and the mode of the socket node at path. With no
-// group configured the socket is handed back to the daemon's own group, so taking the
-// key out of the config on a reload takes the access away as surely as a restart would.
-// The chown is Lchown, so a link at the path is not followed to its target.
-func applyAccess(path string, acc Access) error {
-	gid, err := gidFor(acc)
-	if err != nil {
-		return err
+// checkOwnSocket refuses what fi found at path unless it is a socket owned by the user
+// this process runs as. fi comes from a look that does not follow links, so a symlink is
+// seen as one, and the mode is only ever applied to a socket of ours. checkSocketDir
+// vouched for the directory at bind, but that was then: a directory loosened since, or a
+// reload that moves the socket, is a chance for whoever can write it to replace the node
+// with a link, or a hard link to a file of their choosing, and have a root daemon set the
+// configured mode, 0660 or 0666 for an info socket, on that file. A link, another type
+// of file, or somebody else's socket is reported and left as it is. applyAccess, per
+// platform, is what makes the look and the change land on the same node.
+func checkOwnSocket(path string, fi os.FileInfo) error {
+	if !isSocket(fi) {
+		return fmt.Errorf("%s is not a socket but %s, refusing to change its mode", path, describeNode(fi))
 	}
-	if err := os.Lchown(path, -1, gid); err != nil {
-		return err
+
+	if uid, ok := owner(fi); ok && uid != currentUID() {
+		return fmt.Errorf("%s is owned by %s, not by us, refusing to change its mode", path, describeUID(uid))
 	}
-	return os.Chmod(path, acc.Mode.Perm())
+
+	return nil
+}
+
+// describeNode names what kind of file fi describes, for a message about something found
+// where a socket was expected.
+func describeNode(fi os.FileInfo) string {
+	switch m := fi.Mode(); {
+	case m&os.ModeSymlink != 0:
+		return "a symlink"
+	case m.IsDir():
+		return "a directory"
+	case m.IsRegular():
+		return "a regular file"
+	default:
+		return "a " + m.Type().String() + " file"
+	}
 }
 
 // checkSocketDir refuses to serve from a directory that somebody other than the user
@@ -220,8 +250,12 @@ func describeUID(uid uint32) string {
 // Liveness is a plain connect. Only a refused connect proves there is nothing behind
 // the file. Anything else, a timeout or a permission error, is a socket we cannot vouch
 // for, and it is left alone with the reason in the error.
+//
+// The look is an Lstat: a symlink at path is refused as not a socket, whether or not it
+// resolves. Stat would report a dangling one as nothing there, and bind(2) on darwin
+// and the BSDs follows a dangling link and creates the socket node at its target.
 func clearStale(path string) error {
-	fi, err := os.Stat(path)
+	fi, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -253,8 +287,29 @@ func clearStale(path string) error {
 
 // removeSocket unlinks the socket node. Its directory stays, whoever made it; see
 // listen.
-func removeSocket(path string) {
+//
+// Only the node id names is removed. One that replaced it is another daemon's, bound
+// after ours was taken from under us, and is left where it is. A zero id, a node that
+// could not be identified when it was bound, is removed.
+func removeSocket(path string, id socketID) {
+	if cur, ok := identifySocket(path); ok && id != (socketID{}) && cur != id {
+		return
+	}
 	_ = os.Remove(path)
+}
+
+// identifySocket returns the identity of the node at path, looked at without following
+// links, and false when there is nothing there or it cannot be read.
+func identifySocket(path string) (socketID, bool) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return socketID{}, false
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return socketID{}, false
+	}
+	return socketID{dev: uint64(st.Dev), ino: uint64(st.Ino)}, true
 }
 
 func dial(path string, timeout time.Duration) (net.Conn, error) {

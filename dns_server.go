@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"github.com/miekg/dns"
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 )
 
@@ -259,31 +260,20 @@ func (d *dnsServer) QueryCert(data string) string {
 		return ""
 	}
 
-	// The hostmap only ever contains peers we have handshaked with, so it never carries an entry for ourselves.
-	// Answer self lookups straight from the local cert state.
-	if cs := d.certState(); cs != nil && cs.myVpnAddrsTable != nil && cs.myVpnAddrsTable.Contains(ip) {
-		c := cs.GetDefaultCertificate()
-		if c == nil {
-			return ""
-		}
-		b, err := c.MarshalJSON()
-		if err != nil {
-			return ""
-		}
-		return string(b)
+	// Our own address answers with the certificate handshakes are initiated with, as the
+	// TXT record always has; which of our certificates identity reports is its own choice.
+	cs := d.certState()
+	var crt cert.Certificate
+	if ownsVpnAddr(cs, ip) {
+		crt = cs.getCertificate(cs.initiatingVersion)
+	} else {
+		crt, _ = peerCertificateForVpnAddr(d.hostMap, ip)
 	}
-
-	hostinfo := d.hostMap.QueryVpnAddr(ip)
-	if hostinfo == nil {
+	if crt == nil {
 		return ""
 	}
 
-	q := hostinfo.GetCert()
-	if q == nil {
-		return ""
-	}
-
-	b, err := q.Certificate.MarshalJSON()
+	b, err := crt.MarshalJSON()
 	if err != nil {
 		return ""
 	}

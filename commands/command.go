@@ -34,6 +34,9 @@ type Command struct {
 	ShortDescription string
 	Help             string
 
+	// Identity indicates this command should be made available via the info socket.
+	Identity bool
+
 	Flags CommandFlags
 
 	// Run produces the command's Result, leaving presentation to Render.

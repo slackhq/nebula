@@ -87,6 +87,22 @@ func TestWithheldIsNotReportedAsUnknown(t *testing.T) {
 	assert.Contains(t, out.String(), "did not understand: no-such-command")
 }
 
+// TestResolveTypesTheWithheldRefusal: a surface with status codes tells a withheld
+// command from an unknown one by the error's type, never by asking the unfiltered
+// registry, which is the one thing a filtered surface must not consult.
+func TestResolveTypesTheWithheldRefusal(t *testing.T) {
+	r := testRegistry().Filter(notWithheld, testReason)
+
+	_, err := r.Resolve("withheld")
+	var withheld *WithheldError
+	require.ErrorAs(t, err, &withheld)
+	assert.Contains(t, err.Error(), testReason)
+
+	_, err = r.Resolve("no-such-command")
+	require.Error(t, err)
+	assert.NotErrorAs(t, err, &withheld, "an unknown name is not a withheld one")
+}
+
 // paramRegistry holds one command with a bool flag and a duration flag, and reports what
 // the command saw when it ran.
 func paramRegistry(t *testing.T) (*Registry, *[]paramsSeen) {
@@ -399,6 +415,46 @@ func TestBadFlagIsAnsweredWithTheCommandsHelp(t *testing.T) {
 	require.Error(t, r.DispatchArgs([]string{"x", "-nope"}, Output{Out: out, Err: errOut}))
 	assert.Empty(t, out.String())
 	assert.Equal(t, "flag provided but not defined: -nope\nx - has no flags\n  -json\n    \toutputs as json\n  -pretty\n    \tpretty prints json, assumes -json\n", errOut.String())
+}
+
+// TestParameterMistakesAreParamErrors: a surface with status codes needs to tell a
+// parameter the caller got wrong from a command that failed, and Invoke says which by
+// the error's type rather than its words.
+func TestParameterMistakesAreParamErrors(t *testing.T) {
+	r := New()
+	r.Register(&Command{
+		Name: "flagged",
+		Flags: func() (*flag.FlagSet, any) {
+			fl := flag.NewFlagSet("", flag.ContinueOnError)
+			s := struct{ N int }{}
+			fl.IntVar(&s.N, "n", 0, "")
+			return fl, &s
+		},
+		Run: func(fs any, a []string) (Result, error) { return Result{}, errors.New("ran and failed") },
+	})
+	r.Register(&Command{
+		Name: "bare",
+		Run:  func(fs any, a []string) (Result, error) { return Nothing(), nil },
+	})
+
+	var pe *ParamError
+	for _, tc := range []struct {
+		name   string
+		params map[string]string
+	}{
+		{"flagged", map[string]string{"nope": "1"}},
+		{"flagged", map[string]string{"n": "x"}},
+		{"flagged", map[string]string{FlagJSON: "true"}},
+		{"bare", map[string]string{"n": "1"}},
+	} {
+		_, err := Invoke(Request{Command: r.Get(Name(tc.name)), Params: tc.params})
+		require.Error(t, err, "%s %v", tc.name, tc.params)
+		require.ErrorAs(t, err, &pe, "%s %v: %v", tc.name, tc.params, err)
+	}
+
+	_, err := Invoke(Request{Command: r.Get("flagged"), Params: map[string]string{"n": "1"}})
+	require.EqualError(t, err, "ran and failed")
+	assert.NotErrorAs(t, err, &pe, "a Run error is the command's, not the caller's")
 }
 
 // TestRunErrorIsShown: an error Run returns reaches the person at the prompt on the

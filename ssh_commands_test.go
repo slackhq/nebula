@@ -81,6 +81,7 @@ func TestLocalSocketSurface(t *testing.T) {
 
 	assert.ElementsMatch(t, []commands.Name{
 		commands.Help,
+		commands.Identity,
 		commands.ListHostmap,
 		commands.ListPendingHostmap,
 		commands.ListLighthouseAddrmap,
@@ -96,5 +97,23 @@ func TestLocalSocketSurface(t *testing.T) {
 		commands.ChangeRemote,
 		commands.CloseTunnel,
 		commands.CreateTunnel,
+		commands.Whoami,
 	}, served)
+}
+
+// TestInfoAPISurface pins which commands the info API serves. That surface may be open
+// to every user on the host, so a command joins it by declaring Identity, and this test
+// is where that declaration is reviewed: anything listed here hands whoever can reach
+// the socket what the command reports.
+func TestInfoAPISurface(t *testing.T) {
+	reg := registeredCommands(t)
+
+	var served []commands.Name
+	for _, c := range reg.All() {
+		if c.Identity {
+			served = append(served, c.Name)
+		}
+	}
+
+	assert.ElementsMatch(t, []commands.Name{commands.Identity, commands.Whoami}, served)
 }

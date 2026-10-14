@@ -33,6 +33,12 @@ const network = "pipe"
 // exists so a Server is built the same way on every platform.
 var currentUID = func() uint32 { return 0 }
 
+// infoSupported is false here. A pipe has no mode to open to other accounts, and the
+// security descriptor listen builds admits the daemon's account alone, which is the
+// opposite of what the info API is for. Serving it on windows means designing which
+// accounts a pipe admits, and that has not been done.
+const infoSupported = false
+
 // listen creates the named pipe at path with a security descriptor that admits the user
 // nebula runs as, SYSTEM and Administrators, and the group acc names, if any, for
 // reading and writing, which is what connecting to a pipe takes. acc's mode means
@@ -142,13 +148,17 @@ func sddlFor(acc Access) (string, error) {
 const pipeClientAccess uint32 = windows.FILE_READ_DATA | windows.FILE_WRITE_DATA |
 	windows.FILE_READ_ATTRIBUTES | windows.READ_CONTROL | windows.SYNCHRONIZE
 
+// removeSocket is a no-op: a named pipe disappears when its last handle closes, so
+// there is nothing to unlink and no stale instance to clean up.
+func removeSocket(path string, id socketID) {}
+
+// identifySocket has no node to identify: a pipe is its handle, and it cannot be
+// removed from under the daemon, so an endpoint on its path is always still there.
+func identifySocket(path string) (socketID, bool) { return socketID{}, true }
+
 // applyAccess cannot change a pipe's access in place: its security descriptor is fixed
 // when it is created, so a change means creating it again, which the caller does.
 func applyAccess(path string, acc Access) error { return errReopenForAccess }
-
-// removeSocket is a no-op: a named pipe disappears when its last handle closes, so
-// there is nothing to unlink and no stale instance to clean up.
-func removeSocket(path string) {}
 
 // dial connects to the pipe and, before the connection carries anything, checks who
 // serves it. The request names a command and its arguments, so it must not reach a

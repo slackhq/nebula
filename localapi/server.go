@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"net"
 	"runtime/debug"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -39,29 +39,19 @@ const (
 
 // Server serves a command registry over a local socket to the user who ran nebula.
 type Server struct {
-	l   *slog.Logger
+	endpoint
 	src *commands.Registry
 
 	maxConns  int
 	slowAfter time.Duration
 
-	mu      sync.Mutex
-	ln      net.Listener
-	path    string
-	running bool
-	unwatch func() bool
-
 	sem  chan struct{}
 	euid uint32
 
-	// access is what the socket at path was bound with, so a reload that changes only
-	// the group or the mode is applied without moving the socket.
-	access Access
-
 	// trustSocket is set while a group shares the socket. The kernel admitted the peer
 	// through the socket's mode and group, which is the whole access control then, and
-	// the peer check in serve stands aside: on unix it sees the peer's uid and primary
-	// gid only, so it could not tell a member of the group from anyone else.
+	// the peer check below stands aside: on unix it sees the peer's uid and primary gid
+	// only, so it could not tell a member of the group from anyone else.
 	trustSocket atomic.Bool
 }
 
@@ -69,7 +59,7 @@ type Server struct {
 // registered on it after the server is built.
 func NewServer(l *slog.Logger, reg *commands.Registry) *Server {
 	return &Server{
-		l:         l,
+		endpoint:  endpoint{l: l, name: "local control socket"},
 		src:       reg,
 		maxConns:  defaultMaxConns,
 		slowAfter: defaultSlowAfter,
@@ -80,23 +70,9 @@ func NewServer(l *slog.Logger, reg *commands.Registry) *Server {
 }
 
 // Rebind brings the server up at path, moves a running server there, and serves it until
-// Stop or ctx cancellation. It is the one way the server comes up, so Wire's first
-// attempt and its reload callback are the same call, and a server already serving path
-// is left as it is: Wire registers the callback before the first attempt, so a HUP that
-// lands between the two has the callback do the first bind, and the first attempt then
-// finds the socket it was about to create already up.
-//
-// The new socket is bound before the old one is given up: a bad path in a reloaded
-// config leaves the operator with the endpoint they already had rather than none.
-//
-// s.mu is held for the whole operation, bind included. Releasing it around listen would
-// let a Stop land in between, and this would then install a fresh listener on a server
-// that had just shut down, leaving a live socket on disk until the process exits. listen
-// does not take s.mu, so holding it costs the other methods one bind's wait, at most the
-// stale socket probe, once per reload.
-//
-// An error here is never fatal to the caller: nebula keeps forwarding packets without a
-// control endpoint, and the caller is expected to log and carry on.
+// Stop or ctx cancellation; endpoint.rebindLocked says what that promises. An error here
+// is never fatal to the caller: nebula keeps forwarding packets without a control
+// endpoint, and the caller is expected to log and carry on.
 func (s *Server) Rebind(ctx context.Context, path string, acc Access) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -106,7 +82,14 @@ func (s *Server) Rebind(ctx context.Context, path string, acc Access) error {
 	// arriving before a group's mode is set is refused by the kernel, and with a group
 	// being taken away the peer check applies a moment before the mode tightens.
 	prev := s.trustSocket.Swap(acc.shared())
-	err := s.rebindLocked(ctx, path, acc)
+	err := s.rebindLocked(ctx, path, acc, func(ln net.Listener) io.Closer {
+		s.l.Info("Local control socket listening", "path", path, "access", acc.String())
+		// Closing the listener, when it is given up, ends the accept loop on the
+		// closed-listener error; in flight commands keep their connections, which stay
+		// usable until they finish.
+		go s.accept(ln, s.semaphore())
+		return ln
+	})
 	if err != nil {
 		// Whatever was serving still is, with the access it had.
 		s.trustSocket.Store(prev)
@@ -114,137 +97,9 @@ func (s *Server) Rebind(ctx context.Context, path string, acc Access) error {
 	return err
 }
 
-func (s *Server) rebindLocked(ctx context.Context, path string, acc Access) error {
-	reopening := false
-	if s.running && s.path == path {
-		if s.access == acc {
-			return nil
-		}
-
-		// Only the access changed. On unix it is set on the socket in place; on windows
-		// the descriptor is fixed when the pipe is created, so the pipe is created again.
-		// The name cannot be held twice, so the old one goes first, and a bind that then
-		// fails leaves the server down rather than on the access the operator asked to
-		// change; that is reported.
-		err := applyAccess(path, acc)
-		if err == nil {
-			s.access = acc
-			s.l.Info("Changed the local control socket's access", "path", path, "access", acc.String())
-			return nil
-		}
-		if !errors.Is(err, errReopenForAccess) {
-			return fmt.Errorf("could not change the access of %s: %w", path, err)
-		}
-		reopening = true
-		release(s.ln, s.path)
-		s.ln, s.path, s.running, s.access = nil, "", false, Access{}
-	}
-
-	ln, err := listen(path, acc)
-	if err != nil {
-		if reopening {
-			return fmt.Errorf("the local control socket was closed to change its access and could not be created again: %w", err)
-		}
-		return err
-	}
-
-	// A reload that arrives during shutdown must not bring the endpoint back. Stop is
-	// not terminal (Rebind after Stop is allowed, and is how a server whose first bind
-	// failed comes up), so running is no guide; the context is what shutdown cancels,
-	// and it is checked here, while nothing else can change the server's state.
-	if err := ctx.Err(); err != nil {
-		release(ln, path)
-		return fmt.Errorf("not starting the local control socket, nebula is shutting down: %w", err)
-	}
-
-	oldLn, oldPath := s.ln, s.path
-	s.ln = ln
-	s.path = path
-	s.access = acc
-	s.running = true
-	sem := s.semaphore()
-
-	s.watchLocked(ctx)
-
-	// Stop accepting on the old listener. In flight commands keep their connections,
-	// which stay usable until they finish. Its accept loop exits on the closed-listener
-	// error, so it is gone as soon as this returns. oldPath differs from path whenever
-	// oldLn is set: a running server on the same path returned above.
-	if oldLn != nil {
-		release(oldLn, oldPath)
-	}
-
-	s.l.Info("Local control socket listening", "path", path, "access", acc.String())
-
-	go func() {
-		s.accept(ln, sem)
-	}()
-
-	return nil
-}
-
-// watchLocked stops the server when ctx is cancelled. One watcher covers a run of the
-// server, from the first bind that succeeds until Stop: a daemon whose initial listen
-// failed and which later Rebinds onto a good path from a reloaded config still needs its
-// socket removed on shutdown, and a Rebind on a running server must not stack a second
-// watcher on the same ctx. Stop detaches the watcher, so a server started again
-// afterwards is watched on the ctx that started it, and the ctx of an earlier run no
-// longer reaches it whenever that one ends. Callers hold s.mu.
-func (s *Server) watchLocked(ctx context.Context) {
-	if s.unwatch != nil {
-		return
-	}
-	s.unwatch = context.AfterFunc(ctx, s.Stop)
-}
-
-// Path returns the socket path currently being served, or "" when stopped.
-func (s *Server) Path() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.path
-}
-
-// Stop closes the listener and removes the socket. In flight commands are allowed to
-// finish; Stop does not wait for them.
-//
-// The whole of it runs under s.mu, listener and socket included, so a Rebind cannot land
-// between the state change and the close and find a path that is still bound by the
-// listener it is replacing.
-func (s *Server) Stop() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if !s.running {
-		return
-	}
-
-	release(s.ln, s.path)
-	s.running = false
-	s.access = Access{}
-	s.ln = nil
-	s.path = ""
-
-	// Set whenever running is. When this Stop is the watcher's own, stopping a watcher
-	// that has already fired is a no-op.
-	s.unwatch()
-	s.unwatch = nil
-}
-
-// release gives up a listener and the socket node at its path. The node goes first,
-// while the listener is still open: for as long as it is, the node is this server's,
-// since a starting daemon's stale check refuses to remove a socket that answers. The
-// other order opens a window between the close and the unlink in which a new daemon can
-// find the node stale, clear it and bind its own at the same path, which the unlink
-// then takes from under it, leaving that daemon serving a socket nothing can reach.
-// listen turns off the listener's own unlink on close so this is the only unlink.
-func release(ln net.Listener, path string) {
-	removeSocket(path)
-	_ = ln.Close()
-}
-
 // semaphore returns the connection limiter, creating it on first use. It is made once
 // and never replaced: a handler releases into the channel it acquired from, so swapping
-// in a fresh one across a Stop and Start would leave any handler still in flight
+// in a fresh one across a Stop and Rebind would leave any handler still in flight
 // blocked forever on a channel nothing had filled. Callers hold s.mu.
 func (s *Server) semaphore() chan struct{} {
 	if s.sem == nil {

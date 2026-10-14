@@ -44,6 +44,16 @@ help
     	outputs as json
   -pretty
     	pretty prints json, assumes -json
+identity
+  short: Prints the certificate identity of the host owning the provided vpn addr
+  help: Identity is what the certificate says: name, vpn addrs, networks, groups, fingerprint, issuer and validity. The address may carry a port, so a connection's remote address can be passed through as is. For this node's own identity use whoami.
+  flags:
+  -address string
+    	The vpn addr to look up, optionally with a port
+  -json
+    	outputs as json
+  -pretty
+    	pretty prints json, assumes -json
 list-hostmap
   short: List all known previously connected hosts
   help: 
@@ -133,6 +143,14 @@ reload
 version
   short: Prints the currently running version of nebula
   help: 
+  flags:
+  -json
+    	outputs as json
+  -pretty
+    	pretty prints json, assumes -json
+whoami
+  short: Prints the certificate identity of this node
+  help: The fields identity prints, read from this node's own certificate.
   flags:
   -json
     	outputs as json

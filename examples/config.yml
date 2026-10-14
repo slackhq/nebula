@@ -254,6 +254,26 @@ punchy:
     # socket.
     #group: nebula
 
+  # The info socket is not made available by default. If you enable it, it makes some
+  # internal state available over HTTP. It's not available on Windows.
+  #
+  # The currently supported HTTP requests are:
+  #   GET /v1/identity?address=<vpn addr>[:port]  the host owning the address; the port
+  #                                               is ignored. 404 when no tunnel is
+  #                                               up, 400 when no address is given.
+  #   GET /v1/whoami                              this node's identity
+  #   GET /v1                                     describes what is served
+  #
+  # NB: unless a connection arrived on the nebula interface, there's no guarantee
+  # that the identity returned belongs to the sender.
+  #
+  #info:
+    #enabled: false
+    # The absolute path to listen on.
+    #socket: /var/run/nebula/info.sock
+    # Octal mode for the socket, as a quoted string. Defaults to "0600".
+    #socket_mode: "0600"
+
 # EXPERIMENTAL: relay support for networks that can't establish direct connections.
 relay:
   # Relays are a list of Nebula IP's that peers can use to relay packets to me.

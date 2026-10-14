@@ -13,6 +13,7 @@ const (
 	CreateTunnel          Name = "create-tunnel"
 	DeviceInfo            Name = "device-info"
 	Help                  Name = "help"
+	Identity              Name = "identity"
 	ListHostmap           Name = "list-hostmap"
 	ListLighthouseAddrmap Name = "list-lighthouse-addrmap"
 	ListPendingHostmap    Name = "list-pending-hostmap"
@@ -25,4 +26,5 @@ const (
 	QueryLighthouse       Name = "query-lighthouse"
 	Reload                Name = "reload"
 	Version               Name = "version"
+	Whoami                Name = "whoami"
 )

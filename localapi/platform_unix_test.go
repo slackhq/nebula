@@ -288,6 +288,52 @@ func TestListenerDoesNotUnlinkOnClose(t *testing.T) {
 	assert.NoError(t, err, "closing the old listener left the newer daemon's socket in place")
 }
 
+// TestRebindRecreatesASocketRemovedFromUnderIt: logind clearing /run/user/<uid> on
+// logout, or a unit cleaning a RuntimeDirectory= it shares, takes the node away while
+// the listener stays open and unreachable. The next reload, which Rebinds onto the same
+// path, has to notice and bind the socket again rather than return early because the
+// path has not changed.
+func TestRebindRecreatesASocketRemovedFromUnderIt(t *testing.T) {
+	path := testSocket(t)
+	s := NewServer(test.NewLogger(), basicRegistry())
+	require.NoError(t, s.Rebind(context.Background(), path, ownerOnly()))
+	t.Cleanup(s.Stop)
+
+	require.NoError(t, os.Remove(path))
+	_, err := (&Client{Path: path}).Describe()
+	require.Error(t, err, "nothing can reach the daemon with its node gone")
+
+	require.NoError(t, s.Rebind(context.Background(), path, ownerOnly()))
+	assert.Equal(t, path, s.Path())
+	_, err = (&Client{Path: path}).Describe()
+	require.NoError(t, err, "the plain reload brought the socket back")
+
+	// And a Rebind with the socket in place is still a no-op.
+	before, ok := identifySocket(path)
+	require.True(t, ok)
+	require.NoError(t, s.Rebind(context.Background(), path, ownerOnly()))
+	after, _ := identifySocket(path)
+	assert.Equal(t, before, after, "the node was left alone")
+}
+
+// TestStopLeavesAStrangersSocketAlone: once our node has been taken from under us and
+// another daemon has bound the path, the node there is that daemon's, and our Stop must
+// not unlink it by path.
+func TestStopLeavesAStrangersSocketAlone(t *testing.T) {
+	path := testSocket(t)
+	s := NewServer(test.NewLogger(), basicRegistry())
+	require.NoError(t, s.Rebind(context.Background(), path, ownerOnly()))
+
+	require.NoError(t, os.Remove(path))
+	other, err := net.Listen(network, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { other.Close() })
+
+	s.Stop()
+	_, err = os.Stat(path)
+	assert.NoError(t, err, "the newer daemon's socket is still in place")
+}
+
 // TestListenRefusesADirectoryOthersCanWrite: whoever can write the socket's directory
 // can put a socket of their own at the path and answer the clients, who trust the path;
 // so a directory writable by its group or by everyone is refused, and nothing is bound.
@@ -322,7 +368,7 @@ func TestListenRefusesADirectoryOwnedBySomebodyElse(t *testing.T) {
 	asUID(t, me)
 	ln, err := listen(filepath.Join(dir, "s.sock"), ownerOnly())
 	require.NoError(t, err, "the same directory, seen as our own, serves")
-	release(ln, filepath.Join(dir, "s.sock"))
+	release(ln, filepath.Join(dir, "s.sock"), socketID{})
 }
 
 // TestListenThroughASymlinkedDirectory: a link where the directory should be is judged
@@ -344,7 +390,7 @@ func TestListenThroughASymlinkedDirectory(t *testing.T) {
 
 	ln, err := listen(path, ownerOnly())
 	require.NoError(t, err, "our link to our directory")
-	release(ln, path)
+	release(ln, path, socketID{})
 	assert.NoFileExists(t, filepath.Join(real, "s.sock"))
 
 	asUID(t, me+1)
@@ -355,4 +401,62 @@ func TestListenThroughASymlinkedDirectory(t *testing.T) {
 	require.NoError(t, os.Chmod(real, 0777))
 	_, err = listen(path, ownerOnly())
 	require.ErrorContains(t, err, "writable by everyone")
+}
+
+// TestListenRefusesASymlinkAtThePath: a link where the socket should be is somebody
+// else's doing, and it is refused before bind rather than followed. bind(2) on darwin
+// follows a dangling link and creates the socket at its target, and the chmod after it
+// would follow a link to anything, so neither the target nor the link is touched.
+func TestListenRefusesASymlinkAtThePath(t *testing.T) {
+	path := testSocket(t)
+	require.NoError(t, os.Mkdir(filepath.Dir(path), 0700))
+	target := filepath.Join(filepath.Dir(path), "target")
+
+	require.NoError(t, os.Symlink(target, path))
+	_, err := listen(path, Access{Mode: 0666})
+	require.ErrorContains(t, err, "is not a socket")
+	_, statErr := os.Lstat(target)
+	assert.True(t, os.IsNotExist(statErr), "a dangling link's target is not created")
+
+	require.NoError(t, os.WriteFile(target, nil, 0600))
+	_, err = listen(path, Access{Mode: 0666})
+	require.ErrorContains(t, err, "is not a socket")
+	fi, err := os.Stat(target)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), fi.Mode().Perm(), "the file the link names keeps its mode")
+	assert.True(t, fi.Mode().IsRegular())
+}
+
+// TestChmodSocketRefusesWhatIsNotOurSocket: the mode is set through a look that does not
+// follow links, so a link, a plain file, or a socket of another user's at the path is
+// reported instead of chmoded. The last is seen as another user by changing who we are.
+func TestChmodSocketRefusesWhatIsNotOurSocket(t *testing.T) {
+	dir := filepath.Join(privateBase(t), "n")
+	require.NoError(t, os.Mkdir(dir, 0700))
+
+	file := filepath.Join(dir, "file")
+	require.NoError(t, os.WriteFile(file, nil, 0600))
+	link := filepath.Join(dir, "link")
+	require.NoError(t, os.Symlink(file, link))
+
+	require.ErrorContains(t, applyAccess(link, Access{Mode: 0666}), "a symlink")
+	require.ErrorContains(t, applyAccess(file, Access{Mode: 0666}), "a regular file")
+	fi, err := os.Stat(file)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), fi.Mode().Perm())
+
+	sock := filepath.Join(dir, "s.sock")
+	ln, err := net.Listen(network, sock)
+	require.NoError(t, err)
+	defer ln.Close()
+	require.NoError(t, applyAccess(sock, Access{Mode: 0660}))
+	fi, err = os.Stat(sock)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0660), fi.Mode().Perm())
+
+	asUID(t, currentUID()+1)
+	require.ErrorContains(t, applyAccess(sock, Access{Mode: 0666}), "not by us")
+	fi, err = os.Stat(sock)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0660), fi.Mode().Perm())
 }

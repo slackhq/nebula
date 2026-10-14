@@ -183,6 +183,32 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 		return runPrintCert(f, s, a)
 	}))
 
+	reg.Register(commands.Flagged(&commands.Command{
+		Name:             commands.Identity,
+		ShortDescription: "Prints the certificate identity of the host owning the provided vpn addr",
+		Help:             "Identity is what the certificate says: name, vpn addrs, networks, groups, fingerprint, issuer and validity. The address may carry a port, so a connection's remote address can be passed through as is. For this node's own identity use whoami.",
+		Identity:         true,
+		Text:             commands.Typed(textIdentity),
+	}, func(fl *flag.FlagSet, s *identityFlags) {
+		fl.Func("address", "The vpn addr to look up, optionally with a port", s.setAddress)
+	}, func(s *identityFlags, a []string) (commands.Result, error) {
+		return runIdentity(f, s, a)
+	}))
+
+	reg.Register(&commands.Command{
+		Name:             commands.Whoami,
+		ShortDescription: "Prints the certificate identity of this node",
+		Help:             "The fields identity prints, read from this node's own certificate.",
+		Identity:         true,
+		Text:             commands.Typed(textIdentity),
+		Run: func(fs any, a []string) (commands.Result, error) {
+			if len(a) > 0 {
+				return commands.Failed("whoami takes no arguments"), nil
+			}
+			return runWhoami(f)
+		},
+	})
+
 	reg.Register(&commands.Command{
 		Name:             commands.PrintTunnel,
 		ShortDescription: "Prints json details about a tunnel for the provided vpn addr",

@@ -1,7 +1,11 @@
 package test
 
 import (
+	"context"
 	"flag"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -38,4 +42,35 @@ func Golden(t *testing.T, path, got string) {
 	want, err := os.ReadFile(path)
 	require.NoError(t, err, "missing golden file, run with -update")
 	assert.Equal(t, string(want), got)
+}
+
+// HTTPDo sends one request to the HTTP server on the unix socket at socket and returns
+// the status, body and headers of its answer. The host in the URL is a placeholder:
+// every connection goes to the socket.
+func HTTPDo(t *testing.T, socket, method, target string) (int, string, http.Header) {
+	t.Helper()
+
+	client := &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+		},
+	}}
+	t.Cleanup(client.CloseIdleConnections)
+
+	req, err := http.NewRequest(method, "http://nebula"+target, nil)
+	require.NoError(t, err)
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	require.NoError(t, err)
+	return res.StatusCode, string(body), res.Header
+}
+
+// HTTPGet is HTTPDo for a GET whose headers the test does not read.
+func HTTPGet(t *testing.T, socket, target string) (int, string) {
+	t.Helper()
+	status, body, _ := HTTPDo(t, socket, http.MethodGet, target)
+	return status, body
 }
