@@ -434,6 +434,11 @@ func (hm *HandshakeManager) continuePQ(via ViaSender, hh *HandshakeHostInfo, h *
 // repair delay. It returns the first error from the immediate sends; errors from
 // delayed sends are only logged.
 func (hm *HandshakeManager) sendFragmented(now, later [][]byte, send func([]byte) error) error {
+	return hm.sendFragmentedAfter(now, later, send, hm.pqConfig().repairDelay)
+}
+
+// sendFragmentedAfter is sendFragmented with the given repair delay.
+func (hm *HandshakeManager) sendFragmentedAfter(now, later [][]byte, send func([]byte) error, delay time.Duration) error {
 	var first error
 	for _, p := range now {
 		if err := send(p); err != nil && first == nil {
@@ -447,7 +452,6 @@ func (hm *HandshakeManager) sendFragmented(now, later [][]byte, send func([]byte
 			}
 		}
 	}
-	delay := hm.pqConfig().repairDelay
 	switch {
 	case len(later) == 0:
 	case delay <= 0:

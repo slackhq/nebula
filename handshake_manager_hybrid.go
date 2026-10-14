@@ -342,7 +342,12 @@ func (hm *HandshakeManager) sendHybridMsg3(c *hybridConfirm) {
 		return
 	}
 	hm.messageMetrics.Tx(header.Handshake, hybridSubtype, int64(len(pkts)+len(later)))
-	if err := hm.sendFragmented(pkts, later, c.send); err != nil {
+	// No repair delay: the packets cached during the handshake go out right
+	// behind msg3, and the responder drops whatever arrives before msg3
+	// completes. With the repair trailing, losing either data fragment would
+	// cost them. msg3 is four packets, too short for the tail drop the delay
+	// guards against.
+	if err := hm.sendFragmentedAfter(pkts, later, c.send, 0); err != nil {
 		c.hostinfo.logger(hm.l).Debug("Failed to send handshake message", "error", err)
 	}
 }
