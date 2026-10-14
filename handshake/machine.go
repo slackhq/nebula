@@ -389,10 +389,12 @@ func (m *Machine) validateCert(payload Payload) error {
 		m.failed = true
 		return fmt.Errorf("%w: %v", ErrNoCredential, m.myVersion)
 	}
+	// PeerStatic builds a fresh composite key on every call for hybrid patterns.
+	peerStatic := m.hs.PeerStatic()
 	rc, err := cert.Recombine(
 		cert.Version(payload.CertVersion),
 		payload.Cert,
-		m.hs.PeerStatic(),
+		peerStatic,
 		cred.Cert.Curve(),
 	)
 	if err != nil {
@@ -400,7 +402,7 @@ func (m *Machine) validateCert(payload Payload) error {
 		return fmt.Errorf("recombine cert: %w", err)
 	}
 
-	if !bytes.Equal(rc.PublicKey(), m.hs.PeerStatic()) {
+	if !bytes.Equal(rc.PublicKey(), peerStatic) {
 		m.failed = true
 		return ErrPublicKeyMismatch
 	}
