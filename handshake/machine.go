@@ -134,6 +134,12 @@ func (m *Machine) Subtype() header.MessageSubType {
 	return m.subtype
 }
 
+// PeerCert returns the peer's verified certificate once a message carrying it
+// has been read, which for a three message pattern is before completion.
+func (m *Machine) PeerCert() *cert.CachedCertificate {
+	return m.result.RemoteCert
+}
+
 // MessageIndex returns the noise handshake message index, which equals the
 // wire counter of the most recently sent or received message.
 func (m *Machine) MessageIndex() int {

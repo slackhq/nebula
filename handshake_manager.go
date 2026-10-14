@@ -90,6 +90,8 @@ type HandshakeManager struct {
 	// pqCookies and pqCookieLimiter serve cookies while pqTable is under load.
 	pqCookies       *pqCookies
 	pqCookieLimiter *ratelimit.Limiter
+	// hybrid holds hybrid handshakes waiting on their third message.
+	hybrid hybridState
 }
 
 type HandshakeHostInfo struct {
@@ -107,6 +109,9 @@ type HandshakeHostInfo struct {
 	machine  *handshake.Machine // The handshake state machine, set during stage 0 (initiator) or beginHandshake (responder multi-message)
 	pq       *pqAttempt         // The initiator's post-quantum attempt, pending alongside the classical one
 	lastPQ   bool               // Whether the latest attempt was post-quantum
+	noPQ     bool               // The post-quantum attempt failed for good, only classical is left
+
+	responder *hybridResponder // Set for a responder's hybrid handshake waiting for msg3
 }
 
 func (hh *HandshakeHostInfo) cachePacket(l *slog.Logger, t header.MessageType, st header.MessageSubType, packet []byte, f packetCallback, m *cachedPacketMetrics) {
@@ -150,6 +155,7 @@ func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *Light
 		l:                      l,
 		pqTable:                fragment.NewTable[pqFragKey, pqFragSource](pqTableConfig),
 		pqAnswered:             newPQAnswered(hsTimeout(config.retries, config.tryInterval)),
+		hybrid:                 newHybridState(),
 	}
 	pq := config.pq
 	hm.pq.Store(&pq)
@@ -174,6 +180,8 @@ func (hm *HandshakeManager) Run(ctx context.Context) {
 			hm.NextOutboundHandshakeTimerTick(now)
 			hm.pqTable.Expire(now)
 			hm.pqAnswered.expire(now)
+			hm.expireHybridResponders(now)
+			hm.tickHybridConfirms(now)
 		}
 	}
 }
@@ -183,7 +191,7 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 	// don't yet support) are dropped here rather than silently routed through
 	// the IX path. Add a case when introducing a new pattern.
 	switch h.Subtype {
-	case header.HandshakeIXPSK0, pqSubtype:
+	case header.HandshakeIXPSK0, header.HandshakeIXPSK2MLKEM1024, hybridSubtype:
 		// supported
 	default:
 		hm.l.Debug("dropping handshake with unsupported subtype",
@@ -775,6 +783,28 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 	cs := f.pki.getCertState()
 
 	v := cs.DefaultVersion()
+	allocIndex := func() (uint32, error) { return generateIndex(f.l) }
+
+	// A hybrid responder answers with its v3 certificate and has to wait for msg3,
+	// so its index is registered right away for msg3 to find.
+	var pending *HandshakeHostInfo
+	if h.Subtype == hybridSubtype {
+		v = cert.Version3
+		pending = &HandshakeHostInfo{
+			hostinfo: &HostInfo{
+				HandshakePacket: make(map[uint8][]byte, 0),
+				relayState: RelayState{
+					relays:         nil,
+					relayForByAddr: map[netip.Addr]*Relay{},
+					relayForByIdx:  map[uint32]*Relay{},
+				},
+			},
+			startTime: time.Now(),
+			responder: &hybridResponder{},
+		}
+		allocIndex = func() (uint32, error) { return hm.allocateIndex(pending) }
+	}
+
 	if cs.GetCredential(v) == nil {
 		f.l.Error("Unable to handshake with host because no certificate is available",
 			"from", via, "certVersion", v)
@@ -783,7 +813,7 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 
 	machine, err := handshake.NewMachine(
 		v, cs.GetCredential,
-		hm.certVerifier(), func() (uint32, error) { return generateIndex(f.l) },
+		hm.certVerifier(), allocIndex,
 		false, h.Subtype,
 	)
 	if err != nil {
@@ -793,7 +823,15 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 
 	response, result, err := machine.ProcessPacket(nil, packet)
 	if err != nil {
+		if pending != nil {
+			hm.DeleteHostInfo(pending.hostinfo)
+		}
 		f.l.Error("Failed to process handshake packet", "from", via, "error", err)
+		return
+	}
+
+	if result == nil && pending != nil {
+		hm.awaitMsg3(via, pending, machine, packet, response, received)
 		return
 	}
 
@@ -938,22 +976,28 @@ func (hm *HandshakeManager) processResponse(via ViaSender, hh *HandshakeHostInfo
 	response, result, err := machine.ProcessPacket(nil, packet)
 	if err != nil {
 		// Recoverable errors are routine noise, log at Debug. Fatal errors get a Warn.
-		if machine.Failed() {
+		if !machine.Failed() {
+			f.l.Debug("Failed to process handshake packet",
+				"vpnAddrs", hostinfo.vpnAddrs, "from", via, "error", err)
+		} else if hh.pq != nil && machine == hh.pq.machine && !hm.pqConfig().require {
+			// A post-quantum attempt can fail where the classical one would not, a v3
+			// certificate from a CA only trusted in its v2 form for one. Keep going
+			// with classical alone.
+			f.l.Warn("Failed to process post-quantum handshake packet, continuing with classical",
+				"vpnAddrs", hostinfo.vpnAddrs, "from", via, "error", err)
+			hm.abandonPQ(hh)
+		} else {
 			f.l.Warn("Failed to process handshake packet, abandoning",
 				"vpnAddrs", hostinfo.vpnAddrs, "from", via, "error", err)
 			hm.DeleteHostInfo(hostinfo)
-		} else {
-			f.l.Debug("Failed to process handshake packet",
-				"vpnAddrs", hostinfo.vpnAddrs, "from", via, "error", err)
 		}
 		return
 	}
 
-	if response != nil {
-		hm.sendHandshakeResponse(via, response, hostinfo, false, 0)
-	}
-
 	if result == nil {
+		if response != nil {
+			hm.sendHandshakeResponse(via, response, hostinfo, false, 0)
+		}
 		return
 	}
 
@@ -1068,6 +1112,12 @@ func (hm *HandshakeManager) processResponse(via ViaSender, hh *HandshakeHostInfo
 	hm.Complete(hostinfo, f)
 	hm.notePQPeer(machine.Subtype(), vpnAddrs)
 
+	// A three message pattern finishes with our msg3, which goes out before any
+	// cached packets do and keeps going until the responder is heard from.
+	if response != nil {
+		hm.startHybridConfirm(via, hostinfo, response, result.MessageIndex)
+	}
+
 	if len(hh.packetStore) > 0 {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(f.l).Debug("Sending stored packets", "count", len(hh.packetStore))
@@ -1166,7 +1216,9 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 		"initiatorIndex", hostinfo.remoteIndexId,
 		"responderIndex", hostinfo.localIndexId,
 	}
-	if peerCert := hostinfo.ConnectionState.peerCert; peerCert != nil {
+	if hostinfo.ConnectionState == nil {
+		// A hybrid responder answers msg1 before it has keys.
+	} else if peerCert := hostinfo.ConnectionState.peerCert; peerCert != nil {
 		logFields = append(logFields,
 			"certName", peerCert.Certificate.Name(),
 			"certVersion", peerCert.Certificate.Version(),

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/handshake/fragment"
@@ -19,9 +20,6 @@ import (
 )
 
 const (
-	// pqSubtype is the post-quantum handshake this node speaks.
-	pqSubtype = header.HandshakeIXPSK2MLKEM1024
-
 	// DefaultPQRepairDelay is how long repair fragments trail the data fragments.
 	DefaultPQRepairDelay = 10 * time.Millisecond
 
@@ -91,6 +89,7 @@ func (hm *HandshakeManager) reloadPQ(c *config.C) {
 // local index, so whichever answer arrives first wins.
 type pqAttempt struct {
 	machine        *handshake.Machine
+	subtype        header.MessageSubType
 	index          uint32
 	sender         *fragment.Sender
 	msg2           *fragment.Assembly
@@ -145,7 +144,7 @@ func reassembled(h *header.H, msg []byte) []byte {
 func (hm *HandshakeManager) usePQ(hh *HandshakeHostInfo, vpnIp netip.Addr, triggered bool) bool {
 	cfg := hm.pqConfig()
 	switch {
-	case !cfg.initiate:
+	case !cfg.initiate, hh.noPQ:
 		return false
 	case cfg.require:
 		return true
@@ -199,21 +198,27 @@ func (hm *HandshakeManager) relayEstablished(target netip.Addr, relayHI *HostInf
 	})
 }
 
-// buildPQAttempt creates the initiator's PQ Machine and msg1 sender.
+// buildPQAttempt creates the initiator's PQ Machine and msg1 sender. A node with
+// a v3 certificate speaks the hybrid handshake, anyone else the ephemeral KEM one.
 func (hm *HandshakeManager) buildPQAttempt(hh *HandshakeHostInfo) bool {
 	cs := hm.f.pki.getCertState()
 	v := hm.initiatingVersion(hh, cs)
+	subtype := header.HandshakeIXPSK2MLKEM1024
+	if cs.GetCredential(cert.Version3) != nil {
+		v = cert.Version3
+		subtype = hybridSubtype
+	}
 	if cs.GetCredential(v) == nil {
 		hm.f.l.Error("Unable to handshake with host because no certificate is available",
 			"vpnAddrs", hh.hostinfo.vpnAddrs, "certVersion", v)
 		return false
 	}
 
-	pq := &pqAttempt{}
+	pq := &pqAttempt{subtype: subtype}
 	machine, err := handshake.NewMachine(
 		v, cs.GetCredential,
 		hm.certVerifier(), func() (uint32, error) { return hm.allocatePQIndex(hh, pq) },
-		true, pqSubtype,
+		true, subtype,
 	)
 	if err != nil {
 		hm.f.l.Error("Failed to create handshake machine",
@@ -229,7 +234,7 @@ func (hm *HandshakeManager) buildPQAttempt(hh *HandshakeHostInfo) bool {
 		return false
 	}
 
-	sender, err := fragment.NewSender(msg[header.Len:], pqSubtype, 0, 1, pq.index)
+	sender, err := fragment.NewSender(msg[header.Len:], subtype, 0, 1, pq.index)
 	if err != nil {
 		hm.f.l.Error("Failed to fragment handshake",
 			"vpnAddrs", hh.hostinfo.vpnAddrs, "error", err)
@@ -269,6 +274,14 @@ func (hm *HandshakeManager) allocatePQIndex(hh *HandshakeHostInfo, pq *pqAttempt
 	}
 
 	return 0, errors.New("failed to generate unique localIndexId")
+}
+
+// abandonPQ drops a failed PQ attempt, leaving classical attempts only. The
+// caller must hold hh.Lock.
+func (hm *HandshakeManager) abandonPQ(hh *HandshakeHostInfo) {
+	hm.releasePQIndex(hh, hh.pq)
+	hh.pq = nil
+	hh.noPQ = true
 }
 
 func (hm *HandshakeManager) releasePQIndex(hh *HandshakeHostInfo, pq *pqAttempt) {
@@ -314,9 +327,21 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 
 	switch h.MessageCounter {
 	case 1:
-		if !hm.pqConfig().accept {
+		cfg := hm.pqConfig()
+		if !cfg.accept {
 			hm.l.Debug("dropping post-quantum handshake, not accepting them", "from", via)
 			return
+		}
+		if h.Subtype == hybridSubtype || cfg.require {
+			hasV3 := hm.f.pki.getCertState().GetCredential(cert.Version3) != nil
+			if h.Subtype == hybridSubtype && !hasV3 {
+				hm.l.Debug("dropping hybrid handshake, no v3 certificate to answer it with", "from", via)
+				return
+			}
+			if h.Subtype != hybridSubtype && hasV3 {
+				hm.l.Debug("dropping post-quantum handshake, hybrid handshakes are required", "from", via)
+				return
+			}
 		}
 		if h.RemoteIndex != 0 {
 			hm.l.Debug("dropping stage-1 handshake with non-zero RemoteIndex",
@@ -326,7 +351,7 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 		now := time.Now()
 		key, src := pqFragKeyFor(via, fh.FragID)
 		if hm.pqTable.Load() >= pqCookieLoad && !(fh.HasCookie() && hm.pqCookies.valid(key, fh.Cookie, now)) {
-			hm.sendCookie(via, fh, key, len(packet), now)
+			hm.sendCookie(via, h.Subtype, fh, key, len(packet), now)
 			return
 		}
 		res, err := hm.pqTable.Add(key, src, now, fh, sym)
@@ -349,6 +374,11 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 	case 2:
 		if hh := hm.queryIndex(h.RemoteIndex); hh != nil {
 			hm.continuePQ(via, hh, h, fh, sym)
+		}
+
+	case 3:
+		if h.Subtype == hybridSubtype {
+			hm.continueHybridResponder(via, h, fh, sym)
 		}
 	}
 }
@@ -477,7 +507,7 @@ func (hm *HandshakeManager) sendFragmentedResponse(via ViaSender, msg []byte, ho
 
 // notePQPeer remembers peers that completed a PQ handshake, for sticky mode.
 func (hm *HandshakeManager) notePQPeer(subtype header.MessageSubType, vpnAddrs []netip.Addr) {
-	if !hm.pqConfig().sticky || subtype != pqSubtype {
+	if !hm.pqConfig().sticky || !header.IsFragmented(subtype) {
 		return
 	}
 	for _, a := range vpnAddrs {
@@ -625,7 +655,7 @@ func (c *pqCookies) valid(key pqFragKey, cookie fragment.Cookie, now time.Time) 
 // sendCookie answers a msg1 fragment that arrived without a valid cookie while
 // under load. The reply is never larger than what triggered it, and replies are
 // rate limited as a whole.
-func (hm *HandshakeManager) sendCookie(via ViaSender, fh fragment.Header, key pqFragKey, received int, now time.Time) {
+func (hm *HandshakeManager) sendCookie(via ViaSender, subtype header.MessageSubType, fh fragment.Header, key pqFragKey, received int, now time.Time) {
 	if received < pqCookieReplyLen {
 		return
 	}
@@ -634,9 +664,9 @@ func (hm *HandshakeManager) sendCookie(via ViaSender, fh fragment.Header, key pq
 	}
 	c := hm.pqCookies.make(key, now)
 	reply := make([]byte, header.Len, pqCookieReplyLen)
-	header.Encode(reply, header.Version, header.Handshake, pqSubtype, fh.FragID, pqCookieCounter)
+	header.Encode(reply, header.Version, header.Handshake, subtype, fh.FragID, pqCookieCounter)
 	reply = append(reply, c[:]...)
-	hm.f.messageMetrics.Tx(header.Handshake, pqSubtype, 1)
+	hm.f.messageMetrics.Tx(header.Handshake, subtype, 1)
 	if err := hm.sendTo(via)(reply); err != nil {
 		hm.l.Debug("Failed to send handshake cookie", "to", via, "error", err)
 	}
@@ -674,7 +704,7 @@ func (hm *HandshakeManager) handleCookie(via ViaSender, packet []byte, h *header
 	if err != nil {
 		return
 	}
-	hm.messageMetrics.Tx(header.Handshake, pqSubtype, int64(len(pkts)+len(later)))
+	hm.messageMetrics.Tx(header.Handshake, pq.subtype, int64(len(pkts)+len(later)))
 	if err := hm.sendFragmented(pkts, later, hm.sendTo(via)); err != nil {
 		hm.l.Debug("Failed to resend handshake with cookie", "to", via, "error", err)
 	}

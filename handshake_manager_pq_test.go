@@ -62,7 +62,7 @@ func fragmentIndexes(t *testing.T, pkts [][]byte, fragID, remoteIndex uint32) []
 		require.LessOrEqual(t, len(p), fragment.MaxPacketLen)
 		var h header.H
 		require.NoError(t, h.Parse(p))
-		assert.Equal(t, pqSubtype, h.Subtype)
+		assert.Equal(t, header.HandshakeIXPSK2MLKEM1024, h.Subtype)
 		assert.Equal(t, remoteIndex, h.RemoteIndex)
 		assert.Equal(t, uint64(2), h.MessageCounter)
 		fh, _, err := fragment.Parse(p[header.Len:])
@@ -80,7 +80,7 @@ func TestSendFragmentedResponse(t *testing.T) {
 
 	// A 2000 byte message is 2 symbols of 1000, so packets of 1024 bytes.
 	msg := make([]byte, header.Len, header.Len+2000)
-	header.Encode(msg, header.Version, header.Handshake, pqSubtype, 5, 2)
+	header.Encode(msg, header.Version, header.Handshake, header.HandshakeIXPSK2MLKEM1024, 5, 2)
 	r := rand.New(rand.NewPCG(1, 1))
 	for range 2000 {
 		msg = append(msg, byte(r.Uint32()))
@@ -183,7 +183,7 @@ func TestPQCookies(t *testing.T) {
 // pqMsg1Fragment builds the first fragment of a msg1, optionally with a cookie.
 func pqMsg1Fragment(t *testing.T, fragID uint32, cookie *fragment.Cookie) ([]byte, *header.H) {
 	t.Helper()
-	s, err := fragment.NewSender(make([]byte, 2000), pqSubtype, 0, 1, fragID)
+	s, err := fragment.NewSender(make([]byte, 2000), header.HandshakeIXPSK2MLKEM1024, 0, 1, fragID)
 	require.NoError(t, err)
 	if cookie != nil {
 		s.SetCookie(*cookie)
@@ -238,7 +238,7 @@ func TestPQCookieUnderLoad(t *testing.T) {
 		var rh header.H
 		require.NoError(t, rh.Parse(reply))
 		assert.Equal(t, header.Handshake, rh.Type)
-		assert.Equal(t, pqSubtype, rh.Subtype)
+		assert.Equal(t, header.HandshakeIXPSK2MLKEM1024, rh.Subtype)
 		assert.Equal(t, uint32(7), rh.RemoteIndex, "the reply names the initiator's FragID")
 		assert.Equal(t, uint64(pqCookieCounter), rh.MessageCounter)
 		copy(cookie[:], reply[header.Len:])
@@ -270,7 +270,7 @@ func TestPQCookieUnderLoad(t *testing.T) {
 
 	t.Run("a reply never outgrows what prompted it", func(t *testing.T) {
 		p, h := pqMsg1Fragment(t, 8, nil)
-		hm.sendCookie(via, fragment.Header{FragID: 8}, pqFragKey{}, pqCookieReplyLen-1, time.Now())
+		hm.sendCookie(via, header.HandshakeIXPSK2MLKEM1024, fragment.Header{FragID: 8}, pqFragKey{}, pqCookieReplyLen-1, time.Now())
 		assert.Empty(t, conn.take())
 		hm.handleFragment(via, p, h)
 		assert.Len(t, conn.take(), 1)
@@ -281,7 +281,7 @@ func TestPQHandleCookie(t *testing.T) {
 	hm, conn := newPQTestManager(t)
 	via := ViaSender{UdpAddr: netip.MustParseAddrPort("192.0.2.1:4242")}
 
-	s, err := fragment.NewSender(make([]byte, 2000), pqSubtype, 0, 1, 99)
+	s, err := fragment.NewSender(make([]byte, 2000), header.HandshakeIXPSK2MLKEM1024, 0, 1, 99)
 	require.NoError(t, err)
 	_, _, err = s.Attempt(2)
 	require.NoError(t, err)
@@ -289,7 +289,7 @@ func TestPQHandleCookie(t *testing.T) {
 	hm.indexes[99] = hh
 
 	reply := make([]byte, header.Len, pqCookieReplyLen)
-	header.Encode(reply, header.Version, header.Handshake, pqSubtype, 99, pqCookieCounter)
+	header.Encode(reply, header.Version, header.Handshake, header.HandshakeIXPSK2MLKEM1024, 99, pqCookieCounter)
 	reply = append(reply, bytes16(0xab)...)
 	var h header.H
 	require.NoError(t, h.Parse(reply))
@@ -311,7 +311,7 @@ func TestPQHandleCookie(t *testing.T) {
 
 	t.Run("replies for other indexes are ignored", func(t *testing.T) {
 		other := append([]byte(nil), reply...)
-		header.Encode(other, header.Version, header.Handshake, pqSubtype, 98, pqCookieCounter)
+		header.Encode(other, header.Version, header.Handshake, header.HandshakeIXPSK2MLKEM1024, 98, pqCookieCounter)
 		var oh header.H
 		require.NoError(t, oh.Parse(other))
 		hh.pq.cookieResendAt = time.Time{}
@@ -393,6 +393,6 @@ func TestUsePQ(t *testing.T) {
 
 	set(pqHandshakeConfig{initiate: true, sticky: true})
 	assert.Equal(t, []bool{true, false}, attempts(false, false), "sticky alternates until the peer has done PQ")
-	hm.notePQPeer(pqSubtype, []netip.Addr{peer})
+	hm.notePQPeer(header.HandshakeIXPSK2MLKEM1024, []netip.Addr{peer})
 	assert.Equal(t, []bool{true, true, true}, attempts(false, false, false), "then only PQ")
 }
