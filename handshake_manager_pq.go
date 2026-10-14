@@ -2,13 +2,17 @@ package nebula
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"log/slog"
 	"net/netip"
 	"sync"
 	"time"
 
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/handshake/fragment"
 	"github.com/slackhq/nebula/header"
@@ -43,14 +47,46 @@ type pqHandshakeConfig struct {
 	repairDelay time.Duration // delay between data and repair fragments
 }
 
+func pqHandshakeConfigFrom(c *config.C) pqHandshakeConfig {
+	return pqHandshakeConfig{
+		initiate:    c.GetBool("handshakes.pq.initiate", false),
+		accept:      c.GetBool("handshakes.pq.accept", false),
+		sticky:      c.GetBool("handshakes.pq.sticky", false),
+		repairDelay: c.GetDuration("handshakes.pq.repair_delay", DefaultPQRepairDelay),
+	}
+}
+
+// pqConfig returns the post-quantum settings in effect.
+func (hm *HandshakeManager) pqConfig() *pqHandshakeConfig {
+	return hm.pq.Load()
+}
+
+// reloadPQ applies changed post-quantum settings. Handshakes already in flight
+// keep going; the new settings apply to the next attempt and packet.
+func (hm *HandshakeManager) reloadPQ(c *config.C) {
+	if !c.HasChanged("handshakes.pq") {
+		return
+	}
+	old := hm.pqConfig()
+	cfg := pqHandshakeConfigFrom(c)
+	hm.pq.Store(&cfg)
+	hm.l.Info("Post-quantum handshake settings changed",
+		"initiate", cfg.initiate, "oldInitiate", old.initiate,
+		"accept", cfg.accept, "oldAccept", old.accept,
+		"sticky", cfg.sticky, "oldSticky", old.sticky,
+		"repairDelay", cfg.repairDelay, "oldRepairDelay", old.repairDelay,
+	)
+}
+
 // pqAttempt is the initiator's post-quantum attempt for a pending handshake. It
 // lives alongside the classical attempt in HandshakeHostInfo and has its own
 // local index, so whichever answer arrives first wins.
 type pqAttempt struct {
-	machine *handshake.Machine
-	index   uint32
-	sender  *fragment.Sender
-	msg2    *fragment.Assembly
+	machine        *handshake.Machine
+	index          uint32
+	sender         *fragment.Sender
+	msg2           *fragment.Assembly
+	cookieResendAt time.Time // last resend prompted by a cookie reply
 }
 
 // pqFragKey identifies one msg1 being reassembled.
@@ -94,10 +130,11 @@ func reassembled(h *header.H, msg []byte) []byte {
 // drops it. A peer that already completed a PQ handshake never gets a classical
 // attempt when sticky is on.
 func (hm *HandshakeManager) usePQ(hh *HandshakeHostInfo, vpnIp netip.Addr) bool {
-	if !hm.config.pq.initiate {
+	cfg := hm.pqConfig()
+	if !cfg.initiate {
 		return false
 	}
-	if hm.config.pq.sticky {
+	if cfg.sticky {
 		if _, ok := hm.pqPeers.Load(vpnIp); ok {
 			return true
 		}
@@ -207,6 +244,11 @@ func (hh *HandshakeHostInfo) pqIndex() uint32 {
 
 // handleFragment routes one fragment of a PQ handshake message.
 func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *header.H) {
+	if h.MessageCounter == pqCookieCounter {
+		hm.handleCookie(via, packet, h)
+		return
+	}
+
 	fh, sym, err := fragment.Parse(packet[header.Len:])
 	if err != nil {
 		hm.l.Debug("dropping malformed handshake fragment", "from", via, "error", err)
@@ -215,7 +257,7 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 
 	switch h.MessageCounter {
 	case 1:
-		if !hm.config.pq.accept {
+		if !hm.pqConfig().accept {
 			hm.l.Debug("dropping post-quantum handshake, not accepting them", "from", via)
 			return
 		}
@@ -224,8 +266,13 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 				"from", via, "remoteIndex", h.RemoteIndex)
 			return
 		}
+		now := time.Now()
 		key, src := pqFragKeyFor(via, fh.FragID)
-		res, err := hm.pqTable.Add(key, src, time.Now(), fh, sym)
+		if hm.pqTable.Load() >= pqCookieLoad && !(fh.HasCookie() && hm.pqCookies.valid(key, fh.Cookie, now)) {
+			hm.sendCookie(via, fh, key, len(packet), now)
+			return
+		}
+		res, err := hm.pqTable.Add(key, src, now, fh, sym)
 		if err != nil {
 			hm.l.Debug("dropping handshake fragment", "from", via, "error", err)
 			return
@@ -303,12 +350,13 @@ func (hm *HandshakeManager) sendFragmented(now, later [][]byte, send func([]byte
 			}
 		}
 	}
+	delay := hm.pqConfig().repairDelay
 	switch {
 	case len(later) == 0:
-	case hm.config.pq.repairDelay <= 0:
+	case delay <= 0:
 		sendLater()
 	default:
-		time.AfterFunc(hm.config.pq.repairDelay, sendLater)
+		time.AfterFunc(delay, sendLater)
 	}
 	return first
 }
@@ -356,30 +404,22 @@ func (hm *HandshakeManager) sendFragmentedResponse(via ViaSender, msg []byte, ho
 		return err
 	}
 
-	f := hm.f
-	var send func([]byte) error
-	if !via.IsRelayed {
-		send = func(p []byte) error {
-			return f.outside.WriteTo(p, via.UdpAddr)
-		}
-	} else {
+	if via.IsRelayed {
 		if via.relay == nil {
 			return errors.New("both addr and via.relay are nil")
 		}
+		// We received a valid handshake on this relay, so make sure the relay
+		// state reflects that, in case it had been marked Disestablished.
 		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnAddrs[0])
 		via.relayHI.relayState.UpdateRelayForByIdxState(via.relay.LocalIndex, Established)
-		send = func(p []byte) error {
-			f.SendVia(via.relayHI, via.relay, p, make([]byte, 12), make([]byte, mtu), false, 0)
-			return nil
-		}
 	}
-	f.messageMetrics.Tx(header.Handshake, h.Subtype, int64(len(pkts)+len(later)))
-	return hm.sendFragmented(pkts, later, send)
+	hm.f.messageMetrics.Tx(header.Handshake, h.Subtype, int64(len(pkts)+len(later)))
+	return hm.sendFragmented(pkts, later, hm.sendTo(via))
 }
 
 // notePQPeer remembers peers that completed a PQ handshake, for sticky mode.
 func (hm *HandshakeManager) notePQPeer(subtype header.MessageSubType, vpnAddrs []netip.Addr) {
-	if !hm.config.pq.sticky || subtype != pqSubtype {
+	if !hm.pqConfig().sticky || subtype != pqSubtype {
 		return
 	}
 	for _, a := range vpnAddrs {
@@ -442,5 +482,159 @@ func (a *pqAnswered) expire(now time.Time) {
 		if now.Sub(e.at) > a.ttl {
 			delete(a.entries, k)
 		}
+	}
+}
+
+// A responder whose msg1 table is under load stops keeping state for senders
+// that have not shown they receive at their address. It answers a fragment
+// without a valid cookie with a cookie reply and keeps nothing; the initiator
+// resends with the cookie attached. This is WireGuard's under-load cookie, QUIC's
+// Retry and SCTP's state cookie: one extra round trip, only while under attack.
+const (
+	// pqCookieLoad is the table load above which msg1 fragments need a cookie.
+	pqCookieLoad = 0.5
+
+	// pqCookieCounter marks a cookie reply in the header's message counter.
+	// Handshake messages count from 1.
+	pqCookieCounter = 0
+
+	// pqCookieRotate is how often the cookie secret changes. A cookie stays
+	// valid for between one and two rotations.
+	pqCookieRotate = 2 * time.Minute
+
+	pqCookieReplyLen = header.Len + fragment.CookieLen
+)
+
+// pqCookies mints and checks cookies: an HMAC over the sender's address (or relay
+// channel) and FragID under a rotating secret, with the previous secret still
+// accepted.
+type pqCookies struct {
+	sync.Mutex
+	secrets   [2][32]byte
+	rotatedAt time.Time
+}
+
+func newPQCookies(now time.Time) *pqCookies {
+	c := &pqCookies{rotatedAt: now}
+	_, _ = rand.Read(c.secrets[0][:])
+	_, _ = rand.Read(c.secrets[1][:])
+	return c
+}
+
+func (c *pqCookies) rotate(now time.Time) {
+	if now.Sub(c.rotatedAt) < pqCookieRotate {
+		return
+	}
+	c.secrets[1] = c.secrets[0]
+	_, _ = rand.Read(c.secrets[0][:])
+	c.rotatedAt = now
+}
+
+func cookieMAC(secret []byte, key pqFragKey) fragment.Cookie {
+	mac := hmac.New(sha256.New, secret)
+	addr := key.addr.Addr().As16()
+	mac.Write(addr[:])
+	var b [10]byte
+	binary.BigEndian.PutUint16(b[0:], key.addr.Port())
+	binary.BigEndian.PutUint32(b[2:], key.relay)
+	binary.BigEndian.PutUint32(b[6:], key.fragID)
+	mac.Write(b[:])
+	var c fragment.Cookie
+	copy(c[:], mac.Sum(nil))
+	return c
+}
+
+func (c *pqCookies) make(key pqFragKey, now time.Time) fragment.Cookie {
+	c.Lock()
+	defer c.Unlock()
+	c.rotate(now)
+	return cookieMAC(c.secrets[0][:], key)
+}
+
+func (c *pqCookies) valid(key pqFragKey, cookie fragment.Cookie, now time.Time) bool {
+	c.Lock()
+	defer c.Unlock()
+	c.rotate(now)
+	for _, s := range c.secrets {
+		want := cookieMAC(s[:], key)
+		if hmac.Equal(want[:], cookie[:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// sendCookie answers a msg1 fragment that arrived without a valid cookie while
+// under load. The reply is never larger than what triggered it, and replies are
+// rate limited as a whole.
+func (hm *HandshakeManager) sendCookie(via ViaSender, fh fragment.Header, key pqFragKey, received int, now time.Time) {
+	if received < pqCookieReplyLen {
+		return
+	}
+	if _, ok := hm.pqCookieLimiter.Allow(); !ok {
+		return
+	}
+	c := hm.pqCookies.make(key, now)
+	reply := make([]byte, header.Len, pqCookieReplyLen)
+	header.Encode(reply, header.Version, header.Handshake, pqSubtype, fh.FragID, pqCookieCounter)
+	reply = append(reply, c[:]...)
+	hm.f.messageMetrics.Tx(header.Handshake, pqSubtype, 1)
+	if err := hm.sendTo(via)(reply); err != nil {
+		hm.l.Debug("Failed to send handshake cookie", "to", via, "error", err)
+	}
+}
+
+// handleCookie attaches a responder's cookie to the PQ attempt it names and
+// resends right away, at most once per retry interval, rather than waiting for
+// the next attempt.
+func (hm *HandshakeManager) handleCookie(via ViaSender, packet []byte, h *header.H) {
+	if len(packet) != pqCookieReplyLen {
+		return
+	}
+	hh := hm.queryIndex(h.RemoteIndex)
+	if hh == nil {
+		return
+	}
+	hh.Lock()
+	defer hh.Unlock()
+
+	pq := hh.pq
+	if pq == nil || pq.index != h.RemoteIndex || !hm.stillPending(hh, pq.index) {
+		return
+	}
+	var c fragment.Cookie
+	copy(c[:], packet[header.Len:])
+	pq.sender.SetCookie(c)
+
+	now := time.Now()
+	if now.Sub(pq.cookieResendAt) < hm.config.tryInterval {
+		return
+	}
+	pq.cookieResendAt = now
+	pkts, later, err := pq.sender.Attempt(fragment.DefaultRepair(pq.sender.Layout().K))
+	if err != nil {
+		return
+	}
+	hm.messageMetrics.Tx(header.Handshake, pqSubtype, int64(len(pkts)+len(later)))
+	if err := hm.sendFragmented(pkts, later, hm.sendTo(via)); err != nil {
+		hm.l.Debug("Failed to resend handshake with cookie", "to", via, "error", err)
+	}
+}
+
+// sendTo returns a function sending a packet back the way via came: directly, or
+// through the relay it arrived on.
+func (hm *HandshakeManager) sendTo(via ViaSender) func([]byte) error {
+	f := hm.f
+	if !via.IsRelayed {
+		return func(p []byte) error {
+			return f.outside.WriteTo(p, via.UdpAddr)
+		}
+	}
+	return func(p []byte) error {
+		if via.relay == nil {
+			return errors.New("both addr and via.relay are nil")
+		}
+		f.SendVia(via.relayHI, via.relay, p, make([]byte, 12), make([]byte, mtu), false, 0)
+		return nil
 	}
 }

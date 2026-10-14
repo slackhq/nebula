@@ -232,15 +232,11 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		retries:        int64(c.GetInt("handshakes.retries", DefaultHandshakeRetries)),
 		triggerBuffer:  c.GetInt("handshakes.trigger_buffer", DefaultHandshakeTriggerBuffer),
 		messageMetrics: messageMetrics,
-		pq: pqHandshakeConfig{
-			initiate:    c.GetBool("handshakes.pq.initiate", false),
-			accept:      c.GetBool("handshakes.pq.accept", false),
-			sticky:      c.GetBool("handshakes.pq.sticky", false),
-			repairDelay: c.GetDuration("handshakes.pq.repair_delay", DefaultPQRepairDelay),
-		},
+		pq:             pqHandshakeConfigFrom(c),
 	}
 
 	handshakeManager := NewHandshakeManager(l, hostMap, lightHouse, udpConns[0], handshakeConfig)
+	c.RegisterReloadCallback(handshakeManager.reloadPQ)
 	lightHouse.handshakeTrigger = handshakeManager.trigger
 
 	ds, err := newDnsServerFromConfig(ctx, l, pki, hostMap, c)

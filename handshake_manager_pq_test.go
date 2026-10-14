@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/handshake/fragment"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/test"
@@ -152,4 +153,198 @@ func TestPQFragKeyFor(t *testing.T) {
 
 	_, s5 := pqFragKeyFor(ViaSender{UdpAddr: netip.MustParseAddrPort("[::ffff:192.0.2.1]:1")}, 9)
 	assert.Equal(t, s1, s5, "v4-mapped addresses count as IPv4")
+}
+
+func TestPQCookies(t *testing.T) {
+	now := time.Unix(1000, 0)
+	c := newPQCookies(now)
+	key := pqFragKey{addr: netip.MustParseAddrPort("192.0.2.1:4242"), fragID: 9}
+
+	cookie := c.make(key, now)
+	assert.True(t, c.valid(key, cookie, now))
+
+	for _, other := range []pqFragKey{
+		{addr: netip.MustParseAddrPort("192.0.2.2:4242"), fragID: 9},
+		{addr: netip.MustParseAddrPort("192.0.2.1:4243"), fragID: 9},
+		{addr: netip.MustParseAddrPort("192.0.2.1:4242"), fragID: 10},
+		{addr: netip.MustParseAddrPort("192.0.2.1:4242"), relay: 1, fragID: 9},
+	} {
+		assert.False(t, c.valid(other, cookie, now), "%+v", other)
+	}
+
+	now = now.Add(pqCookieRotate)
+	assert.True(t, c.valid(key, cookie, now), "the previous secret is still accepted")
+	assert.NotEqual(t, cookie, c.make(key, now), "new cookies come from the new secret")
+
+	now = now.Add(pqCookieRotate)
+	assert.False(t, c.valid(key, cookie, now), "two rotations retire a cookie")
+}
+
+// pqMsg1Fragment builds the first fragment of a msg1, optionally with a cookie.
+func pqMsg1Fragment(t *testing.T, fragID uint32, cookie *fragment.Cookie) ([]byte, *header.H) {
+	t.Helper()
+	s, err := fragment.NewSender(make([]byte, 2000), pqSubtype, 0, 1, fragID)
+	require.NoError(t, err)
+	if cookie != nil {
+		s.SetCookie(*cookie)
+	}
+	pkts, _, err := s.Attempt(0)
+	require.NoError(t, err)
+	var h header.H
+	require.NoError(t, h.Parse(pkts[0]))
+	return pkts[0], &h
+}
+
+// fillPQTable puts the responder's msg1 table at the cookie threshold.
+func fillPQTable(t *testing.T, hm *HandshakeManager) {
+	t.Helper()
+	now := time.Now()
+	for i := 0; hm.pqTable.Load() < pqCookieLoad; i++ {
+		p, _ := pqMsg1Fragment(t, uint32(i+1), nil)
+		fh, sym, err := fragment.Parse(p[header.Len:])
+		require.NoError(t, err)
+		addr := netip.AddrPortFrom(netip.AddrFrom4([4]byte{198, 18, byte(i >> 8), byte(i)}), 4242)
+		key, src := pqFragKeyFor(ViaSender{UdpAddr: addr}, fh.FragID)
+		_, err = hm.pqTable.Add(key, src, now, fh, sym)
+		require.NoError(t, err)
+	}
+}
+
+func TestPQCookieUnderLoad(t *testing.T) {
+	hm, conn := newPQTestManager(t)
+	via := ViaSender{UdpAddr: netip.MustParseAddrPort("192.0.2.1:4242")}
+
+	t.Run("no cookie needed below the threshold", func(t *testing.T) {
+		p, h := pqMsg1Fragment(t, 5000, nil)
+		before := hm.pqTable.Len()
+		hm.handleFragment(via, p, h)
+		assert.Empty(t, conn.take())
+		assert.Equal(t, before+1, hm.pqTable.Len())
+	})
+
+	fillPQTable(t, hm)
+
+	var cookie fragment.Cookie
+	t.Run("a fragment without a cookie gets one and leaves no state", func(t *testing.T) {
+		p, h := pqMsg1Fragment(t, 7, nil)
+		before := hm.pqTable.Len()
+		hm.handleFragment(via, p, h)
+		assert.Equal(t, before, hm.pqTable.Len())
+
+		sent := conn.take()
+		require.Len(t, sent, 1)
+		reply := sent[0]
+		require.Len(t, reply, pqCookieReplyLen)
+		var rh header.H
+		require.NoError(t, rh.Parse(reply))
+		assert.Equal(t, header.Handshake, rh.Type)
+		assert.Equal(t, pqSubtype, rh.Subtype)
+		assert.Equal(t, uint32(7), rh.RemoteIndex, "the reply names the initiator's FragID")
+		assert.Equal(t, uint64(pqCookieCounter), rh.MessageCounter)
+		copy(cookie[:], reply[header.Len:])
+	})
+
+	t.Run("a forged cookie gets a fresh one", func(t *testing.T) {
+		bad := cookie
+		bad[0] ^= 1
+		p, h := pqMsg1Fragment(t, 7, &bad)
+		before := hm.pqTable.Len()
+		hm.handleFragment(via, p, h)
+		assert.Equal(t, before, hm.pqTable.Len())
+		assert.Len(t, conn.take(), 1)
+	})
+
+	t.Run("the cookie gets the fragment in", func(t *testing.T) {
+		p, h := pqMsg1Fragment(t, 7, &cookie)
+		before := hm.pqTable.Len()
+		hm.handleFragment(via, p, h)
+		assert.Equal(t, before+1, hm.pqTable.Len())
+		assert.Empty(t, conn.take())
+	})
+
+	t.Run("a cookie is bound to its address", func(t *testing.T) {
+		p, h := pqMsg1Fragment(t, 7, &cookie)
+		hm.handleFragment(ViaSender{UdpAddr: netip.MustParseAddrPort("192.0.2.99:4242")}, p, h)
+		assert.Len(t, conn.take(), 1, "another address gets its own cookie instead")
+	})
+
+	t.Run("a reply never outgrows what prompted it", func(t *testing.T) {
+		p, h := pqMsg1Fragment(t, 8, nil)
+		hm.sendCookie(via, fragment.Header{FragID: 8}, pqFragKey{}, pqCookieReplyLen-1, time.Now())
+		assert.Empty(t, conn.take())
+		hm.handleFragment(via, p, h)
+		assert.Len(t, conn.take(), 1)
+	})
+}
+
+func TestPQHandleCookie(t *testing.T) {
+	hm, conn := newPQTestManager(t)
+	via := ViaSender{UdpAddr: netip.MustParseAddrPort("192.0.2.1:4242")}
+
+	s, err := fragment.NewSender(make([]byte, 2000), pqSubtype, 0, 1, 99)
+	require.NoError(t, err)
+	_, _, err = s.Attempt(2)
+	require.NoError(t, err)
+	hh := &HandshakeHostInfo{hostinfo: &HostInfo{}, pq: &pqAttempt{index: 99, sender: s}}
+	hm.indexes[99] = hh
+
+	reply := make([]byte, header.Len, pqCookieReplyLen)
+	header.Encode(reply, header.Version, header.Handshake, pqSubtype, 99, pqCookieCounter)
+	reply = append(reply, bytes16(0xab)...)
+	var h header.H
+	require.NoError(t, h.Parse(reply))
+
+	hm.handleFragment(via, reply, &h)
+	sent := conn.take()
+	require.Len(t, sent, 4, "an immediate resend of fresh symbols")
+	for i, p := range sent {
+		fh, _, err := fragment.Parse(p[header.Len:])
+		require.NoError(t, err)
+		assert.True(t, fh.HasCookie())
+		assert.Equal(t, fragment.Cookie(bytes16(0xab)), fh.Cookie)
+		assert.Equal(t, uint8(4+i), fh.Index)
+	}
+
+	hm.handleFragment(via, reply, &h)
+	assert.Empty(t, conn.take(), "immediate resends are rate limited")
+
+	t.Run("replies for other indexes are ignored", func(t *testing.T) {
+		other := append([]byte(nil), reply...)
+		header.Encode(other, header.Version, header.Handshake, pqSubtype, 98, pqCookieCounter)
+		var oh header.H
+		require.NoError(t, oh.Parse(other))
+		hh.pq.cookieResendAt = time.Time{}
+		hm.handleFragment(via, other, &oh)
+		assert.Empty(t, conn.take())
+	})
+}
+
+func bytes16(b byte) []byte {
+	out := make([]byte, 16)
+	for i := range out {
+		out[i] = b
+	}
+	return out
+}
+
+func TestReloadPQ(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	require.NoError(t, c.LoadString(`handshakes: {pq: {initiate: false}}`))
+	cfg := defaultHandshakeConfig
+	cfg.pq = pqHandshakeConfigFrom(c)
+	hm := NewHandshakeManager(l, newHostMap(l), newTestLighthouse(), &udp.NoopConn{}, cfg)
+	c.RegisterReloadCallback(hm.reloadPQ)
+
+	assert.Equal(t, pqHandshakeConfig{repairDelay: DefaultPQRepairDelay}, *hm.pqConfig())
+
+	require.NoError(t, c.ReloadConfigString(`handshakes: {pq: {initiate: true, accept: true, sticky: true, repair_delay: 25ms}}`))
+	assert.Equal(t, pqHandshakeConfig{initiate: true, accept: true, sticky: true, repairDelay: 25 * time.Millisecond}, *hm.pqConfig())
+
+	before := hm.pqConfig()
+	require.NoError(t, c.ReloadConfigString(`handshakes: {try_interval: 1s, pq: {initiate: true, accept: true, sticky: true, repair_delay: 25ms}}`))
+	assert.Same(t, before, hm.pqConfig(), "an unrelated change leaves the settings alone")
+
+	require.NoError(t, c.ReloadConfigString(`handshakes: {}`))
+	assert.Equal(t, pqHandshakeConfig{repairDelay: DefaultPQRepairDelay}, *hm.pqConfig(), "removing the section restores the defaults")
 }

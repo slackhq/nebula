@@ -66,12 +66,30 @@ signature, following PQNoise's pqIX, while keeping the classical DH tokens:
 - **msg3** (I to R): ciphertext to R's static KEM key, plus first data. R authenticates I
   when msg3 decrypts; I authenticates R implicitly when R's first reply decrypts.
 
+msg3 is about 1.6 KB, 2 data and 2 repair fragments, and adds no new message types:
+
+- **Responder.** After sending msg2 the responder keeps a pending Machine, found by its
+  local index like the initiator's today; this is the multi-message responder support the
+  manager lacks now. A repeat msg1 maps to it through the answered-msg1 cache and gets msg2
+  resent with fresh symbols, exactly as in phase 1. Until msg3 verifies, data for that
+  index is dropped silently: it must not draw a RecvError, which would tear down the
+  initiator's new tunnel. On completing it sends an empty `Test`/`TestReply` under the
+  new keys, so the initiator hears back even when there is no traffic.
+- **Initiator.** Writing msg3 yields the transport keys, so the hostinfo moves to the main
+  hostmap and data flows at once, readable only by the real responder. The handshake entry
+  stays behind in a confirming state: each retry tick resends msg3 with fresh symbols until
+  any packet from the responder decrypts on the new tunnel, and if that never happens
+  within the handshake timeout the tunnel is torn down. Losing msg3 costs the data sent
+  behind it, which the overlay's own transport retransmits.
+- msg3's fragments use the responder's index as RemoteIndex and land on the responder's
+  pending entry, so they never enter the pre-authentication table.
+
 The initiator never caches the responder's certificate, so every handshake has three
 messages and carries both full certificates. With ML-DSA-87:
 
 | Message | Size | Data fragments (k) |
 |---|---|---|
-| msg1 | ~8.2 KB | 7 |
+| msg1 | ~8.2 KB | 8 |
 | msg2 | ~9.8 KB | 9 |
 | msg3 | ~1.6 KB | 2 |
 
@@ -98,17 +116,29 @@ Every packet of a fragmented handshake subtype is:
 ```
 Nebula header (16)   Version | Type=Handshake | Subtype | Reserved=0 | RemoteIndex | Counter
 Fragment header (8)  FragID u32 | MsgLen u16 | Index u8 | Flags u8
+Cookie (16)          only when Flags has 0x01
 Symbol               SymbolSize bytes
 ```
 
 - `Counter` is the Noise message number (1, 2, 3). `RemoteIndex` is 0 for msg1, as today.
 - `FragID` is the sender's local index (random, non-zero).
 - `MsgLen` is the length of the whole message. Both ends derive the layout from it:
-  `K = ceil(MsgLen / 1176)`, `SymbolSize = ceil(MsgLen / K)`. Every symbol has the same
-  size, so a packet is at most 16 + 8 + 1176 = 1200 bytes.
+  `K = ceil(MsgLen / 1160)`, `SymbolSize = ceil(MsgLen / K)`. Every symbol has the same
+  size. Room for a cookie is always reserved, so a packet is at most
+  16 + 8 + 16 + 1160 = 1200 bytes with or without one.
 - `Index < K` is a data symbol (a slice of the message, the last one zero padded);
   `Index >= K` is a repair symbol.
-- `Flags` is reserved for a cookie extension and must be zero.
+- `Flags` bit 0x01 means a cookie follows the fragment header. Other bits must be zero.
+
+A cookie reply, sent by a responder under load, is a bare 32 byte packet:
+
+```
+Nebula header (16)   Version | Type=Handshake | Subtype | Reserved=0 | RemoteIndex=FragID | Counter=0
+Cookie (16)
+```
+
+It names the initiator's FragID, so the initiator finds its attempt the same way it finds
+msg2.
 
 ### Forward error correction
 
@@ -151,7 +181,7 @@ Implemented in `handshake/fragment` (`Sender`, `Assembly`, and the capped `Table
   Nothing is allocated from a claimed size alone (FragmentSmack, game-engine "fragment
   bombs").
 - `MsgLen` must be identical for every fragment of a `FragID`; a mismatch drops the whole
-  entry. msg1 is capped at `MsgLen <= 16384` (K <= 14).
+  entry. msg1 is capped at `MsgLen <= 16384` (K <= 15).
 - The decoder keeps at most K distinct symbols, so an entry never exceeds about MsgLen bytes
   however many repair symbols arrive.
 - When K symbols are present the message is decoded and handed to the handshake `Machine`
@@ -183,12 +213,42 @@ Implemented in `handshake/fragment` (`Sender`, `Assembly`, and the capped `Table
 ### Denial of service
 
 The responder can no longer complete statelessly on msg1, since msg1 arrives in pieces.
-Defenses are the capped table above plus a **cookie under load**: when the table is under
-pressure, a fragment from an unvalidated address is answered with a stateless cookie
-(a MAC over source address, FragID and a time bucket), and the initiator resends with the
-cookie. This costs a round trip only while under attack, in the style of WireGuard's
-mac2, QUIC Retry and the SCTP state cookie. A CA-keyed pre-filter MAC was considered and
-rejected: networks commonly trust many CAs.
+Defenses are the capped table above plus a **cookie under load**, in the style of
+WireGuard's mac2, QUIC Retry and the SCTP state cookie:
+
+- Once the msg1 table is at least half full (by bytes or by entries), every msg1 fragment
+  must carry a valid cookie. One without is answered with a cookie reply and leaves no
+  state. Fragments that already belong to an entry need one too, so an attacker cannot
+  hold old entries open.
+- A cookie is `HMAC-SHA256(secret, source address and port, relay channel, FragID)`
+  truncated to 16 bytes. The secret rotates every 2 minutes and the previous one is still
+  accepted, so a cookie is good for 2 to 4 minutes.
+- Replies are never larger than the packet that prompted them (no amplification) and are
+  rate limited as a whole (a burst of 256, then 1000 per second), so spoofed floods cannot
+  turn the responder into a reflector.
+- The initiator attaches the cookie to its PQ attempt, so every later packet carries it,
+  and immediately resends fresh symbols to the address the reply came from, at most once
+  per retry interval. Under load a PQ handshake costs one extra round trip, which in
+  practice still beats the classical attempt on the next retry tick.
+- An attacker on the path can forge a cookie reply; the bogus cookie is simply rejected
+  and answered with a real one.
+
+A CA-keyed pre-filter MAC was considered and rejected: networks commonly trust many CAs.
+
+#### Injected symbols
+
+The decoder keeps the first K distinct symbols it sees, so one forged symbol in those K
+spoils that attempt's decode; Noise rejects the result and the next attempt brings fresh
+symbols. Forging one needs the attempt's FragID or index, which are random 32 bit values,
+and for msg1 the initiator's exact address and port too, so in practice only an attacker
+who sees the traffic can do it. An attacker who can also drop packets gains nothing new.
+One who can only inject, and races a forged symbol into every attempt, can stop a PQ
+handshake where it could not stop a classical one, since classical msg2s are tried one
+packet at a time. Keeping spare symbols to find a consistent subset only raises the number
+of forgeries needed per attempt, and authenticating symbols is impossible for msg1, which
+travels before any key exists. So the decoder deliberately does neither. A non-sticky
+initiator still gets a classical tunnel from its next attempt; a sticky one, by design,
+does not downgrade.
 
 ## Rollout
 
@@ -198,6 +258,8 @@ rejected: networks commonly trust many CAs.
 - Old nodes silently drop unknown subtypes, so discovery is speculative: an initiator with
   `initiate` enabled alternates PQ and classical attempts on successive retries, keeping
   both pending, and the first to complete wins.
+- All `handshakes.pq` settings reload without a restart. Handshakes in flight carry on;
+  the new settings apply to the next attempt and the next packet.
 - `handshakes.pq.sticky` (default off): once a peer has completed a PQ handshake, never fall
   back to classical for it again during this process lifetime. This resists active
   downgrade after first contact.
@@ -257,18 +319,18 @@ in every scenario above, and within three at least 99.99%.
     amplification budget.
   - **Relays** carry fragments unchanged; repair fragments trail via a timer.
 - The pre-authentication table is capped at 4 MiB, 1024 entries, 4 per source (IPv4 /32,
-  IPv6 /64, or relay channel), 16 KiB messages and a 3 s idle timeout.
+  IPv6 /64, or relay channel), 16 KiB messages and a 3 s idle timeout. Cookies are
+  demanded from half full.
 - Tests: Noise-level KEM tests, codec and fragment tests and fuzzers, manager unit tests
   for the response budget and rate limit, and e2e tests for a clean handshake, loss of
   data fragments in both directions, fallback to a peer that does not accept PQ, a lost
   msg2 recovered by fresh symbols, sticky mode under an attacker dropping PQ packets,
-  relays, and index cleanup on completion, fallback and timeout. ML-KEM and HKDF also
+  relays, index cleanup on completion, fallback and timeout, and a responder flooded from
+  spoofed sources demanding and accepting a cookie. Unit tests cover cookie binding and
+  rotation, the never-amplify rule, the initiator's rate limited resend, and reload. ML-KEM and HKDF also
   pass under `GOEXPERIMENT=boringcrypto` and `GODEBUG=fips140=on`.
 
 ## Open items
 
-1. Cookie wire format and the load threshold that triggers it.
-2. Whether the decoder keeps spare symbols to identify injected symbols.
-3. msg3 confirmation message format (phase 2).
-4. Configuration reload: the `handshakes.pq` settings are read at startup only, like the
-   rest of the `handshakes` section.
+None for phase 1. Phase 2 needs certificate v3, the KEM-aware Noise symmetric state, and
+the msg3 design above.

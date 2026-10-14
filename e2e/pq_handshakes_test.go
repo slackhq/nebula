@@ -349,3 +349,55 @@ func TestPQTimeoutReleasesIndexes(t *testing.T) {
 	myControl.Stop()
 	theirControl.Stop()
 }
+
+// TestPQCookieUnderLoad floods the responder with msg1 fragments from spoofed
+// sources until it demands cookies, then checks a real initiator picks up the
+// cookie and still completes a PQ handshake.
+func TestPQCookieUnderLoad(t *testing.T) {
+	t.Parallel()
+	myControl, theirControl, myVpn, theirVpn, _, theirUdp, r := newPQPair(t, pqConfig(true, true, false), pqConfig(false, true, false))
+	defer r.RenderFlow()
+
+	// Half of the 1024 entry table is the cookie threshold. Stopping exactly there
+	// keeps them from answering the spoofed sources, which the router cannot reach.
+	t.Log("Flood them with the first fragment of msg1s nobody will finish")
+	for i := range 512 {
+		from := netip.AddrPortFrom(netip.AddrFrom4([4]byte{198, 18, byte(i >> 8), byte(i)}), 4242)
+		s, err := fragment.NewSender(make([]byte, 2000), header.HandshakeIXPSK2MLKEM1024, 0, 1, uint32(i+1))
+		require.NoError(t, err)
+		pkts, _, err := s.Attempt(0)
+		require.NoError(t, err)
+		theirControl.InjectUDPPacket(&udp.Packet{From: from, To: theirUdp, Data: pkts[0]})
+	}
+
+	var tally handshakeTally
+	var cookieReplies, msg2, withCookie int
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpn[0].Addr(), 80, myVpn[0].Addr(), 80, []byte("Hi from me")))
+	require.True(t, r.RouteForAllExitFuncOrTimeout(5*time.Second, func(p *udp.Packet, receiver *nebula.Control) router.ExitType {
+		tally.observe(p)
+		if h, fh := handshakeOf(p); h != nil && h.Subtype == header.HandshakeIXPSK2MLKEM1024 {
+			switch {
+			case h.MessageCounter == 0:
+				cookieReplies++
+			case h.MessageCounter == 2:
+				msg2++
+			case fh != nil && fh.HasCookie():
+				withCookie++
+			}
+		}
+		if isTunnelData(p, receiver, theirControl) {
+			return router.RouteAndExit
+		}
+		return router.KeepRouting
+	}), "tunnel never came up")
+
+	assertUdpPacket(t, []byte("Hi from me"), theirControl.GetFromTun(true), myVpn[0].Addr(), theirVpn[0].Addr(), 80, 80)
+	assert.Positive(t, cookieReplies, "a loaded responder asks for a cookie")
+	assert.Positive(t, withCookie, "the initiator resends with it")
+	assert.Positive(t, msg2, "and the handshake completes post-quantum")
+	assert.Zero(t, tally.classical, "the cookie round trip beats the classical fallback")
+	assertTunnel(t, myVpn[0].Addr(), theirVpn[0].Addr(), myControl, theirControl, r)
+
+	myControl.Stop()
+	theirControl.Stop()
+}

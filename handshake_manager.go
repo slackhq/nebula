@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -17,6 +18,7 @@ import (
 	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/handshake/fragment"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/ratelimit"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -77,12 +79,17 @@ type HandshakeManager struct {
 	// can be used to trigger outbound handshake for the given vpnIp
 	trigger chan netip.Addr
 
+	// pq holds the post-quantum settings, which change on reload.
+	pq atomic.Pointer[pqHandshakeConfig]
 	// pqTable reassembles post-quantum msg1s from senders that have not authenticated yet.
 	pqTable *fragment.Table[pqFragKey, pqFragSource]
 	// pqPeers holds vpn addresses that completed a post-quantum handshake, for sticky mode.
 	pqPeers sync.Map
 	// pqAnswered recognises repeats of post-quantum msg1s already answered.
 	pqAnswered *pqAnswered
+	// pqCookies and pqCookieLimiter serve cookies while pqTable is under load.
+	pqCookies       *pqCookies
+	pqCookieLimiter *ratelimit.Limiter
 }
 
 type HandshakeHostInfo struct {
@@ -127,7 +134,7 @@ func (hh *HandshakeHostInfo) cachePacket(l *slog.Logger, t header.MessageType, s
 }
 
 func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *LightHouse, outside udp.Conn, config HandshakeConfig) *HandshakeManager {
-	return &HandshakeManager{
+	hm := &HandshakeManager{
 		vpnIps:                 map[netip.Addr]*HandshakeHostInfo{},
 		indexes:                map[uint32]*HandshakeHostInfo{},
 		mainHostMap:            mainHostMap,
@@ -143,6 +150,13 @@ func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *Light
 		pqTable:                fragment.NewTable[pqFragKey, pqFragSource](pqTableConfig),
 		pqAnswered:             newPQAnswered(hsTimeout(config.retries, config.tryInterval)),
 	}
+	pq := config.pq
+	hm.pq.Store(&pq)
+	hm.pqCookies = newPQCookies(time.Now())
+	// Cookie replies are tiny, but a flood of spoofed fragments must not turn
+	// into a flood of replies.
+	hm.pqCookieLimiter, _ = ratelimit.New(256, time.Millisecond)
+	return hm
 }
 
 func (hm *HandshakeManager) Run(ctx context.Context) {
