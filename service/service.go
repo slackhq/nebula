@@ -43,8 +43,15 @@ type Service struct {
 		sync.Mutex
 
 		closed    bool
-		listeners map[uint16]*tcpListener
+		listeners map[listenerKey]*tcpListener
 	}
+}
+
+// listenerKey identifies the address family and port an incoming connection is
+// delivered by. A dual-stack listener is registered under both families.
+type listenerKey struct {
+	proto tcpip.NetworkProtocolNumber
+	port  uint16
 }
 
 func New(control *nebula.Control) (_ *Service, reterr error) {
@@ -71,7 +78,7 @@ func New(control *nebula.Control) (_ *Service, reterr error) {
 	s := Service{
 		control: control,
 	}
-	s.mu.listeners = map[uint16]*tcpListener{}
+	s.mu.listeners = map[listenerKey]*tcpListener{}
 
 	s.ipstack = stack.New(stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
@@ -265,16 +272,27 @@ func (s *Service) Dial(network, address string) (net.Conn, error) {
 }
 
 // Listen listens on the provided address. Currently only TCP with wildcard
-// addresses are supported.
+// addresses are supported. As with net.Listen, "tcp4" accepts only IPv4
+// connections, "tcp6" only IPv6, and "tcp" both. A "tcp4" and a "tcp6"
+// listener may share a port, but a "tcp" listener claims the port for both
+// families. Connections of a family with no listener on the port are reset.
 func (s *Service) Listen(network, address string) (net.Listener, error) {
-	if network != "tcp" && network != "tcp4" {
+	var protos []tcpip.NetworkProtocolNumber
+	switch network {
+	case "tcp":
+		protos = []tcpip.NetworkProtocolNumber{ipv4.ProtocolNumber, ipv6.ProtocolNumber}
+	case "tcp4":
+		protos = []tcpip.NetworkProtocolNumber{ipv4.ProtocolNumber}
+	case "tcp6":
+		protos = []tcpip.NetworkProtocolNumber{ipv6.ProtocolNumber}
+	default:
 		return nil, errors.New("only tcp is supported")
 	}
 	addr, err := net.ResolveTCPAddr(network, address)
 	if err != nil {
 		return nil, err
 	}
-	if addr.IP != nil && !bytes.Equal(addr.IP, []byte{0, 0, 0, 0}) {
+	if addr.IP != nil && !addr.IP.IsUnspecified() {
 		return nil, fmt.Errorf("only wildcard address supported, got %q %v", address, addr.IP)
 	}
 	if addr.Port == 0 {
@@ -283,11 +301,13 @@ func (s *Service) Listen(network, address string) (net.Listener, error) {
 	port := uint16(addr.Port)
 
 	l := &tcpListener{
-		port:   port,
 		s:      s,
 		addr:   addr,
 		accept: make(chan net.Conn),
 		closed: make(chan struct{}),
+	}
+	for _, proto := range protos {
+		l.keys = append(l.keys, listenerKey{proto: proto, port: port})
 	}
 
 	s.mu.Lock()
@@ -296,10 +316,14 @@ func (s *Service) Listen(network, address string) (net.Listener, error) {
 	if s.mu.closed {
 		return nil, net.ErrClosed
 	}
-	if _, ok := s.mu.listeners[port]; ok {
-		return nil, fmt.Errorf("already listening on port %d", port)
+	for _, key := range l.keys {
+		if _, ok := s.mu.listeners[key]; ok {
+			return nil, fmt.Errorf("%s port %d already in use", network, port)
+		}
 	}
-	s.mu.listeners[port] = l
+	for _, key := range l.keys {
+		s.mu.listeners[key] = l
+	}
 
 	return l, nil
 }
@@ -339,8 +363,13 @@ func (s *Service) closeListeners() {
 func (s *Service) tcpHandler(r *tcp.ForwarderRequest) {
 	endpointID := r.ID()
 
+	key := listenerKey{proto: ipv4.ProtocolNumber, port: endpointID.LocalPort}
+	if endpointID.LocalAddress.Len() == net.IPv6len {
+		key.proto = ipv6.ProtocolNumber
+	}
+
 	s.mu.Lock()
-	l, ok := s.mu.listeners[endpointID.LocalPort]
+	l, ok := s.mu.listeners[key]
 	s.mu.Unlock()
 	if !ok {
 		r.Complete(true)

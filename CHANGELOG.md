@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `service.Listen` supports `tcp6` and follows `net.Listen` address family semantics for `tcp`, `tcp4` and `tcp6`.
 - A control socket that provides access to all of the ssh debug server's commands along with support
   for running `nebula ctl <command>` as a client from the CLI.
 - An info socket that serves the `identity` command over HTTP: `GET /v1/identity` for this node,
