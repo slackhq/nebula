@@ -72,7 +72,8 @@ func MarshalPayload(out []byte, p Payload) []byte {
 	return append(out, rest...)
 }
 
-// UnmarshalPayload decodes a protobuf-encoded NebulaHandshake message.
+// UnmarshalPayload decodes a protobuf-encoded NebulaHandshake message. The
+// returned Cert aliases b.
 func UnmarshalPayload(b []byte) (Payload, error) {
 	var p Payload
 
@@ -127,7 +128,7 @@ func unmarshalPayloadDetails(p *Payload, b []byte) error {
 			if n < 0 {
 				return errInvalidHandshakeDetails
 			}
-			p.Cert = append([]byte(nil), v...)
+			p.Cert = v
 			b = b[n:]
 		case fieldInitiatorIndex:
 			if typ != protowire.VarintType {
