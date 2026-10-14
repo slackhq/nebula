@@ -235,6 +235,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		pq:             pqHandshakeConfigFrom(c),
 	}
 
+	warnPQWithoutV3(l, handshakeConfig.pq, pki.getCertState())
 	handshakeManager := NewHandshakeManager(l, hostMap, lightHouse, udpConns[0], handshakeConfig)
 	c.RegisterReloadCallback(handshakeManager.reloadPQ)
 	lightHouse.handshakeTrigger = handshakeManager.trigger

@@ -2,8 +2,6 @@ package handshake
 
 import (
 	"bytes"
-	"crypto/mlkem"
-	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -70,9 +68,6 @@ type Machine struct {
 	remoteCertSet  bool
 	payloadSet     bool
 	failed         bool
-
-	kemKey        *mlkem.DecapsulationKey1024 // initiator's ephemeral ML-KEM key, until completion
-	kemCiphertext []byte                      // responder's ciphertext to prefix its response with
 }
 
 // NewMachine creates a handshake state machine. The subtype determines both
@@ -93,7 +88,7 @@ func NewMachine(
 	}
 
 	// Version 3 certificates go with hybrid patterns and nothing else, the
-	// classical and phase 1 subtypes use the v2 form instead.
+	// classical subtype uses the v2 form instead.
 	hybrid := info.kem != nil
 	if hybrid != (version == cert.Version3) {
 		return nil, fmt.Errorf("%w: %v", ErrCertVersionMismatch, version)
@@ -246,18 +241,7 @@ func (m *Machine) ProcessPacket(out, packet []byte) ([]byte, *Result, error) {
 		return nil, nil, ErrInitiateNotCalled
 	}
 
-	noiseMsg := packet[header.Len:]
-	if m.myMsgFlags().kemCiphertext {
-		var err error
-		// Installing a psk derived from a forged ciphertext is harmless: ReadMessage
-		// then fails without advancing, and the next packet installs its own.
-		noiseMsg, err = m.kemDecapsulate(noiseMsg)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	msg, cs1, cs2, err := m.hs.ReadMessage(nil, noiseMsg)
+	msg, cs1, cs2, err := m.hs.ReadMessage(nil, packet[header.Len:])
 	eKey, dKey := m.cipherStates(cs1, cs2)
 	if err != nil {
 		// Noise ReadMessage failed. The noise library checkpoints and rolls back
@@ -318,8 +302,6 @@ func (m *Machine) cipherStates(cs1, cs2 *noise.CipherState) (*noise.CipherState,
 }
 
 func (m *Machine) completed(eKey, dKey *noise.CipherState) *Result {
-	m.kemKey = nil
-	m.kemCiphertext = nil
 	m.result.EKey = eKey
 	m.result.DKey = dKey
 	m.result.MessageIndex = uint64(m.hs.MessageIndex())
@@ -328,7 +310,7 @@ func (m *Machine) completed(eKey, dKey *noise.CipherState) *Result {
 
 func (m *Machine) processPayload(msg []byte, flags msgFlags) error {
 	if len(msg) == 0 {
-		if flags.expectsPayload || flags.expectsCert || flags.kemKey {
+		if flags.expectsPayload || flags.expectsCert {
 			m.failed = true
 			return ErrMissingContent
 		}
@@ -350,12 +332,6 @@ func (m *Machine) processPayload(msg []byte, flags msgFlags) error {
 
 	hasCertData := len(payload.Cert) > 0
 	if hasCertData != flags.expectsCert {
-		m.failed = true
-		return ErrUnexpectedContent
-	}
-
-	hasKEMKey := len(payload.KEMKey) > 0
-	if hasKEMKey != flags.kemKey {
 		m.failed = true
 		return ErrUnexpectedContent
 	}
@@ -382,13 +358,6 @@ func (m *Machine) processPayload(msg []byte, flags msgFlags) error {
 	// Process certificate
 	if flags.expectsCert {
 		if err := m.validateCert(payload); err != nil {
-			return err
-		}
-	}
-
-	if flags.kemKey {
-		if err := m.kemEncapsulate(payload.KEMKey); err != nil {
-			m.failed = true
 			return err
 		}
 	}
@@ -462,21 +431,11 @@ func (m *Machine) validateCert(payload Payload) error {
 }
 
 func (m *Machine) marshalOutgoing(flags msgFlags) ([]byte, error) {
-	if !flags.expectsPayload && !flags.expectsCert && !flags.kemKey {
+	if !flags.expectsPayload && !flags.expectsCert {
 		return nil, nil
 	}
 
 	var p Payload
-	if flags.kemKey {
-		if m.kemKey == nil {
-			dk, err := mlkem.GenerateKey1024()
-			if err != nil {
-				return nil, fmt.Errorf("generate ML-KEM key: %w", err)
-			}
-			m.kemKey = dk
-		}
-		p.KEMKey = m.kemKey.EncapsulationKey().Bytes()
-	}
 	if flags.expectsPayload {
 		if !m.indexAllocated {
 			index, err := m.allocIndex()
@@ -527,13 +486,6 @@ func (m *Machine) buildResponse(out []byte) ([]byte, *noise.CipherState, *noise.
 		m.result.RemoteIndex,
 		uint64(m.hs.MessageIndex()+1),
 	)
-
-	if flags.kemCiphertext {
-		if m.kemCiphertext == nil {
-			return nil, nil, nil, errors.New("no ML-KEM ciphertext to send")
-		}
-		out = append(out, m.kemCiphertext...)
-	}
 
 	// noise.WriteMessage appends the encrypted handshake message to out,
 	// reusing capacity when present.

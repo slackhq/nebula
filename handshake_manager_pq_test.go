@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/handshake/fragment"
 	"github.com/slackhq/nebula/header"
@@ -49,9 +51,24 @@ func newPQTestManager(t *testing.T) (*HandshakeManager, *recordingConn) {
 		handshakeManager: hm,
 		outside:          conn,
 		messageMetrics:   newMessageMetricsOnlyRecvError(),
+		pki:              newV3TestPKI(t),
 		l:                l,
 	}
 	return hm, conn
+}
+
+// newV3TestPKI holds a version 3 certificate, which post-quantum handshakes need.
+func newV3TestPKI(t *testing.T) *PKI {
+	t.Helper()
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version3, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	c, _, keyPEM, _ := cert_test.NewTestCert(cert.Version3, cert.Curve_CURVE25519, ca, caKey, "me", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")}, nil, nil)
+	key, _, curve, err := cert.UnmarshalPrivateKeyFromPEM(keyPEM)
+	require.NoError(t, err)
+	cs, err := newCertState(cert.Version2, nil, cert.V2Form(c), c, false, curve, key, "aes")
+	require.NoError(t, err)
+	p := &PKI{}
+	p.cs.Store(cs)
+	return p
 }
 
 // fragmentIndexes checks every packet is a fragment of the expected response and
@@ -63,7 +80,7 @@ func fragmentIndexes(t *testing.T, pkts [][]byte, fragID, remoteIndex uint32) []
 		require.LessOrEqual(t, len(p), fragment.MaxPacketLen)
 		var h header.H
 		require.NoError(t, h.Parse(p))
-		assert.Equal(t, header.HandshakeIXPSK2MLKEM1024, h.Subtype)
+		assert.Equal(t, header.HandshakeIXHybridMLKEM1024, h.Subtype)
 		assert.Equal(t, remoteIndex, h.RemoteIndex)
 		assert.Equal(t, uint64(2), h.MessageCounter)
 		fh, _, err := fragment.Parse(p[header.Len:])
@@ -81,7 +98,7 @@ func TestSendFragmentedResponse(t *testing.T) {
 
 	// A 2000 byte message is 2 symbols of 1000, so packets of 1024 bytes.
 	msg := make([]byte, header.Len, header.Len+2000)
-	header.Encode(msg, header.Version, header.Handshake, header.HandshakeIXPSK2MLKEM1024, 5, 2)
+	header.Encode(msg, header.Version, header.Handshake, header.HandshakeIXHybridMLKEM1024, 5, 2)
 	r := rand.New(rand.NewPCG(1, 1))
 	for range 2000 {
 		msg = append(msg, byte(r.Uint32()))
@@ -184,7 +201,7 @@ func TestPQCookies(t *testing.T) {
 // pqMsg1Fragment builds the first fragment of a msg1, optionally with a cookie.
 func pqMsg1Fragment(t *testing.T, fragID uint32, cookie *fragment.Cookie) ([]byte, *header.H) {
 	t.Helper()
-	s, err := fragment.NewSender(make([]byte, 2000), header.HandshakeIXPSK2MLKEM1024, 0, 1, fragID)
+	s, err := fragment.NewSender(make([]byte, 2000), header.HandshakeIXHybridMLKEM1024, 0, 1, fragID)
 	require.NoError(t, err)
 	if cookie != nil {
 		s.SetCookie(*cookie)
@@ -239,7 +256,7 @@ func TestPQCookieUnderLoad(t *testing.T) {
 		var rh header.H
 		require.NoError(t, rh.Parse(reply))
 		assert.Equal(t, header.Handshake, rh.Type)
-		assert.Equal(t, header.HandshakeIXPSK2MLKEM1024, rh.Subtype)
+		assert.Equal(t, header.HandshakeIXHybridMLKEM1024, rh.Subtype)
 		assert.Equal(t, uint32(7), rh.RemoteIndex, "the reply names the initiator's FragID")
 		assert.Equal(t, uint64(pqCookieCounter), rh.MessageCounter)
 		copy(cookie[:], reply[header.Len:])
@@ -271,7 +288,7 @@ func TestPQCookieUnderLoad(t *testing.T) {
 
 	t.Run("a reply never outgrows what prompted it", func(t *testing.T) {
 		p, h := pqMsg1Fragment(t, 8, nil)
-		hm.sendCookie(via, header.HandshakeIXPSK2MLKEM1024, fragment.Header{FragID: 8}, pqFragKey{}, pqCookieReplyLen-1, time.Now())
+		hm.sendCookie(via, header.HandshakeIXHybridMLKEM1024, fragment.Header{FragID: 8}, pqFragKey{}, pqCookieReplyLen-1, time.Now())
 		assert.Empty(t, conn.take())
 		hm.handleFragment(via, p, h)
 		assert.Len(t, conn.take(), 1)
@@ -282,7 +299,7 @@ func TestPQHandleCookie(t *testing.T) {
 	hm, conn := newPQTestManager(t)
 	via := ViaSender{UdpAddr: netip.MustParseAddrPort("192.0.2.1:4242")}
 
-	s, err := fragment.NewSender(make([]byte, 2000), header.HandshakeIXPSK2MLKEM1024, 0, 1, 99)
+	s, err := fragment.NewSender(make([]byte, 2000), header.HandshakeIXHybridMLKEM1024, 0, 1, 99)
 	require.NoError(t, err)
 	_, _, err = s.Attempt(2)
 	require.NoError(t, err)
@@ -290,7 +307,7 @@ func TestPQHandleCookie(t *testing.T) {
 	hm.indexes[99] = hh
 
 	reply := make([]byte, header.Len, pqCookieReplyLen)
-	header.Encode(reply, header.Version, header.Handshake, header.HandshakeIXPSK2MLKEM1024, 99, pqCookieCounter)
+	header.Encode(reply, header.Version, header.Handshake, header.HandshakeIXHybridMLKEM1024, 99, pqCookieCounter)
 	reply = append(reply, bytes16(0xab)...)
 	var h header.H
 	require.NoError(t, h.Parse(reply))
@@ -312,7 +329,7 @@ func TestPQHandleCookie(t *testing.T) {
 
 	t.Run("replies for other indexes are ignored", func(t *testing.T) {
 		other := append([]byte(nil), reply...)
-		header.Encode(other, header.Version, header.Handshake, header.HandshakeIXPSK2MLKEM1024, 98, pqCookieCounter)
+		header.Encode(other, header.Version, header.Handshake, header.HandshakeIXHybridMLKEM1024, 98, pqCookieCounter)
 		var oh header.H
 		require.NoError(t, oh.Parse(other))
 		hh.pq.cookieResendAt = time.Time{}
@@ -336,6 +353,7 @@ func TestReloadPQ(t *testing.T) {
 	cfg := defaultHandshakeConfig
 	cfg.pq = pqHandshakeConfigFrom(c)
 	hm := NewHandshakeManager(l, newHostMap(l), newTestLighthouse(), &udp.NoopConn{}, cfg)
+	hm.f = &Interface{pki: newV3TestPKI(t)}
 	c.RegisterReloadCallback(hm.reloadPQ)
 
 	assert.Equal(t, pqHandshakeConfig{repairDelay: DefaultPQRepairDelay}, *hm.pqConfig())
@@ -394,7 +412,7 @@ func TestUsePQ(t *testing.T) {
 
 	set(pqHandshakeConfig{initiate: true, sticky: true})
 	assert.Equal(t, []bool{true, false}, attempts(false, false), "sticky alternates until the peer has done PQ")
-	hm.notePQPeer(header.HandshakeIXPSK2MLKEM1024, []netip.Addr{peer})
+	hm.notePQPeer(header.HandshakeIXHybridMLKEM1024, []netip.Addr{peer})
 	assert.Equal(t, []bool{true, true, true}, attempts(false, false, false), "then only PQ")
 }
 
@@ -527,4 +545,60 @@ func TestPQMsg2Slots(t *testing.T) {
 		assert.Zero(t, n)
 		assert.False(t, hh.pq.heard)
 	})
+}
+
+// Post-quantum handshakes are hybrid only, so without a version 3 certificate
+// there is nothing to initiate and require is refused.
+func TestPQNeedsV3(t *testing.T) {
+	l := test.NewLogger()
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	c2, _, keyPEM, _ := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, ca, caKey, "me", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")}, nil, nil)
+	key, _, curve, err := cert.UnmarshalPrivateKeyFromPEM(keyPEM)
+	require.NoError(t, err)
+	cs, err := newCertState(cert.Version2, nil, c2, nil, false, curve, key, "aes")
+	require.NoError(t, err)
+	v2PKI := &PKI{}
+	v2PKI.cs.Store(cs)
+
+	hm := NewHandshakeManager(l, newHostMap(l), newTestLighthouse(), &udp.NoopConn{}, defaultHandshakeConfig)
+	hm.f = &Interface{pki: v2PKI}
+	hm.pq.Store(&pqHandshakeConfig{initiate: true, accept: true})
+	assert.False(t, hm.usePQ(&HandshakeHostInfo{counter: 1}, netip.MustParseAddr("10.0.0.2"), false), "no v3 certificate, no hybrid attempt")
+
+	conf := config.NewC(l)
+	require.NoError(t, conf.LoadString(`handshakes: {pq: {initiate: true}}`))
+	conf.RegisterReloadCallback(hm.reloadPQ)
+	require.NoError(t, conf.ReloadConfigString(`handshakes: {pq: {require: true}}`))
+	assert.False(t, hm.pqConfig().require, "require without a v3 certificate is refused on reload")
+
+	// And when loading the pki.
+	certPEM, err := c2.MarshalPEM()
+	require.NoError(t, err)
+	conf = config.NewC(l)
+	conf.Settings["pki"] = map[string]any{"cert": string(certPEM), "key": string(keyPEM)}
+	conf.Settings["handshakes"] = map[string]any{"pq": map[string]any{"require": true}}
+	_, err = newCertStateFromConfig(conf, "aes")
+	require.ErrorContains(t, err, "handshakes.pq.require needs a version 3 certificate")
+}
+
+// After answering a peer's hybrid msg1, its classical msg1s go unanswered for
+// four retry intervals, and only for that peer.
+func TestHybridCrossingWindow(t *testing.T) {
+	hm, _ := newPQTestManager(t)
+	peer := []netip.Addr{netip.MustParseAddr("10.1.0.1")}
+	other := []netip.Addr{netip.MustParseAddr("10.1.0.2")}
+	now := time.Unix(1000, 0)
+	w := 4 * hm.config.tryInterval
+	assert.Equal(t, w, hm.hybridWindow())
+
+	assert.False(t, hm.crossesHybrid(peer, now))
+	hm.noteHybridMsg1(peer, now)
+	assert.True(t, hm.crossesHybrid(peer, now.Add(w-time.Millisecond)))
+	assert.False(t, hm.crossesHybrid(peer, now.Add(w)))
+	assert.False(t, hm.crossesHybrid(other, now))
+
+	hm.expireHybridResponders(now.Add(w))
+	hm.hybrid.answeredMu.Lock()
+	assert.Empty(t, hm.hybrid.answered, "expired windows are forgotten")
+	hm.hybrid.answeredMu.Unlock()
 }

@@ -191,7 +191,7 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 	// don't yet support) are dropped here rather than silently routed through
 	// the IX path. Add a case when introducing a new pattern.
 	switch {
-	case h.Subtype == header.HandshakeIXPSK0, h.Subtype == header.HandshakeIXPSK2MLKEM1024, handshake.IsHybrid(h.Subtype):
+	case h.Subtype == header.HandshakeIXPSK0, handshake.IsHybrid(h.Subtype):
 		// supported
 	default:
 		hm.l.Debug("dropping handshake with unsupported subtype",
@@ -867,6 +867,13 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 	// Validate peer identity
 	vpnAddrs, anyVpnAddrsInCommon, ok := hm.validatePeerCert(via, remoteCert)
 	if !ok {
+		return
+	}
+
+	// A classical attempt crossing the peer's hybrid one goes unanswered.
+	if !handshake.IsHybrid(machine.Subtype()) && hm.crossesHybrid(vpnAddrs, time.Now()) {
+		f.l.Debug("Ignoring classical handshake that crossed a hybrid one",
+			"vpnAddrs", vpnAddrs, "from", via, "window", hm.hybridWindow())
 		return
 	}
 

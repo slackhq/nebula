@@ -72,6 +72,17 @@ func (hm *HandshakeManager) pqConfig() *pqHandshakeConfig {
 	return hm.pq.Load()
 }
 
+// warnPQWithoutV3 says so when post-quantum settings are on but the node has no
+// version 3 certificate: post-quantum handshakes are hybrid only, so they do
+// nothing until it has one. require is refused outright when loading pki.
+func warnPQWithoutV3(l *slog.Logger, cfg pqHandshakeConfig, cs *CertState) {
+	if _, ok := cs.hybridSubtype(); ok || !(cfg.initiate || cfg.accept || cfg.sticky) {
+		return
+	}
+	l.Warn("handshakes.pq has no effect without a version 3 certificate in pki.cert",
+		"initiate", cfg.initiate, "accept", cfg.accept, "sticky", cfg.sticky)
+}
+
 // reloadPQ applies changed post-quantum settings. Handshakes already in flight
 // keep going; the new settings apply to the next attempt and packet.
 func (hm *HandshakeManager) reloadPQ(c *config.C) {
@@ -80,6 +91,12 @@ func (hm *HandshakeManager) reloadPQ(c *config.C) {
 	}
 	old := hm.pqConfig()
 	cfg := pqHandshakeConfigFrom(c)
+	cs := hm.f.pki.getCertState()
+	if _, ok := cs.hybridSubtype(); cfg.require && !ok {
+		hm.l.Error("Refusing handshakes.pq.require without a version 3 certificate in pki.cert, keeping the previous settings")
+		return
+	}
+	warnPQWithoutV3(hm.l, cfg, cs)
 	hm.pq.Store(&cfg)
 	hm.l.Info("Post-quantum handshake settings changed",
 		"initiate", cfg.initiate, "oldInitiate", old.initiate,
@@ -220,6 +237,9 @@ func reassembled(h *header.H, msg []byte) []byte {
 // it, so classical stops getting turns.
 func (hm *HandshakeManager) usePQ(hh *HandshakeHostInfo, vpnIp netip.Addr, triggered bool) bool {
 	cfg := hm.pqConfig()
+	if _, ok := hm.f.pki.getCertState().hybridSubtype(); !ok {
+		return false
+	}
 	switch {
 	case !cfg.initiate, hh.noPQ:
 		return false
@@ -281,11 +301,11 @@ func (hm *HandshakeManager) relayEstablished(target netip.Addr, relayHI *HostInf
 func (hm *HandshakeManager) buildPQAttempt(hh *HandshakeHostInfo) bool {
 	cs := hm.f.pki.getCertState()
 	v := hm.initiatingVersion(hh, cs)
-	subtype := header.HandshakeIXPSK2MLKEM1024
-	if st, ok := cs.hybridSubtype(); ok {
-		v = cert.Version3
-		subtype = st
+	subtype, ok := cs.hybridSubtype()
+	if !ok {
+		return false
 	}
+	v = cert.Version3
 	if cs.GetCredential(v) == nil {
 		hm.f.l.Error("Unable to handshake with host because no certificate is available",
 			"vpnAddrs", hh.hostinfo.vpnAddrs, "certVersion", v)
@@ -410,23 +430,17 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 			hm.l.Debug("dropping post-quantum handshake, not accepting them", "from", via)
 			return
 		}
-		hybrid := handshake.IsHybrid(h.Subtype)
-		if hybrid || cfg.require {
-			mine, hasV3 := hm.f.pki.getCertState().hybridSubtype()
-			switch {
-			case hybrid && !hasV3:
-				hm.l.Debug("dropping hybrid handshake, no v3 certificate to answer it with", "from", via)
-				return
-			case hybrid && h.Subtype != mine:
-				// The peer's suite uses another KEM. Like a peer without PQ, it
-				// falls back to classical unless either side requires PQ.
-				hm.l.Debug("dropping hybrid handshake, our v3 certificate's suite uses another KEM", "from", via,
-					"style", header.SubTypeName(header.Handshake, h.Subtype), "ours", header.SubTypeName(header.Handshake, mine))
-				return
-			case !hybrid && hasV3:
-				hm.l.Debug("dropping post-quantum handshake, hybrid handshakes are required", "from", via)
-				return
-			}
+		mine, hasV3 := hm.f.pki.getCertState().hybridSubtype()
+		switch {
+		case !hasV3:
+			hm.l.Debug("dropping hybrid handshake, no v3 certificate to answer it with", "from", via)
+			return
+		case h.Subtype != mine:
+			// The peer's suite uses another KEM. Like a peer without PQ, it
+			// falls back to classical unless either side requires PQ.
+			hm.l.Debug("dropping hybrid handshake, our v3 certificate's suite uses another KEM", "from", via,
+				"style", header.SubTypeName(header.Handshake, h.Subtype), "ours", header.SubTypeName(header.Handshake, mine))
+			return
 		}
 		if h.RemoteIndex != 0 {
 			hm.l.Debug("dropping stage-1 handshake with non-zero RemoteIndex",

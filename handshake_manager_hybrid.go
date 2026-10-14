@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -60,13 +61,61 @@ type hybridState struct {
 
 	confirmsMu sync.Mutex
 	confirms   map[*HostInfo]*hybridConfirm
+
+	// answered holds when this responder answered each peer's latest new
+	// hybrid msg1, for the crossing window.
+	answeredMu sync.Mutex
+	answered   map[netip.Addr]time.Time
 }
 
 func newHybridState() hybridState {
 	return hybridState{
 		responders: map[uint32]*HandshakeHostInfo{},
 		confirms:   map[*HostInfo]*hybridConfirm{},
+		answered:   map[netip.Addr]time.Time{},
 	}
+}
+
+// A peer that sent a hybrid msg1 alternates, and its first classical attempt
+// follows anywhere from right away to three retry intervals later: the retry
+// timer is set one interval out, lands two slots ahead on the timer wheel, and
+// the wheel only moves on whole ticks of the manager's clock. Answering that
+// classical msg1 races the hybrid handshake and leaves a classical tunnel behind
+// on the responder whichever wins. So for four retry intervals after answering a
+// peer's hybrid msg1, its classical msg1s go unanswered; the crossing one arrives
+// within that wherever the round trip, since both travel the same path. The
+// window is short on purpose: an initiator whose hybrid attempt fails on its own
+// side, say one that does not trust our v3 CA yet, still gets a classical answer
+// to a later attempt. Blocking for as long as any hybrid state remains would
+// refuse it until its handshake timed out, and its next handshake would start
+// with a hybrid msg1 again.
+
+// hybridWindow is how long classical msg1s go unanswered after a hybrid msg1.
+func (hm *HandshakeManager) hybridWindow() time.Duration {
+	return 4 * hm.config.tryInterval
+}
+
+// noteHybridMsg1 opens the crossing window for a peer whose new hybrid msg1 this
+// responder answered.
+func (hm *HandshakeManager) noteHybridMsg1(vpnAddrs []netip.Addr, now time.Time) {
+	hm.hybrid.answeredMu.Lock()
+	defer hm.hybrid.answeredMu.Unlock()
+	for _, a := range vpnAddrs {
+		hm.hybrid.answered[a] = now
+	}
+}
+
+// crossesHybrid reports whether a classical msg1 from a peer arrived within the
+// crossing window of its hybrid msg1.
+func (hm *HandshakeManager) crossesHybrid(vpnAddrs []netip.Addr, now time.Time) bool {
+	hm.hybrid.answeredMu.Lock()
+	defer hm.hybrid.answeredMu.Unlock()
+	for _, a := range vpnAddrs {
+		if at, ok := hm.hybrid.answered[a]; ok && now.Sub(at) < hm.hybridWindow() {
+			return true
+		}
+	}
+	return false
 }
 
 // awaitMsg3 keeps a responder's hybrid handshake pending after msg1, and sends
@@ -128,6 +177,7 @@ func (hm *HandshakeManager) awaitMsg3(via ViaSender, hh *HandshakeHostInfo, mach
 
 	hm.sendHandshakeResponse(via, response, hostinfo, false, received)
 	hm.pqAnswered.add(packet[header.Len:], hostinfo, now)
+	hm.noteHybridMsg1(vpnAddrs, now)
 }
 
 // continueHybridResponder collects msg3 fragments for a pending responder and
@@ -294,6 +344,14 @@ func (hm *HandshakeManager) isHybridResponder(index uint32) bool {
 
 // expireHybridResponders drops responders that never got their msg3.
 func (hm *HandshakeManager) expireHybridResponders(now time.Time) {
+	hm.hybrid.answeredMu.Lock()
+	for a, at := range hm.hybrid.answered {
+		if now.Sub(at) >= hm.hybridWindow() {
+			delete(hm.hybrid.answered, a)
+		}
+	}
+	hm.hybrid.answeredMu.Unlock()
+
 	hm.Lock()
 	defer hm.Unlock()
 	for idx, hh := range hm.hybrid.responders {

@@ -23,9 +23,9 @@ import (
 // hybridTally counts handshake packets by subtype and message.
 type hybridTally struct {
 	sync.Mutex
-	hybrid, phase1, classical int
-	msg3                      int
-	maxLen                    int
+	hybrid, classical int
+	msg3              int
+	maxLen            int
 }
 
 func (ht *hybridTally) observe(p *udp.Packet) {
@@ -42,8 +42,6 @@ func (ht *hybridTally) observe(p *udp.Packet) {
 		if h.MessageCounter == 3 {
 			ht.msg3++
 		}
-	case header.HandshakeIXPSK2MLKEM1024:
-		ht.phase1++
 	default:
 		ht.classical++
 	}
@@ -139,7 +137,7 @@ func TestHybridHandshake(t *testing.T) {
 	}), "tunnel never came up")
 
 	assertUdpPacket(t, []byte("Hi from me"), theirControl.GetFromTun(true), myVpn[0].Addr(), theirVpn[0].Addr(), 80, 80)
-	assert.Zero(t, tally.classical+tally.phase1, "a node with a v3 certificate speaks the hybrid handshake")
+	assert.Zero(t, tally.classical, "a node with a v3 certificate speaks the hybrid handshake")
 	assert.GreaterOrEqual(t, tally.hybrid, 7+9+2, "all three messages travel as several fragments")
 	assert.Positive(t, tally.msg3)
 	assert.LessOrEqual(t, tally.maxLen, fragment.MaxPacketLen)
@@ -233,9 +231,9 @@ func TestHybridNeverConfirmed(t *testing.T) {
 	theirControl.Stop()
 }
 
-// TestHybridToV2Peer has a v3 initiator meet a peer that speaks phase 1 post-quantum
-// handshakes but holds only a v2 certificate. Holding v3, the initiator never
-// offers phase 1, so the tunnel comes up classical on the v2 form.
+// TestHybridToV2Peer has a v3 initiator meet a peer that holds only a v2
+// certificate. Its post-quantum settings do nothing without a v3 certificate, so
+// the tunnel comes up classical on the v2 form.
 func TestHybridToV2Peer(t *testing.T) {
 	t.Parallel()
 	ca := newHybridCA(t)
@@ -257,7 +255,6 @@ func TestHybridToV2Peer(t *testing.T) {
 
 	assertUdpPacket(t, []byte("Hi from me"), theirControl.GetFromTun(true), myVpn[0].Addr(), theirVpn[0].Addr(), 80, 80)
 	assert.Positive(t, tally.hybrid, "the hybrid attempt comes first")
-	assert.Zero(t, tally.phase1, "a v3 holder never initiates phase 1")
 	assert.Positive(t, tally.classical)
 	assertHostInfoPair(t, myUdp, theirUdp, myVpn, theirVpn, myControl, theirControl)
 	assert.Equal(t, cert.Version2, theirControl.GetHostInfoByVpnAddr(myVpn[0].Addr(), false).Cert.Version())
@@ -313,37 +310,8 @@ func TestHybridRequire(t *testing.T) {
 			return router.KeepRouting
 		}), "tunnel never came up")
 		assertUdpPacket(t, []byte("Hi from me"), theirControl.GetFromTun(true), myVpn[0].Addr(), theirVpn[0].Addr(), 80, 80)
-		assert.Zero(t, tally.classical+tally.phase1)
+		assert.Zero(t, tally.classical)
 		assertTunnel(t, myVpn[0].Addr(), theirVpn[0].Addr(), myControl, theirControl, r)
-
-		myControl.Stop()
-		theirControl.Stop()
-	})
-
-	t.Run("responder refuses phase 1", func(t *testing.T) {
-		ca := newHybridCA(t)
-		ca2, key2 := ca.v2()
-		myControl, myVpn, _, _ := newSimpleServer(cert.Version2, ca2, key2, "me", "10.128.0.1/24", pqRequire())
-		theirControl, theirVpn, theirUdp, _ := newSimpleServer(cert.Version3, ca.ca, ca.key, "them", "10.128.0.2/24", withCA(pqRequire(), ca.ca, ca2))
-		myControl.InjectLightHouseAddr(theirVpn[0].Addr(), theirUdp)
-		r := router.NewR(t, myControl, theirControl)
-		defer r.RenderFlow()
-		myControl.Start()
-		theirControl.Start()
-
-		var tally hybridTally
-		var answers int
-		myControl.InjectTunPacket(BuildTunUDPPacket(theirVpn[0].Addr(), 80, myVpn[0].Addr(), 80, []byte("Hi from me")))
-		r.RouteForAllExitFuncOrTimeout(time.Second, func(p *udp.Packet, receiver *nebula.Control) router.ExitType {
-			tally.observe(p)
-			if h, _ := handshakeOf(p); h != nil && h.MessageCounter == 2 {
-				answers++
-			}
-			return router.KeepRouting
-		})
-		assert.Positive(t, tally.phase1)
-		assert.Zero(t, answers, "a phase 1 msg1 gets no answer from a v3 node requiring post-quantum")
-		assert.Nil(t, theirControl.GetHostInfoByVpnAddr(myVpn[0].Addr(), false))
 
 		myControl.Stop()
 		theirControl.Stop()
@@ -432,75 +400,113 @@ func TestHybridBackToBack(t *testing.T) {
 	theirControl.Stop()
 }
 
-// TestHybridRaceWithClassical has the initiator's classical attempt reach the
-// responder, which completes it at once, while the hybrid handshake is still
-// waiting for msg3. The initiator gets the hybrid msg2 first and commits to it,
-// so the responder must take the hybrid tunnel when msg3 arrives even though the
-// classical one is newer.
+// TestHybridRaceWithClassical has the initiator's classical attempt cross its
+// hybrid one: the hybrid msg2 is held back until the classical msg1 has reached
+// the responder, and the classical msg2 is lost, so the initiator commits to the
+// hybrid handshake.
+//
+// Arriving within the crossing window, the classical msg1 goes unanswered and
+// the responder ends up with the hybrid tunnel alone. Held past the window, as on
+// a very slow path, the responder completes it, and must still take the hybrid
+// tunnel when msg3 arrives even though the classical one is newer.
 func TestHybridRaceWithClassical(t *testing.T) {
 	t.Parallel()
-	// Both trust the v2 form of the CA too, or the classical attempt could not complete.
-	ca := newHybridCA(t)
-	ca2, _ := ca.v2()
-	myControl, theirControl, myVpn, theirVpn, _, _, r := newHybridPairWithCA(t, ca,
-		withCA(pqConfig(true, true, false), ca.ca, ca2),
-		withCA(pqConfig(false, true, false), ca.ca, ca2),
-	)
-	defer r.RenderFlow()
+	for _, tc := range []struct {
+		name     string
+		delay    time.Duration
+		answered bool
+	}{
+		{"within the window", 0, false},
+		{"past the window", 500 * time.Millisecond, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// Both trust the v2 form of the CA too, or the classical attempt could not complete.
+			ca := newHybridCA(t)
+			ca2, _ := ca.v2()
+			myControl, theirControl, myVpn, theirVpn, _, _, r := newHybridPairWithCA(t, ca,
+				withCA(pqConfig(true, true, false), ca.ca, ca2),
+				withCA(pqConfig(false, true, false), ca.ca, ca2),
+			)
+			defer r.RenderFlow()
 
-	var heldMsg2 []*udp.Packet
-	var sawClassical, recvErrors int
-	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpn[0].Addr(), 80, myVpn[0].Addr(), 80, []byte("Hi from me")))
-	require.True(t, r.RouteForAllExitFuncOrTimeout(3*time.Second, func(p *udp.Packet, receiver *nebula.Control) router.ExitType {
-		h, fh := handshakeOf(p)
-		switch {
-		case h != nil && fh != nil && h.MessageCounter == 2:
-			// Hold the hybrid msg2 back until the classical attempt has gone through.
-			heldMsg2 = append(heldMsg2, p.Copy())
-			return router.Drop
-		case h != nil && fh == nil && h.MessageCounter == 1:
-			sawClassical++
-			return router.RouteAndExit
-		}
-		return router.KeepRouting
-	}), "no classical attempt")
-	require.Positive(t, sawClassical)
+			var heldMsg2 []*udp.Packet
+			var classicalMsg1 *udp.Packet
+			holdMsg2 := func(p *udp.Packet) bool {
+				if h, fh := handshakeOf(p); h != nil && fh != nil && h.MessageCounter == 2 {
+					heldMsg2 = append(heldMsg2, p.Copy())
+					return true
+				}
+				return false
+			}
+			myControl.InjectTunPacket(BuildTunUDPPacket(theirVpn[0].Addr(), 80, myVpn[0].Addr(), 80, []byte("Hi from me")))
+			require.True(t, r.RouteForAllExitFuncOrTimeout(3*time.Second, func(p *udp.Packet, receiver *nebula.Control) router.ExitType {
+				if holdMsg2(p) {
+					return router.Drop
+				}
+				if h, fh := handshakeOf(p); h != nil && fh == nil && h.MessageCounter == 1 {
+					classicalMsg1 = p.Copy()
+					return router.ExitNow
+				}
+				return router.KeepRouting
+			}), "no classical attempt")
 
-	// Lose the classical msg2, so the initiator only ever completes the hybrid handshake.
-	r.RouteForAllExitFuncOrTimeout(50*time.Millisecond, func(p *udp.Packet, receiver *nebula.Control) router.ExitType {
-		if h, fh := handshakeOf(p); h != nil && fh == nil && h.MessageCounter == 2 {
-			return router.Drop
-		}
-		if h, fh := handshakeOf(p); h != nil && fh != nil && h.MessageCounter == 2 {
-			heldMsg2 = append(heldMsg2, p.Copy())
-			return router.Drop
-		}
-		return router.KeepRouting
-	})
-	require.NotNil(t, theirControl.GetHostInfoByVpnAddr(myVpn[0].Addr(), false), "the responder completed the classical handshake")
+			time.Sleep(tc.delay)
+			r.InjectUDPPacket(myControl, theirControl, classicalMsg1)
 
-	for _, p := range heldMsg2 {
-		r.InjectUDPPacket(theirControl, myControl, p)
+			// Lose any classical msg2, so the initiator only ever completes the hybrid
+			// handshake. With msg2 held the initiator keeps retrying, and a later
+			// classical retry may land past the window; only the crossing one counts.
+			var classicalMsg2 int
+			r.RouteForAllExitFuncOrTimeout(50*time.Millisecond, func(p *udp.Packet, receiver *nebula.Control) router.ExitType {
+				if h, fh := handshakeOf(p); h != nil && fh == nil && h.MessageCounter == 1 {
+					return router.Drop
+				}
+				if h, fh := handshakeOf(p); h != nil && fh == nil && h.MessageCounter == 2 {
+					classicalMsg2++
+					return router.Drop
+				}
+				if holdMsg2(p) {
+					return router.Drop
+				}
+				return router.KeepRouting
+			})
+			if tc.answered {
+				require.Positive(t, classicalMsg2, "past the window the classical msg1 is answered")
+				require.NotNil(t, theirControl.GetHostInfoByVpnAddr(myVpn[0].Addr(), false))
+			} else {
+				require.Zero(t, classicalMsg2, "within the window the classical msg1 goes unanswered")
+				require.Nil(t, theirControl.GetHostInfoByVpnAddr(myVpn[0].Addr(), false))
+			}
+
+			var recvErrors int
+			for _, p := range heldMsg2 {
+				r.InjectUDPPacket(theirControl, myControl, p)
+			}
+			require.True(t, routeUntilData(t, r, theirControl, 3*time.Second, func(p *udp.Packet, _ *nebula.Control) router.ExitType {
+				if isType(p, header.RecvError) {
+					recvErrors++
+				}
+				return router.KeepRouting
+			}), "data never arrived")
+			assertUdpPacket(t, []byte("Hi from me"), theirControl.GetFromTun(true), myVpn[0].Addr(), theirVpn[0].Addr(), 80, 80)
+
+			assert.Zero(t, recvErrors)
+			mine := myControl.GetHostInfoByVpnAddr(theirVpn[0].Addr(), false)
+			theirs := theirControl.GetHostInfoByVpnAddr(myVpn[0].Addr(), false)
+			require.NotNil(t, mine)
+			require.NotNil(t, theirs)
+			assert.Equal(t, cert.Version3, mine.Cert.Version())
+			assert.Equal(t, cert.Version3, theirs.Cert.Version(), "the responder's primary tunnel is the hybrid one")
+			assert.Equal(t, mine.LocalIndex, theirs.RemoteIndex)
+			if !tc.answered {
+				assert.Len(t, theirControl.ListHostmapIndexes(false), 1, "and the only one")
+			}
+
+			myControl.Stop()
+			theirControl.Stop()
+		})
 	}
-	require.True(t, routeUntilData(t, r, theirControl, 3*time.Second, func(p *udp.Packet, _ *nebula.Control) router.ExitType {
-		if isType(p, header.RecvError) {
-			recvErrors++
-		}
-		return router.KeepRouting
-	}), "data never arrived")
-	assertUdpPacket(t, []byte("Hi from me"), theirControl.GetFromTun(true), myVpn[0].Addr(), theirVpn[0].Addr(), 80, 80)
-
-	assert.Zero(t, recvErrors)
-	mine := myControl.GetHostInfoByVpnAddr(theirVpn[0].Addr(), false)
-	theirs := theirControl.GetHostInfoByVpnAddr(myVpn[0].Addr(), false)
-	require.NotNil(t, mine)
-	require.NotNil(t, theirs)
-	assert.Equal(t, cert.Version3, mine.Cert.Version())
-	assert.Equal(t, cert.Version3, theirs.Cert.Version(), "the responder's primary tunnel is the hybrid one")
-	assert.Equal(t, mine.LocalIndex, theirs.RemoteIndex)
-
-	myControl.Stop()
-	theirControl.Stop()
 }
 
 // TestHybridWrongResponder gives the initiator a stale address for its peer

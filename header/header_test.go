@@ -97,7 +97,6 @@ func TestTypeMap(t *testing.T) {
 		CloseTunnel: &subTypeNoneMap,
 		Handshake: {
 			HandshakeIXPSK0:            "ix_psk0",
-			HandshakeIXPSK2MLKEM1024:   "ix_psk2_mlkem1024",
 			HandshakeIXHybridMLKEM1024: "ix_hybrid_mlkem1024",
 		},
 		Control: &subTypeNoneMap,
@@ -124,7 +123,9 @@ func TestIsValidSubType(t *testing.T) {
 	assert.False(t, IsValidSubType(Message, 2))
 
 	assert.True(t, IsValidSubType(Handshake, HandshakeIXPSK0))
-	assert.True(t, IsValidSubType(Handshake, HandshakeIXPSK2MLKEM1024))
+	assert.True(t, IsValidSubType(Handshake, HandshakeIXHybridMLKEM1024))
+	// 2 was the unreleased ix_psk2_mlkem1024 and stays reserved.
+	assert.False(t, IsValidSubType(Handshake, 2))
 	// HandshakeXXPSK0 is defined but not a wire-valid subtype.
 	assert.False(t, IsValidSubType(Handshake, HandshakeXXPSK0))
 

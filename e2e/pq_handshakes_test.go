@@ -10,7 +10,6 @@ import (
 
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"
-	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/e2e/router"
 	"github.com/slackhq/nebula/handshake/fragment"
 	"github.com/slackhq/nebula/header"
@@ -79,7 +78,7 @@ func (ht *handshakeTally) observe(p *udp.Packet) {
 	}
 	ht.Lock()
 	defer ht.Unlock()
-	if h.Subtype == header.HandshakeIXPSK2MLKEM1024 {
+	if h.Subtype == header.HandshakeIXHybridMLKEM1024 {
 		ht.pq++
 		ht.maxPQLen = max(ht.maxPQLen, len(p.Data))
 	} else {
@@ -102,46 +101,19 @@ func isTunnelData(p *udp.Packet, receiver, to *nebula.Control) bool {
 	return h.Type == header.Message && h.Subtype == header.MessageNone
 }
 
+// newPQPair builds two hosts with v3 certificates that also trust the CA's v2
+// form, so a classical handshake can complete when the hybrid one does not.
 func newPQPair(t *testing.T, mine, theirs m) (myControl, theirControl *nebula.Control, myVpn, theirVpn []netip.Prefix, myUdp, theirUdp netip.AddrPort, r *router.R) {
 	t.Helper()
-	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
-	myControl, myVpn, myUdp, _ = newSimpleServer(cert.Version2, ca, caKey, "me", "10.128.0.1/24", mine)
-	theirControl, theirVpn, theirUdp, _ = newSimpleServer(cert.Version2, ca, caKey, "them", "10.128.0.2/24", theirs)
+	ca := newHybridCA(t)
+	ca2, _ := ca.v2()
+	myControl, myVpn, myUdp, _ = newSimpleServer(cert.Version3, ca.ca, ca.key, "me", "10.128.0.1/24", withCA(mine, ca.ca, ca2))
+	theirControl, theirVpn, theirUdp, _ = newSimpleServer(cert.Version3, ca.ca, ca.key, "them", "10.128.0.2/24", withCA(theirs, ca.ca, ca2))
 	myControl.InjectLightHouseAddr(theirVpn[0].Addr(), theirUdp)
 	r = router.NewR(t, myControl, theirControl)
 	myControl.Start()
 	theirControl.Start()
 	return
-}
-
-func TestPQHandshake(t *testing.T) {
-	t.Parallel()
-	// They only accept, which is all a PQ initiator needs.
-	myControl, theirControl, myVpn, theirVpn, myUdp, theirUdp, r := newPQPair(t, pqConfig(true, true, false), pqConfig(false, true, false))
-	defer r.RenderFlow()
-
-	var tally handshakeTally
-	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpn[0].Addr(), 80, myVpn[0].Addr(), 80, []byte("Hi from me")))
-	require.True(t, r.RouteForAllExitFuncOrTimeout(5*time.Second, func(p *udp.Packet, receiver *nebula.Control) router.ExitType {
-		tally.observe(p)
-		if isTunnelData(p, receiver, theirControl) {
-			return router.RouteAndExit
-		}
-		return router.KeepRouting
-	}), "tunnel never came up")
-
-	assertUdpPacket(t, []byte("Hi from me"), theirControl.GetFromTun(true), myVpn[0].Addr(), theirVpn[0].Addr(), 80, 80)
-	assert.Zero(t, tally.classical, "no classical handshake should be needed")
-	assert.GreaterOrEqual(t, tally.pq, 4, "both messages travel as several fragments")
-	assert.LessOrEqual(t, tally.maxPQLen, fragment.MaxPacketLen)
-
-	assertHostInfoPair(t, myUdp, theirUdp, myVpn, theirVpn, myControl, theirControl)
-	assertTunnel(t, myVpn[0].Addr(), theirVpn[0].Addr(), myControl, theirControl, r)
-	assert.Empty(t, myControl.ListHostmapIndexes(true), "no pending index may outlive the handshake")
-	assert.Empty(t, theirControl.ListHostmapIndexes(true))
-
-	myControl.Stop()
-	theirControl.Stop()
 }
 
 // TestPQHandshakeLoss drops data fragments of both messages; the repair
@@ -223,12 +195,12 @@ func TestPQResendFreshSymbols(t *testing.T) {
 		case h != nil && fh == nil:
 			// Keep the classical fallback out of the way.
 			return router.Drop
-		case fh != nil && h.MessageCounter == 2 && fh.Index < 4:
+		case fh != nil && h.MessageCounter == 2 && fh.Index < 12:
 			firstMsg2++
 			return router.Drop
 		case fh != nil && h.MessageCounter == 2:
 			freshMsg2++
-		case fh != nil && h.MessageCounter == 1 && fh.Index >= 4:
+		case fh != nil && h.MessageCounter == 1 && fh.Index >= 10:
 			freshMsg1++
 		}
 		if isTunnelData(p, receiver, theirControl) {
@@ -238,7 +210,7 @@ func TestPQResendFreshSymbols(t *testing.T) {
 	}), "tunnel never came up")
 
 	assertUdpPacket(t, []byte("Hi from me"), theirControl.GetFromTun(true), myVpn[0].Addr(), theirVpn[0].Addr(), 80, 80)
-	assert.Equal(t, 4, firstMsg2, "the first msg2 is 2 data and 2 repair fragments")
+	assert.Equal(t, 12, firstMsg2, "the first msg2 is 9 data and 3 repair fragments")
 	assert.Positive(t, freshMsg1, "the retry offers fresh msg1 symbols")
 	assert.Positive(t, freshMsg2, "the resend offers fresh msg2 symbols")
 	assertTunnel(t, myVpn[0].Addr(), theirVpn[0].Addr(), myControl, theirControl, r)
@@ -268,7 +240,7 @@ func TestPQSticky(t *testing.T) {
 	myControl.ReHandshake(theirVpn[0].Addr())
 	r.RouteForAllExitFuncOrTimeout(time.Second, func(p *udp.Packet, receiver *nebula.Control) router.ExitType {
 		tally.observe(p)
-		if h, _ := handshakeOf(p); h != nil && h.Subtype == header.HandshakeIXPSK2MLKEM1024 {
+		if h, _ := handshakeOf(p); h != nil && h.Subtype == header.HandshakeIXHybridMLKEM1024 {
 			return router.Drop
 		}
 		return router.KeepRouting
@@ -277,58 +249,6 @@ func TestPQSticky(t *testing.T) {
 	assert.Zero(t, tally.classical, "sticky must never fall back")
 
 	myControl.Stop()
-	theirControl.Stop()
-}
-
-func TestPQRelays(t *testing.T) {
-	t.Parallel()
-	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
-	useRelays := pqConfig(true, true, false)
-	useRelays["relay"] = m{"use_relays": true}
-	amRelay := pqConfig(true, true, false)
-	amRelay["relay"] = m{"am_relay": true}
-	myControl, myVpnIpNet, _, _ := newSimpleServer(cert.Version1, ca, caKey, "me     ", "10.128.0.1/24", useRelays)
-	relayControl, relayVpnIpNet, relayUdpAddr, _ := newSimpleServer(cert.Version1, ca, caKey, "relay  ", "10.128.0.128/24", amRelay)
-	theirControl, theirVpnIpNet, theirUdpAddr, _ := newSimpleServer(cert.Version1, ca, caKey, "them   ", "10.128.0.2/24", useRelays)
-
-	myControl.InjectLightHouseAddr(relayVpnIpNet[0].Addr(), relayUdpAddr)
-	myControl.InjectRelays(theirVpnIpNet[0].Addr(), []netip.Addr{relayVpnIpNet[0].Addr()})
-	relayControl.InjectLightHouseAddr(theirVpnIpNet[0].Addr(), theirUdpAddr)
-
-	r := router.NewR(t, myControl, relayControl, theirControl)
-	defer r.RenderFlow()
-
-	myControl.Start()
-	relayControl.Start()
-	theirControl.Start()
-
-	var tally handshakeTally
-	var relayedPQ, relayedClassical int
-	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me")))
-	require.True(t, r.RouteForAllExitFuncOrTimeout(10*time.Second, func(p *udp.Packet, receiver *nebula.Control) router.ExitType {
-		tally.observe(p)
-		outer := &header.H{}
-		if outer.Parse(p.Data) == nil && outer.Type == header.Message && outer.Subtype == header.MessageRelay {
-			if h, fh := handshakeOf(p); h != nil && fh != nil {
-				relayedPQ++
-				assert.LessOrEqual(t, len(p.Data), fragment.MaxPacketLen+32, "a relayed fragment fits the IPv6 minimum MTU")
-			} else if h != nil {
-				relayedClassical++
-			}
-		}
-		if isTunnelData(p, receiver, theirControl) {
-			return router.RouteAndExit
-		}
-		return router.KeepRouting
-	}), "tunnel never came up")
-
-	assertUdpPacket(t, []byte("Hi from me"), theirControl.GetFromTun(true), myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), 80, 80)
-	assert.Positive(t, relayedPQ, "the end to end handshake is PQ through the relay")
-	assert.Zero(t, relayedClassical, "the relay coming up carries the PQ attempt, not the classical retry")
-	r.RenderHostmaps("Final hostmaps", myControl, relayControl, theirControl)
-
-	myControl.Stop()
-	relayControl.Stop()
 	theirControl.Stop()
 }
 
@@ -370,7 +290,7 @@ func TestPQCookieUnderLoad(t *testing.T) {
 	t.Log("Flood them with the first fragment of msg1s nobody will finish")
 	for i := range 512 {
 		from := netip.AddrPortFrom(netip.AddrFrom4([4]byte{198, 18, byte(i >> 8), byte(i)}), 4242)
-		s, err := fragment.NewSender(make([]byte, 2000), header.HandshakeIXPSK2MLKEM1024, 0, 1, uint32(i+1))
+		s, err := fragment.NewSender(make([]byte, 2000), header.HandshakeIXHybridMLKEM1024, 0, 1, uint32(i+1))
 		require.NoError(t, err)
 		pkts, _, err := s.Attempt(0)
 		require.NoError(t, err)
@@ -382,7 +302,7 @@ func TestPQCookieUnderLoad(t *testing.T) {
 	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpn[0].Addr(), 80, myVpn[0].Addr(), 80, []byte("Hi from me")))
 	require.True(t, r.RouteForAllExitFuncOrTimeout(5*time.Second, func(p *udp.Packet, receiver *nebula.Control) router.ExitType {
 		tally.observe(p)
-		if h, fh := handshakeOf(p); h != nil && h.Subtype == header.HandshakeIXPSK2MLKEM1024 {
+		if h, fh := handshakeOf(p); h != nil && h.Subtype == header.HandshakeIXHybridMLKEM1024 {
 			switch {
 			case h.MessageCounter == 0:
 				cookieReplies++

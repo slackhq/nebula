@@ -149,8 +149,6 @@ func TestHybridIX_CertVersions(t *testing.T) {
 	require.ErrorIs(t, err, ErrCertVersionMismatch)
 	_, err = NewMachine(cert.Version3, p.initCS.getCredential, v, func() (uint32, error) { return 1, nil }, true, header.HandshakeIXPSK0)
 	require.ErrorIs(t, err, ErrCertVersionMismatch)
-	_, err = NewMachine(cert.Version3, p.initCS.getCredential, v, func() (uint32, error) { return 1, nil }, true, header.HandshakeIXPSK2MLKEM1024)
-	require.ErrorIs(t, err, ErrCertVersionMismatch)
 
 	// The v2 form still does a classical handshake, here with a peer that only has v2.
 	ca2 := cert.V2Form(p.ca)

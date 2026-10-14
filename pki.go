@@ -222,7 +222,6 @@ func (cs *CertState) GetDefaultCertificate() cert.Certificate {
 // DefaultVersion returns the preferred cert version for initiating handshakes.
 func (cs *CertState) DefaultVersion() cert.Version { return cs.initiatingVersion }
 
-// GetCredential returns the pre-computed handshake credential for the given version, or nil.
 // hybridSubtype returns the hybrid handshake subtype for the KEM of the v3
 // certificate's suite, false without a v3 certificate.
 func (cs *CertState) hybridSubtype() (header.MessageSubType, bool) {
@@ -232,6 +231,7 @@ func (cs *CertState) hybridSubtype() (header.MessageSubType, bool) {
 	return handshake.HybridSubtype(cert.PQSuiteOf(cs.v3Cert))
 }
 
+// GetCredential returns the pre-computed handshake credential for the given version, or nil.
 func (cs *CertState) GetCredential(v cert.Version) *handshake.Credential {
 	switch v {
 	case cert.Version1:
@@ -444,6 +444,12 @@ func newCertStateFromConfig(c *config.C, cipher string) (*CertState, error) {
 		initiatingVersion = cert.Version2
 	default:
 		return nil, fmt.Errorf("unknown pki.initiating_version: %v", rawInitiatingVersion)
+	}
+
+	// Post-quantum handshakes are hybrid only, so requiring them without a v3
+	// certificate would leave this node unable to reach anyone.
+	if v3 == nil && c.GetBool("handshakes.pq.require", false) {
+		return nil, errors.New("handshakes.pq.require needs a version 3 certificate in pki.cert")
 	}
 
 	return newCertState(initiatingVersion, v1, v2, v3, isPkcs11, curve, rawKey, cipher)

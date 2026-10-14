@@ -68,10 +68,8 @@ const (
 	HandshakeIXPSK0 MessageSubType = 0
 	HandshakeXXPSK0 MessageSubType = 1
 
-	// HandshakeIXPSK2MLKEM1024 is IX with an ephemeral ML-KEM-1024 exchange mixed
-	// in through the psk2 slot. Its messages exceed the MTU and travel as
-	// fragments (see handshake/fragment).
-	HandshakeIXPSK2MLKEM1024 MessageSubType = 2
+	// 2 was ix_psk2_mlkem1024, an ephemeral ML-KEM exchange over IX on version 2
+	// certificates that was never released. Do not reuse it.
 
 	// HandshakeIXHybridMLKEM1024 is the hybrid IX of github.com/DefinedNet/noise:
 	// IX with X25519 or P256 and ML-KEM-1024 side by side, authenticated by
@@ -82,7 +80,7 @@ const (
 // IsFragmented reports whether handshake messages of this subtype travel as
 // fragments.
 func IsFragmented(st MessageSubType) bool {
-	return st == HandshakeIXPSK2MLKEM1024 || st == HandshakeIXHybridMLKEM1024
+	return st == HandshakeIXHybridMLKEM1024
 }
 
 var ErrHeaderTooShort = errors.New("header is too short")
@@ -105,7 +103,6 @@ var subTypeMap = map[MessageType]*map[MessageSubType]string{
 	CloseTunnel: &subTypeNoneMap,
 	Handshake: {
 		HandshakeIXPSK0:            "ix_psk0",
-		HandshakeIXPSK2MLKEM1024:   "ix_psk2_mlkem1024",
 		HandshakeIXHybridMLKEM1024: "ix_hybrid_mlkem1024",
 	},
 	Control: &subTypeNoneMap,
@@ -217,7 +214,7 @@ func IsValidSubType(t MessageType, s MessageSubType) bool {
 	case Message:
 		return s == MessageNone || s == MessageRelay
 	case Handshake:
-		return s == HandshakeIXPSK0 || s == HandshakeIXPSK2MLKEM1024 || s == HandshakeIXHybridMLKEM1024
+		return s == HandshakeIXPSK0 || s == HandshakeIXHybridMLKEM1024
 	case Test:
 		return s == TestReply || s == TestRequest
 	case Control, CloseTunnel, RecvError, LightHouse:

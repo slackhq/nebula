@@ -47,19 +47,15 @@ func NewCredential(
 	return hc
 }
 
-// buildHandshakeState creates a noise.HandshakeState from this credential.
-// pskPlacement selects the noise psk modifier; 0 means none. A psk for
-// placements 2 and up is supplied later with SetPresharedKey. A hybrid
-// pattern also gets its KEM and the static KEM key.
+// buildHandshakeState creates a noise.HandshakeState from this credential. A
+// hybrid pattern also gets its KEM and the static KEM key.
 func (hc *Credential) buildHandshakeState(initiator bool, info subtypeInfo) (*noise.HandshakeState, error) {
 	cfg := noise.Config{
-		CipherSuite:           hc.cipherSuite,
-		Random:                rand.Reader,
-		Pattern:               info.pattern,
-		Initiator:             initiator,
-		StaticKeypair:         noise.DHKey{Private: hc.privateKey, Public: hc.publicKey},
-		PresharedKey:          []byte{},
-		PresharedKeyPlacement: info.pskPlacement,
+		CipherSuite:   hc.cipherSuite,
+		Random:        rand.Reader,
+		Pattern:       info.pattern,
+		Initiator:     initiator,
+		StaticKeypair: noise.DHKey{Private: hc.privateKey, Public: hc.publicKey},
 	}
 	if info.kem != nil {
 		cfg.KEMFunc = info.kem
