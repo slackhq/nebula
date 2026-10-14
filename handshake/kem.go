@@ -45,17 +45,32 @@ func (kemMLKEM1024) Decapsulate(privkey, ciphertext []byte) ([]byte, error) {
 }
 
 // mlkem1024Keys is KEMMLKEM1024 for one handshake. It decapsulates with the
-// static key the Credential holds expanded, rather than expanding it again from
-// the seed noise hands back; any other private key is expanded as usual.
+// keys it holds expanded, the static one from the Credential and the ephemeral
+// one it generated, rather than expanding them again from the seeds noise hands
+// back; any other private key is expanded as usual.
 type mlkem1024Keys struct {
 	kemMLKEM1024
-	static     *mlkem.DecapsulationKey1024
-	staticSeed []byte
+	static        *mlkem.DecapsulationKey1024
+	staticSeed    []byte
+	ephemeral     *mlkem.DecapsulationKey1024
+	ephemeralSeed []byte
+}
+
+func (k *mlkem1024Keys) GenerateKeypair(_ io.Reader) (noise.KEMKey, error) {
+	dk, err := mlkem.GenerateKey1024()
+	if err != nil {
+		return noise.KEMKey{}, fmt.Errorf("mlkem1024: GenerateKey: %w", err)
+	}
+	k.ephemeral, k.ephemeralSeed = dk, dk.Bytes()
+	return noise.KEMKey{Private: k.ephemeralSeed, Public: dk.EncapsulationKey().Bytes()}, nil
 }
 
 func (k *mlkem1024Keys) Decapsulate(privkey, ciphertext []byte) ([]byte, error) {
-	if k.static != nil && subtle.ConstantTimeCompare(privkey, k.staticSeed) == 1 {
+	switch {
+	case k.static != nil && subtle.ConstantTimeCompare(privkey, k.staticSeed) == 1:
 		return k.static.Decapsulate(ciphertext)
+	case k.ephemeral != nil && subtle.ConstantTimeCompare(privkey, k.ephemeralSeed) == 1:
+		return k.ephemeral.Decapsulate(ciphertext)
 	}
 	return k.kemMLKEM1024.Decapsulate(privkey, ciphertext)
 }
