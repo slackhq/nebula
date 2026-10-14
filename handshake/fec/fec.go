@@ -58,18 +58,20 @@ type Encoder struct {
 	data   [][]byte
 }
 
-// NewEncoder copies msg into padded data symbols.
+// NewEncoder splits msg into data symbols. They alias msg, all but a padded
+// last symbol, so msg must not change while the Encoder is in use.
 func NewEncoder(msg []byte, maxSymbolSize int) (*Encoder, error) {
 	l, err := NewLayout(len(msg), maxSymbolSize)
 	if err != nil {
 		return nil, err
 	}
 
-	buf := make([]byte, l.K*l.SymbolSize)
-	copy(buf, msg)
 	data := make([][]byte, l.K)
 	for i := range data {
-		data[i] = buf[i*l.SymbolSize : (i+1)*l.SymbolSize]
+		data[i] = msg[i*l.SymbolSize : min((i+1)*l.SymbolSize, len(msg))]
+	}
+	if last := data[l.K-1]; len(last) < l.SymbolSize {
+		data[l.K-1] = append(make([]byte, 0, l.SymbolSize), last...)[:l.SymbolSize]
 	}
 	return &Encoder{layout: l, data: data}, nil
 }

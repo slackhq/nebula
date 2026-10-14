@@ -34,7 +34,8 @@ type Sender struct {
 }
 
 // NewSender prepares msg for sending. subtype, remoteIndex and counter fill the
-// Nebula header of every fragment; fragID is the sender's local index.
+// Nebula header of every fragment; fragID is the sender's local index. The
+// Sender keeps msg, which must not change while it is in use.
 func NewSender(msg []byte, subtype header.MessageSubType, remoteIndex uint32, counter uint64, fragID uint32) (*Sender, error) {
 	if len(msg) == 0 || len(msg) > math.MaxUint16 {
 		return nil, ErrMsgLen
