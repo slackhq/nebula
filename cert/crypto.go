@@ -158,6 +158,7 @@ func splitNonceCiphertext(blob []byte, nonceSize int) ([]byte, []byte, error) {
 
 // EncryptAndMarshalSigningPrivateKey is a simple helper to encrypt and PEM encode a private key
 func EncryptAndMarshalSigningPrivateKey(curve Curve, b []byte, passphrase []byte, kdfParams *Argon2Parameters) ([]byte, error) {
+	pq := len(b) == signingPrivateKeySize(curve)+MLDSA87PrivateKeySize
 	ciphertext, err := aes256Encrypt(passphrase, kdfParams, b)
 	if err != nil {
 		return nil, err
@@ -178,6 +179,13 @@ func EncryptAndMarshalSigningPrivateKey(curve Curve, b []byte, passphrase []byte
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	switch {
+	case pq && curve == Curve_CURVE25519:
+		return pem.EncodeToMemory(&pem.Block{Type: EncryptedEd25519MLDSA87PrivateKeyBanner, Bytes: b}), nil
+	case pq && curve == Curve_P256:
+		return pem.EncodeToMemory(&pem.Block{Type: EncryptedECDSAP256MLDSA87PrivateKeyBanner, Bytes: b}), nil
 	}
 
 	switch curve {
@@ -260,11 +268,18 @@ func DecryptAndUnmarshalSigningPrivateKey(passphrase, b []byte) (Curve, []byte, 
 		return curve, nil, r, fmt.Errorf("input did not contain a valid PEM encoded block")
 	}
 
+	pq := false
 	switch k.Type {
 	case EncryptedEd25519PrivateKeyBanner:
 		curve = Curve_CURVE25519
 	case EncryptedECDSAP256PrivateKeyBanner:
 		curve = Curve_P256
+	case EncryptedEd25519MLDSA87PrivateKeyBanner:
+		curve = Curve_CURVE25519
+		pq = true
+	case EncryptedECDSAP256MLDSA87PrivateKeyBanner:
+		curve = Curve_P256
+		pq = true
 	default:
 		return curve, nil, r, fmt.Errorf("bytes did not contain a proper nebula encrypted Ed25519/ECDSA private key banner")
 	}
@@ -283,6 +298,13 @@ func DecryptAndUnmarshalSigningPrivateKey(passphrase, b []byte) (Curve, []byte, 
 		}
 	default:
 		return curve, nil, r, fmt.Errorf("unsupported encryption algorithm: %s", ned.EncryptionMetadata.EncryptionAlgorithm)
+	}
+
+	if pq {
+		if len(bytes) != signingPrivateKeySize(curve)+MLDSA87PrivateKeySize {
+			return curve, nil, r, fmt.Errorf("key was not %d bytes, is invalid %s ML-DSA-87 private key", signingPrivateKeySize(curve)+MLDSA87PrivateKeySize, curve)
+		}
+		return curve, bytes, r, nil
 	}
 
 	switch curve {

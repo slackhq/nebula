@@ -15,6 +15,11 @@ import (
 type CAPool struct {
 	CAs           map[string]*CachedCertificate
 	certBlocklist map[string]struct{}
+
+	// v3CAs indexes the version 3 CAs in CAs by the fingerprint of their v2 form, which is what the certificates
+	// they issue name as issuer. A version 3 CA only verifies version 3 certificates: version 2 certificates find
+	// their issuer in CAs, where only the v2 form of the CA, if listed itself, answers to that fingerprint.
+	v3CAs map[string]*CachedCertificate
 }
 
 // NewCAPool creates an empty CAPool
@@ -22,6 +27,7 @@ func NewCAPool() *CAPool {
 	ca := CAPool{
 		CAs:           make(map[string]*CachedCertificate),
 		certBlocklist: make(map[string]struct{}),
+		v3CAs:         make(map[string]*CachedCertificate),
 	}
 
 	return &ca
@@ -122,6 +128,17 @@ func (ncp *CAPool) AddCA(c Certificate) error {
 		cc.InvertedGroups[g] = struct{}{}
 	}
 
+	if v2 := V2Form(c); v2 != nil {
+		v2Sum, err := v2.Fingerprint()
+		if err != nil {
+			return fmt.Errorf("could not calculate fingerprint for provided CA; error: %w; %s", err, c.Name())
+		}
+		if other, ok := ncp.v3CAs[v2Sum]; ok && other.Fingerprint != sum {
+			return fmt.Errorf("%s: two version 3 CAs extend the same version 2 CA %s", c.Name(), v2Sum)
+		}
+		ncp.v3CAs[v2Sum] = cc
+	}
+
 	ncp.CAs[sum] = cc
 
 	if c.Expired(time.Now()) {
@@ -180,11 +197,34 @@ func (ncp *CAPool) VerifyCertificate(now time.Time, c Certificate) (*CachedCerti
 		return nil, ErrBlockListed
 	}
 
+	// Blocking the v2 form of a version 3 certificate blocks the certificate too.
+	var v2Fps []string
+	if v2 := V2Form(c); v2 != nil {
+		v2Fp, err := v2.Fingerprint()
+		if err != nil {
+			return nil, fmt.Errorf("could not calculate v2 fingerprint to verify: %w", err)
+		}
+		v2Fp2, err := CalculateAlternateFingerprint(v2)
+		if err != nil {
+			return nil, fmt.Errorf("could not calculate alternate v2 fingerprint to verify: %w", err)
+		}
+		v2Fps = append(v2Fps, v2Fp)
+		if v2Fp2 != "" {
+			v2Fps = append(v2Fps, v2Fp2)
+		}
+		for _, f := range v2Fps {
+			if ncp.IsBlocklisted(f) {
+				return nil, ErrBlockListed
+			}
+		}
+	}
+
 	cc := CachedCertificate{
 		Certificate:       c,
 		InvertedGroups:    make(map[string]struct{}),
 		Fingerprint:       fp,
 		fingerprint2:      fp2,
+		v2Fingerprints:    v2Fps,
 		signerFingerprint: signer.Fingerprint,
 	}
 
@@ -201,6 +241,11 @@ func (ncp *CAPool) VerifyCachedCertificate(now time.Time, c *CachedCertificate) 
 	// Check any available alternate fingerprint forms for this certificate, re P256 high-s/low-s
 	if c.fingerprint2 != "" && ncp.IsBlocklisted(c.fingerprint2) {
 		return ErrBlockListed
+	}
+	for _, f := range c.v2Fingerprints {
+		if ncp.IsBlocklisted(f) {
+			return ErrBlockListed
+		}
 	}
 
 	_, err := ncp.verify(c.Certificate, now, c.Fingerprint, c.signerFingerprint)
@@ -257,7 +302,12 @@ func (ncp *CAPool) GetCAForCert(c Certificate) (*CachedCertificate, error) {
 		return nil, fmt.Errorf("no issuer in certificate")
 	}
 
-	signer, ok := ncp.CAs[issuer]
+	cas := ncp.CAs
+	if c.Version() == Version3 {
+		cas = ncp.v3CAs
+	}
+
+	signer, ok := cas[issuer]
 	if ok {
 		return signer, nil
 	}

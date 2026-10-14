@@ -14,12 +14,14 @@ const (
 	VersionPre1 Version = 0
 	Version1    Version = 1
 	Version2    Version = 2
+	Version3    Version = 3
 )
 
 type Certificate interface {
 	// Version defines the underlying certificate structure and wire protocol version
 	// Version1 certificates are ipv4 only and uses protobuf serialization
 	// Version2 certificates are ipv4 or ipv6 and uses asn.1 serialization
+	// Version3 certificates extend a Version2 certificate with post-quantum keys and signatures
 	Version() Version
 
 	// Name is the human-readable name that identifies this certificate.
@@ -115,6 +117,9 @@ type CachedCertificate struct {
 
 	// A place to store a 2nd fingerprint if the certificate could have one, such as with P256
 	fingerprint2 string
+
+	// The fingerprints of a version 3 certificate's v2 form, which the blocklist also applies to
+	v2Fingerprints []string
 }
 
 func (cc *CachedCertificate) String() string {
@@ -143,6 +148,8 @@ func Recombine(v Version, rawCertBytes, publicKey []byte, curve Curve) (Certific
 		c, err = unmarshalCertificateV1(rawCertBytes, publicKey)
 	case Version2:
 		c, err = unmarshalCertificateV2(rawCertBytes, publicKey, curve)
+	case Version3:
+		c, err = unmarshalCertificateV3(rawCertBytes, publicKey, curve)
 	default:
 		return nil, ErrUnknownVersion
 	}
@@ -162,6 +169,12 @@ func Recombine(v Version, rawCertBytes, publicKey []byte, curve Curve) (Certific
 // CAPool blocklist testing through `VerifyCertificate` and `VerifyCachedCertificate` automatically performs this step.
 func CalculateAlternateFingerprint(c Certificate) (string, error) {
 	if c.Curve() != Curve_P256 {
+		return "", nil
+	}
+
+	// The post-quantum signature of a version 3 certificate covers its classical signature, so it has no second form.
+	// The pool checks the fingerprints of its v2 form separately.
+	if c.Version() == Version3 {
 		return "", nil
 	}
 

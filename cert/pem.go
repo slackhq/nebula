@@ -64,6 +64,7 @@ func SplitPEM(data []byte, atEOF bool) (advance int, token []byte, err error) {
 const ( //cert banners
 	CertificateBanner   = "NEBULA CERTIFICATE"
 	CertificateV2Banner = "NEBULA CERTIFICATE V2"
+	CertificateV3Banner = "NEBULA CERTIFICATE V3"
 )
 
 const ( //key-agreement-key banners
@@ -72,6 +73,42 @@ const ( //key-agreement-key banners
 	P256PrivateKeyBanner   = "NEBULA P256 PRIVATE KEY"
 	P256PublicKeyBanner    = "NEBULA P256 PUBLIC KEY"
 )
+
+// Version 3 keys are composite: the classical key followed by the post-quantum key, an ML-KEM-1024 seed or
+// encapsulation key for hosts and an ML-DSA-87 seed or public key for CAs.
+const ( //post-quantum key-agreement-key banners
+	X25519MLKEM1024PrivateKeyBanner = "NEBULA X25519 MLKEM1024 PRIVATE KEY"
+	X25519MLKEM1024PublicKeyBanner  = "NEBULA X25519 MLKEM1024 PUBLIC KEY"
+	P256MLKEM1024PrivateKeyBanner   = "NEBULA P256 MLKEM1024 PRIVATE KEY"
+	P256MLKEM1024PublicKeyBanner    = "NEBULA P256 MLKEM1024 PUBLIC KEY"
+)
+
+const ( //post-quantum signing key banners
+	EncryptedECDSAP256MLDSA87PrivateKeyBanner = "NEBULA ECDSA P256 MLDSA87 ENCRYPTED PRIVATE KEY"
+	ECDSAP256MLDSA87PrivateKeyBanner          = "NEBULA ECDSA P256 MLDSA87 PRIVATE KEY"
+	ECDSAP256MLDSA87PublicKeyBanner           = "NEBULA ECDSA P256 MLDSA87 PUBLIC KEY"
+	EncryptedEd25519MLDSA87PrivateKeyBanner   = "NEBULA ED25519 MLDSA87 ENCRYPTED PRIVATE KEY"
+	Ed25519MLDSA87PrivateKeyBanner            = "NEBULA ED25519 MLDSA87 PRIVATE KEY"
+	Ed25519MLDSA87PublicKeyBanner             = "NEBULA ED25519 MLDSA87 PUBLIC KEY"
+)
+
+// Classical key sizes, the composite keys of version 3 add the post-quantum key to these.
+const (
+	x25519KeySize          = 32
+	p256PublicKeySize      = 65 // uncompressed
+	p256PrivateKeySize     = 32
+	ed25519PublicKeySize   = 32
+	ed25519PrivateKeySize  = 64
+	ecdsaP256PublicKeySize = 65 // uncompressed
+)
+
+// signingPrivateKeySize returns the size of a classical signing private key.
+func signingPrivateKeySize(curve Curve) int {
+	if curve == Curve_P256 {
+		return p256PrivateKeySize
+	}
+	return ed25519PrivateKeySize
+}
 
 /* including "ECDSA" in the P256 banners is a clue that these keys should be used only for signing */
 const ( //signing key banners
@@ -109,6 +146,8 @@ func unmarshalCertificateBlock(block *pem.Block) (Certificate, error) {
 		return unmarshalCertificateV1(block.Bytes, nil)
 	case CertificateV2Banner:
 		return unmarshalCertificateV2(block.Bytes, nil, Curve_CURVE25519)
+	case CertificateV3Banner:
+		return unmarshalCertificateV3(block.Bytes, nil, Curve_CURVE25519)
 	default:
 		return nil, ErrInvalidPEMCertificateBanner
 	}
@@ -125,6 +164,13 @@ func marshalCertPublicKeyToPEM(c Certificate) []byte {
 // MarshalPublicKeyToPEM returns a PEM representation of a public key used for ECDH.
 // if your public key came from a certificate, prefer Certificate.PublicKeyPEM() if possible, to avoid mistakes!
 func MarshalPublicKeyToPEM(curve Curve, b []byte) []byte {
+	pq := len(b) > MLKEM1024PublicKeySize
+	switch {
+	case pq && curve == Curve_CURVE25519:
+		return pem.EncodeToMemory(&pem.Block{Type: X25519MLKEM1024PublicKeyBanner, Bytes: b})
+	case pq && curve == Curve_P256:
+		return pem.EncodeToMemory(&pem.Block{Type: P256MLKEM1024PublicKeyBanner, Bytes: b})
+	}
 	switch curve {
 	case Curve_CURVE25519:
 		return pem.EncodeToMemory(&pem.Block{Type: X25519PublicKeyBanner, Bytes: b})
@@ -138,6 +184,13 @@ func MarshalPublicKeyToPEM(curve Curve, b []byte) []byte {
 // MarshalSigningPublicKeyToPEM returns a PEM representation of a public key used for signing.
 // if your public key came from a certificate, prefer Certificate.PublicKeyPEM() if possible, to avoid mistakes!
 func MarshalSigningPublicKeyToPEM(curve Curve, b []byte) []byte {
+	pq := len(b) > MLDSA87PublicKeySize
+	switch {
+	case pq && curve == Curve_CURVE25519:
+		return pem.EncodeToMemory(&pem.Block{Type: Ed25519MLDSA87PublicKeyBanner, Bytes: b})
+	case pq && curve == Curve_P256:
+		return pem.EncodeToMemory(&pem.Block{Type: ECDSAP256MLDSA87PublicKeyBanner, Bytes: b})
+	}
 	switch curve {
 	case Curve_CURVE25519:
 		return pem.EncodeToMemory(&pem.Block{Type: Ed25519PublicKeyBanner, Bytes: b})
@@ -166,6 +219,12 @@ func UnmarshalPublicKeyFromPEM(b []byte) ([]byte, []byte, Curve, error) {
 		// Uncompressed
 		expectedLen = 65
 		curve = Curve_P256
+	case X25519MLKEM1024PublicKeyBanner:
+		expectedLen = x25519KeySize + MLKEM1024PublicKeySize
+		curve = Curve_CURVE25519
+	case P256MLKEM1024PublicKeyBanner:
+		expectedLen = p256PublicKeySize + MLKEM1024PublicKeySize
+		curve = Curve_P256
 	default:
 		return nil, r, 0, fmt.Errorf("bytes did not contain a proper public key banner")
 	}
@@ -193,6 +252,12 @@ func UnmarshalSigningPublicKeyFromPEM(b []byte) ([]byte, []byte, Curve, error) {
 		// Uncompressed
 		expectedLen = 65
 		curve = Curve_P256
+	case Ed25519MLDSA87PublicKeyBanner:
+		expectedLen = ed25519PublicKeySize + MLDSA87PublicKeySize
+		curve = Curve_CURVE25519
+	case ECDSAP256MLDSA87PublicKeyBanner:
+		expectedLen = ecdsaP256PublicKeySize + MLDSA87PublicKeySize
+		curve = Curve_P256
 	default:
 		return nil, r, 0, fmt.Errorf("bytes did not contain a proper Ed25519/ECDSA public key banner")
 	}
@@ -203,6 +268,13 @@ func UnmarshalSigningPublicKeyFromPEM(b []byte) ([]byte, []byte, Curve, error) {
 }
 
 func MarshalPrivateKeyToPEM(curve Curve, b []byte) []byte {
+	pq := len(b) > MLKEM1024PrivateKeySize
+	switch {
+	case pq && curve == Curve_CURVE25519:
+		return pem.EncodeToMemory(&pem.Block{Type: X25519MLKEM1024PrivateKeyBanner, Bytes: b})
+	case pq && curve == Curve_P256:
+		return pem.EncodeToMemory(&pem.Block{Type: P256MLKEM1024PrivateKeyBanner, Bytes: b})
+	}
 	switch curve {
 	case Curve_CURVE25519:
 		return pem.EncodeToMemory(&pem.Block{Type: X25519PrivateKeyBanner, Bytes: b})
@@ -214,6 +286,13 @@ func MarshalPrivateKeyToPEM(curve Curve, b []byte) []byte {
 }
 
 func MarshalSigningPrivateKeyToPEM(curve Curve, b []byte) []byte {
+	pq := len(b) == signingPrivateKeySize(curve)+MLDSA87PrivateKeySize
+	switch {
+	case pq && curve == Curve_CURVE25519:
+		return pem.EncodeToMemory(&pem.Block{Type: Ed25519MLDSA87PrivateKeyBanner, Bytes: b})
+	case pq && curve == Curve_P256:
+		return pem.EncodeToMemory(&pem.Block{Type: ECDSAP256MLDSA87PrivateKeyBanner, Bytes: b})
+	}
 	switch curve {
 	case Curve_CURVE25519:
 		return pem.EncodeToMemory(&pem.Block{Type: Ed25519PrivateKeyBanner, Bytes: b})
@@ -240,6 +319,12 @@ func UnmarshalPrivateKeyFromPEM(b []byte) ([]byte, []byte, Curve, error) {
 	case P256PrivateKeyBanner:
 		expectedLen = 32
 		curve = Curve_P256
+	case X25519MLKEM1024PrivateKeyBanner:
+		expectedLen = x25519KeySize + MLKEM1024PrivateKeySize
+		curve = Curve_CURVE25519
+	case P256MLKEM1024PrivateKeyBanner:
+		expectedLen = p256PrivateKeySize + MLKEM1024PrivateKeySize
+		curve = Curve_P256
 	default:
 		return nil, r, 0, fmt.Errorf("bytes did not contain a proper private key banner")
 	}
@@ -258,8 +343,20 @@ func UnmarshalSigningPrivateKeyFromPEM(b []byte) ([]byte, []byte, Curve, error) 
 	switch k.Type {
 	case EncryptedEd25519PrivateKeyBanner:
 		return nil, nil, Curve_CURVE25519, ErrPrivateKeyEncrypted
-	case EncryptedECDSAP256PrivateKeyBanner:
+	case EncryptedECDSAP256PrivateKeyBanner, EncryptedECDSAP256MLDSA87PrivateKeyBanner:
 		return nil, nil, Curve_P256, ErrPrivateKeyEncrypted
+	case EncryptedEd25519MLDSA87PrivateKeyBanner:
+		return nil, nil, Curve_CURVE25519, ErrPrivateKeyEncrypted
+	case Ed25519MLDSA87PrivateKeyBanner:
+		curve = Curve_CURVE25519
+		if len(k.Bytes) != ed25519PrivateKeySize+MLDSA87PrivateKeySize {
+			return nil, r, 0, fmt.Errorf("key was not %d bytes, is invalid Ed25519 ML-DSA-87 private key", ed25519PrivateKeySize+MLDSA87PrivateKeySize)
+		}
+	case ECDSAP256MLDSA87PrivateKeyBanner:
+		curve = Curve_P256
+		if len(k.Bytes) != p256PrivateKeySize+MLDSA87PrivateKeySize {
+			return nil, r, 0, fmt.Errorf("key was not %d bytes, is invalid ECDSA P256 ML-DSA-87 private key", p256PrivateKeySize+MLDSA87PrivateKeySize)
+		}
 	case Ed25519PrivateKeyBanner:
 		curve = Curve_CURVE25519
 		if len(k.Bytes) != ed25519.PrivateKeySize {

@@ -47,29 +47,85 @@ type SignerLambda func(certBytes []byte) ([]byte, error)
 // details do not violate constraints of the signing certificate.
 // If the TBSCertificate is a CA then signer must be nil.
 func (t *TBSCertificate) Sign(signer Certificate, curve Curve, key []byte) (Certificate, error) {
-	switch t.Curve {
+	if t.Version == Version3 {
+		// The signing key is a composite CA key, classical || ML-DSA-87 seed.
+		if len(key) <= MLDSA87PrivateKeySize {
+			return nil, ErrInvalidPrivateKey
+		}
+		classical, err := classicalSigner(t.Curve, key[:len(key)-MLDSA87PrivateKeySize])
+		if err != nil {
+			return nil, err
+		}
+		pq, err := SignPQ(key[len(key)-MLDSA87PrivateKeySize:])
+		if err != nil {
+			return nil, err
+		}
+		return t.SignHybridWith(signer, curve, classical, pq)
+	}
+
+	sp, err := classicalSigner(t.Curve, key)
+	if err != nil {
+		return nil, err
+	}
+	return t.SignWith(signer, curve, sp)
+}
+
+// classicalSigner returns a SignerLambda for a classical signing private key.
+func classicalSigner(curve Curve, key []byte) (SignerLambda, error) {
+	switch curve {
 	case Curve_CURVE25519:
+		if len(key) != ed25519.PrivateKeySize {
+			return nil, ErrInvalidPrivateKey
+		}
 		pk := ed25519.PrivateKey(key)
-		sp := func(certBytes []byte) ([]byte, error) {
+		return func(certBytes []byte) ([]byte, error) {
 			sig := ed25519.Sign(pk, certBytes)
 			return sig, nil
-		}
-		return t.SignWith(signer, curve, sp)
+		}, nil
 	case Curve_P256:
 		pk, err := ecdsa.ParseRawPrivateKey(elliptic.P256(), key)
 		if err != nil {
 			return nil, err
 		}
-		sp := func(certBytes []byte) ([]byte, error) {
+		return func(certBytes []byte) ([]byte, error) {
 			// We need to hash first for ECDSA
 			// - https://pkg.go.dev/crypto/ecdsa#SignASN1
 			hashed := sha256.Sum256(certBytes)
 			return ecdsa.SignASN1(rand.Reader, pk, hashed[:])
-		}
-		return t.SignWith(signer, curve, sp)
+		}, nil
 	default:
-		return nil, fmt.Errorf("invalid curve: %s", t.Curve)
+		return nil, fmt.Errorf("invalid curve: %s", curve)
 	}
+}
+
+// SignHybridWith signs a version 3 certificate, using sp for the classical signature and pqSp for the ML-DSA-87
+// signature. t.PublicKey is the composite public key. signer must be a version 3 CA, or nil for a self signed CA.
+// The v2 form is signed exactly as SignWith would sign it, and so is the v2 form of signer.
+func (t *TBSCertificate) SignHybridWith(signer Certificate, curve Curve, sp, pqSp SignerLambda) (Certificate, error) {
+	if t.Version != Version3 {
+		return nil, fmt.Errorf("SignHybridWith only signs version 3 certificates")
+	}
+	classical, pq, err := splitPQPublicKey(t.IsCA, t.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+
+	var signerV2 Certificate
+	if signer != nil {
+		if signer.Version() != Version3 {
+			return nil, fmt.Errorf("a version 3 certificate must be signed by a version 3 CA")
+		}
+		signerV2 = V2Form(signer)
+	}
+
+	t2 := *t
+	t2.Version = Version2
+	t2.PublicKey = classical
+	c2, err := t2.SignWith(signerV2, curve, sp)
+	if err != nil {
+		return nil, err
+	}
+	return ExtendToV3(c2, pq, signer, pqSp)
 }
 
 // SignWith does the same thing as sign, but uses the function in `sp` to calculate the signature.
@@ -114,6 +170,8 @@ func (t *TBSCertificate) SignWith(signer Certificate, curve Curve, sp SignerLamb
 		if err != nil {
 			return nil, err
 		}
+	case Version3:
+		return nil, fmt.Errorf("version 3 certificates carry two signatures, use SignHybridWith")
 	default:
 		return nil, fmt.Errorf("unknown cert version %d", t.Version)
 	}
