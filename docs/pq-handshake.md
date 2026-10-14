@@ -511,7 +511,17 @@ in every scenario above, and within three at least 99.99%.
   it times out, and the Machine reports it as recoverable. Blocks publishing the module; the fix is
   a deferred rollback that also restores `k`, `n` and `hasK`. Smaller pre-publish items are in
   [DefinedNet/noise#3](https://github.com/DefinedNet/noise/issues/3).
-- Field test of hybrid handshakes on real hosts, as was done for phase 1.
+- The initiator's first classical retry can fire 0-100 ms after the post-quantum attempt, so at
+  real round-trip times it often crosses it. For hybrid, msg3 settles which tunnel the responder
+  keeps, but the crossing classical tunnel lingers on the responder until it is found dead. The
+  ephemeral-KEM handshake has no msg3: the responder keeps the newer classical tunnel while the
+  initiator keeps the KEM one, and replies go to a released index (field test: 5 of 100 first
+  pings failed at 50 ms round trip, no loss). Options: no classical turn until one retry interval
+  after the post-quantum attempt, and/or complete a losing attempt's late msg2 only to send it a
+  CloseTunnel.
+
+Field tested on real hosts on 2026-10-14 (`pq-lab/2026-10-14-hybrid/`, untracked): LAN median 3.2 ms
+against 1.4 ms classical, +2.0 ms at 50 ms round trip, no fallbacks with `require` under loss.
 
 The cryptographic review of 2026-10-14 found no break in the composition or the certificate
 chain. Its outcomes are folded in above: deterministic ML-DSA signing, the fingerprint guidance,
