@@ -21,7 +21,8 @@ import (
 // it with peers that only speak v2. The v2 form keeps its own classical CA signature and fingerprint.
 //
 // Hosts carry an ML-KEM-1024 encapsulation key and CAs an ML-DSA-87 public key. The issuing CA signs every field
-// with ML-DSA-87, including the classical signature, so the classical signature can not be swapped out either.
+// with ML-DSA-87, including the classical signature, so the classical signature can not be swapped out either. The
+// ML-DSA-87 signature is deterministic, so a certificate extended twice is the same certificate.
 //
 // Wherever a v3 certificate deals in keys they are composite: the classical key followed by the post-quantum one.
 // PublicKey returns classical || post-quantum, and VerifyPrivateKey and signing take the private keys the same way.
@@ -508,13 +509,16 @@ func ExtendToV3(c Certificate, pqPublicKey []byte, signer Certificate, pqSign Si
 	return c3, nil
 }
 
-// SignPQ returns a SignerLambda that signs certificates with the ML-DSA-87 private key seed.
+// SignPQ returns a SignerLambda that signs certificates with the ML-DSA-87 private key seed. Signatures are
+// deterministic (FIPS 204 section 3.4), so signing the same certificate twice gives the same bytes and the same
+// fingerprint, and extending a certificate is idempotent. The hedged variant guards signers an attacker can fault
+// physically, which a CA key in a file is not; the Ed25519 signature beside it is deterministic too.
 func SignPQ(seed []byte) (SignerLambda, error) {
 	sk, err := mldsa.NewPrivateKey(mldsa.MLDSA87(), seed)
 	if err != nil {
 		return nil, err
 	}
 	return func(b []byte) ([]byte, error) {
-		return sk.Sign(nil, b, &mldsa.Options{Context: pqSignatureContext})
+		return sk.SignDeterministic(b, &mldsa.Options{Context: pqSignatureContext})
 	}, nil
 }

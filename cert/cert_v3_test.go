@@ -389,6 +389,47 @@ func TestExtendToV3(t *testing.T) {
 	}
 }
 
+// ML-DSA-87 signing is deterministic, so extending a certificate twice gives the same bytes and the same fingerprint:
+// pq-extend is idempotent, and a CA extended again is not a second v3 CA to the pool.
+func TestExtendToV3_Deterministic(t *testing.T) {
+	for _, curve := range testCurves {
+		t.Run(curve.String(), func(t *testing.T) {
+			ca2, _, caKey2, _ := NewTestCaCert(Version2, curve, time.Time{}, time.Time{}, nil, nil, nil)
+			host2, _, _, _ := NewTestCert(Version2, curve, ca2, caKey2, "host", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.1/16")}, nil, nil)
+			sk, err := mldsa.GenerateKey(mldsa.MLDSA87())
+			require.NoError(t, err)
+			signPQ, err := SignPQ(sk.Bytes())
+			require.NoError(t, err)
+			dk, err := mlkem.GenerateKey1024()
+			require.NoError(t, err)
+
+			extend := func(c Certificate, pq []byte, signer Certificate) ([]byte, string, Certificate) {
+				c3, err := ExtendToV3(c, pq, signer, signPQ)
+				require.NoError(t, err)
+				b, err := c3.Marshal()
+				require.NoError(t, err)
+				fp, err := c3.Fingerprint()
+				require.NoError(t, err)
+				return b, fp, c3
+			}
+
+			caBytesA, caFpA, caA := extend(ca2, sk.PublicKey().Bytes(), nil)
+			caBytesB, caFpB, caB := extend(ca2, sk.PublicKey().Bytes(), nil)
+			assert.Equal(t, caBytesA, caBytesB)
+			assert.Equal(t, caFpA, caFpB)
+
+			hostBytesA, hostFpA, _ := extend(host2, dk.EncapsulationKey().Bytes(), caA)
+			hostBytesB, hostFpB, _ := extend(host2, dk.EncapsulationKey().Bytes(), caB)
+			assert.Equal(t, hostBytesA, hostBytesB)
+			assert.Equal(t, hostFpA, hostFpB)
+
+			pool := NewCAPool()
+			require.NoError(t, pool.AddCA(caA))
+			require.NoError(t, pool.AddCA(caB))
+		})
+	}
+}
+
 func TestCertificateV3_KeyPEM(t *testing.T) {
 	for _, curve := range testCurves {
 		t.Run(curve.String(), func(t *testing.T) {
