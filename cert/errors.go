@@ -23,6 +23,8 @@ var (
 	ErrUnknownVersion             = errors.New("certificate version unrecognized")
 	ErrCertPubkeyPresent          = errors.New("certificate has unexpected pubkey present")
 	ErrCurveMismatch              = errors.New("certificate curve does not match CA")
+	ErrPQSuiteMismatch            = errors.New("certificate post-quantum suite does not match CA")
+	ErrUnknownPQSuite             = errors.New("unknown post-quantum suite")
 
 	ErrInvalidPEMBlock                   = errors.New("input did not contain a valid PEM encoded block")
 	ErrInvalidPEMCertificateBanner       = errors.New("bytes did not contain a proper certificate banner")

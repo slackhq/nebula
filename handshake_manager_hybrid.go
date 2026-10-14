@@ -27,8 +27,6 @@ import (
 //     within the handshake timeout the tunnel is closed.
 
 const (
-	hybridSubtype = header.HandshakeIXHybridMLKEM1024
-
 	// hybridMsg3MaxLen bounds the msg3 a pending responder reassembles. msg3 is
 	// a ciphertext and two tags, about 1.6KB.
 	hybridMsg3MaxLen = 4096
@@ -45,6 +43,7 @@ type hybridResponder struct {
 // heard from the responder.
 type hybridConfirm struct {
 	hostinfo     *HostInfo
+	subtype      header.MessageSubType
 	sender       *fragment.Sender
 	send         func([]byte) error
 	handshakeLen uint64 // messages the handshake took, which the replay window was seeded with
@@ -323,6 +322,7 @@ func (hm *HandshakeManager) startHybridConfirm(via ViaSender, hostinfo *HostInfo
 	now := time.Now()
 	c := &hybridConfirm{
 		hostinfo:     hostinfo,
+		subtype:      h.Subtype,
 		sender:       s,
 		send:         hm.sendTo(via),
 		handshakeLen: handshakeLen,
@@ -341,7 +341,7 @@ func (hm *HandshakeManager) sendHybridMsg3(c *hybridConfirm) {
 	if err != nil {
 		return
 	}
-	hm.messageMetrics.Tx(header.Handshake, hybridSubtype, int64(len(pkts)+len(later)))
+	hm.messageMetrics.Tx(header.Handshake, c.subtype, int64(len(pkts)+len(later)))
 	// No repair delay: the packets cached during the handshake go out right
 	// behind msg3, and the responder drops whatever arrives before msg3
 	// completes. With the repair trailing, losing either data fragment would

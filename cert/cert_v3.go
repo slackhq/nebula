@@ -20,28 +20,32 @@ import (
 // the fields of the v2 certificate it extends, so a v3 holder can always marshal that v2 form, byte for byte, and use
 // it with peers that only speak v2. The v2 form keeps its own classical CA signature and fingerprint.
 //
-// Hosts carry an ML-KEM-1024 encapsulation key and CAs an ML-DSA-87 public key. The issuing CA signs every field
-// with ML-DSA-87, including the classical signature, so the classical signature can not be swapped out either. The
-// ML-DSA-87 signature is deterministic, so a certificate extended twice is the same certificate.
+// The certificate's PQSuite says which post-quantum algorithms it uses, the way its curve does for the classical
+// ones. Hosts carry a public key for the suite's KEM and CAs one for its signature algorithm. The issuing CA, which
+// has the same suite, signs every field with that signature algorithm, including the suite and the classical
+// signature, so neither can be swapped out. Signatures are deterministic, so a certificate extended twice is the same
+// certificate.
 //
 // Wherever a v3 certificate deals in keys they are composite: the classical key followed by the post-quantum one.
 // PublicKey returns classical || post-quantum, and VerifyPrivateKey and signing take the private keys the same way.
 
 const (
-	TagCertPQPublicKey = 4 | classContextSpecific
-	TagCertPQSignature = 5 | classContextSpecific
+	TagCertPQSuite     = 4 | classContextSpecific
+	TagCertPQPublicKey = 5 | classContextSpecific
+	TagCertPQSignature = 6 | classContextSpecific
 )
 
+// Sizes of the keys and signatures of PQSuite_MLKEM1024_MLDSA87.
 const (
-	// MLKEM1024PublicKeySize is the size of the ML-KEM-1024 encapsulation key in a v3 host certificate.
+	// MLKEM1024PublicKeySize is the size of an ML-KEM-1024 encapsulation key.
 	MLKEM1024PublicKeySize = mlkem.EncapsulationKeySize1024
-	// MLKEM1024PrivateKeySize is the size of the ML-KEM-1024 decapsulation key seed in a v3 host private key.
+	// MLKEM1024PrivateKeySize is the size of an ML-KEM-1024 decapsulation key seed.
 	MLKEM1024PrivateKeySize = mlkem.SeedSize
-	// MLDSA87PublicKeySize is the size of the ML-DSA-87 public key in a v3 CA certificate.
+	// MLDSA87PublicKeySize is the size of an ML-DSA-87 public key.
 	MLDSA87PublicKeySize = mldsa.MLDSA87PublicKeySize
-	// MLDSA87PrivateKeySize is the size of the ML-DSA-87 private key seed in a v3 CA private key.
+	// MLDSA87PrivateKeySize is the size of an ML-DSA-87 private key seed.
 	MLDSA87PrivateKeySize = mldsa.PrivateKeySize
-	// MLDSA87SignatureSize is the size of the ML-DSA-87 signature in every v3 certificate.
+	// MLDSA87SignatureSize is the size of an ML-DSA-87 signature.
 	MLDSA87SignatureSize = mldsa.MLDSA87SignatureSize
 
 	// pqSignatureContext is the ML-DSA context string for certificate signatures.
@@ -52,36 +56,14 @@ type certificateV3 struct {
 	// v2 is the version 2 certificate this one extends. Its public key is the classical key.
 	v2 certificateV2
 
-	// pqPublicKey is the ML-KEM-1024 encapsulation key of a host, or the ML-DSA-87 public key of a CA.
+	// pqSuite names the post-quantum algorithms, and so the kind of pqPublicKey and pqSignature.
+	pqSuite PQSuite
+
+	// pqPublicKey is the suite's KEM public key of a host, or its signature algorithm's public key of a CA.
 	pqPublicKey []byte
 
-	// pqSignature is the issuing CA's ML-DSA-87 signature over every other field.
+	// pqSignature is the issuing CA's post-quantum signature over every other field.
 	pqSignature []byte
-}
-
-// pqPublicKeySize returns the size of the post-quantum public key a v3 certificate carries.
-func pqPublicKeySize(isCA bool) int {
-	if isCA {
-		return MLDSA87PublicKeySize
-	}
-	return MLKEM1024PublicKeySize
-}
-
-// pqPrivateKeySize returns the size of the post-quantum half of a v3 private key.
-func pqPrivateKeySize(isCA bool) int {
-	if isCA {
-		return MLDSA87PrivateKeySize
-	}
-	return MLKEM1024PrivateKeySize
-}
-
-// splitPQPublicKey splits a composite public key into its classical and post-quantum halves.
-func splitPQPublicKey(isCA bool, key []byte) ([]byte, []byte, error) {
-	n := pqPublicKeySize(isCA)
-	if len(key) <= n {
-		return nil, nil, ErrInvalidPublicKey
-	}
-	return key[:len(key)-n], key[len(key)-n:], nil
 }
 
 // V2Form returns the version 2 certificate a version 3 certificate extends, or nil for any other version. It is
@@ -159,24 +141,26 @@ func (c *certificateV3) Fingerprint() (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// CheckSignature checks both signatures against the composite public key of the signing CA.
+// CheckSignature checks both signatures against the composite public key of the signing CA. Like the classical
+// signature with the curve, the post-quantum signature is checked with the algorithm of this certificate's suite,
+// which the signing CA has to share.
 func (c *certificateV3) CheckSignature(key []byte) bool {
-	classical, pq, err := splitPQPublicKey(true, key)
-	if err != nil || len(pq) != MLDSA87PublicKeySize {
+	p := pqSuites[c.pqSuite]
+	if p == nil {
+		return false
+	}
+	classical, pq, err := c.pqSuite.SplitPublicKey(true, key)
+	if err != nil {
 		return false
 	}
 	if !c.v2.CheckSignature(classical) {
-		return false
-	}
-	pk, err := mldsa.NewPublicKey(mldsa.MLDSA87(), pq)
-	if err != nil {
 		return false
 	}
 	b, err := c.marshalForPQSigning()
 	if err != nil {
 		return false
 	}
-	return mldsa.Verify(pk, b, c.pqSignature, &mldsa.Options{Context: pqSignatureContext}) == nil
+	return p.dsa.verify(pq, b, c.pqSignature)
 }
 
 func (c *certificateV3) Expired(t time.Time) bool {
@@ -185,28 +169,17 @@ func (c *certificateV3) Expired(t time.Time) bool {
 
 // VerifyPrivateKey checks a composite private key, classical || post-quantum seed, against the composite public key.
 func (c *certificateV3) VerifyPrivateKey(curve Curve, key []byte) error {
-	n := pqPrivateKeySize(c.IsCA())
-	if len(key) <= n {
-		return ErrInvalidPrivateKey
+	classical, seed, err := c.pqSuite.SplitPrivateKey(c.IsCA(), key)
+	if err != nil {
+		return err
 	}
-	if err := c.v2.VerifyPrivateKey(curve, key[:len(key)-n]); err != nil {
+	if err := c.v2.VerifyPrivateKey(curve, classical); err != nil {
 		return err
 	}
 
-	var pub []byte
-	seed := key[len(key)-n:]
-	if c.IsCA() {
-		sk, err := mldsa.NewPrivateKey(mldsa.MLDSA87(), seed)
-		if err != nil {
-			return ErrInvalidPrivateKey
-		}
-		pub = sk.PublicKey().Bytes()
-	} else {
-		dk, err := mlkem.NewDecapsulationKey1024(seed)
-		if err != nil {
-			return ErrInvalidPrivateKey
-		}
-		pub = dk.EncapsulationKey().Bytes()
+	pub, err := c.pqSuite.publicKey(c.IsCA(), seed)
+	if err != nil {
+		return ErrInvalidPrivateKey
 	}
 	if !bytes.Equal(pub, c.pqPublicKey) {
 		return ErrPublicPrivateKeyMismatch
@@ -227,7 +200,8 @@ func (c *certificateV3) String() string {
 	return string(b)
 }
 
-// MarshalForHandshakes leaves out both public keys, the handshake carries them as the composite static key.
+// MarshalForHandshakes leaves out both public keys, the handshake carries them as the composite static key. It keeps
+// the suite, which says how to split that key.
 func (c *certificateV3) MarshalForHandshakes() ([]byte, error) {
 	return c.marshal(false, false)
 }
@@ -237,7 +211,7 @@ func (c *certificateV3) Marshal() ([]byte, error) {
 }
 
 // marshalForPQSigning returns the bytes the post-quantum signature covers: every field but that signature, with the
-// curve always present.
+// curve always present. The suite is always present anyway.
 func (c *certificateV3) marshalForPQSigning() ([]byte, error) {
 	return c.marshal(true, true)
 }
@@ -263,6 +237,10 @@ func (c *certificateV3) marshal(withPublicKeys, forSigning bool) ([]byte, error)
 
 		b.AddASN1(TagCertSignature, func(b *cryptobyte.Builder) {
 			b.AddBytes(c.v2.signature)
+		})
+
+		b.AddASN1(TagCertPQSuite, func(b *cryptobyte.Builder) {
+			b.AddUint8(uint8(c.pqSuite))
 		})
 
 		if withPublicKeys {
@@ -310,6 +288,7 @@ func (c *certificateV3) marshalJSON() (m, error) {
 	mb["v2Fingerprint"] = mb["fingerprint"]
 	mb["fingerprint"] = fp
 	mb["version"] = Version3
+	mb["pqSuite"] = c.pqSuite.String()
 	mb["pqPublicKey"] = fmt.Sprintf("%x", c.pqPublicKey)
 	mb["pqSignature"] = fmt.Sprintf("%x", c.pqSignature)
 	return mb, nil
@@ -318,6 +297,7 @@ func (c *certificateV3) marshalJSON() (m, error) {
 func (c *certificateV3) Copy() Certificate {
 	nc := &certificateV3{
 		v2:          *c.v2.Copy().(*certificateV2),
+		pqSuite:     c.pqSuite,
 		pqPublicKey: make([]byte, len(c.pqPublicKey)),
 		pqSignature: make([]byte, len(c.pqSignature)),
 	}
@@ -331,20 +311,14 @@ func (c *certificateV3) validate() error {
 		return err
 	}
 
-	if len(c.pqPublicKey) != pqPublicKeySize(c.IsCA()) {
+	if !c.pqSuite.Valid() {
+		return fmt.Errorf("%w: %v", ErrUnknownPQSuite, c.pqSuite)
+	}
+	if !c.pqSuite.checkPublicKey(c.IsCA(), c.pqPublicKey) {
 		return ErrInvalidPublicKey
 	}
-	if c.IsCA() {
-		if _, err := mldsa.NewPublicKey(mldsa.MLDSA87(), c.pqPublicKey); err != nil {
-			return ErrInvalidPublicKey
-		}
-	} else {
-		if _, err := mlkem.NewEncapsulationKey1024(c.pqPublicKey); err != nil {
-			return ErrInvalidPublicKey
-		}
-	}
 
-	if len(c.pqSignature) != MLDSA87SignatureSize {
+	if len(c.pqSignature) != c.pqSuite.signatureSize() {
 		return ErrBadFormat
 	}
 	return nil
@@ -390,6 +364,15 @@ func unmarshalCertificateV3(b []byte, publicKey []byte, curve Curve) (*certifica
 		return nil, ErrBadFormat
 	}
 
+	var rawSuite cryptobyte.String
+	if !body.ReadASN1(&rawSuite, TagCertPQSuite) || len(rawSuite) != 1 {
+		return nil, ErrBadFormat
+	}
+	suite := PQSuite(rawSuite[0])
+	if !suite.Valid() {
+		return nil, fmt.Errorf("%w: %v", ErrUnknownPQSuite, suite)
+	}
+
 	if fromHandshake {
 		if body.PeekASN1Tag(TagCertPQPublicKey) {
 			return nil, ErrCertPubkeyPresent
@@ -413,7 +396,7 @@ func unmarshalCertificateV3(b []byte, publicKey []byte, curve Curve) (*certifica
 	}
 
 	if fromHandshake {
-		k, p, err := splitPQPublicKey(details.isCA, publicKey)
+		k, p, err := suite.SplitPublicKey(details.isCA, publicKey)
 		if err != nil {
 			return nil, err
 		}
@@ -429,6 +412,7 @@ func unmarshalCertificateV3(b []byte, publicKey []byte, curve Curve) (*certifica
 			publicKey:  classical,
 			signature:  signature,
 		},
+		pqSuite:     suite,
 		pqPublicKey: pq,
 		pqSignature: pqSignature,
 	}
@@ -440,16 +424,20 @@ func unmarshalCertificateV3(b []byte, publicKey []byte, curve Curve) (*certifica
 	return c, nil
 }
 
-// ExtendToV3 builds the version 3 certificate that extends the version 2 certificate c with pqPublicKey, the composite
-// public key's post-quantum half. pqSign produces the ML-DSA-87 signature, see SignPQ.
+// ExtendToV3 builds the version 3 certificate in suite that extends the version 2 certificate c with pqPublicKey, the
+// composite public key's post-quantum half. pqSign produces the suite's post-quantum signature, see SignPQ.
 //
 // A CA certificate signs its own extension: signer must be nil and pqSign must use the private key for pqPublicKey.
-// A host certificate is extended by its issuing CA: signer is the v3 form of that CA. In both cases c's classical
-// signature, and so its fingerprint, are left unchanged, so certificates in use can be extended in place.
-func ExtendToV3(c Certificate, pqPublicKey []byte, signer Certificate, pqSign SignerLambda) (Certificate, error) {
+// A host certificate is extended by its issuing CA: signer is the v3 form of that CA, which must be in the same suite.
+// In both cases c's classical signature, and so its fingerprint, are left unchanged, so certificates in use can be
+// extended in place.
+func ExtendToV3(c Certificate, suite PQSuite, pqPublicKey []byte, signer Certificate, pqSign SignerLambda) (Certificate, error) {
 	c2, ok := c.(*certificateV2)
 	if !ok {
 		return nil, fmt.Errorf("only version 2 certificates can be extended to version 3, got version %d", c.Version())
+	}
+	if !suite.Valid() {
+		return nil, fmt.Errorf("%w: %v", ErrUnknownPQSuite, suite)
 	}
 
 	var signingKey []byte
@@ -464,6 +452,9 @@ func ExtendToV3(c Certificate, pqPublicKey []byte, signer Certificate, pqSign Si
 	} else {
 		if signer == nil || signer.Version() != Version3 || !signer.IsCA() {
 			return nil, fmt.Errorf("a host certificate must be extended by a version 3 CA")
+		}
+		if PQSuiteOf(signer) != suite {
+			return nil, ErrPQSuiteMismatch
 		}
 		signerV2 := V2Form(signer)
 		issuer, err := signerV2.Fingerprint()
@@ -481,9 +472,10 @@ func ExtendToV3(c Certificate, pqPublicKey []byte, signer Certificate, pqSign Si
 
 	c3 := &certificateV3{
 		v2:          *c2.Copy().(*certificateV2),
+		pqSuite:     suite,
 		pqPublicKey: bytes.Clone(pqPublicKey),
 	}
-	if len(c3.pqPublicKey) != pqPublicKeySize(c3.IsCA()) {
+	if len(c3.pqPublicKey) != suite.PublicKeySize(c3.IsCA()) {
 		return nil, ErrInvalidPublicKey
 	}
 
@@ -509,16 +501,16 @@ func ExtendToV3(c Certificate, pqPublicKey []byte, signer Certificate, pqSign Si
 	return c3, nil
 }
 
-// SignPQ returns a SignerLambda that signs certificates with the ML-DSA-87 private key seed. Signatures are
-// deterministic (FIPS 204 section 3.4), so signing the same certificate twice gives the same bytes and the same
-// fingerprint, and extending a certificate is idempotent. The hedged variant guards signers an attacker can fault
-// physically, which a CA key in a file is not; the Ed25519 signature beside it is deterministic too.
-func SignPQ(seed []byte) (SignerLambda, error) {
-	sk, err := mldsa.NewPrivateKey(mldsa.MLDSA87(), seed)
-	if err != nil {
-		return nil, err
+// SignPQ returns a SignerLambda that signs certificates with the private key seed of suite's signature algorithm.
+// Signatures are deterministic, so signing the same certificate twice gives the same bytes and the same fingerprint,
+// and extending a certificate is idempotent.
+func SignPQ(suite PQSuite, seed []byte) (SignerLambda, error) {
+	p := pqSuites[suite]
+	if p == nil {
+		return nil, fmt.Errorf("%w: %v", ErrUnknownPQSuite, suite)
 	}
-	return func(b []byte) ([]byte, error) {
-		return sk.SignDeterministic(b, &mldsa.Options{Context: pqSignatureContext})
-	}, nil
+	if len(seed) != p.dsa.privateKeySize {
+		return nil, ErrInvalidPrivateKey
+	}
+	return p.dsa.signer(seed)
 }

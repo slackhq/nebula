@@ -21,6 +21,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/handshake"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/util"
 )
@@ -222,6 +223,15 @@ func (cs *CertState) GetDefaultCertificate() cert.Certificate {
 func (cs *CertState) DefaultVersion() cert.Version { return cs.initiatingVersion }
 
 // GetCredential returns the pre-computed handshake credential for the given version, or nil.
+// hybridSubtype returns the hybrid handshake subtype for the KEM of the v3
+// certificate's suite, false without a v3 certificate.
+func (cs *CertState) hybridSubtype() (header.MessageSubType, bool) {
+	if cs.v3Cert == nil {
+		return 0, false
+	}
+	return handshake.HybridSubtype(cert.PQSuiteOf(cs.v3Cert))
+}
+
 func (cs *CertState) GetCredential(v cert.Version) *handshake.Credential {
 	switch v {
 	case cert.Version1:
@@ -440,7 +450,7 @@ func newCertStateFromConfig(c *config.C, cipher string) (*CertState, error) {
 }
 
 // newCertState builds the handshake credentials. v3, when present, must be what v2 is the v2 form of. privateKey is
-// then the composite key, classical || ML-KEM-1024 seed, and v1 and v2 get its classical half.
+// then the composite key, classical || the seed of the KEM of v3's suite, and v1 and v2 get its classical half.
 func newCertState(dv cert.Version, v1, v2, v3 cert.Certificate, pkcs11backed bool, privateKeyCurve cert.Curve, privateKey []byte, cipher string) (*CertState, error) {
 	cs := CertState{
 		privateKey:               privateKey,
@@ -468,8 +478,8 @@ func newCertState(dv cert.Version, v1, v2, v3 cert.Certificate, pkcs11backed boo
 	}
 
 	classicalKey := privateKey
-	if !pkcs11backed && len(privateKey) > cert.MLKEM1024PrivateKeySize {
-		classicalKey = privateKey[:len(privateKey)-cert.MLKEM1024PrivateKeySize]
+	if !pkcs11backed {
+		classicalKey = cert.ClassicalPrivateKey(privateKey)
 	}
 
 	if v3 != nil {
@@ -478,6 +488,10 @@ func newCertState(dv cert.Version, v1, v2, v3 cert.Certificate, pkcs11backed boo
 		}
 		if err := v3.VerifyPrivateKey(privateKeyCurve, privateKey); err != nil {
 			return nil, fmt.Errorf("private key is not a pair with public key in v3 nebula cert: %w", err)
+		}
+		suite := cert.PQSuiteOf(v3)
+		if _, ok := handshake.HybridSubtype(suite); !ok {
+			return nil, fmt.Errorf("v3 nebula cert uses post-quantum suite %v, which no hybrid handshake supports", suite)
 		}
 
 		v3hs, err := v3.MarshalForHandshakes()

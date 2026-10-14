@@ -169,16 +169,20 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		version = caCert.Version()
 	}
 
+	// A version 3 certificate is in the suite of its CA.
+	suite := cert.PQSuiteOf(caCert)
 	switch {
 	case version == cert.Version3 && caCert.Version() != cert.Version3:
 		return newHelpErrorf("version 3 certificates must be signed by a version 3 CA")
 	case version == cert.Version3 && isP11:
-		return newHelpErrorf("version 3 certificates can not be signed with -pkcs11, the ML-DSA-87 key has to be in ca-key")
+		return newHelpErrorf("version 3 certificates can not be signed with -pkcs11, the post-quantum key has to be in ca-key")
 	case version != cert.Version3 && caCert.Version() == cert.Version3:
 		// A v3 CA signs anything older as its v2 form, with the classical half of its key.
 		caCert = cert.V2Form(caCert)
 		if caKey != nil {
-			caKey = caKey[:len(caKey)-cert.MLDSA87PrivateKeySize]
+			if caKey, _, err = suite.SplitPrivateKey(true, caKey); err != nil {
+				return fmt.Errorf("error while parsing ca-key: %s", err)
+			}
 		}
 	}
 
@@ -272,11 +276,15 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		if pubCurve != curve {
 			return fmt.Errorf("curve of in-pub does not match ca")
 		}
-		if isPQ := len(pub) > cert.MLKEM1024PublicKeySize; isPQ != (version == cert.Version3) {
+		// Composite keys are longer than any classical one, an uncompressed P256 key being the longest.
+		if isPQ := len(pub) > 65; isPQ != (version == cert.Version3) {
 			if isPQ {
-				return fmt.Errorf("in-pub has an ML-KEM-1024 key, which only version 3 certificates carry")
+				return fmt.Errorf("in-pub has a post-quantum key, which only version 3 certificates carry")
 			}
 			return fmt.Errorf("version 3 certificates need an in-pub from keygen -version 3")
+		}
+		if _, _, err := suite.SplitPublicKey(false, pub); version == cert.Version3 && err != nil {
+			return fmt.Errorf("in-pub is not a key for the CA's post-quantum suite, %v", suite)
 		}
 	} else if isP11 {
 		pub, err = p11Client.GetPubKey()
@@ -286,7 +294,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 	} else {
 		pub, rawPriv = newKeypair(curve)
 		if version == cert.Version3 {
-			pub, rawPriv, err = appendPQKey(pub, rawPriv)
+			pub, rawPriv, err = appendPQKey(suite, pub, rawPriv)
 			if err != nil {
 				return err
 			}
@@ -388,6 +396,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 			PublicKey:      pub,
 			IsCA:           false,
 			Curve:          curve,
+			PQSuite:        suite,
 		}
 
 		nc, err := t.Sign(caCert, curve, caKey)
@@ -408,7 +417,11 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 			}
 		}
 
-		err = writeOutput(*sf.outKeyPath, cert.MarshalPrivateKeyToPEM(curve, rawPriv), 0600, out)
+		b := cert.MarshalPrivateKeyToPEM(curve, rawPriv)
+		if version == cert.Version3 {
+			b = cert.MarshalPQPrivateKeyToPEM(curve, suite, rawPriv)
+		}
+		err = writeOutput(*sf.outKeyPath, b, 0600, out)
 		if err != nil {
 			return fmt.Errorf("error while writing out-key: %s", err)
 		}

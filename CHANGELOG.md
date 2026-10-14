@@ -10,10 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Version 3 certificates and post-quantum hybrid handshakes (`ix_hybrid_mlkem1024`). A version 3 certificate is a
-  version 2 certificate extended with an ML-KEM-1024 key (hosts) or an ML-DSA-87 key (CAs) and a deterministic
-  ML-DSA-87 CA signature, and a node holding one still presents the version 2 certificate it extends to peers that
-  need it. `nebula-cert pq-extend` upgrades existing CAs and hosts in place, and extending a certificate twice gives
-  the same certificate. See `docs/pq-handshake.md`.
+  version 2 certificate extended with a post-quantum key and a deterministic post-quantum CA signature, and a node
+  holding one still presents the version 2 certificate it extends to peers that need it. Its post-quantum suite names
+  the algorithms, as its curve does the classical ones; the one suite today is `MLKEM1024_MLDSA87`, an ML-KEM-1024
+  key for hosts and ML-DSA-87 for CAs and their signatures, chosen with `nebula-cert -pq-suite`. `nebula-cert
+  pq-extend` upgrades existing CAs and hosts in place, and extending a certificate twice gives the same certificate.
+  See `docs/pq-handshake.md`.
 
 ### Changed
 

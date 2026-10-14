@@ -3,33 +3,60 @@ package main
 import (
 	"bytes"
 	"crypto/ecdh"
-	"crypto/mldsa"
-	"crypto/mlkem"
 	"encoding/pem"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/slackhq/nebula/cert"
 )
 
-// appendPQSigningKey makes a classical CA keypair into a version 3 composite one with a fresh ML-DSA-87 key.
-func appendPQSigningKey(pub, priv []byte) ([]byte, []byte, error) {
-	sk, err := mldsa.GenerateKey(mldsa.MLDSA87())
-	if err != nil {
-		return nil, nil, fmt.Errorf("error while generating ML-DSA-87 key: %s", err)
+// pqSuiteFlag adds -pq-suite to a flag set.
+func pqSuiteFlag(set *flag.FlagSet, usage string) *string {
+	var names []string
+	for _, s := range cert.PQSuites() {
+		names = append(names, s.String())
 	}
-	return append(pub, sk.PublicKey().Bytes()...), append(priv, sk.Bytes()...), nil
+	return set.String("pq-suite", cert.DefaultPQSuite.String(), usage+" ("+strings.Join(names, ", ")+")")
 }
 
-// appendPQKey makes a classical host keypair into a version 3 composite one with a fresh ML-KEM-1024 key.
-func appendPQKey(pub, priv []byte) ([]byte, []byte, error) {
-	dk, err := mlkem.GenerateKey1024()
-	if err != nil {
-		return nil, nil, fmt.Errorf("error while generating ML-KEM-1024 key: %s", err)
+// parsePQSuiteFlag returns the suite -pq-suite names. Setting it is an error unless allowed, when the suite has no use
+// or comes from elsewhere.
+func parsePQSuiteFlag(set *flag.FlagSet, value string, allowed bool, why string) (cert.PQSuite, error) {
+	given := false
+	set.Visit(func(f *flag.Flag) {
+		if f.Name == "pq-suite" {
+			given = true
+		}
+	})
+	if given && !allowed {
+		return cert.PQSuiteUnknown, newHelpErrorf("-pq-suite %s", why)
 	}
-	return append(pub, dk.EncapsulationKey().Bytes()...), append(priv, dk.Bytes()...), nil
+	s, err := cert.ParsePQSuite(value)
+	if err != nil {
+		return cert.PQSuiteUnknown, newHelpErrorf("-pq-suite: %s", err)
+	}
+	return s, nil
+}
+
+// appendPQSigningKey makes a classical CA keypair into a version 3 composite one with a fresh key of suite.
+func appendPQSigningKey(suite cert.PQSuite, pub, priv []byte) ([]byte, []byte, error) {
+	pqPub, pqPriv, err := suite.GenerateKey(true)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error while generating %v CA key: %s", suite, err)
+	}
+	return append(pub, pqPub...), append(priv, pqPriv...), nil
+}
+
+// appendPQKey makes a classical host keypair into a version 3 composite one with a fresh key of suite.
+func appendPQKey(suite cert.PQSuite, pub, priv []byte) ([]byte, []byte, error) {
+	pqPub, pqPriv, err := suite.GenerateKey(false)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error while generating %v key: %s", suite, err)
+	}
+	return append(pub, pqPub...), append(priv, pqPriv...), nil
 }
 
 // publicKeyFor returns the public key of a classical host private key.
@@ -45,7 +72,7 @@ func publicKeyFor(curve cert.Curve, priv []byte) ([]byte, error) {
 	}
 	k, err := c.NewPrivateKey(priv)
 	if err != nil {
-		return nil, fmt.Errorf("not a classical %s private key, it may already have an ML-KEM-1024 key", curve)
+		return nil, fmt.Errorf("not a classical %s private key, it may already have a post-quantum key", curve)
 	}
 	return k.PublicKey().Bytes(), nil
 }
@@ -58,6 +85,7 @@ type pqExtendFlags struct {
 	inPubPath   *string
 	outCertPath *string
 	outKeyPath  *string
+	pqSuite     *string
 }
 
 func newPQExtendFlags() *pqExtendFlags {
@@ -69,6 +97,7 @@ func newPQExtendFlags() *pqExtendFlags {
 	pf.caCertPath = pf.set.String("ca-crt", "", "Required for a host in-crt: path to the version 3 form of the CA that issued it")
 	pf.inPubPath = pf.set.String("in-pub", "", "Required for a host in-crt: path to the host's public key from keygen -in-key")
 	pf.outKeyPath = pf.set.String("out-key", "", "Required for a CA in-crt: path to write the CA's version 3 key to, encrypted again if ca-key was")
+	pf.pqSuite = pqSuiteFlag(pf.set, "Optional, for a CA in-crt: post-quantum suite of the version 3 CA. A host takes its CA's suite")
 	return &pf
 }
 
@@ -134,9 +163,14 @@ func pqExtend(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		return err
 	}
 
+	suite, err := parsePQSuiteFlag(pf.set, *pf.pqSuite, c.IsCA(), "is for CA certificates, a host takes its CA's suite")
+	if err != nil {
+		return err
+	}
+
 	var c3 cert.Certificate
 	if c.IsCA() {
-		c3, err = extendCA(pf, c, curve, caKey, rawCAKey, passphrase, out)
+		c3, err = extendCA(pf, c, suite, curve, caKey, rawCAKey, passphrase, out)
 	} else {
 		c3, err = extendHost(pf, c, curve, caKey, &claims)
 	}
@@ -154,8 +188,8 @@ func pqExtend(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 	return nil
 }
 
-// extendCA gives a v2 CA an ML-DSA-87 key and writes out the composite key.
-func extendCA(pf *pqExtendFlags, ca cert.Certificate, curve cert.Curve, key, rawKey, passphrase []byte, out io.Writer) (cert.Certificate, error) {
+// extendCA gives a v2 CA a post-quantum key of suite and writes out the composite key.
+func extendCA(pf *pqExtendFlags, ca cert.Certificate, suite cert.PQSuite, curve cert.Curve, key, rawKey, passphrase []byte, out io.Writer) (cert.Certificate, error) {
 	if *pf.caCertPath != "" || *pf.inPubPath != "" {
 		return nil, newHelpErrorf("-ca-crt and -in-pub are for host certificates, a CA extends itself")
 	}
@@ -166,15 +200,15 @@ func extendCA(pf *pqExtendFlags, ca cert.Certificate, curve cert.Curve, key, raw
 		return nil, fmt.Errorf("refusing to extend, the CA certificate does not match ca-key")
 	}
 
-	pub, priv, err := appendPQSigningKey(nil, append([]byte(nil), key...))
+	pub, priv, err := appendPQSigningKey(suite, nil, append([]byte(nil), key...))
 	if err != nil {
 		return nil, err
 	}
-	signPQ, err := cert.SignPQ(priv[len(key):])
+	signPQ, err := cert.SignPQ(suite, priv[len(key):])
 	if err != nil {
 		return nil, err
 	}
-	c3, err := cert.ExtendToV3(ca, pub, nil, signPQ)
+	c3, err := cert.ExtendToV3(ca, suite, pub, nil, signPQ)
 	if err != nil {
 		return nil, fmt.Errorf("error while extending: %s", err)
 	}
@@ -192,12 +226,12 @@ func extendCA(pf *pqExtendFlags, ca cert.Certificate, curve cert.Curve, key, raw
 		}
 		a := ned.EncryptionMetadata.Argon2Parameters
 		kdf := cert.NewArgon2Parameters(a.Memory, a.Parallelism, a.Iterations)
-		b, err = cert.EncryptAndMarshalSigningPrivateKey(curve, priv, passphrase, kdf)
+		b, err = cert.EncryptAndMarshalPQSigningPrivateKey(curve, suite, priv, passphrase, kdf)
 		if err != nil {
 			return nil, fmt.Errorf("error while encrypting out-key: %s", err)
 		}
 	} else {
-		b = cert.MarshalSigningPrivateKeyToPEM(curve, priv)
+		b = cert.MarshalPQSigningPrivateKeyToPEM(curve, suite, priv)
 	}
 	if err := writeOutput(*pf.outKeyPath, b, 0600, out); err != nil {
 		return nil, fmt.Errorf("error while writing out-key: %s", err)
@@ -205,7 +239,7 @@ func extendCA(pf *pqExtendFlags, ca cert.Certificate, curve cert.Curve, key, raw
 	return c3, nil
 }
 
-// extendHost adds a host's ML-KEM-1024 key to its certificate, signed by the v3 form of its CA.
+// extendHost adds a host's post-quantum key to its certificate, signed by the v3 form of its CA, in the CA's suite.
 func extendHost(pf *pqExtendFlags, c cert.Certificate, curve cert.Curve, caKey []byte, claims *ioClaims) (cert.Certificate, error) {
 	if *pf.outKeyPath != "" {
 		return nil, newHelpErrorf("-out-key is for CA certificates, a host's key comes from keygen -in-key")
@@ -240,19 +274,24 @@ func extendHost(pf *pqExtendFlags, c cert.Certificate, curve cert.Curve, caKey [
 	if err != nil {
 		return nil, fmt.Errorf("error while parsing in-pub: %s", err)
 	}
-	if pubCurve != c.Curve() || len(pub) <= cert.MLKEM1024PublicKeySize {
-		return nil, fmt.Errorf("in-pub must be the host's key from keygen -in-key")
+	suite := cert.PQSuiteOf(ca)
+	classical, pq, err := suite.SplitPublicKey(false, pub)
+	if pubCurve != c.Curve() || err != nil {
+		return nil, fmt.Errorf("in-pub must be the host's key from keygen -in-key -pq-suite %v", suite)
 	}
-	classical, pq := pub[:len(pub)-cert.MLKEM1024PublicKeySize], pub[len(pub)-cert.MLKEM1024PublicKeySize:]
 	if !bytes.Equal(classical, c.PublicKey()) {
 		return nil, fmt.Errorf("in-pub does not extend the key in in-crt")
 	}
 
-	signPQ, err := cert.SignPQ(caKey[len(caKey)-cert.MLDSA87PrivateKeySize:])
+	_, pqCAKey, err := suite.SplitPrivateKey(true, caKey)
 	if err != nil {
 		return nil, err
 	}
-	c3, err := cert.ExtendToV3(c, pq, ca, signPQ)
+	signPQ, err := cert.SignPQ(suite, pqCAKey)
+	if err != nil {
+		return nil, err
+	}
+	c3, err := cert.ExtendToV3(c, suite, pq, ca, signPQ)
 	if err != nil {
 		return nil, fmt.Errorf("error while extending: %s", err)
 	}

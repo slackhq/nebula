@@ -94,13 +94,19 @@ func NewMachine(
 
 	// Version 3 certificates go with hybrid patterns and nothing else, the
 	// classical and phase 1 subtypes use the v2 form instead.
-	if info.hybrid != (version == cert.Version3) {
+	hybrid := info.kem != nil
+	if hybrid != (version == cert.Version3) {
 		return nil, fmt.Errorf("%w: %v", ErrCertVersionMismatch, version)
 	}
 
 	cred := getCred(version)
 	if cred == nil {
 		return nil, fmt.Errorf("%w: %v", ErrNoCredential, version)
+	}
+	if hybrid {
+		if err := checkHybridSuite(subtype, cred.Cert); err != nil {
+			return nil, err
+		}
 	}
 
 	hs, err := cred.buildHandshakeState(initiator, info)
@@ -112,7 +118,7 @@ func NewMachine(
 		hs:         hs,
 		subtype:    subtype,
 		msgs:       info.msgs,
-		hybrid:     info.hybrid,
+		hybrid:     hybrid,
 		getCred:    getCred,
 		allocIndex: allocIndex,
 		verifier:   verifier,
@@ -390,6 +396,16 @@ func (m *Machine) processPayload(msg []byte, flags msgFlags) error {
 	return nil
 }
 
+// checkHybridSuite checks that a version 3 certificate's suite uses the KEM of
+// the hybrid subtype.
+func checkHybridSuite(subtype header.MessageSubType, c cert.Certificate) error {
+	suite := cert.PQSuiteOf(c)
+	if st, ok := HybridSubtype(suite); !ok || st != subtype {
+		return fmt.Errorf("%w: %v", ErrPQSuiteMismatch, suite)
+	}
+	return nil
+}
+
 func (m *Machine) validateCert(payload Payload) error {
 	// A v3 certificate only ever comes with a hybrid pattern, and a hybrid
 	// pattern only ever with one. The composite static key would not recombine
@@ -418,6 +434,13 @@ func (m *Machine) validateCert(payload Payload) error {
 	if !bytes.Equal(rc.PublicKey(), m.hs.PeerStatic()) {
 		m.failed = true
 		return ErrPublicKeyMismatch
+	}
+
+	if m.hybrid {
+		if err := checkHybridSuite(m.subtype, rc); err != nil {
+			m.failed = true
+			return err
+		}
 	}
 
 	// Version negotiation, if the peer sent a different version and we have it, switch

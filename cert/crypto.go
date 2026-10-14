@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"strings"
 
 	"golang.org/x/crypto/argon2"
 	"google.golang.org/protobuf/proto"
@@ -158,7 +159,33 @@ func splitNonceCiphertext(blob []byte, nonceSize int) ([]byte, []byte, error) {
 
 // EncryptAndMarshalSigningPrivateKey is a simple helper to encrypt and PEM encode a private key
 func EncryptAndMarshalSigningPrivateKey(curve Curve, b []byte, passphrase []byte, kdfParams *Argon2Parameters) ([]byte, error) {
-	pq := len(b) == signingPrivateKeySize(curve)+MLDSA87PrivateKeySize
+	switch curve {
+	case Curve_CURVE25519:
+		return encryptAndMarshalSigningPrivateKey(EncryptedEd25519PrivateKeyBanner, b, passphrase, kdfParams)
+	case Curve_P256:
+		return encryptAndMarshalSigningPrivateKey(EncryptedECDSAP256PrivateKeyBanner, b, passphrase, kdfParams)
+	default:
+		return nil, fmt.Errorf("invalid curve: %v", curve)
+	}
+}
+
+// EncryptAndMarshalPQSigningPrivateKey encrypts and PEM encodes a composite CA private key of suite, the classical
+// signing key followed by the seed of the suite's signature algorithm.
+func EncryptAndMarshalPQSigningPrivateKey(curve Curve, suite PQSuite, b []byte, passphrase []byte, kdfParams *Argon2Parameters) ([]byte, error) {
+	p := pqSuites[suite]
+	if p == nil {
+		return nil, fmt.Errorf("%w: %v", ErrUnknownPQSuite, suite)
+	}
+	if curve != Curve_CURVE25519 && curve != Curve_P256 {
+		return nil, fmt.Errorf("invalid curve: %v", curve)
+	}
+	if len(b) != pqKeySize(pqSigningPrivateKey, curve, p) {
+		return nil, ErrInvalidPrivateKey
+	}
+	return encryptAndMarshalSigningPrivateKey(pqBannerName(pqEncryptedSigningPrivateKey, curve, p), b, passphrase, kdfParams)
+}
+
+func encryptAndMarshalSigningPrivateKey(banner string, b []byte, passphrase []byte, kdfParams *Argon2Parameters) ([]byte, error) {
 	ciphertext, err := aes256Encrypt(passphrase, kdfParams, b)
 	if err != nil {
 		return nil, err
@@ -181,21 +208,7 @@ func EncryptAndMarshalSigningPrivateKey(curve Curve, b []byte, passphrase []byte
 		return nil, err
 	}
 
-	switch {
-	case pq && curve == Curve_CURVE25519:
-		return pem.EncodeToMemory(&pem.Block{Type: EncryptedEd25519MLDSA87PrivateKeyBanner, Bytes: b}), nil
-	case pq && curve == Curve_P256:
-		return pem.EncodeToMemory(&pem.Block{Type: EncryptedECDSAP256MLDSA87PrivateKeyBanner, Bytes: b}), nil
-	}
-
-	switch curve {
-	case Curve_CURVE25519:
-		return pem.EncodeToMemory(&pem.Block{Type: EncryptedEd25519PrivateKeyBanner, Bytes: b}), nil
-	case Curve_P256:
-		return pem.EncodeToMemory(&pem.Block{Type: EncryptedECDSAP256PrivateKeyBanner, Bytes: b}), nil
-	default:
-		return nil, fmt.Errorf("invalid curve: %v", curve)
-	}
+	return pem.EncodeToMemory(&pem.Block{Type: banner, Bytes: b}), nil
 }
 
 // UnmarshalNebulaEncryptedData will unmarshal a protobuf byte representation of a nebula cert into its
@@ -268,18 +281,15 @@ func DecryptAndUnmarshalSigningPrivateKey(passphrase, b []byte) (Curve, []byte, 
 		return curve, nil, r, fmt.Errorf("input did not contain a valid PEM encoded block")
 	}
 
-	pq := false
-	switch k.Type {
-	case EncryptedEd25519PrivateKeyBanner:
+	pq, pqKey := pqKeyBanners[k.Type]
+	pqKey = pqKey && pq.kind == pqEncryptedSigningPrivateKey
+	switch {
+	case pqKey:
+		curve = pq.curve
+	case k.Type == EncryptedEd25519PrivateKeyBanner:
 		curve = Curve_CURVE25519
-	case EncryptedECDSAP256PrivateKeyBanner:
+	case k.Type == EncryptedECDSAP256PrivateKeyBanner:
 		curve = Curve_P256
-	case EncryptedEd25519MLDSA87PrivateKeyBanner:
-		curve = Curve_CURVE25519
-		pq = true
-	case EncryptedECDSAP256MLDSA87PrivateKeyBanner:
-		curve = Curve_P256
-		pq = true
 	default:
 		return curve, nil, r, fmt.Errorf("bytes did not contain a proper nebula encrypted Ed25519/ECDSA private key banner")
 	}
@@ -300,9 +310,9 @@ func DecryptAndUnmarshalSigningPrivateKey(passphrase, b []byte) (Curve, []byte, 
 		return curve, nil, r, fmt.Errorf("unsupported encryption algorithm: %s", ned.EncryptionMetadata.EncryptionAlgorithm)
 	}
 
-	if pq {
-		if len(bytes) != signingPrivateKeySize(curve)+MLDSA87PrivateKeySize {
-			return curve, nil, r, fmt.Errorf("key was not %d bytes, is invalid %s ML-DSA-87 private key", signingPrivateKeySize(curve)+MLDSA87PrivateKeySize, curve)
+	if pqKey {
+		if len(bytes) != pq.size {
+			return curve, nil, r, fmt.Errorf("key was not %d bytes, is invalid %s", pq.size, strings.ToLower(strings.TrimPrefix(k.Type, "NEBULA ")))
 		}
 		return curve, bytes, r, nil
 	}

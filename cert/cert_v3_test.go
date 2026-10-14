@@ -46,7 +46,7 @@ func TestCertificateV3_Sign(t *testing.T) {
 			assert.Equal(t, caV2Fp, host.Issuer())
 
 			// A v2 CA can not sign a v3 certificate, nor a v3 CA a v2 one.
-			_, err = (&TBSCertificate{Version: Version3, Curve: curve, Name: "x", Networks: host.Networks(), NotBefore: host.NotBefore(), NotAfter: host.NotAfter(), PublicKey: host.PublicKey()}).Sign(V2Form(ca), curve, caKey)
+			_, err = (&TBSCertificate{Version: Version3, Curve: curve, PQSuite: DefaultPQSuite, Name: "x", Networks: host.Networks(), NotBefore: host.NotBefore(), NotAfter: host.NotAfter(), PublicKey: host.PublicKey()}).Sign(V2Form(ca), curve, caKey)
 			require.Error(t, err)
 		})
 	}
@@ -174,13 +174,13 @@ func TestCertificateV3_StrictParse(t *testing.T) {
 	require.ErrorIs(t, err, ErrBadFormat, "trailing bytes after the envelope")
 
 	trailing := rebuildV3(t, host, func(fields map[asn1.Tag][]byte, order *[]asn1.Tag) {
-		fields[6|classContextSpecific] = []byte{6 | classContextSpecific, 1, 0}
-		*order = append(*order, 6|classContextSpecific)
+		fields[7|classContextSpecific] = []byte{7 | classContextSpecific, 1, 0}
+		*order = append(*order, 7|classContextSpecific)
 	})
 	_, err = unmarshalCertificateV3(trailing, nil, Curve_CURVE25519)
 	require.ErrorIs(t, err, ErrBadFormat, "unknown field after the pq signature")
 
-	for _, tag := range []asn1.Tag{TagCertPQPublicKey, TagCertPQSignature} {
+	for _, tag := range []asn1.Tag{TagCertPQSuite, TagCertPQPublicKey, TagCertPQSignature} {
 		missing := rebuildV3(t, host, func(fields map[asn1.Tag][]byte, order *[]asn1.Tag) {
 			*order = removeTag(*order, tag)
 		})
@@ -202,6 +202,17 @@ func TestCertificateV3_StrictParse(t *testing.T) {
 	})
 	_, err = unmarshalCertificateV3(short, nil, Curve_CURVE25519)
 	require.ErrorIs(t, err, ErrInvalidPublicKey)
+
+	// The suite is one known value, PQSuiteUnknown included in what is not.
+	for _, suite := range [][]byte{{byte(PQSuiteUnknown)}, {200}, {}, {1, 1}} {
+		bad := rebuildV3(t, host, func(fields map[asn1.Tag][]byte, order *[]asn1.Tag) {
+			var b cryptobyte.Builder
+			b.AddASN1(TagCertPQSuite, func(b *cryptobyte.Builder) { b.AddBytes(suite) })
+			fields[TagCertPQSuite] = b.BytesOrPanic()
+		})
+		_, err = unmarshalCertificateV3(bad, nil, Curve_CURVE25519)
+		require.Error(t, err, "suite %x", suite)
+	}
 }
 
 func removeTag(order []asn1.Tag, tag asn1.Tag) []asn1.Tag {
@@ -278,9 +289,9 @@ func TestCAPool_V3(t *testing.T) {
 			// A second v3 extension of the same v2 CA is ambiguous.
 			sk, err := mldsa.GenerateKey(mldsa.MLDSA87())
 			require.NoError(t, err)
-			signPQ, err := SignPQ(sk.Bytes())
+			signPQ, err := SignPQ(DefaultPQSuite, sk.Bytes())
 			require.NoError(t, err)
-			again, err := ExtendToV3(V2Form(ca), sk.PublicKey().Bytes(), nil, signPQ)
+			again, err := ExtendToV3(V2Form(ca), DefaultPQSuite, sk.PublicKey().Bytes(), nil, signPQ)
 			require.NoError(t, err)
 			require.ErrorContains(t, pool.AddCA(again), "two version 3 CAs extend the same version 2 CA")
 		})
@@ -343,17 +354,17 @@ func TestExtendToV3(t *testing.T) {
 
 			sk, err := mldsa.GenerateKey(mldsa.MLDSA87())
 			require.NoError(t, err)
-			signPQ, err := SignPQ(sk.Bytes())
+			signPQ, err := SignPQ(DefaultPQSuite, sk.Bytes())
 			require.NoError(t, err)
 
-			ca3, err := ExtendToV3(ca2, sk.PublicKey().Bytes(), nil, signPQ)
+			ca3, err := ExtendToV3(ca2, DefaultPQSuite, sk.PublicKey().Bytes(), nil, signPQ)
 			require.NoError(t, err)
 			assertCertsEqual(t, ca2, V2Form(ca3))
 			require.NoError(t, ca3.VerifyPrivateKey(curve, append(caKey2, sk.Bytes()...)))
 
 			dk, err := mlkem.GenerateKey1024()
 			require.NoError(t, err)
-			host3, err := ExtendToV3(host2, dk.EncapsulationKey().Bytes(), ca3, signPQ)
+			host3, err := ExtendToV3(host2, DefaultPQSuite, dk.EncapsulationKey().Bytes(), ca3, signPQ)
 			require.NoError(t, err)
 			assertCertsEqual(t, host2, V2Form(host3))
 
@@ -364,26 +375,26 @@ func TestExtendToV3(t *testing.T) {
 
 			// A host must be extended by its own issuer, and with that issuer's key.
 			other2, _, _, _ := NewTestCaCert(Version2, curve, time.Time{}, time.Time{}, nil, nil, nil)
-			other3, err := ExtendToV3(other2, sk.PublicKey().Bytes(), nil, signPQ)
+			other3, err := ExtendToV3(other2, DefaultPQSuite, sk.PublicKey().Bytes(), nil, signPQ)
 			require.NoError(t, err)
-			_, err = ExtendToV3(host2, dk.EncapsulationKey().Bytes(), other3, signPQ)
+			_, err = ExtendToV3(host2, DefaultPQSuite, dk.EncapsulationKey().Bytes(), other3, signPQ)
 			require.Error(t, err)
 
 			wrong, err := mldsa.GenerateKey(mldsa.MLDSA87())
 			require.NoError(t, err)
-			wrongSign, err := SignPQ(wrong.Bytes())
+			wrongSign, err := SignPQ(DefaultPQSuite, wrong.Bytes())
 			require.NoError(t, err)
-			_, err = ExtendToV3(host2, dk.EncapsulationKey().Bytes(), ca3, wrongSign)
+			_, err = ExtendToV3(host2, DefaultPQSuite, dk.EncapsulationKey().Bytes(), ca3, wrongSign)
 			require.ErrorIs(t, err, ErrSignatureMismatch)
 
 			// A CA extends itself, and needs its own post-quantum key to.
-			_, err = ExtendToV3(ca2, sk.PublicKey().Bytes(), nil, wrongSign)
+			_, err = ExtendToV3(ca2, DefaultPQSuite, sk.PublicKey().Bytes(), nil, wrongSign)
 			require.ErrorIs(t, err, ErrSignatureMismatch)
-			_, err = ExtendToV3(ca2, sk.PublicKey().Bytes(), ca3, signPQ)
+			_, err = ExtendToV3(ca2, DefaultPQSuite, sk.PublicKey().Bytes(), ca3, signPQ)
 			require.Error(t, err)
 
 			// Only v2 certificates extend.
-			_, err = ExtendToV3(host3, dk.EncapsulationKey().Bytes(), ca3, signPQ)
+			_, err = ExtendToV3(host3, DefaultPQSuite, dk.EncapsulationKey().Bytes(), ca3, signPQ)
 			require.Error(t, err)
 		})
 	}
@@ -398,13 +409,13 @@ func TestExtendToV3_Deterministic(t *testing.T) {
 			host2, _, _, _ := NewTestCert(Version2, curve, ca2, caKey2, "host", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.1/16")}, nil, nil)
 			sk, err := mldsa.GenerateKey(mldsa.MLDSA87())
 			require.NoError(t, err)
-			signPQ, err := SignPQ(sk.Bytes())
+			signPQ, err := SignPQ(DefaultPQSuite, sk.Bytes())
 			require.NoError(t, err)
 			dk, err := mlkem.GenerateKey1024()
 			require.NoError(t, err)
 
 			extend := func(c Certificate, pq []byte, signer Certificate) ([]byte, string, Certificate) {
-				c3, err := ExtendToV3(c, pq, signer, signPQ)
+				c3, err := ExtendToV3(c, DefaultPQSuite, pq, signer, signPQ)
 				require.NoError(t, err)
 				b, err := c3.Marshal()
 				require.NoError(t, err)
@@ -446,18 +457,18 @@ func TestCertificateV3_KeyPEM(t *testing.T) {
 			assert.Equal(t, curve, gotCurve)
 			assert.Equal(t, ca.PublicKey(), pub)
 
-			key, _, gotCurve, err := UnmarshalPrivateKeyFromPEM(MarshalPrivateKeyToPEM(curve, hostKey))
+			key, _, gotCurve, err := UnmarshalPrivateKeyFromPEM(MarshalPQPrivateKeyToPEM(curve, DefaultPQSuite, hostKey))
 			require.NoError(t, err)
 			assert.Equal(t, curve, gotCurve)
 			assert.Equal(t, hostKey, key)
 
-			key, _, gotCurve, err = UnmarshalSigningPrivateKeyFromPEM(MarshalSigningPrivateKeyToPEM(curve, caKey))
+			key, _, gotCurve, err = UnmarshalSigningPrivateKeyFromPEM(MarshalPQSigningPrivateKeyToPEM(curve, DefaultPQSuite, caKey))
 			require.NoError(t, err)
 			assert.Equal(t, curve, gotCurve)
 			assert.Equal(t, caKey, key)
 
 			kdf := NewArgon2Parameters(64*1024, 4, 1)
-			enc, err := EncryptAndMarshalSigningPrivateKey(curve, caKey, []byte("pw"), kdf)
+			enc, err := EncryptAndMarshalPQSigningPrivateKey(curve, DefaultPQSuite, caKey, []byte("pw"), kdf)
 			require.NoError(t, err)
 			_, _, _, err = UnmarshalSigningPrivateKeyFromPEM(enc)
 			require.ErrorIs(t, err, ErrPrivateKeyEncrypted)
@@ -465,6 +476,18 @@ func TestCertificateV3_KeyPEM(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, curve, gotCurve)
 			assert.Equal(t, caKey, key)
+
+			// The banners name both halves.
+			assert.Contains(t, string(MarshalPQPrivateKeyToPEM(curve, DefaultPQSuite, hostKey)), " MLKEM1024 PRIVATE KEY-----")
+			assert.Contains(t, string(MarshalPQSigningPrivateKeyToPEM(curve, DefaultPQSuite, caKey)), " MLDSA87 PRIVATE KEY-----")
+			assert.Contains(t, string(enc), " MLDSA87 ENCRYPTED PRIVATE KEY-----")
+
+			// A key of the wrong size, or for an unknown suite, has no banner.
+			assert.Nil(t, MarshalPQPrivateKeyToPEM(curve, DefaultPQSuite, hostKey[1:]))
+			assert.Nil(t, MarshalPQPrivateKeyToPEM(curve, PQSuiteUnknown, hostKey))
+			assert.Nil(t, MarshalPQSigningPrivateKeyToPEM(curve, DefaultPQSuite, caKey[1:]))
+			_, err = EncryptAndMarshalPQSigningPrivateKey(curve, DefaultPQSuite, caKey[1:], []byte("pw"), kdf)
+			require.Error(t, err)
 		})
 	}
 }

@@ -4,8 +4,6 @@ import (
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
-	"crypto/mldsa"
-	"crypto/mlkem"
 	"crypto/rand"
 	"io"
 	"net/netip"
@@ -64,6 +62,9 @@ func NewTestCaCert(version Version, curve Curve, before, after time.Time, networ
 		Groups:         groups,
 		IsCA:           true,
 	}
+	if version == Version3 {
+		t.PQSuite = DefaultPQSuite
+	}
 
 	c, err := t.Sign(nil, curve, priv)
 	if err != nil {
@@ -104,7 +105,7 @@ func NewTestCert(v Version, curve Curve, ca Certificate, key []byte, name string
 	}
 
 	if v == Version3 {
-		pub, priv = appendPQKey(pub, priv)
+		pub, priv = appendPQKey(ca, pub, priv)
 	}
 
 	nc := &TBSCertificate{
@@ -118,6 +119,7 @@ func NewTestCert(v Version, curve Curve, ca Certificate, key []byte, name string
 		NotAfter:       time.Unix(after.Unix(), 0),
 		PublicKey:      pub,
 		IsCA:           false,
+		PQSuite:        PQSuiteOf(ca),
 	}
 
 	c, err := nc.Sign(ca, ca.Curve(), key)
@@ -130,25 +132,28 @@ func NewTestCert(v Version, curve Curve, ca Certificate, key []byte, name string
 		panic(err)
 	}
 
+	if v == Version3 {
+		return c, pub, MarshalPQPrivateKeyToPEM(curve, PQSuiteOf(ca), priv), pem
+	}
 	return c, pub, MarshalPrivateKeyToPEM(curve, priv), pem
 }
 
-// appendPQSigningKey makes a classical CA keypair into a version 3 composite one with a fresh ML-DSA-87 key.
+// appendPQSigningKey makes a classical CA keypair into a version 3 composite one with a fresh key of the default suite.
 func appendPQSigningKey(pub, priv []byte) ([]byte, []byte) {
-	sk, err := mldsa.GenerateKey(mldsa.MLDSA87())
+	pqPub, pqPriv, err := DefaultPQSuite.GenerateKey(true)
 	if err != nil {
 		panic(err)
 	}
-	return append(pub, sk.PublicKey().Bytes()...), append(priv, sk.Bytes()...)
+	return append(pub, pqPub...), append(priv, pqPriv...)
 }
 
-// appendPQKey makes a classical host keypair into a version 3 composite one with a fresh ML-KEM-1024 key.
-func appendPQKey(pub, priv []byte) ([]byte, []byte) {
-	dk, err := mlkem.GenerateKey1024()
+// appendPQKey makes a classical host keypair into a version 3 composite one with a fresh key of the CA's suite.
+func appendPQKey(ca Certificate, pub, priv []byte) ([]byte, []byte) {
+	pqPub, pqPriv, err := PQSuiteOf(ca).GenerateKey(false)
 	if err != nil {
 		panic(err)
 	}
-	return append(pub, dk.EncapsulationKey().Bytes()...), append(priv, dk.Bytes()...)
+	return append(pub, pqPub...), append(priv, pqPriv...)
 }
 
 func X25519Keypair() ([]byte, []byte) {

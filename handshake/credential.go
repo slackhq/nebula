@@ -15,7 +15,7 @@ type Credential struct {
 	Bytes       []byte            // pre-marshaled certificate bytes
 	privateKey  []byte            // static private key (public half lives in Cert)
 	publicKey   []byte            // static public key, the classical half for a v3 Cert
-	kemKey      noise.KEMKey      // static ML-KEM-1024 keypair, only for a v3 Cert
+	kemKey      noise.KEMKey      // static KEM keypair of the Cert's suite, only for a v3 Cert
 	cipherSuite noise.CipherSuite // pre-built cipher suite (DH + cipher + hash)
 }
 
@@ -24,7 +24,8 @@ type Credential struct {
 // appropriate DH function, cipher, and hash.
 //
 // For a version 3 certificate privateKey is the composite private key,
-// classical || ML-KEM-1024 seed, matching the composite Cert.PublicKey().
+// classical || the seed of its suite's KEM, matching the composite
+// Cert.PublicKey().
 func NewCredential(
 	c cert.Certificate,
 	hsBytes []byte,
@@ -38,14 +39,10 @@ func NewCredential(
 		publicKey:   c.PublicKey(),
 		cipherSuite: cipherSuite,
 	}
-	if v2 := cert.V2Form(c); v2 != nil {
-		classical := v2.PublicKey()
-		hc.publicKey = classical
-		hc.kemKey = noise.KEMKey{
-			Private: privateKey[len(privateKey)-cert.MLKEM1024PrivateKeySize:],
-			Public:  c.PublicKey()[len(classical):],
-		}
-		hc.privateKey = privateKey[:len(privateKey)-cert.MLKEM1024PrivateKeySize]
+	if suite := cert.PQSuiteOf(c); suite != cert.PQSuiteUnknown {
+		// The pki checked the private key against the certificate, so both split.
+		hc.publicKey, hc.kemKey.Public, _ = suite.SplitPublicKey(false, c.PublicKey())
+		hc.privateKey, hc.kemKey.Private, _ = suite.SplitPrivateKey(false, privateKey)
 	}
 	return hc
 }
@@ -53,7 +50,7 @@ func NewCredential(
 // buildHandshakeState creates a noise.HandshakeState from this credential.
 // pskPlacement selects the noise psk modifier; 0 means none. A psk for
 // placements 2 and up is supplied later with SetPresharedKey. A hybrid
-// pattern also gets ML-KEM-1024 and the static ML-KEM key.
+// pattern also gets its KEM and the static KEM key.
 func (hc *Credential) buildHandshakeState(initiator bool, info subtypeInfo) (*noise.HandshakeState, error) {
 	cfg := noise.Config{
 		CipherSuite:           hc.cipherSuite,
@@ -64,8 +61,8 @@ func (hc *Credential) buildHandshakeState(initiator bool, info subtypeInfo) (*no
 		PresharedKey:          []byte{},
 		PresharedKeyPlacement: info.pskPlacement,
 	}
-	if info.hybrid {
-		cfg.KEMFunc = KEMMLKEM1024
+	if info.kem != nil {
+		cfg.KEMFunc = info.kem
 		cfg.StaticKEMKeypair = hc.kemKey
 	}
 	return noise.NewHandshakeState(cfg)

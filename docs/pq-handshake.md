@@ -77,11 +77,22 @@ CertificateV3 ::= SEQUENCE {
     curve        [1] Curve DEFAULT curve25519,
     publicKey    [2] OCTET STRING,   -- classical: X25519 / P256 for hosts, Ed25519 / ECDSA P256 for CAs
     signature    [3] OCTET STRING,   -- classical CA signature over details || curve || publicKey, as in v2
-    pqPublicKey  [4] OCTET STRING,   -- ML-KEM-1024 encapsulation key for hosts, ML-DSA-87 public key for CAs
-    pqSignature  [5] OCTET STRING    -- ML-DSA-87 by the issuing CA, context "nebula certificate v3",
-                                     -- over the DER of fields 0 to 4, curve always present
+    pqSuite      [4] OCTET STRING,   -- one byte, the PQSuite; always present
+    pqPublicKey  [5] OCTET STRING,   -- the suite's KEM public key for hosts, its signature public key for CAs
+    pqSignature  [6] OCTET STRING    -- the suite's signature by the issuing CA, context "nebula certificate v3",
+                                     -- over the DER of fields 0 to 5, curve always present
 }
 ```
+
+- **The suite.** `pqSuite` names the post-quantum algorithms the way `curve` names the classical
+  ones: the KEM of host keys, and the signature algorithm of CA keys and of the certificates a CA
+  signs. A CA and every certificate it signs share a suite, as they share a curve; the CA pool
+  rejects a mismatch, and the post-quantum signature covers the suite, so a certificate can not be
+  relabelled. The field is always present, in handshakes too, with no default, and 0 is never
+  valid. There is one suite today, `MLKEM1024_MLDSA87` (1): ML-KEM-1024 hosts, ML-DSA-87 CAs. A
+  new suite is an entry in the cert package's suite table plus, for a new KEM, a hybrid subtype; no
+  new certificate version. Changing a CA's suite means a new CA, or a new v3 extension of its v2
+  form that replaces the old one, since one v2 CA has one v3 extension.
 
 - **The v2 form.** Fields 0 to 3 are a byte exact v2 certificate, signed by the v2 form of the CA.
   A v3 holder presents it in classical and phase 1 handshakes, so peers that only speak v2 accept
@@ -109,7 +120,9 @@ CertificateV3 ::= SEQUENCE {
 - **Keys are composite**, classical followed by post-quantum, wherever a v3 certificate deals in
   them: `PublicKey()` returns `classical || pq`, and private keys are `classical || seed` (64 byte
   ML-KEM seed for hosts, 32 byte ML-DSA seed for CAs), in one PEM block in `pki.key` with banners
-  such as `NEBULA X25519 MLKEM1024 PRIVATE KEY` and `NEBULA ED25519 MLDSA87 PRIVATE KEY`.
+  such as `NEBULA X25519 MLKEM1024 PRIVATE KEY` and `NEBULA ED25519 MLDSA87 PRIVATE KEY`. The
+  banner names the post-quantum algorithm, not the suite, because a seed's size does not tell the
+  algorithm's strength.
 - **Both curves.** Curve25519 and P256; the post-quantum half does not depend on the curve.
 - **In-place upgrade.** `nebula-cert pq-extend` turns an existing v2 CA into a v3 CA whose v2 form
   is the old CA certificate, byte for byte, and extends existing host certificates the same way.
@@ -118,8 +131,8 @@ CertificateV3 ::= SEQUENCE {
 
 | Certificate | Full | In a handshake | v2 form |
 |---|---|---|---|
-| CA, Curve25519 | 7362 B | n/a | 134 B |
-| Host, Curve25519 | 6375 B | 4769 B | 171 B |
+| CA, Curve25519 | 7365 B | n/a | 134 B |
+| Host, Curve25519 | 6378 B | 4772 B | 171 B |
 
 `crypto/mldsa` is new in Go 1.27, so `go.mod` moves to Go 1.27.
 
@@ -163,11 +176,17 @@ design rationale and security argument), with ML-KEM-1024 supplied by nebula:
   initiator sealed.
 - v3 certificates go with this subtype and nothing else: a v3 certificate on any other subtype, or
   a v2 one on this one, is a protocol error.
+- **One subtype per KEM.** A hybrid subtype names its KEM, and a v3 holder initiates the subtype of
+  its suite's KEM. Peers need the same KEM, not the same suite: suites that differ only in their
+  signature algorithm share a subtype, and each certificate carries its own suite. A responder
+  whose suite uses another KEM drops msg1, so the pair behaves as if the responder did not speak
+  PQ: classical fallback, or no tunnel under `require`. A suite's KEM must have a subtype for the
+  pki to load a certificate in it.
 
 | Message | Size (Curve25519) | Data fragments (k) |
 |---|---|---|
-| msg1 | 8006 B | 7 |
-| msg2 | 9625 B | 9 |
+| msg1 | 8009 B | 7 |
+| msg2 | 9628 B | 9 |
 | msg3 | 1616 B | 2 |
 
 **Dependency.** DefinedNet/noise is a private repository today. `go.mod` points at a local clone
@@ -484,10 +503,11 @@ in every scenario above, and within three at least 99.99%.
 
 ## Implementation (phase 2)
 
-- `cert`: `cert_v3.go` (format, `V2Form`, `ExtendToV3`, `SignPQ`), `SignHybridWith` and the
-  composite `Sign` path, the CA pool's v3 index and v2-form blocklisting, and the composite key
-  PEM banners.
+- `cert`: `cert_v3.go` (format, `V2Form`, `ExtendToV3`, `SignPQ`), `pq_suite.go` (`PQSuite` and
+  the suite table), `SignHybridWith` and the composite `Sign` path, the CA pool's v3 index, suite
+  check and v2-form blocklisting, and the composite key PEM banners, generated per suite.
 - `handshake`: the `ix_hybrid_mlkem1024` subtype on `noise.HandshakeHybridIX`, `KEMMLKEM1024`,
+  `HybridSubtype` mapping a suite to the subtype of its KEM,
   composite credentials, cipher states ordered by role for three message patterns, and
   `Machine.PeerCert` for a responder that has to act before completion.
 - `pki.go` loads a v3 certificate with its composite key and derives the v2 form; messages after
@@ -496,7 +516,8 @@ in every scenario above, and within three at least 99.99%.
   initiator's msg3 resends and teardown; `outside.go` keeps quiet about pending responder indexes.
 - `nebula-cert`: `ca`, `keygen` and `sign` take `-version 3`, `keygen -in-key` extends an existing
   host key, `sign -version 2` with a v3 CA signs as its v2 form, and `pq-extend` upgrades v2
-  certificates in place, keeping an encrypted CA key encrypted.
+  certificates in place, keeping an encrypted CA key encrypted. `ca`, `keygen` and `pq-extend` of a
+  CA take `-pq-suite`; `sign` and `pq-extend` of a host take the CA's suite.
 - Tests: certificate format, strictness, tampering, pool and blocklist rules and in-place
   extension on both curves; Machine-level hybrid handshakes including corrupted msg3 and
   impersonation with only the classical key; e2e tests for a clean hybrid handshake, a lost

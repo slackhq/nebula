@@ -524,7 +524,7 @@ func TestTableAnswered(t *testing.T) {
 	r := rand.New(rand.NewPCG(3, 3))
 	tb := NewTable[testKey, string](testConfig())
 	now := time.Unix(1000, 0)
-	const msgLen = 8006 // a hybrid msg1: K=7 data symbols, 3 repair
+	const msgLen = 8009 // a hybrid msg1: K=7 data symbols, 3 repair
 
 	sendAll := func(key testKey, pkts [][]byte) []*Result {
 		var out []*Result

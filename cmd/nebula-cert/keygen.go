@@ -20,6 +20,7 @@ type keygenFlags struct {
 	inKeyPath  *string
 	curve      *string
 	version    *uint
+	pqSuite    *string
 	p11url     *string
 }
 
@@ -29,8 +30,9 @@ func newKeygenFlags() *keygenFlags {
 	cf.outPubPath = cf.set.String("out-pub", "", "Required: path to write the public key to")
 	cf.outKeyPath = cf.set.String("out-key", "", "Required: path to write the private key to")
 	cf.curve = cf.set.String("curve", defaultCurve(), "ECDH Curve (25519, P256)")
-	cf.version = cf.set.Uint("version", 0, "Optional: 3 adds an ML-KEM-1024 key, for version 3 certificates")
-	cf.inKeyPath = cf.set.String("in-key", "", "Optional: path to an existing private key to add an ML-KEM-1024 key to, keeping the existing key. Implies -version 3")
+	cf.version = cf.set.Uint("version", 0, "Optional: 3 adds a post-quantum key, for version 3 certificates")
+	cf.inKeyPath = cf.set.String("in-key", "", "Optional: path to an existing private key to add a post-quantum key to, keeping the existing key. Implies -version 3")
+	cf.pqSuite = pqSuiteFlag(cf.set, "Optional: post-quantum suite of a version 3 key, which must be the suite of the CA that signs it")
 	cf.p11url = p11Flag(cf.set)
 	return &cf
 }
@@ -63,7 +65,11 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 		return newHelpErrorf("-version must be %v, or left out for keys that work with any other version", cert.Version3)
 	}
 	if version == cert.Version3 && isP11 {
-		return newHelpErrorf("-version 3 can not be used with -pkcs11, the ML-KEM-1024 key has to be in out-key")
+		return newHelpErrorf("-version 3 can not be used with -pkcs11, the post-quantum key has to be in out-key")
+	}
+	suite, err := parsePQSuiteFlag(cf.set, *cf.pqSuite, version == cert.Version3, "is only for -version 3")
+	if err != nil {
+		return err
 	}
 
 	var claims ioClaims
@@ -113,7 +119,7 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 	}
 
 	if version == cert.Version3 {
-		pub, rawPriv, err = appendPQKey(pub, rawPriv)
+		pub, rawPriv, err = appendPQKey(suite, pub, rawPriv)
 		if err != nil {
 			return err
 		}
@@ -139,12 +145,20 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 			return fmt.Errorf("error while getting public key: %w", err)
 		}
 	} else {
-		err = writeOutput(*cf.outKeyPath, cert.MarshalPrivateKeyToPEM(curve, rawPriv), 0600, out)
+		b := cert.MarshalPrivateKeyToPEM(curve, rawPriv)
+		if version == cert.Version3 {
+			b = cert.MarshalPQPrivateKeyToPEM(curve, suite, rawPriv)
+		}
+		err = writeOutput(*cf.outKeyPath, b, 0600, out)
 		if err != nil {
 			return fmt.Errorf("error while writing out-key: %s", err)
 		}
 	}
-	err = writeOutput(*cf.outPubPath, cert.MarshalPublicKeyToPEM(curve, pub), 0600, out)
+	b := cert.MarshalPublicKeyToPEM(curve, pub)
+	if version == cert.Version3 {
+		b = cert.MarshalPQPublicKeyToPEM(curve, suite, pub)
+	}
+	err = writeOutput(*cf.outPubPath, b, 0600, out)
 	if err != nil {
 		return fmt.Errorf("error while writing out-pub: %s", err)
 	}

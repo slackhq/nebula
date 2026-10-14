@@ -190,8 +190,8 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 	// Gate on known handshake subtypes. Unknown subtypes (or future ones we
 	// don't yet support) are dropped here rather than silently routed through
 	// the IX path. Add a case when introducing a new pattern.
-	switch h.Subtype {
-	case header.HandshakeIXPSK0, header.HandshakeIXPSK2MLKEM1024, hybridSubtype:
+	switch {
+	case h.Subtype == header.HandshakeIXPSK0, h.Subtype == header.HandshakeIXPSK2MLKEM1024, handshake.IsHybrid(h.Subtype):
 		// supported
 	default:
 		hm.l.Debug("dropping handshake with unsupported subtype",
@@ -795,7 +795,7 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 	// A hybrid responder answers with its v3 certificate and has to wait for msg3,
 	// so its index is registered right away for msg3 to find.
 	var pending *HandshakeHostInfo
-	if h.Subtype == hybridSubtype {
+	if handshake.IsHybrid(h.Subtype) {
 		v = cert.Version3
 		pending = &HandshakeHostInfo{
 			hostinfo: &HostInfo{

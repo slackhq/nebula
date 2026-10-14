@@ -100,9 +100,40 @@ func TestPQ_SignErrors(t *testing.T) {
 	require.NoError(t, ca([]string{"-version", "3", "-name", "v3 ca", "-out-crt", p("ca3.crt"), "-out-key", p("ca3.key")}, ob, eb, nopw))
 	require.ErrorContains(t, signCert([]string{"-ca-crt", p("ca3.crt"), "-ca-key", p("ca3.key"), "-name", "h", "-networks", "10.1.0.1/16", "-in-pub", p("k.pub"), "-out-crt", p("h3.crt")}, ob, eb, nopw), "need an in-pub from keygen -version 3")
 
-	// keygen -in-key refuses a key that already has an ML-KEM key.
+	// keygen -in-key refuses a key that already has a post-quantum key.
 	require.NoError(t, keygen([]string{"-version", "3", "-out-key", p("k3.key"), "-out-pub", p("k3.pub")}, ob, eb))
-	require.ErrorContains(t, keygen([]string{"-in-key", p("k3.key"), "-out-key", p("k33.key"), "-out-pub", p("k33.pub")}, ob, eb), "already have an ML-KEM-1024 key")
+	require.ErrorContains(t, keygen([]string{"-in-key", p("k3.key"), "-out-key", p("k33.key"), "-out-pub", p("k33.pub")}, ob, eb), "already have a post-quantum key")
+}
+
+func TestPQ_SuiteFlag(t *testing.T) {
+	dir := t.TempDir()
+	ob, eb := &bytes.Buffer{}, &bytes.Buffer{}
+	nopw := &StubPasswordReader{}
+	p := func(n string) string { return filepath.Join(dir, n) }
+
+	// The suite can be named, case aside, and the certificates a CA signs share its suite.
+	require.NoError(t, ca([]string{"-version", "3", "-pq-suite", "mlkem1024_mldsa87", "-name", "ca", "-out-crt", p("ca.crt"), "-out-key", p("ca.key")}, ob, eb, nopw))
+	assert.Equal(t, cert.PQSuite_MLKEM1024_MLDSA87, cert.PQSuiteOf(readCert(t, p("ca.crt"))))
+	require.NoError(t, keygen([]string{"-version", "3", "-pq-suite", "MLKEM1024_MLDSA87", "-out-key", p("k.key"), "-out-pub", p("k.pub")}, ob, eb))
+	require.NoError(t, signCert([]string{"-ca-crt", p("ca.crt"), "-ca-key", p("ca.key"), "-name", "h", "-networks", "10.1.0.1/16", "-in-pub", p("k.pub"), "-out-crt", p("h.crt")}, ob, eb, nopw))
+	assert.Equal(t, cert.PQSuite_MLKEM1024_MLDSA87, cert.PQSuiteOf(readCert(t, p("h.crt"))))
+
+	// Printing shows it.
+	ob.Reset()
+	require.NoError(t, printCert([]string{"-json", "-path", p("h.crt")}, ob, eb))
+	assert.Contains(t, ob.String(), `"pqSuite":"MLKEM1024_MLDSA87"`)
+
+	// Unknown suites, and suites where there is no post-quantum key, are refused.
+	require.ErrorContains(t, ca([]string{"-version", "3", "-pq-suite", "mlkem768_mldsa65", "-name", "x", "-out-crt", p("x.crt"), "-out-key", p("x.key")}, ob, eb, nopw), "unknown post-quantum suite")
+	require.ErrorContains(t, ca([]string{"-pq-suite", "MLKEM1024_MLDSA87", "-name", "x", "-out-crt", p("x.crt"), "-out-key", p("x.key")}, ob, eb, nopw), "only for -version 3")
+	require.ErrorContains(t, keygen([]string{"-pq-suite", "MLKEM1024_MLDSA87", "-out-key", p("x.key"), "-out-pub", p("x.pub")}, ob, eb), "only for -version 3")
+
+	// A host takes its CA's suite when extended.
+	require.NoError(t, ca([]string{"-name", "ca2", "-out-crt", p("ca2.crt"), "-out-key", p("ca2.key")}, ob, eb, nopw))
+	require.NoError(t, signCert([]string{"-ca-crt", p("ca2.crt"), "-ca-key", p("ca2.key"), "-name", "h2", "-networks", "10.1.0.2/16", "-out-crt", p("h2.crt"), "-out-key", p("h2.key")}, ob, eb, nopw))
+	require.NoError(t, pqExtend([]string{"-in-crt", p("ca2.crt"), "-ca-key", p("ca2.key"), "-pq-suite", "MLKEM1024_MLDSA87", "-out-crt", p("ca23.crt"), "-out-key", p("ca23.key")}, ob, eb, nopw))
+	require.NoError(t, keygen([]string{"-in-key", p("h2.key"), "-out-key", p("h23.key"), "-out-pub", p("h23.pub")}, ob, eb))
+	require.ErrorContains(t, pqExtend([]string{"-in-crt", p("h2.crt"), "-in-pub", p("h23.pub"), "-ca-crt", p("ca23.crt"), "-ca-key", p("ca23.key"), "-pq-suite", "MLKEM1024_MLDSA87", "-out-crt", p("h23.crt")}, ob, eb, nopw), "a host takes its CA's suite")
 }
 
 // TestPQ_Extend upgrades a v2 CA and a host in place, the way a running network migrates.
@@ -145,7 +176,7 @@ func TestPQ_Extend(t *testing.T) {
 				require.ErrorIs(t, err, cert.ErrPrivateKeyEncrypted, "an encrypted ca-key stays encrypted")
 			}
 
-			// The host gets an ML-KEM key on top of the one it has, and the CA signs it.
+			// The host gets a post-quantum key on top of the one it has, and the CA signs it.
 			require.NoError(t, keygen([]string{"-in-key", p("host.key"), "-out-key", p("host3.key"), "-out-pub", p("host3.pub")}, ob, eb))
 			require.NoError(t, pqExtend([]string{"-in-crt", p("host.crt"), "-in-pub", p("host3.pub"), "-ca-crt", p("ca3.crt"), "-ca-key", p("ca3.key"), "-out-crt", p("host3.crt")}, ob, eb, pw))
 			host3 := readCert(t, p("host3.crt"))

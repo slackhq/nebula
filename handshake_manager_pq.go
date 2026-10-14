@@ -276,14 +276,15 @@ func (hm *HandshakeManager) relayEstablished(target netip.Addr, relayHI *HostInf
 }
 
 // buildPQAttempt creates the initiator's PQ Machine and msg1 sender. A node with
-// a v3 certificate speaks the hybrid handshake, anyone else the ephemeral KEM one.
+// a v3 certificate speaks the hybrid handshake for its suite's KEM, anyone else
+// the ephemeral KEM one.
 func (hm *HandshakeManager) buildPQAttempt(hh *HandshakeHostInfo) bool {
 	cs := hm.f.pki.getCertState()
 	v := hm.initiatingVersion(hh, cs)
 	subtype := header.HandshakeIXPSK2MLKEM1024
-	if cs.GetCredential(cert.Version3) != nil {
+	if st, ok := cs.hybridSubtype(); ok {
 		v = cert.Version3
-		subtype = hybridSubtype
+		subtype = st
 	}
 	if cs.GetCredential(v) == nil {
 		hm.f.l.Error("Unable to handshake with host because no certificate is available",
@@ -409,13 +410,20 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 			hm.l.Debug("dropping post-quantum handshake, not accepting them", "from", via)
 			return
 		}
-		if h.Subtype == hybridSubtype || cfg.require {
-			hasV3 := hm.f.pki.getCertState().GetCredential(cert.Version3) != nil
-			if h.Subtype == hybridSubtype && !hasV3 {
+		hybrid := handshake.IsHybrid(h.Subtype)
+		if hybrid || cfg.require {
+			mine, hasV3 := hm.f.pki.getCertState().hybridSubtype()
+			switch {
+			case hybrid && !hasV3:
 				hm.l.Debug("dropping hybrid handshake, no v3 certificate to answer it with", "from", via)
 				return
-			}
-			if h.Subtype != hybridSubtype && hasV3 {
+			case hybrid && h.Subtype != mine:
+				// The peer's suite uses another KEM. Like a peer without PQ, it
+				// falls back to classical unless either side requires PQ.
+				hm.l.Debug("dropping hybrid handshake, our v3 certificate's suite uses another KEM", "from", via,
+					"style", header.SubTypeName(header.Handshake, h.Subtype), "ours", header.SubTypeName(header.Handshake, mine))
+				return
+			case !hybrid && hasV3:
 				hm.l.Debug("dropping post-quantum handshake, hybrid handshakes are required", "from", via)
 				return
 			}
@@ -463,7 +471,7 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 		}
 
 	case 3:
-		if h.Subtype == hybridSubtype {
+		if handshake.IsHybrid(h.Subtype) {
 			hm.continueHybridResponder(via, h, fh, sym)
 		}
 	}

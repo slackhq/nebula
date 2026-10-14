@@ -26,6 +26,7 @@ type TBSCertificate struct {
 	NotAfter       time.Time
 	PublicKey      []byte
 	Curve          Curve
+	PQSuite        PQSuite // version 3 only, the suite of the certificate and of its signing CA
 	issuer         string
 }
 
@@ -48,15 +49,16 @@ type SignerLambda func(certBytes []byte) ([]byte, error)
 // If the TBSCertificate is a CA then signer must be nil.
 func (t *TBSCertificate) Sign(signer Certificate, curve Curve, key []byte) (Certificate, error) {
 	if t.Version == Version3 {
-		// The signing key is a composite CA key, classical || ML-DSA-87 seed.
-		if len(key) <= MLDSA87PrivateKeySize {
-			return nil, ErrInvalidPrivateKey
-		}
-		classical, err := classicalSigner(t.Curve, key[:len(key)-MLDSA87PrivateKeySize])
+		// The signing key is a composite CA key, classical || the seed of the suite's signature algorithm.
+		classicalKey, pqKey, err := t.PQSuite.SplitPrivateKey(true, key)
 		if err != nil {
 			return nil, err
 		}
-		pq, err := SignPQ(key[len(key)-MLDSA87PrivateKeySize:])
+		classical, err := classicalSigner(t.Curve, classicalKey)
+		if err != nil {
+			return nil, err
+		}
+		pq, err := SignPQ(t.PQSuite, pqKey)
 		if err != nil {
 			return nil, err
 		}
@@ -98,14 +100,18 @@ func classicalSigner(curve Curve, key []byte) (SignerLambda, error) {
 	}
 }
 
-// SignHybridWith signs a version 3 certificate, using sp for the classical signature and pqSp for the ML-DSA-87
-// signature. t.PublicKey is the composite public key. signer must be a version 3 CA, or nil for a self signed CA.
-// The v2 form is signed exactly as SignWith would sign it, and so is the v2 form of signer.
+// SignHybridWith signs a version 3 certificate, using sp for the classical signature and pqSp for the post-quantum
+// signature of t.PQSuite. t.PublicKey is the composite public key. signer must be a version 3 CA in the same suite,
+// or nil for a self signed CA. The v2 form is signed exactly as SignWith would sign it, and so is the v2 form of
+// signer.
 func (t *TBSCertificate) SignHybridWith(signer Certificate, curve Curve, sp, pqSp SignerLambda) (Certificate, error) {
 	if t.Version != Version3 {
 		return nil, fmt.Errorf("SignHybridWith only signs version 3 certificates")
 	}
-	classical, pq, err := splitPQPublicKey(t.IsCA, t.PublicKey)
+	if !t.PQSuite.Valid() {
+		return nil, fmt.Errorf("%w: %v", ErrUnknownPQSuite, t.PQSuite)
+	}
+	classical, pq, err := t.PQSuite.SplitPublicKey(t.IsCA, t.PublicKey)
 	if err != nil {
 		return nil, err
 	}
@@ -114,6 +120,9 @@ func (t *TBSCertificate) SignHybridWith(signer Certificate, curve Curve, sp, pqS
 	if signer != nil {
 		if signer.Version() != Version3 {
 			return nil, fmt.Errorf("a version 3 certificate must be signed by a version 3 CA")
+		}
+		if PQSuiteOf(signer) != t.PQSuite {
+			return nil, ErrPQSuiteMismatch
 		}
 		signerV2 = V2Form(signer)
 	}
@@ -125,7 +134,7 @@ func (t *TBSCertificate) SignHybridWith(signer Certificate, curve Curve, sp, pqS
 	if err != nil {
 		return nil, err
 	}
-	return ExtendToV3(c2, pq, signer, pqSp)
+	return ExtendToV3(c2, t.PQSuite, pq, signer, pqSp)
 }
 
 // SignWith does the same thing as sign, but uses the function in `sp` to calculate the signature.

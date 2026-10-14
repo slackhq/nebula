@@ -4,8 +4,6 @@ import (
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
-	"crypto/mldsa"
-	"crypto/mlkem"
 	"crypto/rand"
 	"io"
 	"net/netip"
@@ -65,6 +63,9 @@ func NewTestCaCert(version cert.Version, curve cert.Curve, before, after time.Ti
 		Groups:         groups,
 		IsCA:           true,
 	}
+	if version == cert.Version3 {
+		t.PQSuite = cert.DefaultPQSuite
+	}
 
 	c, err := t.Sign(nil, curve, priv)
 	if err != nil {
@@ -101,7 +102,7 @@ func NewTestCert(v cert.Version, curve cert.Curve, ca cert.Certificate, key []by
 	}
 
 	if v == cert.Version3 {
-		pub, priv = appendPQKey(pub, priv)
+		pub, priv = appendPQKey(ca, pub, priv)
 	}
 
 	nc := &cert.TBSCertificate{
@@ -115,6 +116,7 @@ func NewTestCert(v cert.Version, curve cert.Curve, ca cert.Certificate, key []by
 		NotAfter:       time.Unix(after.Unix(), 0),
 		PublicKey:      pub,
 		IsCA:           false,
+		PQSuite:        cert.PQSuiteOf(ca),
 	}
 
 	c, err := nc.Sign(ca, ca.Curve(), key)
@@ -127,6 +129,9 @@ func NewTestCert(v cert.Version, curve cert.Curve, ca cert.Certificate, key []by
 		panic(err)
 	}
 
+	if v == cert.Version3 {
+		return c, pub, cert.MarshalPQPrivateKeyToPEM(curve, cert.PQSuiteOf(ca), priv), pem
+	}
 	return c, pub, cert.MarshalPrivateKeyToPEM(curve, priv), pem
 }
 
@@ -142,6 +147,7 @@ func NewTestCertDifferentVersion(c cert.Certificate, v cert.Version, ca cert.Cer
 		NotAfter:       time.Unix(c.NotAfter().Unix(), 0),
 		PublicKey:      c.PublicKey(),
 		IsCA:           false,
+		PQSuite:        cert.PQSuiteOf(ca),
 	}
 
 	c, err := nc.Sign(ca, ca.Curve(), key)
@@ -157,22 +163,22 @@ func NewTestCertDifferentVersion(c cert.Certificate, v cert.Version, ca cert.Cer
 	return c, pem
 }
 
-// appendPQSigningKey makes a classical CA keypair into a version 3 composite one with a fresh ML-DSA-87 key.
+// appendPQSigningKey makes a classical CA keypair into a version 3 composite one with a fresh key of the default suite.
 func appendPQSigningKey(pub, priv []byte) ([]byte, []byte) {
-	sk, err := mldsa.GenerateKey(mldsa.MLDSA87())
+	pqPub, pqPriv, err := cert.DefaultPQSuite.GenerateKey(true)
 	if err != nil {
 		panic(err)
 	}
-	return append(pub, sk.PublicKey().Bytes()...), append(priv, sk.Bytes()...)
+	return append(pub, pqPub...), append(priv, pqPriv...)
 }
 
-// appendPQKey makes a classical host keypair into a version 3 composite one with a fresh ML-KEM-1024 key.
-func appendPQKey(pub, priv []byte) ([]byte, []byte) {
-	dk, err := mlkem.GenerateKey1024()
+// appendPQKey makes a classical host keypair into a version 3 composite one with a fresh key of the CA's suite.
+func appendPQKey(ca cert.Certificate, pub, priv []byte) ([]byte, []byte) {
+	pqPub, pqPriv, err := cert.PQSuiteOf(ca).GenerateKey(false)
 	if err != nil {
 		panic(err)
 	}
-	return append(pub, dk.EncapsulationKey().Bytes()...), append(priv, dk.Bytes()...)
+	return append(pub, pqPub...), append(priv, pqPriv...)
 }
 
 func X25519Keypair() ([]byte, []byte) {

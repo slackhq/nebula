@@ -266,6 +266,10 @@ func (ncp *CAPool) verify(c Certificate, now time.Time, certFp string, signerFp 
 		return nil, ErrCurveMismatch
 	}
 
+	if PQSuiteOf(signer.Certificate) != PQSuiteOf(c) {
+		return nil, ErrPQSuiteMismatch
+	}
+
 	if signer.Certificate.Expired(now) {
 		return nil, ErrRootExpired
 	}
