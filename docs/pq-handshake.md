@@ -174,6 +174,10 @@ flynn/noise) before this can merge.
 - **Lost confirmation.** A msg3 fragment for a v3 tunnel the responder already completed means the
   initiator is still waiting, so the responder confirms again, at most once per retry interval and
   only to the tunnel's own remote, never to the fragment's source.
+- **Crossing attempts.** The initiator's classical attempt can reach the responder, which
+  completes it at once, while the hybrid handshake still waits for msg3. If the initiator got the
+  hybrid msg2 first it has committed to hybrid and sends msg3, so the responder takes the hybrid
+  tunnel even though the classical one is newer, rather than rejecting it as too old.
 - **A failed attempt.** A post-quantum attempt can fail fatally where the classical one would not,
   for example a v3 certificate from a CA the initiator trusts only in its v2 form. The failed
   attempt is dropped and the handshake continues classical. With `require` the handshake ends.
@@ -278,9 +282,15 @@ Implemented in `handshake/fragment` (`Sender`, `Assembly`, and the capped `Table
   however many repair symbols arrive.
 - When K symbols are present the message is decoded and handed to the handshake `Machine`
   as a synthetic `[header | message]`. The Machine never sees fragments.
-- A completed entry is forgotten immediately. A late duplicate fragment starts a new entry
-  and, once enough arrive, reconstructs the same message again; the handshake layer's
-  duplicate detection recognises it.
+- A completed message the responder answered is remembered without its symbols, outside the
+  memory and per-source caps, for the idle timeout: which symbol indexes it has seen, and its
+  hash. Fragments still trailing the attempt that completed it are counted and dropped. Once as
+  many new symbols as it has data symbols arrive, which only a retry offers, it is reported as a
+  repeat and the cached response is resent. Without this, the repair fragments trailing a msg1
+  whose data fragments already completed it open an entry that for K above the repair count can
+  never complete, and back to back handshakes from one source run into its quota (seen on real
+  hosts: the fifth hybrid handshake within 3 s fell back to classical). A message that decoded
+  but was not answered is forgotten, and the next attempt rebuilds it.
 - If Noise rejects a decoded message, the entry is discarded and the next attempt
   supplies fresh symbols. (Possible refinement: keep a few spare symbols so an injected
   bad symbol can be identified by re-encoding instead of waiting for a retry.)
