@@ -91,6 +91,7 @@ func NewTable[K, S comparable](cfg TableConfig) *Table[K, S] {
 // Result describes a completed message.
 type Result struct {
 	Msg      []byte            // the decoded message, nil for a repeat
+	Packet   []byte            // header.Len bytes for the caller's Nebula header, then Msg
 	Hash     [sha256.Size]byte // sha256 of the message
 	Received int               // packet bytes received for it, for the amplification budget
 
@@ -159,12 +160,14 @@ func (t *Table[K, S]) Add(key K, source S, now time.Time, h Header, sym []byte) 
 	t.remove(key, e)
 	t.mu.Unlock()
 
-	msg, err := e.a.Decode()
+	pkt, err := e.a.Decode(make([]byte, header.Len))
 	if err != nil {
 		return nil, err
 	}
+	msg := pkt[header.Len:]
 	return &Result{
 		Msg:      msg,
+		Packet:   pkt,
 		Hash:     sha256.Sum256(msg),
 		Received: e.a.Received(),
 		msgLen:   e.a.msgLen,

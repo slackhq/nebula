@@ -93,9 +93,17 @@ func decodeWith(t *testing.T, enc *Encoder, msgLen, maxSym int, indexes []int) [
 		require.NoError(t, err)
 	}
 	require.True(t, dec.Ready())
-	out, err := dec.Decode()
+	// Decode after a prefix, into capacity holding garbage, which must neither
+	// disturb the prefix nor leak into the message.
+	dst := make([]byte, 3, 3+dec.Layout().K*dec.Layout().SymbolSize)
+	for i := range dst[:cap(dst)] {
+		dst[:cap(dst)][i] = 0xa5
+	}
+	out, err := dec.Decode(dst)
 	require.NoError(t, err)
-	return out
+	require.Equal(t, []byte{0xa5, 0xa5, 0xa5}, out[:3])
+	require.Equal(t, &dst[:1][0], &out[:1][0], "decoded in place")
+	return out[3:]
 }
 
 // TestExhaustiveSubsets decodes every k-subset of the first k+m symbols for
@@ -156,7 +164,7 @@ func TestDecoderBounds(t *testing.T) {
 	dec, err := NewDecoder(3000, 1176)
 	require.NoError(t, err)
 
-	_, err = dec.Decode()
+	_, err = dec.Decode(nil)
 	require.ErrorIs(t, err, ErrNotEnough)
 
 	_, err = dec.Add(-1, make([]byte, 1000))
@@ -190,7 +198,7 @@ func TestDecoderBounds(t *testing.T) {
 	require.True(t, ready)
 	require.Len(t, dec.syms, 3)
 
-	out, err := dec.Decode()
+	out, err := dec.Decode(nil)
 	require.NoError(t, err)
 	require.Equal(t, msg, out)
 }
@@ -207,7 +215,7 @@ func TestCorruptPadding(t *testing.T) {
 		_, err = dec.Add(i, s)
 		require.NoError(t, err)
 	}
-	_, err = dec.Decode()
+	_, err = dec.Decode(nil)
 	require.ErrorIs(t, err, ErrCorrupt)
 }
 
@@ -274,7 +282,7 @@ func FuzzDecoder(f *testing.F) {
 				t.Fatal(err)
 			}
 		}
-		out, err := dec.Decode()
+		out, err := dec.Decode(nil)
 		if err == nil {
 			require.Len(t, out, int(msgLen))
 		}
@@ -311,7 +319,7 @@ func BenchmarkDecode(b *testing.B) {
 		for i, x := range idx {
 			_, _ = dec.Add(x, syms[i])
 		}
-		if _, err := dec.Decode(); err != nil {
+		if _, err := dec.Decode(nil); err != nil {
 			b.Fatal(err)
 		}
 	}

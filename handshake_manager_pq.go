@@ -219,12 +219,11 @@ func pqFragKeyFor(via ViaSender, fragID uint32) (pqFragKey, pqFragSource) {
 	return pqFragKey{addr: via.UdpAddr, fragID: fragID}, pqFragSource{prefix: prefix}
 }
 
-// reassembled rebuilds the packet the handshake Machine expects from the header
-// of a fragment and the decoded message.
-func reassembled(h *header.H, msg []byte) []byte {
-	p := make([]byte, header.Len, header.Len+len(msg))
-	header.Encode(p, header.Version, header.Handshake, h.Subtype, h.RemoteIndex, h.MessageCounter)
-	return append(p, msg...)
+// reassembled turns a decoded message into the packet the handshake Machine
+// expects, by writing the header of one of its fragments into the header.Len
+// bytes left for it in front of the message.
+func reassembled(h *header.H, pkt []byte) []byte {
+	return header.Encode(pkt, header.Version, header.Handshake, h.Subtype, h.RemoteIndex, h.MessageCounter)[:len(pkt)]
 }
 
 // usePQ decides whether this outbound attempt is post-quantum. A peer that does
@@ -474,7 +473,7 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 			hm.pqTable.Forget(key)
 			return
 		}
-		hm.beginHandshake(via, reassembled(h, res.Msg), h, res.Received)
+		hm.beginHandshake(via, reassembled(h, res.Packet), h, res.Received)
 		if hm.pqAnswered.lookup(res.Hash, now) != nil {
 			hm.pqTable.Answered(key, res, now)
 		}
@@ -516,13 +515,13 @@ func (hm *HandshakeManager) continuePQ(via ViaSender, hh *HandshakeHostInfo, h *
 		return
 	}
 
-	msg, err := a.Decode()
+	pkt, err := a.Decode(make([]byte, header.Len))
 	pq.dropSlot(a)
 	if err != nil {
 		hm.l.Debug("failed to decode handshake fragments", "from", via, "error", err)
 		return
 	}
-	hm.processResponse(via, hh, pq.machine, reassembled(h, msg))
+	hm.processResponse(via, hh, pq.machine, reassembled(h, pkt))
 }
 
 // sendFragmented sends packets to a peer: now immediately and later after the

@@ -50,9 +50,10 @@ func (a *Assembly) wouldStore(h Header, sym []byte) int {
 	return len(sym)
 }
 
-// Decode reconstructs the message. It requires Add to have reported ready.
-func (a *Assembly) Decode() ([]byte, error) {
-	return a.dec.Decode()
+// Decode reconstructs the message and appends it to dst, see fec.Decoder.Decode.
+// It requires Add to have reported ready.
+func (a *Assembly) Decode(dst []byte) ([]byte, error) {
+	return a.dec.Decode(dst)
 }
 
 // Stored returns the number of symbol bytes held.

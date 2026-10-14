@@ -214,14 +214,14 @@ func (hm *HandshakeManager) continueHybridResponder(via ViaSender, h *header.H, 
 	if err != nil || !ready {
 		return
 	}
-	msg, err := r.msg3.Decode()
+	pkt, err := r.msg3.Decode(make([]byte, header.Len))
 	r.msg3 = nil
 	if err != nil {
 		hm.l.Debug("failed to decode handshake fragments", "from", via, "error", err)
 		return
 	}
 
-	_, result, err := hh.machine.ProcessPacket(nil, reassembled(h, msg))
+	_, result, err := hh.machine.ProcessPacket(nil, reassembled(h, pkt))
 	if err != nil {
 		if hh.machine.Failed() {
 			hm.l.Warn("Failed to process handshake packet, abandoning",

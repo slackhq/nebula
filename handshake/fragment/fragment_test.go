@@ -241,6 +241,8 @@ func TestLossy(t *testing.T) {
 					// duplicate can complete one again; the handshake layer
 					// recognises the repeat.
 					require.True(t, bytes.Equal(msg, res.Msg))
+					require.Len(t, res.Packet, header.Len+len(msg))
+					require.Equal(t, &res.Packet[header.Len], &res.Msg[0], "Msg follows room for a header")
 					got = res
 				}
 				checkInvariants(t, tb)

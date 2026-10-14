@@ -11,6 +11,7 @@ package fec
 import (
 	"errors"
 	"fmt"
+	"slices"
 )
 
 // MaxSymbols is the number of distinct symbols, data and repair together, one
@@ -108,8 +109,8 @@ func (e *Encoder) Symbol(dst []byte, index int) ([]byte, error) {
 // folds the known columns into each parked repair symbol in place and runs
 // Gauss-Jordan across those rows in place; a Cauchy submatrix needs no
 // pivoting, so each solution lands in the slot of its own column and the
-// buffer is the packet. That removes the per-symbol copies, the output buffer
-// and reassembled()'s copy, about 20KB and a dozen allocations per msg2, at the
+// buffer is the packet. That removes the per-symbol copies, about 10KB and a
+// dozen allocations per msg2, at the
 // cost of holding K*SymbolSize from the first fragment and destroying the
 // input on a failed decode. It is not for the responder's msg1 table, which
 // must never allocate from a claimed size.
@@ -170,19 +171,24 @@ func (d *Decoder) Add(index int, sym []byte) (bool, error) {
 	return d.Ready(), nil
 }
 
-// Decode reconstructs the message from the stored symbols.
-func (d *Decoder) Decode() ([]byte, error) {
+// Decode reconstructs the message from the stored symbols and appends it to
+// dst. Decoding needs the padding of the last symbol too, so dst has to have
+// room for K*SymbolSize bytes or it is grown to.
+func (d *Decoder) Decode(dst []byte) ([]byte, error) {
 	if !d.Ready() {
 		return nil, ErrNotEnough
 	}
 	l := d.layout
 
-	out := make([]byte, l.K*l.SymbolSize)
+	start := len(dst)
+	dst = slices.Grow(dst, l.K*l.SymbolSize)[:start+l.K*l.SymbolSize]
+	out := dst[start:]
 	var missing, repair []int
 	for i := range l.K {
 		if s, ok := d.syms[i]; ok {
 			copy(out[i*l.SymbolSize:], s)
 		} else {
+			clear(out[i*l.SymbolSize : (i+1)*l.SymbolSize])
 			missing = append(missing, i)
 		}
 	}
@@ -232,5 +238,5 @@ func (d *Decoder) Decode() ([]byte, error) {
 			return nil, ErrCorrupt
 		}
 	}
-	return out[:l.MsgLen], nil
+	return dst[:start+l.MsgLen], nil
 }

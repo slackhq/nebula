@@ -470,7 +470,7 @@ func TestPQMsg2Slots(t *testing.T) {
 			continue
 		}
 		require.Equal(t, 11, n, "B completes on its ninth symbol")
-		msg, err := a.Decode()
+		msg, err := a.Decode(nil)
 		require.NoError(t, err)
 		got = msg
 		pq.dropSlot(a)
@@ -488,7 +488,7 @@ func TestPQMsg2Slots(t *testing.T) {
 		c, _, ready = feedMsg2(t, pq, pktsC[i])
 		assert.Equal(t, i == 8, ready, "symbol %d", i)
 	}
-	msg, err := c.Decode()
+	msg, err := c.Decode(nil)
 	require.NoError(t, err)
 	assert.Equal(t, msgC, msg)
 
