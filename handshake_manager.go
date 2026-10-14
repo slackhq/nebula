@@ -802,6 +802,10 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 			startTime: time.Now(),
 			responder: &hybridResponder{},
 		}
+		// The index is visible to msg3 as soon as it is allocated, so hold the
+		// entry until it is filled in.
+		pending.Lock()
+		defer pending.Unlock()
 		allocIndex = func() (uint32, error) { return hm.allocateIndex(pending) }
 	}
 
