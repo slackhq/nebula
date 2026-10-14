@@ -17,7 +17,9 @@ type keygenFlags struct {
 	set        *flag.FlagSet
 	outKeyPath *string
 	outPubPath *string
+	inKeyPath  *string
 	curve      *string
+	version    *uint
 	p11url     *string
 }
 
@@ -27,6 +29,8 @@ func newKeygenFlags() *keygenFlags {
 	cf.outPubPath = cf.set.String("out-pub", "", "Required: path to write the public key to")
 	cf.outKeyPath = cf.set.String("out-key", "", "Required: path to write the private key to")
 	cf.curve = cf.set.String("curve", defaultCurve(), "ECDH Curve (25519, P256)")
+	cf.version = cf.set.Uint("version", 0, "Optional: 3 adds an ML-KEM-1024 key, for version 3 certificates")
+	cf.inKeyPath = cf.set.String("in-key", "", "Optional: path to an existing private key to add an ML-KEM-1024 key to, keeping the existing key. Implies -version 3")
 	cf.p11url = p11Flag(cf.set)
 	return &cf
 }
@@ -51,9 +55,41 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 		return err
 	}
 
+	version := cert.Version(*cf.version)
+	if *cf.inKeyPath != "" {
+		version = cert.Version3
+	}
+	if version != 0 && version != cert.Version3 {
+		return newHelpErrorf("-version must be %v, or left out for keys that work with any other version", cert.Version3)
+	}
+	if version == cert.Version3 && isP11 {
+		return newHelpErrorf("-version 3 can not be used with -pkcs11, the ML-KEM-1024 key has to be in out-key")
+	}
+
+	var claims ioClaims
+	if err := reserveInputs(&claims, "in-key", *cf.inKeyPath); err != nil {
+		return err
+	}
+
 	var pub, rawPriv []byte
 	var curve cert.Curve
-	if isP11 {
+	if *cf.inKeyPath != "" {
+		raw, err := readInput("in-key", *cf.inKeyPath, &claims)
+		if err != nil {
+			return fmt.Errorf("error while reading in-key: %s", err)
+		}
+		rawPriv, _, curve, err = cert.UnmarshalPrivateKeyFromPEM(raw)
+		if err != nil {
+			return fmt.Errorf("error while parsing in-key: %s", err)
+		}
+		pub, err = publicKeyFor(curve, rawPriv)
+		if err != nil {
+			return fmt.Errorf("error while parsing in-key: %s", err)
+		}
+		if fips140.Enforced() && curve == cert.Curve_CURVE25519 {
+			return errors.New("use of Curve25519 is not allowed in FIPS 140-only mode")
+		}
+	} else if isP11 {
 		switch *cf.curve {
 		case "P256":
 			curve = cert.Curve_P256
@@ -76,7 +112,13 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 		}
 	}
 
-	var claims ioClaims
+	if version == cert.Version3 {
+		pub, rawPriv, err = appendPQKey(pub, rawPriv)
+		if err != nil {
+			return err
+		}
+	}
+
 	if err := reserveOutputs(&claims,
 		"out-key", *cf.outKeyPath,
 		"out-pub", *cf.outPubPath,

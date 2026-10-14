@@ -73,7 +73,7 @@ func Test_caHelp(t *testing.T) {
 			"  -unsafe-networks string\n"+
 			"    \tOptional: comma separated list of ip address and network in CIDR notation. This will limit which ip addresses and networks subordinate certs can use in unsafe networks\n"+
 			"  -version uint\n"+
-			"    \tOptional: version of the certificate format to use (default 2)\n",
+			"    \tOptional: version of the certificate format to use. Version 3 adds an ML-DSA-87 key, for post-quantum certificates (default 2)\n",
 		ob.String(),
 	)
 }

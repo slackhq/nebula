@@ -55,7 +55,7 @@ func Test_signHelp(t *testing.T) {
 			"  -unsafe-networks string\n"+
 			"    \tOptional: comma separated list of ip address and network in CIDR notation. Unsafe networks this cert can route for\n"+
 			"  -version uint\n"+
-			"    \tOptional: version of the certificate format to use. The default is to match the version of the signing CA\n",
+			"    \tOptional: version of the certificate format to use. The default is to match the version of the signing CA. A version 3 CA also signs version 2 certificates, as its v2 form\n",
 		ob.String(),
 	)
 }

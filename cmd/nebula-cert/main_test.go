@@ -23,6 +23,7 @@ func Test_help(t *testing.T) {
 		"    " + signSummary() + "\n" +
 		"    " + printSummary() + "\n" +
 		"    " + verifySummary() + "\n" +
+		"    " + pqExtendSummary() + "\n" +
 		"\n" +
 		"  To see usage for a given mode, use " + os.Args[0] + " <mode> -h\n"
 

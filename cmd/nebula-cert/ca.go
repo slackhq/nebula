@@ -71,7 +71,7 @@ func newCaFlags() *caFlags {
 	cf := caFlags{set: flag.NewFlagSet("ca", flag.ContinueOnError)}
 	cf.set.Usage = func() {}
 	cf.name = cf.set.String("name", "", "Required: name of the certificate authority")
-	cf.version = cf.set.Uint("version", uint(cert.Version2), "Optional: version of the certificate format to use")
+	cf.version = cf.set.Uint("version", uint(cert.Version2), "Optional: version of the certificate format to use. Version 3 adds an ML-DSA-87 key, for post-quantum certificates")
 	cf.duration = cf.set.Duration("duration", time.Duration(time.Hour*8760), "Optional: amount of time the certificate should be valid for. Valid time units are seconds: \"s\", minutes: \"m\", hours: \"h\"")
 	cf.outKeyPath = cf.set.String("out-key", "ca.key", "Optional: path to write the private key to")
 	cf.outCertPath = cf.set.String("out-crt", "ca.crt", "Optional: path to write the certificate to")
@@ -160,8 +160,11 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 	}
 
 	version := cert.Version(*cf.version)
-	if version != cert.Version1 && version != cert.Version2 {
-		return newHelpErrorf("-version must be either %v or %v", cert.Version1, cert.Version2)
+	if version != cert.Version1 && version != cert.Version2 && version != cert.Version3 {
+		return newHelpErrorf("-version must be %v, %v or %v", cert.Version1, cert.Version2, cert.Version3)
+	}
+	if version == cert.Version3 && isP11 {
+		return newHelpErrorf("-version 3 can not be used with -pkcs11, the ML-DSA-87 key has to be in out-key")
 	}
 
 	var networks []netip.Prefix
@@ -294,6 +297,13 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 			pub = eKey.PublicKey().Bytes()
 		default:
 			return fmt.Errorf("invalid curve: %s", *cf.curve)
+		}
+
+		if version == cert.Version3 {
+			pub, rawPriv, err = appendPQSigningKey(pub, rawPriv)
+			if err != nil {
+				return err
+			}
 		}
 	}
 

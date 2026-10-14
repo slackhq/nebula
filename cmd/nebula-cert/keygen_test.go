@@ -23,11 +23,15 @@ func Test_keygenHelp(t *testing.T) {
 			"  Pass \"-\" to any path flag to read from stdin or write to stdout.\n"+
 			"  -curve string\n"+
 			"    \tECDH Curve (25519, P256) (default \"25519\")\n"+
+			"  -in-key string\n"+
+			"    \tOptional: path to an existing private key to add an ML-KEM-1024 key to, keeping the existing key. Implies -version 3\n"+
 			"  -out-key string\n"+
 			"    \tRequired: path to write the private key to\n"+
 			"  -out-pub string\n"+
 			"    \tRequired: path to write the public key to\n"+
-			optionalPkcs11String("  -pkcs11 string\n    \tOptional: PKCS#11 URI to an existing private key\n"),
+			optionalPkcs11String("  -pkcs11 string\n    \tOptional: PKCS#11 URI to an existing private key\n")+
+			"  -version uint\n"+
+			"    \tOptional: 3 adds an ML-KEM-1024 key, for version 3 certificates\n",
 		ob.String(),
 	)
 }

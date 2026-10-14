@@ -44,7 +44,7 @@ type signFlags struct {
 func newSignFlags() *signFlags {
 	sf := signFlags{set: flag.NewFlagSet("sign", flag.ContinueOnError)}
 	sf.set.Usage = func() {}
-	sf.version = sf.set.Uint("version", 0, "Optional: version of the certificate format to use. The default is to match the version of the signing CA")
+	sf.version = sf.set.Uint("version", 0, "Optional: version of the certificate format to use. The default is to match the version of the signing CA. A version 3 CA also signs version 2 certificates, as its v2 form")
 	sf.caKeyPath = sf.set.String("ca-key", "ca.key", "Optional: path to the signing CA key")
 	sf.caCertPath = sf.set.String("ca-crt", "ca.crt", "Optional: path to the signing CA cert")
 	sf.name = sf.set.String("name", "", "Required: name of the cert, usually a hostname")
@@ -102,8 +102,8 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 	}
 
 	version := cert.Version(*sf.version)
-	if version != 0 && version != cert.Version1 && version != cert.Version2 {
-		return newHelpErrorf("-version must be either %v or %v", cert.Version1, cert.Version2)
+	if version != 0 && version != cert.Version1 && version != cert.Version2 && version != cert.Version3 {
+		return newHelpErrorf("-version must be %v, %v or %v", cert.Version1, cert.Version2, cert.Version3)
 	}
 
 	if *sf.outKeyPath == "" {
@@ -139,37 +139,9 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 			return fmt.Errorf("error while reading ca-key: %s", err)
 		}
 
-		// naively attempt to decode the private key as though it is not encrypted
-		caKey, _, curve, err = cert.UnmarshalSigningPrivateKeyFromPEM(rawCAKey)
-		if errors.Is(err, cert.ErrPrivateKeyEncrypted) {
-			var passphrase []byte
-			passphrase = []byte(os.Getenv("NEBULA_CA_PASSPHRASE"))
-			if len(passphrase) == 0 {
-				// ask for a passphrase until we get one
-				for range 5 {
-					errOut.Write([]byte("Enter passphrase: "))
-					passphrase, err = pr.ReadPassword()
-
-					if errors.Is(err, ErrNoTerminal) {
-						return fmt.Errorf("ca-key is encrypted and must be decrypted interactively")
-					} else if err != nil {
-						return fmt.Errorf("error reading password: %s", err)
-					}
-
-					if len(passphrase) > 0 {
-						break
-					}
-				}
-				if len(passphrase) == 0 {
-					return fmt.Errorf("cannot open encrypted ca-key without passphrase")
-				}
-			}
-			curve, caKey, _, err = cert.DecryptAndUnmarshalSigningPrivateKey(passphrase, rawCAKey)
-			if err != nil {
-				return fmt.Errorf("error while parsing encrypted ca-key: %s", err)
-			}
-		} else if err != nil {
-			return fmt.Errorf("error while parsing ca-key: %s", err)
+		curve, caKey, _, err = readSigningKey(rawCAKey, errOut, pr)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -195,6 +167,19 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 
 	if version == 0 {
 		version = caCert.Version()
+	}
+
+	switch {
+	case version == cert.Version3 && caCert.Version() != cert.Version3:
+		return newHelpErrorf("version 3 certificates must be signed by a version 3 CA")
+	case version == cert.Version3 && isP11:
+		return newHelpErrorf("version 3 certificates can not be signed with -pkcs11, the ML-DSA-87 key has to be in ca-key")
+	case version != cert.Version3 && caCert.Version() == cert.Version3:
+		// A v3 CA signs anything older as its v2 form, with the classical half of its key.
+		caCert = cert.V2Form(caCert)
+		if caKey != nil {
+			caKey = caKey[:len(caKey)-cert.MLDSA87PrivateKeySize]
+		}
 	}
 
 	// if no duration is given, expire one second before the root expires
@@ -287,6 +272,12 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		if pubCurve != curve {
 			return fmt.Errorf("curve of in-pub does not match ca")
 		}
+		if isPQ := len(pub) > cert.MLKEM1024PublicKeySize; isPQ != (version == cert.Version3) {
+			if isPQ {
+				return fmt.Errorf("in-pub has an ML-KEM-1024 key, which only version 3 certificates carry")
+			}
+			return fmt.Errorf("version 3 certificates need an in-pub from keygen -version 3")
+		}
 	} else if isP11 {
 		pub, err = p11Client.GetPubKey()
 		if err != nil {
@@ -294,6 +285,12 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		}
 	} else {
 		pub, rawPriv = newKeypair(curve)
+		if version == cert.Version3 {
+			pub, rawPriv, err = appendPQKey(pub, rawPriv)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	if !isStdio(*sf.outCertPath) {
@@ -378,6 +375,27 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		}
 
 		crts = append(crts, nc)
+
+	case cert.Version3:
+		t := &cert.TBSCertificate{
+			Version:        cert.Version3,
+			Name:           *sf.name,
+			Networks:       append(v4Networks, v6Networks...),
+			Groups:         groups,
+			UnsafeNetworks: append(v4UnsafeNetworks, v6UnsafeNetworks...),
+			NotBefore:      notBefore,
+			NotAfter:       notAfter,
+			PublicKey:      pub,
+			IsCA:           false,
+			Curve:          curve,
+		}
+
+		nc, err := t.Sign(caCert, curve, caKey)
+		if err != nil {
+			return fmt.Errorf("error while signing: %w", err)
+		}
+		crts = append(crts, nc)
+
 	default:
 		// this should be unreachable
 		return fmt.Errorf("invalid version: %d", version)
@@ -469,4 +487,43 @@ func signHelp(out io.Writer) {
 	out.Write([]byte(stdioHelpText))
 	sf.set.SetOutput(out)
 	sf.set.PrintDefaults()
+}
+
+// readSigningKey decodes a CA key, asking for its passphrase if it is encrypted.
+// The passphrase is returned too, nil for a key that was not encrypted.
+func readSigningKey(rawCAKey []byte, errOut io.Writer, pr PasswordReader) (cert.Curve, []byte, []byte, error) {
+	// naively attempt to decode the private key as though it is not encrypted
+	caKey, _, curve, err := cert.UnmarshalSigningPrivateKeyFromPEM(rawCAKey)
+	if errors.Is(err, cert.ErrPrivateKeyEncrypted) {
+		var passphrase []byte
+		passphrase = []byte(os.Getenv("NEBULA_CA_PASSPHRASE"))
+		if len(passphrase) == 0 {
+			// ask for a passphrase until we get one
+			for range 5 {
+				errOut.Write([]byte("Enter passphrase: "))
+				passphrase, err = pr.ReadPassword()
+
+				if errors.Is(err, ErrNoTerminal) {
+					return 0, nil, nil, fmt.Errorf("ca-key is encrypted and must be decrypted interactively")
+				} else if err != nil {
+					return 0, nil, nil, fmt.Errorf("error reading password: %s", err)
+				}
+
+				if len(passphrase) > 0 {
+					break
+				}
+			}
+			if len(passphrase) == 0 {
+				return 0, nil, nil, fmt.Errorf("cannot open encrypted ca-key without passphrase")
+			}
+		}
+		curve, caKey, _, err = cert.DecryptAndUnmarshalSigningPrivateKey(passphrase, rawCAKey)
+		if err != nil {
+			return 0, nil, nil, fmt.Errorf("error while parsing encrypted ca-key: %s", err)
+		}
+		return curve, caKey, passphrase, nil
+	} else if err != nil {
+		return 0, nil, nil, fmt.Errorf("error while parsing ca-key: %s", err)
+	}
+	return curve, caKey, nil, nil
 }
