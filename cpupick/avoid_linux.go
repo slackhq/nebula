@@ -1,6 +1,6 @@
 //go:build linux && !android && !e2e_testing
 
-package util
+package cpupick
 
 import (
 	"errors"
@@ -12,11 +12,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// AvoidCPUs removes cpus from the affinity of every thread of the process, for use at startup. New threads inherit
+// Avoid removes cpus from the affinity of every thread of the process, for use at startup. New threads inherit
 // their parent's mask, so it repeats until a pass finds nothing left to change; a thread that exits meanwhile is
 // skipped. Every mask is checked before any is changed. With apply false it only validates, for configuration tests.
-// This affects the entire process, including other users of an embedded Nebula.
-func AvoidCPUs(cpus []int, apply bool) error {
+// This affects the entire process, including other users of an embedded Nebula. Not wired up yet: tun.avoid_cpus
+// only steers Default for now.
+func Avoid(cpus []int, apply bool) error {
 	const capacity = int(unsafe.Sizeof(unix.CPUSet{})) * 8
 	for _, cpu := range cpus {
 		if cpu < 0 || cpu >= capacity {

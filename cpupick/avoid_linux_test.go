@@ -1,6 +1,6 @@
 //go:build linux && !android && !e2e_testing
 
-package util
+package cpupick
 
 import (
 	"fmt"
@@ -12,22 +12,23 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
 
-// TestAvoidCPUs changes the affinity of the whole process, so it runs in a child, leaving the test runner untouched.
-func TestAvoidCPUs(t *testing.T) {
-	if os.Getenv("NEBULA_AVOID_CPU_TEST") != "1" {
+// TestAvoid changes the affinity of the whole process, so it runs in a child, leaving the test runner untouched.
+func TestAvoid(t *testing.T) {
+	if os.Getenv("NEBULA_CPUPICK_AVOID_TEST") != "1" {
 		exe, err := os.Executable()
 		require.NoError(t, err)
-		cmd := exec.Command(exe, "-test.run=^TestAvoidCPUs$", "-test.v")
-		cmd.Env = append(os.Environ(), "NEBULA_AVOID_CPU_TEST=1")
+		cmd := exec.Command(exe, "-test.run=^TestAvoid$", "-test.v")
+		cmd.Env = append(os.Environ(), "NEBULA_CPUPICK_AVOID_TEST=1")
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "%s", out)
 		return
 	}
-	allowed, err := AllowedCPUs()
+	allowed, err := util.AllowedCPUs()
 	require.NoError(t, err)
 	if len(allowed) < 2 {
 		t.Skip("requires at least two allowed CPUs")
@@ -50,12 +51,12 @@ func TestAvoidCPUs(t *testing.T) {
 	}
 	lockThreads()
 
-	require.NoError(t, AvoidCPUs([]int{cpu}, false))
-	after, err := AllowedCPUs()
+	require.NoError(t, Avoid([]int{cpu}, false))
+	after, err := util.AllowedCPUs()
 	require.NoError(t, err)
 	require.Equal(t, allowed, after, "configuration check must not mutate affinity")
-	require.Error(t, AvoidCPUs(allowed, true), "must reject an empty mask before applying")
-	require.NoError(t, AvoidCPUs([]int{cpu, cpu}, true))
+	require.Error(t, Avoid(allowed, true), "must reject an empty mask before applying")
+	require.NoError(t, Avoid([]int{cpu, cpu}, true))
 	requireAvoided(t, cpu, allowed)
 	// Existing threads stay locked while new ones inherit the restriction
 	lockThreads()
@@ -88,10 +89,10 @@ func requireAvoided(t *testing.T, cpu int, allowed []int) {
 	}
 }
 
-// TestAvoidCPUsRange checks the bounds of unix.CPUSet, whose words are 32 bits wide on 32-bit platforms.
-func TestAvoidCPUsRange(t *testing.T) {
+// TestAvoidRange checks the bounds of unix.CPUSet, whose words are 32 bits wide on 32-bit platforms.
+func TestAvoidRange(t *testing.T) {
 	capacity := int(unsafe.Sizeof(unix.CPUSet{})) * 8
-	require.NoError(t, AvoidCPUs([]int{capacity - 1}, false))
-	require.EqualError(t, AvoidCPUs([]int{capacity}, false), fmt.Sprintf("CPU %d is out of range", capacity))
-	require.EqualError(t, AvoidCPUs([]int{-1}, false), "CPU -1 is out of range")
+	require.NoError(t, Avoid([]int{capacity - 1}, false))
+	require.EqualError(t, Avoid([]int{capacity}, false), fmt.Sprintf("CPU %d is out of range", capacity))
+	require.EqualError(t, Avoid([]int{-1}, false), "CPU -1 is out of range")
 }

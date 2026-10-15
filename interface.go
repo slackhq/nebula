@@ -60,6 +60,9 @@ type InterfaceConfig struct {
 	// shorter lists than `routines` cycle. Empty list keeps the default
 	// pin-to-(i % NumCPU) behavior. Only consulted when PinThreads is true.
 	CpuAffinity []int
+	// AvoidCPUs (tun.avoid_cpus) lists CPUs the default pin spread skips when
+	// CpuAffinity is empty. Only consulted when PinThreads is true.
+	AvoidCPUs []int
 	// PinThreads controls whether each TUN reader OS thread is pinned to a
 	// single CPU (via tun.pin_threads, default true). Pinning keeps each
 	// goroutine's sendmmsg on one XPS-selected NIC TX ring so per-flow
@@ -95,6 +98,8 @@ type Interface struct {
 	// Empty falls back to the default pin-to-(allowed CPU) behavior.
 	// Only consulted when pinThreads is true.
 	cpuAffinity []int
+	// avoidCPUs are removed from that fallback spread, unless they would empty it.
+	avoidCPUs []int
 	// pinThreads controls whether listenIn pins each TUN reader OS thread to
 	// a CPU at all (tun.pin_threads, default true). When false, threads are
 	// left free to migrate as on stock nebula.
@@ -247,6 +252,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		connectionManager:     c.connectionManager,
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
 		cpuAffinity:           c.CpuAffinity,
+		avoidCPUs:             c.AvoidCPUs,
 		pinThreads:            c.PinThreads,
 		udpTxErrLimiter:       udpTxErrLimiter,
 		udpRelayTxErrLimiter:  udpRelayTxErrLimiter,
@@ -437,12 +443,14 @@ func (f *Interface) pinThisThread(i int) {
 	var cpu int
 	if n := len(f.cpuAffinity); n > 0 {
 		// Explicit tun.cpu_affinity list wins; parseCpuAffinity already
-		// validated the entries against the allowed CPU set.
+		// validated the entries against the allowed CPU set and tun.avoid_cpus.
 		cpu = f.cpuAffinity[i%n]
 	} else if allowed, err := util.AllowedCPUs(); err == nil && len(allowed) > 0 {
 		// Default: spread queues across the CPUs we're actually allowed to
 		// run on. Under a cpuset/taskset mask these aren't 0..NumCPU-1, so
 		// i % NumCPU would pick unrunnable IDs and every pin would fail.
+		// parseAvoidCPUs already dropped an avoid list that covers them all.
+		allowed = slices.DeleteFunc(allowed, func(c int) bool { return slices.Contains(f.avoidCPUs, c) })
 		cpu = allowed[i%len(allowed)]
 	} else {
 		cpu = i % runtime.NumCPU()

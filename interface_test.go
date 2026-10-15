@@ -7,6 +7,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/test"
+	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -117,4 +118,23 @@ func TestReloadFirewall_NoChange(t *testing.T) {
 	f.reloadFirewall(cfg)
 
 	assert.Same(t, fw, f.firewall, "firewall should not have been replaced")
+}
+
+// TestPinThisThreadFallbackSkipsAvoided covers the single reader, which never goes through cpupick: its fallback
+// spread over the allowed set must still skip tun.avoid_cpus.
+func TestPinThisThreadFallbackSkipsAvoided(t *testing.T) {
+	allowed, err := util.AllowedCPUs()
+	require.NoError(t, err)
+	if len(allowed) < 2 {
+		t.Skip("requires at least two allowed CPUs")
+	}
+	f := &Interface{l: test.NewLogger(), pinThreads: true, avoidCPUs: []int{allowed[0]}}
+	got := make(chan []int)
+	go func() {
+		// The pin leaves this goroutine locked to its thread, so the runtime discards the thread when it returns.
+		f.pinThisThread(0)
+		cpus, _ := util.AllowedCPUs()
+		got <- cpus
+	}()
+	assert.Equal(t, []int{allowed[1]}, <-got)
 }
