@@ -14,13 +14,14 @@ import (
 )
 
 // TestLogFormatRefusalIsShown: a format the logger does not know is reported to the user
-// rather than returned bare, which over ssh was silence.
+// as a failure, rather than returned bare, which over ssh was silence.
 func TestLogFormatRefusalIsShown(t *testing.T) {
 	l := logging.NewLogger(io.Discard)
 	out := &bytes.Buffer{}
 	w := commands.NewStringWriter(out)
 
-	require.NoError(t, sshLogFormat(l, nil, []string{"bogus"}, w))
+	var f *commands.Failure
+	require.ErrorAs(t, sshLogFormat(l, nil, []string{"bogus"}, w), &f)
 	assert.Equal(t, "Unable to set log format: unknown log format `bogus`. possible formats: [text json]\n", out.String())
 
 	out.Reset()

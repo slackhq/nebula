@@ -50,13 +50,36 @@ func TestFlagUsageGoesToTheWriter(t *testing.T) {
 	assert.Contains(t, merged.String(), "flag provided but not defined")
 }
 
-// TestDispatchDropsUnparseableLine pins sshd's behaviour for a line shlex rejects: no
-// answer at all. An operator with an unbalanced quote gets silence, as they always have.
-func TestDispatchDropsUnparseableLine(t *testing.T) {
+// TestDispatchReportsUnparseableLine: a line shlex rejects, an unbalanced quote, is a
+// failure the user is told about.
+func TestDispatchReportsUnparseableLine(t *testing.T) {
 	out := &bytes.Buffer{}
-	testRegistry().Dispatch(`served "unterminated`, NewStringWriter(out))
-	assert.Empty(t, out.String())
+	err := testRegistry().Dispatch(`served "unterminated`, NewStringWriter(out))
+
+	var f *Failure
+	require.ErrorAs(t, err, &f)
+	assert.Equal(t, f.Msg+"\n", out.String())
+	assert.Contains(t, out.String(), "could not parse the command line: ")
 }
+
+// TestFailTellsTheUserAndTheSurface: Fail writes the message and returns it as a Failure;
+// when the write fails, the user heard nothing, so the write error is what comes back.
+func TestFailTellsTheUserAndTheSurface(t *testing.T) {
+	out := &bytes.Buffer{}
+	err := Fail(NewStringWriter(out), "no such tunnel")
+	var f *Failure
+	require.ErrorAs(t, err, &f)
+	assert.Equal(t, "no such tunnel", f.Msg)
+	assert.Equal(t, "no such tunnel\n", out.String())
+
+	err = Fail(NewStringWriter(failingWriter{}), "no such tunnel")
+	require.EqualError(t, err, "gone")
+	assert.NotErrorAs(t, err, &f)
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("gone") }
 
 // TestAllSortsByName: registration order does not matter.
 func TestAllSortsByName(t *testing.T) {
@@ -126,7 +149,7 @@ func TestCloneHelpListsTheClone(t *testing.T) {
 }
 
 // TestDispatchReturnsTheCommandsError: what the callback returns reaches the caller, so
-// a surface can log it, and an unparseable line reports why nothing was answered.
+// a surface can log it.
 func TestDispatchReturnsTheCommandsError(t *testing.T) {
 	r := New()
 	r.Register(&Command{
@@ -138,14 +161,16 @@ func TestDispatchReturnsTheCommandsError(t *testing.T) {
 
 	out := &bytes.Buffer{}
 	require.EqualError(t, r.Dispatch("fails", NewStringWriter(out)), "boom")
-	assert.Error(t, r.Dispatch(`fails "unterminated`, NewStringWriter(out)))
-	assert.Empty(t, out.String())
+	assert.Empty(t, out.String(), "a command's own error is not shown; the command speaks for itself")
 }
 
 // TestUnknownCommandNamesTheWord: only the first word is looked up, so only it is
-// reported, followed by the command list.
+// reported, followed by the command list, and the line is a failure to the surface.
 func TestUnknownCommandNamesTheWord(t *testing.T) {
 	out := &bytes.Buffer{}
-	require.NoError(t, testRegistry().Dispatch(`nope "with args"`, NewStringWriter(out)))
+	err := testRegistry().Dispatch(`nope "with args"`, NewStringWriter(out))
+	var f *Failure
+	require.ErrorAs(t, err, &f)
+	assert.Equal(t, "did not understand: nope", f.Msg)
 	assert.True(t, strings.HasPrefix(out.String(), "did not understand: nope\nAvailable commands:\n"), out.String())
 }

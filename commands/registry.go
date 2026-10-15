@@ -89,15 +89,13 @@ func (r *Registry) Clone() *Registry {
 	return c
 }
 
-// Dispatch parses a command line and runs it, reporting problems to w. The error is the
-// command's own, or the flag parse failure; both have already been reported to w, so it
-// is for the caller to log, not to show.
+// Dispatch parses a command line and runs it, reporting problems to w. The error is for
+// the caller to log, not to show; see CommandCallback.
 func (r *Registry) Dispatch(line string, w StringWriter) error {
-	// A line shlex cannot split, an unbalanced quote, gets no answer. sshd was silent
-	// here too; this is a relocation, so it stays silent.
+	// A line shlex cannot split, an unbalanced quote.
 	args, err := shlex.Split(line, true)
 	if err != nil {
-		return err
+		return Fail(w, "could not parse the command line: "+err.Error())
 	}
 
 	return r.DispatchArgs(args, w)
@@ -113,12 +111,13 @@ func (r *Registry) DispatchArgs(args []string, w StringWriter) error {
 	c := r.Get(Name(args[0]))
 	if c == nil {
 		// Only the first word was looked up, so only it is named.
-		if err := w.WriteLine(fmt.Sprintf("did not understand: %s", args[0])); err != nil {
+		msg := fmt.Sprintf("did not understand: %s", args[0])
+		if err := w.WriteLine(msg); err != nil {
 			return err
 		}
 
 		r.dumpCommands(w)
-		return nil
+		return &Failure{Msg: msg}
 	}
 
 	if checkHelpArgs(args) {
@@ -156,7 +155,7 @@ func (r *Registry) help(a []string, w StringWriter) error {
 	// We are printing a specific commands help text
 	cmd := r.Get(Name(a[0]))
 	if cmd == nil {
-		return w.WriteLine("Command not available " + a[0])
+		return Fail(w, "Command not available "+a[0])
 	}
 
 	if err := w.WriteLine(fmt.Sprintf("%s - %s", cmd.Name, cmd.ShortDescription)); err != nil {

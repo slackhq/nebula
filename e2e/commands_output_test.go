@@ -70,14 +70,17 @@ func TestCommandOutput(t *testing.T) {
 	reg := control.Commands().Clone()
 	reg.Register(sshd.LogoutCommand(func() {}))
 
-	run := func(args ...string) string {
+	// run dispatches as the ssh exec path does and returns the output and the error, which
+	// over ssh is exit status 1.
+	run := func(args ...string) (string, error) {
 		buf := &bytes.Buffer{}
-		_ = reg.DispatchArgs(args, commands.NewStringWriter(buf))
-		return buf.String()
+		err := reg.DispatchArgs(args, commands.NewStringWriter(buf))
+		return buf.String(), err
 	}
 
 	// Seed a pending tunnel so the listing and per-address commands have something to show.
-	seed := run("create-tunnel", "10.222.0.9")
+	seed, err := run("create-tunnel", "10.222.0.9")
+	require.NoError(t, err)
 	require.Equal(t, "Created\n", seed, "seeding a tunnel should succeed before anything else is recorded")
 
 	cases := []outputCase{
@@ -140,12 +143,18 @@ func TestCommandOutput(t *testing.T) {
 			args = append(args, c.args...)
 
 			fmt.Fprintf(got, "$ %s\n", strings.Join(args, " "))
-			out := normalise(run(args...))
+			out, err := run(args...)
+			out = normalise(out)
 			got.WriteString(out)
 			// Output that does not end in a newline is recorded as such, the way diff marks
 			// it, so the golden sees that byte too and the next prompt still starts a line.
 			if out != "" && !strings.HasSuffix(out, "\n") {
 				got.WriteString("\\ No newline at end of output\n")
+			}
+			// A failed command is recorded as the exit status an ssh caller sees, so the
+			// golden pins which outcomes count as failures.
+			if err != nil {
+				got.WriteString("exit status 1\n")
 			}
 			got.WriteString("\n")
 		}
