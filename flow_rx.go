@@ -1,7 +1,6 @@
 package nebula
 
 import (
-	"log/slog"
 	"net/netip"
 	"sync"
 
@@ -37,17 +36,12 @@ type rxChunk struct {
 	done  chan struct{}
 }
 
-// decryptRxItems checks the data packets among items against the replay window and decrypts the ones it accepts in
-// place, as Decrypt does. Recording the counters is left to readOutsidePackets on the writer, which also handles
-// the packets without a tunnel.
-func decryptRxItems(l *slog.Logger, items []rxItem, nb []byte) {
+// decryptRxItems decrypts the data packets among items in place, skipping the replays checkReplays marked. Recording
+// the counters is left to readOutsidePackets on the writer, which also handles the packets without a tunnel.
+func decryptRxItems(items []rxItem, nb []byte) {
 	for i := range items {
 		it := &items[i]
-		if it.ci == nil {
-			continue
-		}
-		if !it.ci.checkReplay(l, it.counter) {
-			it.err = ErrAlreadySeen
+		if it.ci == nil || it.err != nil {
 			continue
 		}
 		it.out, it.err = it.ci.decryptPacket(it.counter, it.packet, nb)
@@ -135,7 +129,7 @@ func newStagedRx(f *Interface, q int, wrxc *rxContext) *stagedRx {
 func (p *stagedRx) decrypt() {
 	nb := make([]byte, 12)
 	for c := range p.jobs {
-		decryptRxItems(p.f.l, c.items, nb)
+		decryptRxItems(c.items, nb)
 		c.done <- struct{}{}
 	}
 }
@@ -205,6 +199,7 @@ func (p *stagedRx) endBatch() {
 		b.reset()
 		return
 	}
+	p.checkReplays(b.items)
 
 	if p.inFlight == 0 && n < p.f.staged.inlineBelow {
 		// The writer is idle with nothing in flight, so the listener may commit with its context and flush the tun
@@ -239,6 +234,27 @@ func (p *stagedRx) endBatch() {
 	p.free = p.free[:len(p.free)-1]
 }
 
+// checkReplays marks the replays among items before anything decrypts them, as Decrypt checks before it decrypts,
+// taking each tunnel's lock once per run of its packets rather than once per packet. The window only moves forward
+// until the writer records these counters, so a stale check can only let a replay through to acceptDecrypted, which
+// rejects it.
+func (p *stagedRx) checkReplays(items []rxItem) {
+	for i := 0; i < len(items); {
+		ci := items[i].ci
+		if ci == nil {
+			i++
+			continue
+		}
+		ci.decryptLock.Lock()
+		for ; i < len(items) && items[i].ci == ci; i++ {
+			if !ci.window.Check(p.f.l, items[i].counter) {
+				items[i].err = ErrAlreadySeen
+			}
+		}
+		ci.decryptLock.Unlock()
+	}
+}
+
 // reap takes back every batch the writer has finished with, without waiting.
 func (p *stagedRx) reap() {
 	for {
@@ -260,7 +276,7 @@ func (p *stagedRx) release(b *rxBatch) {
 // order, and flush the tun batcher.
 func (p *stagedRx) process(b *rxBatch, rxc *rxContext) {
 	if b.nChunks == 0 {
-		decryptRxItems(p.f.l, b.items, rxc.nb)
+		decryptRxItems(b.items, rxc.nb)
 		p.commit(b.items, rxc)
 	} else {
 		// Commit chunk by chunk, so the commit overlaps the workers still on later chunks
