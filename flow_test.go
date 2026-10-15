@@ -17,6 +17,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
@@ -236,6 +237,23 @@ func (c *flowTunCapture) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
+// segments decodes what reached the tun. The coalescer may have merged segments back into superpackets, so this
+// walks each payload in MSS steps.
+func (c *flowTunCapture) segments(t testing.TB) []decodedSeg {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []decodedSeg
+	for _, w := range c.writes {
+		pay := w[40:]
+		require.Zero(t, len(pay)%flowTestMSS, "tun write payload %d bytes", len(pay))
+		for off := 0; off < len(pay); off += flowTestMSS {
+			out = append(out, decodeSeg(pay[off:]))
+		}
+	}
+	return out
+}
+
 // decryptWire checks every wire packet decrypts on the receiver, in order, with strictly increasing counters, and
 // returns what each one carried. It uses its own replay window and copies, so the wire can still be fed to the
 // receiver afterwards.
@@ -337,7 +355,7 @@ func delayCrypto(peer *flowTestPeer, before func(uint64)) {
 
 // stagedOn enables staging with n workers.
 func stagedOn(n int) stagedConfig {
-	return stagedConfig{workers: n, tx: true}
+	return stagedConfig{workers: n, tx: true, rx: true}
 }
 
 func stagedName(sc stagedConfig) string {
@@ -356,12 +374,143 @@ func TestFlowStagedFallback(t *testing.T) {
 	sender, receiver := newFlowTestPair(t, noise.CipherChaChaPoly, stagedOn(3))
 	batches, want := flowTestBatches(10, 2, 1, 4)
 	tx := metrics.GetOrRegisterCounter("flow.tx.batches", nil)
-	tx0 := tx.Count()
+	tx0, rx0 := tx.Count(), rxBatches.Count()
 	sender.f.listenIn(plainQueue{newFlowBatchQueue(batches)}, 0)
 	wire := sender.conn.captured()
 	require.Equal(t, want, decryptWire(t, receiver, wire))
 	require.Equal(t, tx0, tx.Count())
+	receiver.receive(plainConn{&rxConn{wire: wire, batchLen: 16}})
+	require.Equal(t, want, receiver.tun.segments(t))
+	require.Equal(t, rx0, rxBatches.Count())
 }
 
 // plainQueue and plainConn hide SwapRxBuf and ListenOutHandoff, so they cannot hand off their batches.
 type plainQueue struct{ tio.Queue }
+
+// wireFor produces the wire packets the sender emits for batches, inline.
+func wireFor(t testing.TB, sender *flowTestPeer, batches [][]tio.Packet) [][]byte {
+	t.Helper()
+	sc := sender.f.staged
+	sender.f.staged = stagedConfig{}
+	sender.f.listenIn(newFlowBatchQueue(batches), 0)
+	sender.f.staged = sc
+	wire := sender.conn.captured()
+	sender.conn.pkts, sender.conn.addrs = nil, nil
+	return wire
+}
+
+// rxConn plays wire back to listenOut through the buffer handoff, in batches of batchLen or of the scripted sizes
+// (the last one repeating), and captures what is sent back. Every buffer handed back is scribbled over before it is
+// read into, so a stage still using one shows corruption. from, when set, picks each packet's source address by its
+// index in wire.
+type rxConn struct {
+	flowCaptureConn
+	wire     [][]byte
+	batchLen int
+	sizes    []int
+	from     func(i int) netip.AddrPort
+	swaps    int
+}
+
+func (c *rxConn) ListenOut(r udp.EncReader, flush func()) error {
+	return c.ListenOutHandoff(r, func(bufs [][]byte) [][]byte {
+		flush()
+		return bufs
+	})
+}
+
+func (c *rxConn) ListenOutHandoff(r udp.EncReader, handoff func(bufs [][]byte) [][]byte) error {
+	n := c.batchLen
+	for _, size := range c.sizes {
+		n = max(n, size)
+	}
+	bufs := make([][]byte, n)
+	for i := range bufs {
+		bufs[i] = make([]byte, udp.MTU)
+	}
+	for off, k := 0, 0; off < len(c.wire); k++ {
+		size := c.batchLen
+		if len(c.sizes) > 0 {
+			size = c.sizes[min(k, len(c.sizes)-1)]
+		}
+		end := min(off+size, len(c.wire))
+		for i, p := range c.wire[off:end] {
+			n := copy(bufs[i], p)
+			from := flowTestUnder
+			if c.from != nil {
+				from = c.from(off + i)
+			}
+			r(from, bufs[i][:n:n])
+		}
+		next := handoff(bufs)
+		if len(next) != len(bufs) {
+			panic("handoff returned the wrong number of buffers")
+		}
+		bufs = next
+		for _, b := range bufs {
+			for j := range b[:udp.MTU] {
+				b[j] = 0x5a
+			}
+		}
+		c.swaps++
+		off = end
+	}
+	return os.ErrClosed
+}
+
+type plainConn struct{ udp.Conn }
+
+var rxBatches = metrics.GetOrRegisterCounter("flow.rx.batches", nil)
+
+// receive runs the peer's listenOut over conn until conn runs out.
+func (p *flowTestPeer) receive(conn udp.Conn) {
+	p.f.writers = []udp.Conn{conn}
+	p.f.outside = conn
+	p.f.listenOut(0)
+}
+
+// TestFlowStagedFirewallParity: both paths apply the same outbound and inbound policy. An authenticated inbound
+// denial still consumes its replay counter, exactly as inline Decrypt does.
+func TestFlowStagedFirewallParity(t *testing.T) {
+	for _, sc := range []stagedConfig{{}, stagedOn(2)} {
+		t.Run(stagedName(sc), func(t *testing.T) {
+			batches, _ := flowTestBatches(4, 3, 1, 8)
+			sender, _ := newFlowTestPair(t, noise.CipherChaChaPoly, sc)
+			sender.f.firewall.OutRules = newFirewallTable()
+			sender.f.listenIn(newFlowBatchQueue(batches), 0)
+			require.Empty(t, sender.conn.captured())
+
+			sender, receiver := newFlowTestPair(t, noise.CipherChaChaPoly, sc)
+			wire := wireFor(t, sender, batches)
+			receiver.f.firewall.InRules = newFirewallTable()
+			receiver.receive(&rxConn{wire: wire, batchLen: 64})
+			require.Empty(t, receiver.tun.writes)
+			for _, pkt := range wire {
+				h := &header.H{}
+				require.NoError(t, h.Parse(pkt))
+				require.False(t, receiver.hostinfo.ConnectionState.window.Check(receiver.f.l, h.MessageCounter))
+			}
+		})
+	}
+}
+
+// TestFlowStagedCipherFallback runs the parsed configuration with the real AES cipher: transmit falls back to inline
+// when the build needs nonce-ordered encryption (BoringCrypto, FIPS), receive decryption stays staged.
+func TestFlowStagedCipherFallback(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	c.Settings = map[string]any{"tun": map[string]any{"staged": map[string]any{"workers": 2}}}
+	sender, receiver := newFlowTestPair(t, noiseutil.CipherAESGCM, parseStagedConfig(c, l))
+	require.Equal(t, !noiseutil.EncryptLockNeeded, sender.f.staged.tx)
+	require.True(t, sender.f.staged.rx)
+	batches, want := flowTestBatches(4, 8, 1, 45)
+	tx := metrics.GetOrRegisterCounter("flow.tx.batches", nil)
+	tx0, rx0 := tx.Count(), rxBatches.Count()
+	sender.f.listenIn(newFlowBatchQueue(batches), 0)
+	if noiseutil.EncryptLockNeeded {
+		require.Equal(t, tx0, tx.Count())
+	}
+	receiver.receive(&rxConn{wire: sender.conn.captured(), batchLen: 512})
+	require.Greater(t, rxBatches.Count(), rx0)
+	require.Equal(t, want, receiver.tun.segments(t))
+}

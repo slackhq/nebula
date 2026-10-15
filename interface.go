@@ -422,14 +422,18 @@ func (f *Interface) listenOut(i int) {
 		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, payload, rxc)
 	}
 
-	flusher := func() {
-		if err := f.batchers[i].Flush(); err != nil {
-			f.l.Error("Failed to flush tun coalescer", "error", err)
-		}
-		clear(rxc.hostmapCache)
-	}
+	flusher := func() { f.flushOutside(rxc) }
 
-	err := li.ListenOut(listener, flusher)
+	var err error
+	if hc, ok := li.(handoffConn); ok && f.staged.rx {
+		// Every stage on its own goroutine, see flow_rx.go. rxc becomes the ordered writer's context.
+		err = newStagedRx(f, i, rxc).listen(hc)
+	} else {
+		if f.staged.rx {
+			f.l.Info("udp conn cannot hand off receive batches, receive stays inline", "reader", i)
+		}
+		err = li.ListenOut(listener, flusher)
+	}
 
 	// An error after teardown began is shutdown noise, the closed flag covers resources
 	// Close releases itself and the cancelled ctx covers ones torn down by their owners

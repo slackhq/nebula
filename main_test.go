@@ -142,6 +142,6 @@ func TestParseStagedConfig(t *testing.T) {
 		require.Equal(t, stagedConfig{}, staged(2))
 		return
 	}
-	want := stagedConfig{workers: 2, tx: !noiseutil.EncryptLockNeeded}
+	want := stagedConfig{workers: 2, tx: !noiseutil.EncryptLockNeeded, rx: true}
 	require.Equal(t, want, staged(2))
 }

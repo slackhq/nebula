@@ -130,16 +130,9 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxCont
 	}
 
 	out, err := hostinfo.ConnectionState.Decrypt(f.l, h.MessageCounter, packet, rxc.nb)
-	if err != nil {
-		if f.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.logger(f.l).Debug("Failed to decrypt packet", "error", err, "from", via, "header", h)
-		}
+	if !f.finishOutsideDecrypt(hostinfo, via, h.MessageCounter, err) {
 		return
 	}
-
-	// Roam before we respond
-	f.handleHostRoaming(hostinfo, via)
-	f.connectionManager.In(hostinfo)
 
 	switch h.Type {
 	case header.Message:
@@ -471,6 +464,29 @@ func parseV4(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 	}
 
 	return nil
+}
+
+// finishOutsideDecrypt logs a failed decrypt, or roams and records the traffic for an authenticated packet before it
+// is handled. It reports whether the packet authenticated.
+func (f *Interface) finishOutsideDecrypt(hostinfo *HostInfo, via ViaSender, counter uint64, err error) bool {
+	if err != nil {
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			hostinfo.logger(f.l).Debug("Failed to decrypt packet", "error", err, "from", via, "counter", counter)
+		}
+		return false
+	}
+	// Roam before we respond
+	f.handleHostRoaming(hostinfo, via)
+	f.connectionManager.In(hostinfo)
+	return true
+}
+
+// flushOutside ends a receive batch: it writes out the tun coalescer and drops the batch's hostmap cache.
+func (f *Interface) flushOutside(rxc *rxContext) {
+	if err := f.batchers[rxc.q].Flush(); err != nil {
+		f.l.Error("Failed to flush tun coalescer", "error", err)
+	}
+	clear(rxc.hostmapCache)
 }
 
 func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, messageCounter uint64, out []byte, rxc *rxContext) {

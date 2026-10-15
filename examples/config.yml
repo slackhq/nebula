@@ -278,6 +278,7 @@ tun:
   # Linux only. staged.workers enables staged packet processing: each routine hands its batches to this many crypto
   # workers per direction, then sends or writes them in order. 0, the default, keeps processing inline. Not reloadable.
   # Transmit needs use_offloads; BoringCrypto and FIPS builds keep it inline because AES-GCM there needs ordered nonces.
+  # Receive needs a listener that can hand off its batches, which Linux has.
   # IMPORTANT: staged senders require peers with at least the 8192-entry replay window of this release. Released
   # v1.11.x peers use 1024 and are incompatible. The window is not negotiated.
   #staged:

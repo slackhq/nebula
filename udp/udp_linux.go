@@ -246,6 +246,18 @@ func getFrom(names [][]byte, i int, isV4 bool) netip.AddrPort {
 }
 
 func (u *StdConn) ListenOut(r EncReader, flush func()) error {
+	return u.listenOut(r, flush, nil)
+}
+
+// ListenOutHandoff is ListenOut for a reader that keeps the packets: after each batch, handoff takes the batch's
+// buffers and returns replacements, of the same count and at least the same size, to receive the next one into.
+func (u *StdConn) ListenOutHandoff(r EncReader, handoff func(bufs [][]byte) [][]byte) error {
+	return u.listenOut(r, nil, handoff)
+}
+
+// listenOut is the receive loop. After each batch it calls flush, or with handoff set, hands the batch's buffers
+// over and points the recvmmsg iovecs at the ones it gets back.
+func (u *StdConn) listenOut(r EncReader, flush func(), handoff func(bufs [][]byte) [][]byte) error {
 	bufSize := MTU
 	cmsgSpace := 0
 	if u.groSupported {
@@ -283,7 +295,21 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 			deliverSegments(r, from, payload, segSize)
 		}
 
-		flush()
+		if handoff == nil {
+			flush()
+			continue
+		}
+		next := handoff(buffers)
+		if len(next) != len(buffers) {
+			panic(fmt.Sprintf("udp: handoff returned %d buffers, need %d", len(next), len(buffers)))
+		}
+		for i := range next {
+			if len(next[i]) < bufSize {
+				panic(fmt.Sprintf("udp: handoff buffer is %d bytes, need %d", len(next[i]), bufSize))
+			}
+			msgs[i].Hdr.Iov.Base = &next[i][0]
+		}
+		buffers = next
 	}
 }
 

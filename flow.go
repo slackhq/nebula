@@ -12,21 +12,24 @@ import (
 	"github.com/slackhq/nebula/noiseutil"
 )
 
-// Staged transmit (tun.staged.workers) moves encryption off each tun reader onto worker goroutines, behind which an
-// ordered sender flushes every batch in read order. It reuses the inline filter and encryption: staging changes
-// ownership and scheduling, not policy. Each routine has its own workers and sender, so order is per routine. Full
-// queues block the reader. A read error drains the batches in flight, while shutdown waits for the crypto and then
-// drops packets whose sockets have closed. Eight slots take about 9 MiB per routine; small-MSS arenas can grow.
+// Staged processing (tun.staged.workers) moves crypto off each tun reader and udp listener onto worker goroutines,
+// behind which an ordered stage sends or writes every batch in read order. It reuses the inline packet handlers:
+// staging changes ownership and scheduling, not policy. Each routine has its own workers and ordered stages, so order
+// is per routine. Full queues block the reader. A read error drains the batches in flight, while shutdown waits for
+// the crypto and then drops packets whose destination has closed. TX uses eight slots and RX six; at listen.batch=64
+// with GRO their buffers take about 9 MiB and 24 MiB per routine. Small-MSS TX arenas can grow.
 //
-// Metrics are registered only for active pipelines. flow.tx.batches counts reads handed to the sender.
-// flow.stage.<stage>.q<queue>.busy_ns locates the limiting stage: tx_read, tx_encrypt or tx_send. Take rates; 1e9
-// ns/s fills a serial stage. These are elapsed times that exclude read syscalls and downstream waits; descheduling
-// inflates them and worker times add up across the pool.
+// Metrics are registered only for active pipelines. flow.{tx,rx}.batches counts reads handed to the ordered stage.
+// flow.stage.<stage>.q<queue>.busy_ns locates the limiting stage: tx_read, tx_encrypt, tx_send, rx_read, rx_decrypt
+// or rx_write. Take rates; 1e9 ns/s fills a serial stage. These are elapsed times that exclude read syscalls and
+// downstream waits; descheduling inflates them and worker times add up across the pool. Small RX batches sent to the
+// writer include decryption in writer time.
 
 // stagedConfig is tun.staged. workers is per routine and direction; zero keeps processing inline.
 type stagedConfig struct {
 	workers int
 	tx      bool
+	rx      bool
 }
 
 // parseStagedConfig enables staging on Linux only; queues and conns that cannot hand off batches also stay inline.
@@ -39,12 +42,12 @@ func parseStagedConfig(c *config.C, l *slog.Logger) stagedConfig {
 		l.Warn("tun.staged is only supported on Linux; packet processing stays inline")
 		return stagedConfig{}
 	}
-	sc.tx = true
+	sc.tx, sc.rx = true, true
 	if noiseutil.EncryptLockNeeded {
 		l.Warn("tun.staged cannot encrypt in parallel with boringcrypto or fips140; transmit stays inline")
 		sc.tx = false
 	}
-	l.Info("Staged packet processing enabled", "workers", sc.workers, "tx", sc.tx)
+	l.Info("Staged packet processing enabled", "workers", sc.workers, "tx", sc.tx, "rx", sc.rx)
 	return sc
 }
 
