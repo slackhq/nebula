@@ -396,13 +396,6 @@ type rxConn struct {
 	swaps    int
 }
 
-func (c *rxConn) ListenOut(r udp.EncReader, flush func()) error {
-	return c.ListenOutHandoff(r, func(bufs [][]byte) [][]byte {
-		flush()
-		return bufs
-	})
-}
-
 func (c *rxConn) HandoffShape() (n, size int) {
 	n = c.batchLen
 	for _, s := range c.sizes {
@@ -411,7 +404,7 @@ func (c *rxConn) HandoffShape() (n, size int) {
 	return n, udp.MTU
 }
 
-func (c *rxConn) ListenOutHandoff(r udp.EncReader, handoff func(bufs [][]byte) [][]byte) error {
+func (c *rxConn) ListenOut(r udp.EncReader, handoff func(bufs [][]byte) [][]byte) error {
 	n, _ := c.HandoffShape()
 	bufs := make([][]byte, n)
 	for i := range bufs {
@@ -447,7 +440,7 @@ func (c *rxConn) ListenOutHandoff(r udp.EncReader, handoff func(bufs [][]byte) [
 	return os.ErrClosed
 }
 
-// plainConn hides ListenOutHandoff, so it cannot hand off its batches.
+// plainConn hides HandoffShape, so receive stays inline.
 type plainConn struct{ udp.Conn }
 
 var rxBatches = metrics.GetOrRegisterCounter("flow.rx.batches", nil)

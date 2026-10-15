@@ -86,8 +86,9 @@ type rawMessage struct {
 	Len uint32
 }
 
-func (u *GenericConn) ListenOut(r EncReader, flush func()) error {
-	buffer := make([]byte, MTU)
+func (u *GenericConn) ListenOut(r EncReader, handoff func(bufs [][]byte) [][]byte) error {
+	bufs := [][]byte{make([]byte, MTU)}
+	buffer := bufs[0]
 
 	var lastRecvErr time.Time
 
@@ -107,7 +108,8 @@ func (u *GenericConn) ListenOut(r EncReader, flush func()) error {
 		}
 
 		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n:n])
-		flush()
+		bufs = handoff(bufs)
+		buffer = bufs[0]
 	}
 }
 

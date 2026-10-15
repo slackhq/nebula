@@ -245,14 +245,7 @@ func getFrom(names [][]byte, i int, isV4 bool) netip.AddrPort {
 	return netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4]))
 }
 
-func (u *StdConn) ListenOut(r EncReader, flush func()) error {
-	return u.ListenOutHandoff(r, func(bufs [][]byte) [][]byte {
-		flush()
-		return bufs
-	})
-}
-
-// HandoffShape is the count and size of the buffers ListenOutHandoff hands over after each batch.
+// HandoffShape is the count and size of the buffers ListenOut hands over after each batch.
 func (u *StdConn) HandoffShape() (n, size int) {
 	if u.groSupported {
 		return u.batch, udpGROBufferSize
@@ -260,10 +253,7 @@ func (u *StdConn) HandoffShape() (n, size int) {
 	return u.batch, MTU
 }
 
-// ListenOutHandoff is the receive loop. After each batch, handoff takes the batch's buffers and returns the ones to
-// receive the next batch into, in HandoffShape: the same ones for a reader that is done with the packets, or
-// replacements for one that keeps them.
-func (u *StdConn) ListenOutHandoff(r EncReader, handoff func(bufs [][]byte) [][]byte) error {
+func (u *StdConn) ListenOut(r EncReader, handoff func(bufs [][]byte) [][]byte) error {
 	_, bufSize := u.HandoffShape()
 	cmsgSpace := 0
 	if u.groSupported {

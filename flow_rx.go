@@ -10,10 +10,10 @@ import (
 	"github.com/slackhq/nebula/udp"
 )
 
-// handoffConn is a udp conn that can hand each received batch over. The callback returns replacement buffers in the
-// conn's HandoffShape.
+// handoffConn is a udp conn that receives in batches of a fixed shape, so staged receive can have replacement buffers
+// ready for every batch it keeps.
 type handoffConn interface {
-	ListenOutHandoff(udp.EncReader, func([][]byte) [][]byte) error
+	ListenOut(udp.EncReader, func([][]byte) [][]byte) error
 	HandoffShape() (n, size int)
 }
 
@@ -152,7 +152,7 @@ func (p *stagedRx) listen(li handoffConn) error {
 		}
 	}
 	defer p.close()
-	return li.ListenOutHandoff(p.deliver, p.handoff)
+	return li.ListenOut(p.deliver, p.handoff)
 }
 
 // deliver is the listener's per-packet work: classify the packet and add it to the current batch. Nothing here

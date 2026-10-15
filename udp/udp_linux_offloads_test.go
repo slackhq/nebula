@@ -226,7 +226,7 @@ func TestOffloadsDisabledRxDelivers(t *testing.T) {
 		_ = sc.ListenOut(func(from netip.AddrPort, payload []byte) {
 			// payload aliases the shared recv buffer row; copy before handing off.
 			rxCh <- rxPkt{from, slices.Clone(payload)}
-		}, func() {})
+		}, func(bufs [][]byte) [][]byte { return bufs })
 	}()
 
 	tx, err := net.DialUDP("udp4", nil, net.UDPAddrFromAddrPort(addr))

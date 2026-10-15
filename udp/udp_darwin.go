@@ -180,8 +180,9 @@ func NewUDPStatsEmitter(udpConns []Conn) func() {
 	return func() {}
 }
 
-func (u *StdConn) ListenOut(r EncReader, flush func()) error {
-	buffer := make([]byte, MTU)
+func (u *StdConn) ListenOut(r EncReader, handoff func(bufs [][]byte) [][]byte) error {
+	bufs := [][]byte{make([]byte, MTU)}
+	buffer := bufs[0]
 
 	for {
 		// Just read one packet at a time
@@ -195,7 +196,8 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 		}
 
 		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n:n])
-		flush()
+		bufs = handoff(bufs)
+		buffer = bufs[0]
 	}
 }
 

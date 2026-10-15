@@ -142,7 +142,7 @@ func runTeardownCase(t *testing.T, batch int, name string, traffic func(send net
 	go func() {
 		loopDone <- sc.ListenOut(func(netip.AddrPort, []byte) {
 			received.Add(1)
-		}, func() {})
+		}, func(bufs [][]byte) [][]byte { return bufs })
 	}()
 
 	send, err := net.Dial("udp", addr.String())

@@ -418,7 +418,10 @@ func (f *Interface) listenOut(i int) {
 		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, payload, rxc)
 	}
 
-	flusher := func() { f.flushOutside(rxc) }
+	flusher := func(bufs [][]byte) [][]byte {
+		f.flushOutside(rxc)
+		return bufs
+	}
 
 	var err error
 	if hc, ok := li.(handoffConn); ok && f.staged.workers > 0 {

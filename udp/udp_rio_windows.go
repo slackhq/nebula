@@ -142,8 +142,9 @@ func (u *RIOConn) bind(l *slog.Logger, sa windows.Sockaddr) error {
 	return nil
 }
 
-func (u *RIOConn) ListenOut(r EncReader, flush func()) error {
-	buffer := make([]byte, MTU)
+func (u *RIOConn) ListenOut(r EncReader, handoff func(bufs [][]byte) [][]byte) error {
+	bufs := [][]byte{make([]byte, MTU)}
+	buffer := bufs[0]
 
 	var lastRecvErr time.Time
 
@@ -164,7 +165,8 @@ func (u *RIOConn) ListenOut(r EncReader, flush func()) error {
 		}
 
 		r(netip.AddrPortFrom(netip.AddrFrom16(rua.Addr).Unmap(), (rua.Port>>8)|((rua.Port&0xff)<<8)), buffer[:n:n])
-		flush()
+		bufs = handoff(bufs)
+		buffer = bufs[0]
 	}
 }
 

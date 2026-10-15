@@ -29,11 +29,12 @@ type Settings struct {
 type Conn interface {
 	Rebind() error
 	LocalAddr() (netip.AddrPort, error)
-	// ListenOut invokes r for each received packet.
-	// On batch-capable backends (recvmmsg), flush is called after each batch is fully delivered.
-	// Callers use it to flush per-batch accumulators such as TUN write coalescers.
-	// Single-packet backends call flush after each packet. flush must not be nil.
-	ListenOut(r EncReader, flush func()) error
+	// ListenOut invokes r for each received packet. The packets alias the receive buffers.
+	// After each batch is fully delivered (after each packet on single-packet backends), handoff takes the batch's
+	// buffers and returns the ones to receive the next batch into: the same ones once the caller is done with the
+	// packets, after flushing per-batch accumulators such as TUN write coalescers, or replacements of the same count
+	// and size to keep them. handoff must not be nil.
+	ListenOut(r EncReader, handoff func(bufs [][]byte) [][]byte) error
 	WriteTo(b []byte, addr netip.AddrPort) error
 	// WriteBatch sends a contiguous batch of packets, each with its own
 	// destination. bufs and addrs must have the same length. Linux uses
@@ -56,7 +57,7 @@ func (NoopConn) Rebind() error {
 func (NoopConn) LocalAddr() (netip.AddrPort, error) {
 	return netip.AddrPort{}, nil
 }
-func (NoopConn) ListenOut(_ EncReader, _ func()) error {
+func (NoopConn) ListenOut(_ EncReader, _ func([][]byte) [][]byte) error {
 	return nil
 }
 func (NoopConn) SupportsMultipleReaders() bool {
