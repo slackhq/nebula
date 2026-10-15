@@ -150,6 +150,19 @@ func TestParseStagedConfig(t *testing.T) {
 	c.Settings["tun"] = map[string]any{"staged": map[string]any{"workers": 2, "tx_slots": 3, "rx_slots": 1}}
 	got := parseStagedConfig(c, l)
 	require.Equal(t, []int{3, 2}, []int{got.txSlots, got.rxSlots}, "overrides apply, down to the minimum")
+
+	c = config.NewC(l)
+	c.Settings["tun"] = map[string]any{"staged": map[string]any{"workers": 2, "tx": false, "inline_below": 0}}
+	got = parseStagedConfig(c, l)
+	require.False(t, got.tx, "tx: false keeps transmit inline")
+	require.True(t, got.rx)
+	require.Zero(t, got.inlineBelow, "inline_below: 0 hands every batch off")
+
+	c = config.NewC(l)
+	c.Settings["tun"] = map[string]any{"staged": map[string]any{"workers": 2, "inline_below": 32}}
+	require.Equal(t, 32, parseStagedConfig(c, l).inlineBelow)
+	c.Settings["tun"] = map[string]any{"staged": map[string]any{"workers": 2, "inline_below": -1}}
+	require.Zero(t, parseStagedConfig(c, l).inlineBelow, "a negative threshold is 0")
 }
 
 func TestStagedSlots(t *testing.T) {

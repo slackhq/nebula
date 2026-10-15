@@ -34,7 +34,7 @@ type stagedConfig struct {
 	workers int
 	tx      bool
 	rx      bool
-	// inlineBelow is the TX segment or RX packet count below which an idle reader skips the worker handoff
+	// inlineBelow is the TX segment or RX packet count below which an idle reader skips the worker handoff, 0 never
 	inlineBelow int
 	// txSlots and rxSlots are how many batches each routine can have in flight per direction
 	txSlots, rxSlots int
@@ -78,17 +78,17 @@ func parseStagedConfig(c *config.C, l *slog.Logger) stagedConfig {
 		l.Warn("tun.staged is only supported on Linux; packet processing stays inline")
 		return stagedConfig{}
 	}
-	sc.tx, sc.rx = true, true
-	// 256 is the measured crossover
-	sc.inlineBelow = 256
-	if noiseutil.EncryptLockNeeded {
+	sc.tx, sc.rx = c.GetBool("tun.staged.tx", true), true
+	// 256 is the measured crossover, 0 hands every batch to the workers
+	sc.inlineBelow = max(c.GetInt("tun.staged.inline_below", 256), 0)
+	if sc.tx && noiseutil.EncryptLockNeeded {
 		l.Warn("tun.staged cannot encrypt in parallel with boringcrypto or fips140; transmit stays inline")
 		sc.tx = false
 	}
 	sc.txSlots, sc.rxSlots = stagedSlots(sc.workers, c.GetInt("listen.batch", 64),
 		c.GetInt("tun.staged.tx_slots", 0), c.GetInt("tun.staged.rx_slots", 0))
 	l.Info("Staged packet processing enabled", "workers", sc.workers, "tx", sc.tx, "rx", sc.rx,
-		"txSlots", sc.txSlots, "rxSlots", sc.rxSlots)
+		"inlineBelow", sc.inlineBelow, "txSlots", sc.txSlots, "rxSlots", sc.rxSlots)
 	return sc
 }
 

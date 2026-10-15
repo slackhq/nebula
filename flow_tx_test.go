@@ -14,12 +14,14 @@ import (
 
 	"github.com/flynn/noise"
 	"github.com/rcrowley/go-metrics"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/cpupick"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/overlay/batch"
 	"github.com/slackhq/nebula/overlay/tio"
+	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/require"
@@ -431,6 +433,72 @@ func TestFlowStagedTXInlineOnlyWhenEmpty(t *testing.T) {
 	close(block)
 	p.close()
 	require.Equal(t, want, decryptWire(t, receiver, sender.conn.captured()))
+}
+
+// TestFlowStagedTXInlineBelowZero: with inline_below 0 an idle reader never sends a batch itself, in either
+// direction: every read goes through the workers and the ordered sender or writer.
+func TestFlowStagedTXInlineBelowZero(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	l := test.NewLogger()
+	c := config.NewC(l)
+	c.Settings = map[string]any{"tun": map[string]any{"staged": map[string]any{"workers": 2, "inline_below": 0}}}
+	sc := parseStagedConfig(c, l)
+	if !sc.tx {
+		t.Skip("transmit stays inline in this build")
+	}
+	sender, receiver := newFlowTestPair(t, noise.CipherChaChaPoly, sc)
+	batches, want := flowTestBatches(20, 2, 1, 4)
+	txInline := metrics.GetOrRegisterCounter("flow.tx.inline", nil)
+	tx := metrics.GetOrRegisterCounter("flow.tx.batches", nil)
+	rxInline := metrics.GetOrRegisterCounter("flow.rx.inline", nil)
+	txInline0, tx0, rxInline0, rx0 := txInline.Count(), tx.Count(), rxInline.Count(), rxBatches.Count()
+	sender.f.listenIn(newFlowBatchQueue(batches), 0)
+	wire := sender.conn.captured()
+	require.Equal(t, want, decryptWire(t, receiver, wire))
+	require.Zero(t, txInline.Count()-txInline0)
+	require.Equal(t, int64(len(batches)), tx.Count()-tx0)
+	receiver.receive(&rxConn{wire: wire, sizes: []int{1, 2, 4}})
+	require.Equal(t, want, receiver.tun.segments(t))
+	require.Zero(t, rxInline.Count()-rxInline0)
+	require.Positive(t, rxBatches.Count()-rx0)
+}
+
+// TestFlowStagedTXDisabled: with tx false the reader never builds a staged pipeline, even on a queue that could hand
+// off its batches. Receive stays staged.
+func TestFlowStagedTXDisabled(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	l := test.NewLogger()
+	c := config.NewC(l)
+	c.Settings = map[string]any{"tun": map[string]any{"staged": map[string]any{"workers": 2, "tx": false}}}
+	sc := parseStagedConfig(c, l)
+	require.False(t, sc.tx)
+	require.True(t, sc.rx)
+	sender, receiver := newFlowTestPair(t, noise.CipherChaChaPoly, sc)
+	batches, want := flowTestBatches(4, 8, 1, 45)
+	tx := metrics.GetOrRegisterCounter("flow.tx.batches", nil)
+	txInline := metrics.GetOrRegisterCounter("flow.tx.inline", nil)
+	tx0, txInline0, rx0 := tx.Count(), txInline.Count(), rxBatches.Count()
+	q := &swapCountQueue{flowBatchQueue: newFlowBatchQueue(batches)}
+	sender.f.listenIn(q, 0)
+	wire := sender.conn.captured()
+	require.Equal(t, want, decryptWire(t, receiver, wire))
+	require.Zero(t, q.swaps, "newStagedTx always takes the queue's buffer, so it never ran")
+	require.Equal(t, tx0, tx.Count())
+	require.Equal(t, txInline0, txInline.Count())
+	receiver.receive(&rxConn{wire: wire, batchLen: 512})
+	require.Equal(t, want, receiver.tun.segments(t))
+	require.Greater(t, rxBatches.Count(), rx0)
+}
+
+// swapCountQueue counts SwapRxBuf calls.
+type swapCountQueue struct {
+	*flowBatchQueue
+	swaps int
+}
+
+func (q *swapCountQueue) SwapRxBuf(buf []byte) []byte {
+	q.swaps++
+	return q.flowBatchQueue.SwapRxBuf(buf)
 }
 
 // TestFlowStagedTXAdaptiveBudget: a fast reader's adaptive sends must stop spending credit until another reader's
