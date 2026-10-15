@@ -26,13 +26,15 @@ type sshdReloadHarness struct {
 	server  *sshd.SSHServer
 	keyFile string
 	signer  ssh.Signer
+	listen  string
+	users   []string
 	extra   string
 }
 
 func newSSHDReloadHarness(t *testing.T) *sshdReloadHarness {
 	t.Helper()
 	l := test.NewLogger()
-	h := &sshdReloadHarness{keyFile: filepath.Join(t.TempDir(), "host_key")}
+	h := &sshdReloadHarness{keyFile: filepath.Join(t.TempDir(), "host_key"), listen: "127.0.0.1:0", users: []string{"test"}}
 	h.writeHostKey(t, newEd25519Key(t))
 
 	_, userKey, err := ed25519.GenerateKey(rand.Reader)
@@ -71,8 +73,12 @@ func (h *sshdReloadHarness) writeHostKey(t *testing.T, key crypto.Signer) ssh.Pu
 }
 
 func (h *sshdReloadHarness) config() string {
-	return fmt.Sprintf("sshd:\n  enabled: true\n  listen: 127.0.0.1:0\n  host_key: %s\n  authorized_users:\n    - user: test\n      keys: [%q]\n%s",
-		h.keyFile, string(ssh.MarshalAuthorizedKey(h.signer.PublicKey())), h.extra)
+	users := ""
+	for _, u := range h.users {
+		users += fmt.Sprintf("    - user: %s\n      keys: [%q]\n", u, string(ssh.MarshalAuthorizedKey(h.signer.PublicKey())))
+	}
+	return fmt.Sprintf("sshd:\n  enabled: true\n  listen: %s\n  host_key: %s\n  authorized_users:\n%s%s",
+		h.listen, h.keyFile, users, h.extra)
 }
 
 // dial connects to wherever the server listens now, a restart on :0 moves it. hostKeyAlgorithms limits which host keys
@@ -134,15 +140,41 @@ func TestSSHDReload_UnchangedKeepsSessions(t *testing.T) {
 	assert.False(t, dropped(client, 500*time.Millisecond), "an unchanged sshd was restarted")
 }
 
+// Every key the server reads restarts it when it changes
 func TestSSHDReload_ChangedConfigRestarts(t *testing.T) {
+	cases := map[string]func(t *testing.T, h *sshdReloadHarness){
+		"listen":           func(t *testing.T, h *sshdReloadHarness) { h.listen = "localhost:0" },
+		"authorized_users": func(t *testing.T, h *sshdReloadHarness) { h.users = append(h.users, "other") },
+		"trusted_cas":      func(t *testing.T, h *sshdReloadHarness) { h.extra = "  trusted_cas: []\n" },
+		"host_key": func(t *testing.T, h *sshdReloadHarness) {
+			h.keyFile = filepath.Join(t.TempDir(), "other_host_key")
+			h.writeHostKey(t, newEd25519Key(t))
+		},
+	}
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newSSHDReloadHarness(t)
+			client, _ := h.connect(t)
+
+			change(t, h)
+			require.NoError(t, h.c.ReloadConfigString(h.config()).Err)
+			assert.True(t, dropped(client, 5*time.Second), "a changed sshd config was not applied")
+			require.Eventually(t, h.server.Running, 5*time.Second, 10*time.Millisecond)
+			h.connect(t)
+		})
+	}
+}
+
+// sandbox_dir is only read at startup, restarting sshd for it would drop every session and still not apply it
+func TestSSHDReload_SandboxDirKeepsSessions(t *testing.T) {
 	h := newSSHDReloadHarness(t)
 	client, _ := h.connect(t)
 
-	h.extra = "  trusted_cas: []\n"
-	require.NoError(t, h.c.ReloadConfigString(h.config()).Err)
-	assert.True(t, dropped(client, 5*time.Second), "a changed sshd config was not applied")
-	require.Eventually(t, h.server.Running, 5*time.Second, 10*time.Millisecond)
-	h.connect(t)
+	h.extra = "  sandbox_dir: " + t.TempDir() + "\n"
+	res := h.c.ReloadConfigString(h.config())
+	require.NoError(t, res.Err)
+	assert.Equal(t, []string{"sshd.sandbox_dir"}, res.RestartKeys)
+	assert.False(t, dropped(client, 500*time.Millisecond), "sshd was restarted")
 }
 
 // The config can stay the same while the host key file it names changes. New connections get the new key, open

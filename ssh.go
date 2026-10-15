@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -65,7 +66,7 @@ func wireSSHReload(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) {
 			// Restarting the server drops every open session, the one that asked for this reload included. Only restart
 			// when it isn't running or its config changed. The host key file can change under the same config, new
 			// handshakes use the new key without a restart
-			if ssh.Running() && !c.HasChanged("sshd") {
+			if ssh.Running() && !slices.ContainsFunc(sshdServerKeys, c.HasChanged) {
 				key, err := loadSSHHostKey(c)
 				if err == nil {
 					err = ssh.SetHostKey(key)
@@ -91,6 +92,10 @@ func wireSSHReload(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) {
 		}
 	})
 }
+
+// sshdServerKeys are what configSSH reads. sshd.sandbox_dir isn't one, it's read once at startup and restarting the
+// server doesn't apply it
+var sshdServerKeys = []string{"sshd.enabled", "sshd.listen", "sshd.host_key", "sshd.trusted_cas", "sshd.authorized_users"}
 
 // loadSSHHostKey returns sshd.host_key, read from its file when it names one.
 func loadSSHHostKey(c *config.C) ([]byte, error) {
