@@ -3,16 +3,18 @@ package nebula
 import (
 	"log/slog"
 	"net/netip"
+	"sync"
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/udp"
 )
 
-// handoffConn is a udp conn that can hand each received batch over. The callback returns replacement buffers with
-// the same count and at least the same lengths.
+// handoffConn is a udp conn that can hand each received batch over. The callback returns replacement buffers in the
+// conn's HandoffShape.
 type handoffConn interface {
 	ListenOutHandoff(udp.EncReader, func([][]byte) [][]byte) error
+	HandoffShape() (n, size int)
 }
 
 const stagedRxSlots = 6
@@ -31,14 +33,8 @@ type rxItem struct {
 
 // rxChunk is a contiguous run of a batch's items for one worker to decrypt.
 type rxChunk struct {
-	l     *slog.Logger
 	items []rxItem
 	done  chan struct{}
-}
-
-func (c *rxChunk) run(nb []byte) {
-	decryptRxItems(c.l, c.items, nb)
-	c.done <- struct{}{}
 }
 
 // decryptRxItems checks the data packets among items against the replay window and decrypts the ones it accepts in
@@ -81,9 +77,11 @@ func (b *rxBatch) reset() {
 
 // stagedRx is the staged receive pipeline of one udp listener. deliver and handoff run on the listener goroutine.
 type stagedRx struct {
-	f    *Interface
-	q    int
-	pool *flowPool
+	f *Interface
+	q int
+	// jobs feeds the decrypt workers. The listener is the only producer and closes it once the writer has drained.
+	jobs    chan *rxChunk
+	workers sync.WaitGroup
 	// h and hostmapCache are the listener's own. wrxc is the commit context: the writer's, or the listener's while
 	// nothing is in flight.
 	h            *header.H
@@ -114,13 +112,15 @@ func newStagedRx(f *Interface, q int, wrxc *rxContext) *stagedRx {
 		metricBatches: metrics.GetOrRegisterCounter("flow.rx.batches", nil),
 		metricInline:  metrics.GetOrRegisterCounter("flow.rx.inline", nil),
 	}
-	workers := f.staged.workers
-	p.pool = newFlowPool(workers, stagedRxSlots*2*workers)
+	n := f.staged.workers
+	p.jobs = make(chan *rxChunk, stagedRxSlots*2*n)
+	for range n {
+		p.workers.Go(p.decrypt)
+	}
 	for range stagedRxSlots {
 		// Two chunks per worker, so the writer can start committing while the workers are still on the rest
-		b := &rxBatch{items: make([]rxItem, 0, 256), chunks: make([]rxChunk, 2*workers)}
+		b := &rxBatch{items: make([]rxItem, 0, 256), chunks: make([]rxChunk, 2*n)}
 		for i := range b.chunks {
-			b.chunks[i].l = f.l
 			b.chunks[i].done = make(chan struct{}, 1)
 		}
 		p.free = append(p.free, b)
@@ -131,9 +131,26 @@ func newStagedRx(f *Interface, q int, wrxc *rxContext) *stagedRx {
 	return p
 }
 
+// decrypt is a worker: it decrypts the chunks it is handed and signals each one done.
+func (p *stagedRx) decrypt() {
+	nb := make([]byte, 12)
+	for c := range p.jobs {
+		decryptRxItems(p.f.l, c.items, nb)
+		c.done <- struct{}{}
+	}
+}
+
 // listen runs the conn's receive loop through the pipeline until it fails, then drains the pipeline. The conn hands
 // its buffers over, so a batch moves between stages without a copy.
 func (p *stagedRx) listen(li handoffConn) error {
+	// The first batch reads into the conn's own buffers; every other one brings its own
+	n, size := li.HandoffShape()
+	for _, b := range p.free {
+		b.bufs = make([][]byte, n)
+		for i := range b.bufs {
+			b.bufs[i] = make([]byte, size)
+		}
+	}
 	defer p.close()
 	return li.ListenOutHandoff(p.deliver, p.handoff)
 }
@@ -175,14 +192,7 @@ func (p *stagedRx) classify(it *rxItem) {
 func (p *stagedRx) handoff(bufs [][]byte) [][]byte {
 	p.cur.bufs = bufs
 	p.endBatch()
-	b := p.cur
-	if len(b.bufs) != len(bufs) || len(b.bufs[0]) < len(bufs[0]) {
-		b.bufs = make([][]byte, len(bufs))
-		for i := range b.bufs {
-			b.bufs[i] = make([]byte, len(bufs[0]))
-		}
-	}
-	return b.bufs
+	return p.cur.bufs
 }
 
 // endBatch hands the batch to the workers and the ordered writer, then takes a free batch.
@@ -216,7 +226,7 @@ func (p *stagedRx) endBatch() {
 	}
 	// The jobs go out before the batch does: once the writer has it, it may finish and reset it at any moment
 	for i := range b.nChunks {
-		p.pool.jobs <- &b.chunks[i]
+		p.jobs <- &b.chunks[i]
 	}
 	p.inFlight++
 	p.ordered <- b
@@ -301,5 +311,6 @@ func (p *stagedRx) close() {
 	}
 	close(p.ordered)
 	<-p.writerDone
-	p.pool.close()
+	close(p.jobs)
+	p.workers.Wait()
 }

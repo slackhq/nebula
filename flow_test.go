@@ -403,11 +403,16 @@ func (c *rxConn) ListenOut(r udp.EncReader, flush func()) error {
 	})
 }
 
-func (c *rxConn) ListenOutHandoff(r udp.EncReader, handoff func(bufs [][]byte) [][]byte) error {
-	n := c.batchLen
-	for _, size := range c.sizes {
-		n = max(n, size)
+func (c *rxConn) HandoffShape() (n, size int) {
+	n = c.batchLen
+	for _, s := range c.sizes {
+		n = max(n, s)
 	}
+	return n, udp.MTU
+}
+
+func (c *rxConn) ListenOutHandoff(r udp.EncReader, handoff func(bufs [][]byte) [][]byte) error {
+	n, _ := c.HandoffShape()
 	bufs := make([][]byte, n)
 	for i := range bufs {
 		bufs[i] = make([]byte, udp.MTU)

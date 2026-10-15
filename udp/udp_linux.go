@@ -246,22 +246,27 @@ func getFrom(names [][]byte, i int, isV4 bool) netip.AddrPort {
 }
 
 func (u *StdConn) ListenOut(r EncReader, flush func()) error {
-	return u.listenOut(r, flush, nil)
+	return u.ListenOutHandoff(r, func(bufs [][]byte) [][]byte {
+		flush()
+		return bufs
+	})
 }
 
-// ListenOutHandoff is ListenOut for a reader that keeps the packets: after each batch, handoff takes the batch's
-// buffers and returns replacements, of the same count and at least the same size, to receive the next one into.
+// HandoffShape is the count and size of the buffers ListenOutHandoff hands over after each batch.
+func (u *StdConn) HandoffShape() (n, size int) {
+	if u.groSupported {
+		return u.batch, udpGROBufferSize
+	}
+	return u.batch, MTU
+}
+
+// ListenOutHandoff is the receive loop. After each batch, handoff takes the batch's buffers and returns the ones to
+// receive the next batch into, in HandoffShape: the same ones for a reader that is done with the packets, or
+// replacements for one that keeps them.
 func (u *StdConn) ListenOutHandoff(r EncReader, handoff func(bufs [][]byte) [][]byte) error {
-	return u.listenOut(r, nil, handoff)
-}
-
-// listenOut is the receive loop. After each batch it calls flush, or with handoff set, hands the batch's buffers
-// over and points the recvmmsg iovecs at the ones it gets back.
-func (u *StdConn) listenOut(r EncReader, flush func(), handoff func(bufs [][]byte) [][]byte) error {
-	bufSize := MTU
+	_, bufSize := u.HandoffShape()
 	cmsgSpace := 0
 	if u.groSupported {
-		bufSize = udpGROBufferSize
 		cmsgSpace = unix.CmsgSpace(udpGROCmsgPayload)
 	}
 	msgs, buffers, names, _ := prepareRawMessages(u.batch, bufSize, cmsgSpace)
@@ -295,21 +300,20 @@ func (u *StdConn) listenOut(r EncReader, flush func(), handoff func(bufs [][]byt
 			deliverSegments(r, from, payload, segSize)
 		}
 
-		if handoff == nil {
-			flush()
-			continue
-		}
 		next := handoff(buffers)
 		if len(next) != len(buffers) {
 			panic(fmt.Sprintf("udp: handoff returned %d buffers, need %d", len(next), len(buffers)))
 		}
-		for i := range next {
-			if len(next[i]) < bufSize {
-				panic(fmt.Sprintf("udp: handoff buffer is %d bytes, need %d", len(next[i]), bufSize))
+		if &next[0] != &buffers[0] {
+			// Replacements, point the recvmmsg iovecs at them
+			for i := range next {
+				if len(next[i]) < bufSize {
+					panic(fmt.Sprintf("udp: handoff buffer is %d bytes, need %d", len(next[i]), bufSize))
+				}
+				msgs[i].Hdr.Iov.Base = &next[i][0]
 			}
-			msgs[i].Hdr.Iov.Base = &next[i][0]
+			buffers = next
 		}
-		buffers = next
 	}
 }
 

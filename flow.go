@@ -3,7 +3,6 @@ package nebula
 import (
 	"log/slog"
 	"runtime"
-	"sync"
 
 	"github.com/slackhq/nebula/config"
 )
@@ -39,28 +38,3 @@ func parseStagedConfig(c *config.C, l *slog.Logger) stagedConfig {
 	l.Info("Staged receive processing enabled", "workers", sc.workers)
 	return sc
 }
-
-// flowJob is one batch of crypto work. It owns its packet buffers until run returns; jobs and queues are reused.
-type flowJob interface{ run(nb []byte) }
-
-// flowPool runs one listener's crypto jobs. The listener is the only producer and closes the pool once its ordered
-// stage has drained.
-type flowPool struct {
-	jobs chan flowJob
-	wg   sync.WaitGroup
-}
-
-func newFlowPool(workers, queueLen int) *flowPool {
-	p := &flowPool{jobs: make(chan flowJob, queueLen)}
-	for range workers {
-		p.wg.Go(func() {
-			nb := make([]byte, 12)
-			for job := range p.jobs {
-				job.run(nb)
-			}
-		})
-	}
-	return p
-}
-
-func (p *flowPool) close() { close(p.jobs); p.wg.Wait() }

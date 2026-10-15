@@ -185,22 +185,29 @@ func (u *TesterConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, err
 func (u *TesterConn) ListenOut(r EncReader, flush func()) error {
 	// The batcher borrows plaintext decrypted in place inside p.Data
 	// until Flush, so the packet must stay alive across flush()
-	return u.listenOut(r, func(p *Packet) { flush() })
+	return u.ListenOutHandoff(r, func(bufs [][]byte) [][]byte {
+		flush()
+		return bufs
+	})
 }
 
-// ListenOutHandoff hands each packet's buffer over, the replacement goes back to the pool.
+// HandoffShape is one buffer per handoff; the pool resizes the replacements it gets back as it needs.
+func (u *TesterConn) HandoffShape() (n, size int) { return 1, MTU }
+
+// ListenOutHandoff hands each packet's buffer over as a batch of one, the buffer it gets back goes to the pool. Like
+// StdConn it carries on with the slice handoff returns, since a reader that keeps the packets keeps the one it was
+// given.
 func (u *TesterConn) ListenOutHandoff(r EncReader, handoff func(bufs [][]byte) [][]byte) error {
-	return u.listenOut(r, func(p *Packet) { p.Data = handoff([][]byte{p.Data})[0] })
-}
-
-func (u *TesterConn) listenOut(r EncReader, finish func(*Packet)) error {
+	bufs := make([][]byte, 1)
 	for {
 		select {
 		case <-u.done:
 			return os.ErrClosed
 		case p := <-u.RxPackets:
 			r(p.From, p.Data[:len(p.Data):len(p.Data)])
-			finish(p)
+			bufs[0] = p.Data
+			bufs = handoff(bufs)
+			p.Data = bufs[0]
 			p.Release()
 		}
 	}
