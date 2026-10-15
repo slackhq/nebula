@@ -268,9 +268,8 @@ func sshListHostMap(hl controlHostLister, a any, w commands.StringWriter) error 
 			js.SetIndent("", "    ")
 		}
 
-		err := js.Encode(hm)
-		if err != nil {
-			return nil
+		if err := js.Encode(hm); err != nil {
+			return err
 		}
 
 	} else {
@@ -318,9 +317,8 @@ func sshListLighthouseMap(lightHouse *LightHouse, a any, w commands.StringWriter
 			js.SetIndent("", "    ")
 		}
 
-		err := js.Encode(addrMap)
-		if err != nil {
-			return nil
+		if err := js.Encode(addrMap); err != nil {
+			return err
 		}
 
 	} else {
@@ -560,16 +558,15 @@ func sshPrintCert(ifce *Interface, fs any, a []string, w commands.StringWriter) 
 	if args.Json || args.Pretty {
 		b, err := cert.MarshalJSON()
 		if err != nil {
-			return nil
+			return commands.Fail(w, fmt.Sprintf("Unable to marshal the certificate: %s", err))
 		}
 
 		if args.Pretty {
 			buf := new(bytes.Buffer)
-			err := json.Indent(buf, b, "", "    ")
-			b = buf.Bytes()
-			if err != nil {
-				return nil
+			if err := json.Indent(buf, b, "", "    "); err != nil {
+				return commands.Fail(w, fmt.Sprintf("Unable to marshal the certificate: %s", err))
 			}
+			b = buf.Bytes()
 		}
 
 		return w.WriteBytes(b)
@@ -578,7 +575,7 @@ func sshPrintCert(ifce *Interface, fs any, a []string, w commands.StringWriter) 
 	if args.Raw {
 		b, err := cert.MarshalPEM()
 		if err != nil {
-			return nil
+			return commands.Fail(w, fmt.Sprintf("Unable to marshal the certificate: %s", err))
 		}
 
 		return w.WriteBytes(b)
