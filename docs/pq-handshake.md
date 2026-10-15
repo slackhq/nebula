@@ -357,6 +357,11 @@ Implemented in `handshake/fragment` (`Sender`, `Assembly`, and the capped `Table
   a resend costs the initiator K packets on that path and the answer is held to the 3x
   budget below. That is TFTP's Sorcerer's Apprentice bound, per path rather than per
   handshake.
+  A path is only an address and port, so a recently answered msg1 replayed from spoofed
+  sources draws one cached msg2 to each, at about 1.2-1.4x the bytes sent and never over 3x,
+  for as long as the answered msg1 is remembered (the handshake timeout). Accepted
+  (2026-10-15): classical IX already resends its stored msg2 to any source that replays msg1,
+  with no clock at all, and a per-handshake clock is what broke a path that only works one way.
 - Duplicate msg1 detection compares the decoded message to the cached one **before**
   running Noise or certificate verification.
 - Before an address is validated, a responder sends at most 3x the bytes it received from
