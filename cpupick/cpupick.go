@@ -16,6 +16,10 @@
 // across distinct physical cores when the topology permits, CPU 0's physical
 // core demoted to last resort, and the order rotated by a stable per-instance
 // key so co-located instances spread instead of stacking.
+//
+// Avoid narrows the process-wide allowed set before any of that happens
+// (tun.avoid_cpus), so Default and tun.cpu_affinity validation only ever see
+// the CPUs left over.
 package cpupick
 
 import (

@@ -443,7 +443,7 @@ func configureAvoidCPUs(c *config.C, l *slog.Logger, configTest bool) error {
 	if len(cpus) == 0 {
 		return nil
 	}
-	if err := util.AvoidCPUs(cpus, !configTest); err != nil {
+	if err := cpupick.Avoid(cpus, !configTest); err != nil {
 		if errors.Is(err, errors.ErrUnsupported) {
 			l.Warn("tun.avoid_cpus is only supported on Linux; ignoring")
 			return nil
