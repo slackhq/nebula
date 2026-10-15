@@ -3,7 +3,6 @@ package nebula
 import (
 	"encoding/binary"
 	"net/netip"
-	"time"
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/header"
@@ -88,7 +87,6 @@ type stagedRx struct {
 	hostmapCache map[uint32]*HostInfo
 	wrxc         *rxContext
 
-	started    time.Time
 	cur        *rxBatch
 	free       []*rxBatch
 	ordered    chan *rxBatch
@@ -96,9 +94,8 @@ type stagedRx struct {
 	inFlight   int
 	writerDone chan struct{}
 
-	readBusy, decryptBusy, writeBusy metrics.Counter
-	metricBatches                    metrics.Counter
-	metricInline                     metrics.Counter
+	metricBatches metrics.Counter
+	metricInline  metrics.Counter
 }
 
 func newStagedRx(f *Interface, q int, wrxc *rxContext) *stagedRx {
@@ -111,14 +108,11 @@ func newStagedRx(f *Interface, q int, wrxc *rxContext) *stagedRx {
 		ordered:       make(chan *rxBatch, stagedRxSlots),
 		returned:      make(chan *rxBatch, stagedRxSlots),
 		writerDone:    make(chan struct{}),
-		readBusy:      stageBusy("rx_read", q),
-		decryptBusy:   stageBusy("rx_decrypt", q),
-		writeBusy:     stageBusy("rx_write", q),
 		metricBatches: metrics.GetOrRegisterCounter("flow.rx.batches", nil),
 		metricInline:  metrics.GetOrRegisterCounter("flow.rx.inline", nil),
 	}
 	workers := f.staged.workers
-	p.pool = newFlowPool(workers, stagedRxSlots*2*workers, p.decryptBusy)
+	p.pool = newFlowPool(workers, stagedRxSlots*2*workers)
 	for range stagedRxSlots {
 		// Two chunks per worker, so the writer can start committing while the workers are still on the rest
 		b := &rxBatch{items: make([]rxItem, 0, 256), chunks: make([]rxChunk, 2*workers)}
@@ -143,9 +137,6 @@ func (p *stagedRx) listen(li handoffConn) error {
 // deliver is the listener's per-packet work: classify the packet and add it to the current batch. Nothing here
 // decrypts or touches the tun.
 func (p *stagedRx) deliver(via netip.AddrPort, packet []byte) {
-	if p.started.IsZero() {
-		p.started = time.Now()
-	}
 	b := p.cur
 	it := rxItem{packet: packet, via: via}
 	p.classify(&it)
@@ -210,10 +201,6 @@ func (p *stagedRx) precheck(b *rxBatch) {
 func (p *stagedRx) handoff(bufs [][]byte) [][]byte {
 	p.cur.bufs = bufs
 	p.endBatch()
-	if !p.started.IsZero() {
-		p.readBusy.Inc(int64(time.Since(p.started)))
-		p.started = time.Time{}
-	}
 	b := p.cur
 	if len(b.bufs) != len(bufs) || len(b.bufs[0]) < len(bufs[0]) {
 		b.bufs = make([][]byte, len(bufs))
@@ -262,11 +249,8 @@ func (p *stagedRx) endBatch() {
 	p.ordered <- b
 
 	if len(p.free) == 0 {
-		// Every batch is in flight, wait for the writer: the socket buffer absorbs the backlog meanwhile. The wait is
-		// downstream backpressure, not listener busy time.
-		t := time.Now()
+		// Every batch is in flight, wait for the writer: the socket buffer absorbs the backlog meanwhile
 		p.release(<-p.returned)
-		p.started = p.started.Add(time.Since(t))
 	}
 	p.cur = p.free[len(p.free)-1]
 	p.free = p.free[:len(p.free)-1]
@@ -290,9 +274,8 @@ func (p *stagedRx) release(b *rxBatch) {
 }
 
 // process is the ordered stage for one batch: decrypt whatever no worker is decrypting, commit every item in arrival
-// order, and flush the tun batcher. It reports how long it waited on workers.
-func (p *stagedRx) process(b *rxBatch, rxc *rxContext) time.Duration {
-	var waited time.Duration
+// order, and flush the tun batcher.
+func (p *stagedRx) process(b *rxBatch, rxc *rxContext) {
 	if b.nChunks == 0 {
 		decryptRxItems(b.items, rxc.nb)
 		p.commit(b.items, rxc)
@@ -300,18 +283,11 @@ func (p *stagedRx) process(b *rxBatch, rxc *rxContext) time.Duration {
 		// Commit chunk by chunk, so the commit overlaps the workers still on later chunks
 		for i := range b.nChunks {
 			c := &b.chunks[i]
-			select {
-			case <-c.done:
-			default:
-				t := time.Now()
-				<-c.done
-				waited += time.Since(t)
-			}
+			<-c.done
 			p.commit(c.items, rxc)
 		}
 	}
 	p.f.flushOutside(rxc)
-	return waited
 }
 
 // commit runs the ordered stage over items in arrival order. A non-data packet goes through readOutsidePackets in
@@ -378,9 +354,7 @@ func (p *stagedRx) writer() {
 				<-b.chunks[i].done
 			}
 		} else {
-			t := time.Now()
-			waited := p.process(b, p.wrxc)
-			p.writeBusy.Inc(int64(time.Since(t) - waited))
+			p.process(b, p.wrxc)
 		}
 		b.reset()
 		p.returned <- b

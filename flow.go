@@ -1,13 +1,10 @@
 package nebula
 
 import (
-	"fmt"
 	"log/slog"
 	"runtime"
 	"sync"
-	"time"
 
-	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/config"
 )
 
@@ -19,10 +16,6 @@ import (
 //
 // Metrics are registered only for active pipelines. flow.rx.batches counts batches handed to the writer and
 // flow.rx.inline those an idle listener handled itself; their rates show whether staging is used.
-// flow.stage.<stage>.q<queue>.busy_ns locates the limiting stage: rx_read, rx_decrypt or rx_write. Take rates; 1e9
-// ns/s fills a serial stage. These are elapsed times that exclude read syscalls and downstream waits; descheduling
-// inflates them and worker times add up across the pool. Small batches sent to the writer include decryption in
-// writer time.
 
 // stagedConfig is tun.staged. workers is per routine; zero keeps receive inline.
 type stagedConfig struct {
@@ -57,15 +50,13 @@ type flowPool struct {
 	wg   sync.WaitGroup
 }
 
-func newFlowPool(workers, queueLen int, busy metrics.Counter) *flowPool {
+func newFlowPool(workers, queueLen int) *flowPool {
 	p := &flowPool{jobs: make(chan flowJob, queueLen)}
 	for range workers {
 		p.wg.Go(func() {
 			nb := make([]byte, 12)
 			for job := range p.jobs {
-				t := time.Now()
 				job.run(nb)
-				busy.Inc(int64(time.Since(t)))
 			}
 		})
 	}
@@ -73,8 +64,3 @@ func newFlowPool(workers, queueLen int, busy metrics.Counter) *flowPool {
 }
 
 func (p *flowPool) close() { close(p.jobs); p.wg.Wait() }
-
-// stageBusy is the busy time counter of one stage of routine q.
-func stageBusy(stage string, q int) metrics.Counter {
-	return metrics.GetOrRegisterCounter(fmt.Sprintf("flow.stage.%s.q%d.busy_ns", stage, q), nil)
-}
