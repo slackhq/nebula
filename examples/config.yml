@@ -295,6 +295,14 @@ tun:
   #  - 2
   #  - 4
 
+  # Linux only. avoid_cpus removes these CPU IDs from the affinity of every thread of the process at startup,
+  # embedding applications included; later threads inherit the remaining set. Applied before cpu_affinity and the
+  # default pin selection, independent of pin_threads. Invalid IDs, or IDs that would leave no CPU, fail
+  # startup. Not reloadable; ignored on other platforms. To keep Nebula off the underlay NIC's receive IRQ CPUs, find
+  # them in /proc/interrupts and /proc/irq/<IRQ>/effective_affinity_list, add their SMT siblings from
+  # /sys/devices/system/cpu/cpu<N>/topology/thread_siblings_list, and revisit the list when IRQ placement changes.
+  #avoid_cpus: []
+
   # Route based MTU overrides, you have known vpn ip paths that can support larger MTUs you can increase/decrease them here
   routes:
     #- mtu: 8800
