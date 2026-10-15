@@ -327,6 +327,8 @@ tun:
   # `mtu`: will default to tun mtu if this option is not specified
   # `metric`: will default to 0 if this option is not specified
   # `install`: will default to true, controls whether this route is installed in the systems routing table.
+  # On macOS, a route whose destination another interface already routes, like the local network, is installed once
+  # that route is removed. One deleted by hand stays deleted until nebula reloads or restarts.
   # This setting is reloadable.
   unsafe_routes:
     #- route: 172.16.1.0/24
