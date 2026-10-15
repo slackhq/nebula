@@ -1,7 +1,7 @@
 package nebula
 
 import (
-	"encoding/binary"
+	"log/slog"
 	"net/netip"
 
 	"github.com/rcrowley/go-metrics"
@@ -21,32 +21,37 @@ const rxChunkMin = 16
 // rxItem is one received packet. A data packet for an established tunnel has ci set; out and err are written by
 // whoever decrypts it.
 type rxItem struct {
-	packet   []byte
-	hostinfo *HostInfo
-	ci       *ConnectionState
-	counter  uint64
-	via      netip.AddrPort
-	out      []byte
-	err      error
+	packet  []byte
+	ci      *ConnectionState
+	counter uint64
+	via     netip.AddrPort
+	out     []byte
+	err     error
 }
 
 // rxChunk is a contiguous run of a batch's items for one worker to decrypt.
 type rxChunk struct {
+	l     *slog.Logger
 	items []rxItem
 	done  chan struct{}
 }
 
 func (c *rxChunk) run(nb []byte) {
-	decryptRxItems(c.items, nb)
+	decryptRxItems(c.l, c.items, nb)
 	c.done <- struct{}{}
 }
 
-// decryptRxItems decrypts the data packets among items in place. The replay window is left to the ordered stage, as
-// are packets without a tunnel and the known replays precheck marked.
-func decryptRxItems(items []rxItem, nb []byte) {
+// decryptRxItems checks the data packets among items against the replay window and decrypts the ones it accepts in
+// place, as Decrypt does. Recording the counters is left to readOutsidePackets on the writer, which also handles
+// the packets without a tunnel.
+func decryptRxItems(l *slog.Logger, items []rxItem, nb []byte) {
 	for i := range items {
 		it := &items[i]
-		if it.ci == nil || it.err != nil {
+		if it.ci == nil {
+			continue
+		}
+		if !it.ci.checkReplay(l, it.counter) {
+			it.err = ErrAlreadySeen
 			continue
 		}
 		it.out, it.err = it.ci.decryptPacket(it.counter, it.packet, nb)
@@ -58,7 +63,6 @@ type rxBatch struct {
 	// items is every packet of the batch in arrival order. Data packets are decrypted by a worker; anything else is
 	// handled whole by the writer, in its place.
 	items []rxItem
-	data  int
 	// bufs is the set of recvmmsg buffers the items point into, owned by the batch from handoff until it is reused.
 	bufs [][]byte
 	// chunks are the decrypt jobs, nChunks of them in use. With none the writer decrypts the batch itself.
@@ -69,7 +73,6 @@ type rxBatch struct {
 func (b *rxBatch) reset() {
 	clear(b.items)
 	b.items = b.items[:0]
-	b.data = 0
 	for i := range b.nChunks {
 		b.chunks[i].items = nil
 	}
@@ -117,6 +120,7 @@ func newStagedRx(f *Interface, q int, wrxc *rxContext) *stagedRx {
 		// Two chunks per worker, so the writer can start committing while the workers are still on the rest
 		b := &rxBatch{items: make([]rxItem, 0, 256), chunks: make([]rxChunk, 2*workers)}
 		for i := range b.chunks {
+			b.chunks[i].l = f.l
 			b.chunks[i].done = make(chan struct{}, 1)
 		}
 		p.free = append(p.free, b)
@@ -137,17 +141,14 @@ func (p *stagedRx) listen(li handoffConn) error {
 // deliver is the listener's per-packet work: classify the packet and add it to the current batch. Nothing here
 // decrypts or touches the tun.
 func (p *stagedRx) deliver(via netip.AddrPort, packet []byte) {
-	b := p.cur
 	it := rxItem{packet: packet, via: via}
 	p.classify(&it)
-	if it.ci != nil {
-		b.data++
-	}
-	b.items = append(b.items, it)
+	p.cur.items = append(p.cur.items, it)
 }
 
 // classify fills in the tunnel for a plain data packet of an established, non-relayed tunnel, leaving anything else
-// for the writer to handle whole. The replay pre-check waits for the end of the batch, see precheck.
+// for the writer to handle whole. It is speculative: readOutsidePackets resolves the tunnel again on the writer and
+// uses the worker's result only when it is still the same one.
 func (p *stagedRx) classify(it *rxItem) {
 	f := p.f
 	h := p.h
@@ -166,34 +167,7 @@ func (p *stagedRx) classify(it *rxItem) {
 	if len(packet) < header.Len+ci.dKey.Overhead() {
 		return
 	}
-	it.hostinfo, it.ci, it.counter = hostinfo, ci, h.MessageCounter
-}
-
-// precheck marks obvious replays before anything decrypts them, like ConnectionState.Decrypt does, taking each
-// tunnel's lock once per run of its packets rather than once per packet: the writer takes the same lock for its
-// window updates, from another core. The writer checks again when it commits. The window only moves forward in
-// between, so a stale check here can only let a replay through to that second check. Marked packets keep their
-// place: an earlier RecvError may delete their tunnel, and inline receive then replies with a RecvError rather than
-// dropping a replay.
-func (p *stagedRx) precheck(b *rxBatch) {
-	f := p.f
-	items := b.items
-	for i := 0; i < len(items); {
-		ci := items[i].ci
-		if ci == nil {
-			i++
-			continue
-		}
-		ci.decryptLock.Lock()
-		for ; i < len(items) && items[i].ci == ci; i++ {
-			if ci.window.Check(f.l, items[i].counter) {
-				continue
-			}
-			b.data--
-			items[i].err = ErrAlreadySeen
-		}
-		ci.decryptLock.Unlock()
-	}
+	it.ci, it.counter = ci, h.MessageCounter
 }
 
 // handoff ends a batch: the batch takes bufs, and the conn reads the next batch into the buffers of the next free
@@ -216,7 +190,6 @@ func (p *stagedRx) endBatch() {
 	clear(p.hostmapCache)
 	p.reap()
 	b := p.cur
-	p.precheck(b)
 	n := len(b.items)
 	if n == 0 {
 		b.reset()
@@ -231,7 +204,7 @@ func (p *stagedRx) endBatch() {
 		return
 	}
 
-	parts := min(len(b.chunks), b.data/rxChunkMin)
+	parts := min(len(b.chunks), n/rxChunkMin)
 	p.metricBatches.Inc(1)
 	if parts > 0 {
 		size := (n + parts - 1) / parts
@@ -277,7 +250,7 @@ func (p *stagedRx) release(b *rxBatch) {
 // order, and flush the tun batcher.
 func (p *stagedRx) process(b *rxBatch, rxc *rxContext) {
 	if b.nChunks == 0 {
-		decryptRxItems(b.items, rxc.nb)
+		decryptRxItems(p.f.l, b.items, rxc.nb)
 		p.commit(b.items, rxc)
 	} else {
 		// Commit chunk by chunk, so the commit overlaps the workers still on later chunks
@@ -290,56 +263,16 @@ func (p *stagedRx) process(b *rxBatch, rxc *rxContext) {
 	p.f.flushOutside(rxc)
 }
 
-// commit runs the ordered stage over items in arrival order. A non-data packet goes through readOutsidePackets in
-// its place, a run of data packets on one tunnel through commitRun.
+// commit runs every item through readOutsidePackets in arrival order, handing it the worker's result for a data
+// packet, exactly as inline receive handles them.
 func (p *stagedRx) commit(items []rxItem, rxc *rxContext) {
-	for i := 0; i < len(items); {
-		ci := items[i].ci
-		if ci == nil {
-			p.f.readOutsidePackets(ViaSender{UdpAddr: items[i].via}, items[i].packet, rxc)
-			i++
-			continue
+	for i := range items {
+		it := &items[i]
+		if it.ci != nil {
+			rxc.decrypted = it
 		}
-		j := i + 1
-		for j < len(items) && items[j].ci == ci {
-			j++
-		}
-		p.commitRun(items[i:j], rxc)
-		i = j
-	}
-}
-
-// commitRun commits a run of decrypted data packets on one tunnel. The window updates go first, under one lock, then
-// the rest; handling a data packet never touches the window, so that is the same as one packet at a time.
-func (p *stagedRx) commitRun(run []rxItem, rxc *rxContext) {
-	f := p.f
-	ci := run[0].ci
-	// Classification is speculative: earlier control packets may have removed this tunnel. Resolve it through the
-	// writer's batch-local cache, exactly where inline processing would, before touching replay state.
-	index := binary.BigEndian.Uint32(run[0].packet[4:8])
-	hostinfo := f.hostMap.QueryIndexCached(index, rxc.hostmapCache)
-	if hostinfo != run[0].hostinfo || hostinfo.ConnectionState != ci {
-		if hostinfo == nil {
-			for i := range run {
-				f.maybeSendRecvError(run[i].via, index)
-			}
-		}
-		return
-	}
-
-	ci.decryptLock.Lock()
-	for i := range run {
-		// A packet that failed to decrypt does not touch the window, like ConnectionState.Decrypt
-		if run[i].err == nil && !ci.window.Update(f.l, run[i].counter) {
-			run[i].err = ErrAlreadySeen
-		}
-	}
-	ci.decryptLock.Unlock()
-	for i := range run {
-		it := &run[i]
-		if f.finishOutsideDecrypt(it.hostinfo, ViaSender{UdpAddr: it.via}, it.counter, it.err) {
-			f.handleOutsideMessagePacket(it.hostinfo, it.counter, it.out, rxc)
-		}
+		p.f.readOutsidePackets(ViaSender{UdpAddr: it.via}, it.packet, rxc)
+		rxc.decrypted = nil
 	}
 }
 

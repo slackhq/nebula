@@ -387,6 +387,8 @@ type rxContext struct {
 	hostmapCache map[uint32]*HostInfo
 	lhh          *LightHouseHandler
 	ctCache      *firewall.ConntrackCacheTicker
+	// decrypted is staged receive's result for the packet being handled, decrypted ahead of time on a worker
+	decrypted *rxItem
 }
 
 func newRxContext(f *Interface, q int) *rxContext {

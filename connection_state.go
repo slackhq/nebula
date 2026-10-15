@@ -97,30 +97,39 @@ func (cs *ConnectionState) Curve() cert.Curve {
 }
 
 func (cs *ConnectionState) Decrypt(l *slog.Logger, messageCounter uint64, packet []byte, nb []byte) ([]byte, error) {
+	if !cs.checkReplay(l, messageCounter) {
+		return nil, ErrAlreadySeen
+	}
+	out, err := cs.decryptPacket(messageCounter, packet, nb)
+	return cs.acceptDecrypted(l, messageCounter, out, err)
+}
+
+// checkReplay reports whether the replay window would still accept messageCounter, without recording it.
+func (cs *ConnectionState) checkReplay(l *slog.Logger, messageCounter uint64) bool {
 	cs.decryptLock.Lock()
 	result := cs.window.Check(l, messageCounter)
 	cs.decryptLock.Unlock()
-	if !result {
-		return nil, ErrAlreadySeen
-	}
-
-	out, err := cs.decryptPacket(messageCounter, packet, nb)
-	if err != nil {
-		return nil, err
-	}
-
-	cs.decryptLock.Lock()
-	result = cs.window.Update(l, messageCounter)
-	cs.decryptLock.Unlock()
-	if !result {
-		return nil, ErrAlreadySeen
-	}
-	return out, nil
+	return result
 }
 
 // decryptPacket authenticates and decrypts packet in place, leaving the replay window to the caller.
 func (cs *ConnectionState) decryptPacket(messageCounter uint64, packet, nb []byte) ([]byte, error) {
 	return cs.dKey.DecryptDanger(packet[header.Len:header.Len], packet[:header.Len], packet[header.Len:], messageCounter, nb)
+}
+
+// acceptDecrypted finishes a decryptPacket result: an authenticated packet is recorded in the replay window, and
+// rejected if its counter was recorded since it was checked.
+func (cs *ConnectionState) acceptDecrypted(l *slog.Logger, messageCounter uint64, out []byte, err error) ([]byte, error) {
+	if err != nil {
+		return nil, err
+	}
+	cs.decryptLock.Lock()
+	result := cs.window.Update(l, messageCounter)
+	cs.decryptLock.Unlock()
+	if !result {
+		return nil, ErrAlreadySeen
+	}
+	return out, nil
 }
 
 func (cs *ConnectionState) VerifyRelay(l *slog.Logger, messageCounter uint64, packet []byte, nb []byte) error {

@@ -129,10 +129,23 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxCont
 		return
 	}
 
-	out, err := hostinfo.ConnectionState.Decrypt(f.l, h.MessageCounter, packet, rxc.nb)
-	if !f.finishOutsideDecrypt(hostinfo, via, h.MessageCounter, err) {
+	var out []byte
+	if pre := rxc.decrypted; pre != nil && pre.ci == hostinfo.ConnectionState {
+		// Staged receive already checked and decrypted this packet on a worker, only the replay window is left
+		out, err = pre.ci.acceptDecrypted(f.l, h.MessageCounter, pre.out, pre.err)
+	} else {
+		out, err = hostinfo.ConnectionState.Decrypt(f.l, h.MessageCounter, packet, rxc.nb)
+	}
+	if err != nil {
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			hostinfo.logger(f.l).Debug("Failed to decrypt packet", "error", err, "from", via, "header", h)
+		}
 		return
 	}
+
+	// Roam before we respond
+	f.handleHostRoaming(hostinfo, via)
+	f.connectionManager.In(hostinfo)
 
 	switch h.Type {
 	case header.Message:
@@ -464,21 +477,6 @@ func parseV4(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 	}
 
 	return nil
-}
-
-// finishOutsideDecrypt logs a failed decrypt, or roams and records the traffic for an authenticated packet before it
-// is handled. It reports whether the packet authenticated.
-func (f *Interface) finishOutsideDecrypt(hostinfo *HostInfo, via ViaSender, counter uint64, err error) bool {
-	if err != nil {
-		if f.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.logger(f.l).Debug("Failed to decrypt packet", "error", err, "from", via, "counter", counter)
-		}
-		return false
-	}
-	// Roam before we respond
-	f.handleHostRoaming(hostinfo, via)
-	f.connectionManager.In(hostinfo)
-	return true
 }
 
 // flushOutside ends a receive batch: it writes out the tun coalescer and drops the batch's hostmap cache.
