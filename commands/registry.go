@@ -39,7 +39,7 @@ func (r *Registry) registerHelp() {
 }
 
 // Register adds a command that can be run by a user. A command registered under a name
-// already held replaces it.
+// already held replaces it; see Clone for what that means for Help.
 func (r *Registry) Register(c *Command) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -80,7 +80,8 @@ func (r *Registry) All() []*Command {
 
 // Clone returns a copy holding the same commands, with help bound to the copy: a
 // command registered on the clone alone is listed and described there, and one the
-// clone withholds is not.
+// clone withholds is not. That rebinding replaces whatever was registered under Help on
+// the source, built-in or not.
 func (r *Registry) Clone() *Registry {
 	r.mu.RLock()
 	c := &Registry{commands: maps.Clone(r.commands)}
