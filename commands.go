@@ -3,7 +3,6 @@ package nebula
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -601,7 +600,7 @@ func sshPrintRelays(ifce *Interface, fs any, a []string, w commands.StringWriter
 	ifce.hostMap.Unlock()
 
 	type RelayFor struct {
-		Error          error
+		Error          string `json:",omitempty"`
 		Type           string
 		State          string
 		PeerAddr       netip.Addr
@@ -632,11 +631,11 @@ func sshPrintRelays(ifce *Interface, fs any, a []string, w commands.StringWriter
 		co.Relays = append(co.Relays, &ro)
 		relayHI := ifce.hostMap.QueryVpnAddr(v.vpnAddrs[0])
 		if relayHI == nil {
-			ro.RelayForAddrs = append(ro.RelayForAddrs, RelayFor{Error: errors.New("could not find hostinfo")})
+			ro.RelayForAddrs = append(ro.RelayForAddrs, RelayFor{Error: "could not find hostinfo"})
 			continue
 		}
 		for _, vpnAddr := range relayHI.relayState.CopyRelayForIps() {
-			rf := RelayFor{Error: nil}
+			rf := RelayFor{}
 			r, ok := relayHI.relayState.GetRelayForByAddr(vpnAddr)
 			if ok {
 				t := ""
@@ -665,7 +664,7 @@ func sshPrintRelays(ifce *Interface, fs any, a []string, w commands.StringWriter
 				rf.Type = t
 				rf.State = s
 				if rf.LocalIndex != k {
-					rf.Error = fmt.Errorf("hostmap LocalIndex '%v' does not match RelayState LocalIndex", k)
+					rf.Error = fmt.Sprintf("hostmap LocalIndex '%v' does not match RelayState LocalIndex", k)
 				}
 			}
 			relayedHI := ifce.hostMap.QueryVpnAddr(vpnAddr)
