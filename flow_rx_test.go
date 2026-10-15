@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/flynn/noise"
+	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/udp"
@@ -92,7 +93,7 @@ func sendControl(sender *flowTestPeer, typ header.MessageType, st header.Message
 
 // receivePaths is inline, staged and, with the threshold, adaptive receive.
 func receivePaths() []stagedConfig {
-	return []stagedConfig{{}, stagedOn(2)}
+	return []stagedConfig{{}, stagedOn(2), adaptive(2)}
 }
 
 // TestFlowStagedRXRecvError feeds a RecvError that deletes the tunnel, then a known replay and new data for it, in one
@@ -217,4 +218,20 @@ func TestFlowStagedRXCloseFlushesPartial(t *testing.T) {
 	}
 	p.close()
 	require.Equal(t, want, receiver.tun.segments(t))
+}
+
+// TestFlowStagedRXInlineBelow: small idle batches stay on the listener, larger batches still use the ordered writer.
+func TestFlowStagedRXInlineBelow(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	sc := adaptive(3)
+	sc.inlineBelow = 16
+	sender, receiver := newFlowTestPair(t, noise.CipherChaChaPoly, sc)
+	batches, want := flowTestBatches(40, 4, 1, 16)
+	wire := wireFor(t, sender, batches)
+	inline := metrics.GetOrRegisterCounter("flow.rx.inline", nil)
+	inline0, rx0 := inline.Count(), rxBatches.Count()
+	receiver.receive(&rxConn{wire: wire, sizes: []int{8, 8, 8, 128, 128, 8, 8, 128, 4, 128}})
+	require.Equal(t, want, receiver.tun.segments(t))
+	require.Positive(t, inline.Count()-inline0)
+	require.Positive(t, rxBatches.Count()-rx0)
 }

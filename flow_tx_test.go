@@ -272,6 +272,7 @@ func requireFlowCPU(t *testing.T, masks []unix.CPUSet, cpu int, allowed []int) {
 // TestFlowStagedTXAffinity sends large, small and large reads, each from an idle pipeline, and checks the order on the
 // wire and where the reader and each send actually ran, for every CPU placement, with one routine and with several. A
 // staged sender is only pinned to an explicit entry other than its reader's CPU, and inline sends stay on the reader.
+// With the threshold, only the small read goes inline.
 // The reader only reads again once its earlier reads are on the wire, so this also checks the sender never waits for
 // the reader. Pinning threads changes the process, so the test runs in a child.
 func TestFlowStagedTXAffinity(t *testing.T) {
@@ -316,14 +317,22 @@ func TestFlowStagedTXAffinity(t *testing.T) {
 							}
 						}
 						smallCPU := sendCPU
+						if sc.inlineBelow > 0 {
+							smallCPU = readerCPU
+						}
 						conn := &affinityConn{}
 						f.writers = []udp.Conn{conn}
 						batches, want := flowTestBatches(3, 8, 1, 45)
 						batches[1] = batches[1][:1]
 						want = append(want[:405], want[720:]...)
 						q := &affinityQueue{flowBatchQueue: newFlowBatchQueue(batches), conn: conn}
+						inline := metrics.GetOrRegisterCounter("flow.tx.inline", nil)
+						inline0 := inline.Count()
 						f.listenIn(q, 0)
 						require.Equal(t, want, decryptWire(t, receiver, conn.captured()))
+						if sc.inlineBelow > 0 {
+							require.Equal(t, int64(1), inline.Count()-inline0)
+						}
 						b := q.boundaries
 						requireFlowCPU(t, q.masks, readerCPU, allowed)
 						requireFlowCPU(t, conn.masks[:b[1]], sendCPU, allowed)
@@ -338,7 +347,7 @@ func TestFlowStagedTXAffinity(t *testing.T) {
 
 // sendPaths is inline, staged and, with the threshold, adaptive transmit.
 func sendPaths() []stagedConfig {
-	return []stagedConfig{{}, stagedOn(2)}
+	return []stagedConfig{{}, stagedOn(2), adaptive(2)}
 }
 
 // requireAccepted checks the receiver accepts every packet of wire in the order given. With several readers the wire
@@ -402,6 +411,88 @@ func TestFlowTXBudgetManyReaders(t *testing.T) {
 			require.Len(t, wire, 8*28*360+128)
 			require.Equal(t, start+uint64(len(wire)), ci.messageCounter.Load())
 			requireAccepted(t, receiver, wire)
+		})
+	}
+}
+
+// TestFlowStagedTXInlineOnlyWhenEmpty: a small read behind a staged batch still in flight must not go inline, it
+// would overtake that batch.
+func TestFlowStagedTXInlineOnlyWhenEmpty(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	sc := adaptive(2)
+	sc.inlineBelow = 4
+	sender, receiver := newFlowTestPair(t, noise.CipherChaChaPoly, sc)
+	p := newStagedTx(sender.f, newFlowBatchQueue(nil), 0)
+	block := make(chan struct{})
+	delayCrypto(sender, func(uint64) { <-block })
+	batches, want := flowTestBatches(1, 4, 1, 3)
+	p.send(batches[0][:3]) // its worker is blocked
+	p.send(batches[0][3:])
+	close(block)
+	p.close()
+	require.Equal(t, want, decryptWire(t, receiver, sender.conn.captured()))
+}
+
+// TestFlowStagedTXAdaptiveBudget: a fast reader's adaptive sends must stop spending credit until another reader's
+// earlier reservation reaches the wire.
+func TestFlowStagedTXAdaptiveBudget(t *testing.T) {
+	for _, shape := range []struct {
+		name              string
+		packets, segments int
+	}{
+		{"single", 1, 1}, {"batch", 8, 30},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+			sender, receiver := newFlowTestPair(t, noise.CipherChaChaPoly, adaptive(2))
+			sender.f.routines = 2
+			sender.f.writers = []udp.Conn{sender.conn, sender.conn}
+			ci := sender.hostinfo.ConnectionState
+			start := ci.messageCounter.Load()
+			entered, unblock := make(chan struct{}), make(chan struct{})
+			delayCrypto(sender, func(n uint64) {
+				if n == start+1 {
+					close(entered)
+					<-unblock
+				}
+			})
+			p0 := newStagedTx(sender.f, newFlowBatchQueue(nil), 0)
+			p1 := newStagedTx(sender.f, newFlowBatchQueue(nil), 1)
+			defer p0.close()
+			defer p1.close()
+			var release sync.Once
+			defer release.Do(func() { close(unblock) })
+			large, _ := flowTestBatches(1, 8, 1, 45)
+			p0.send(large[0])
+			<-entered
+			perBatch := shape.packets * shape.segments
+			small, _ := flowTestBatches(9600/perBatch, shape.packets, 1, shape.segments)
+			fits := int(ci.txBudgetLimit()-360) / perBatch
+			for _, packets := range small[:fits] {
+				p1.send(packets)
+			}
+			require.Equal(t, uint64(360+fits*perBatch), (ci.txBudget.state.Load()>>24)&txBudgetMask, "inline sends must spend shared credit")
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				for _, packets := range small[fits:] {
+					p1.send(packets)
+				}
+			}()
+			select {
+			case <-done:
+				t.Error("adaptive reader bypassed outstanding credit")
+			case <-time.After(50 * time.Millisecond):
+			}
+			require.LessOrEqual(t, ci.messageCounter.Load()-start, ci.txBudgetLimit())
+			release.Do(func() { close(unblock) })
+			<-done
+			p0.drain()
+			p1.drain()
+			wire := sender.conn.captured()
+			require.Len(t, wire, 360+40*240)
+			requireAccepted(t, receiver, wire)
+			require.Zero(t, ci.txBudget.state.Load())
 		})
 	}
 }

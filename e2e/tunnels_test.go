@@ -578,7 +578,7 @@ func TestCloseTunnelAuthenticated(t *testing.T) {
 // Other platforms must do the same over the inline fallback.
 func TestStagedTunnel(t *testing.T) {
 	t.Parallel()
-	received := metrics.GetOrRegisterCounter("flow.rx.batches", nil)
+	received := metrics.GetOrRegisterCounter("flow.rx.inline", nil)
 	before := received.Count()
 	staged := m{"tun": m{"staged": m{"workers": 2}}}
 	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})

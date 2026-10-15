@@ -270,7 +270,7 @@ func (s *txSlot) run(nb []byte) {
 type stagedTx struct {
 	txReserver
 	q         int
-	cpu       int // reader CPU
+	cpu       int // reader CPU, inline sends stay here
 	senderCPU int // -1 leaves the sender within its inherited affinity
 	queue     handoffQueue
 	pool      *flowPool
@@ -359,6 +359,13 @@ func (p *stagedTx) run(fwPacket *firewall.ParsedPacket, rejectBuf []byte, conntr
 // it itself, with how long it waited for the sender.
 func (p *stagedTx) handle(pkts []tio.Packet, fwPacket *firewall.ParsedPacket, rejectBuf []byte, localCache firewall.ConntrackCache) time.Duration {
 	p.reap()
+	inline := p.inFlight == 0 && p.small(pkts)
+	if inline && p.f.routines == 1 {
+		// With only one reader and an empty pipeline, no other staged reservation can be overtaken. Keep this common
+		// case inexpensive.
+		p.inlineSoleReader(pkts, fwPacket, rejectBuf, localCache)
+		return 0
+	}
 
 	slot, stall := p.acquire()
 	items := p.collect(slot.items[:0], pkts, fwPacket, rejectBuf, p.q, localCache)
@@ -388,6 +395,12 @@ func (p *stagedTx) handle(pkts []tio.Packet, fwPacket *firewall.ParsedPacket, re
 	slot.items = items
 	if len(items) == 0 {
 		slot.releaseBudget()
+		p.free = append(p.free, slot)
+		return stall
+	}
+
+	if inline {
+		p.inline(slot)
 		p.free = append(p.free, slot)
 		return stall
 	}
@@ -473,4 +486,48 @@ func (p *stagedTx) close() {
 	close(p.ordered)
 	<-p.senderDone
 	p.pool.close()
+}
+
+// small counts segments against the inline threshold.
+func (p *stagedTx) small(pkts []tio.Packet) bool {
+	below := uint64(p.f.staged.inlineBelow)
+	if below == 0 {
+		return false
+	}
+	var n uint64
+	for _, pkt := range pkts {
+		if n += segmentCount(pkt); n >= below {
+			return false
+		}
+	}
+	return true
+}
+
+// inline encrypts a budgeted batch on the reader, with no worker handoff or buffer swap. The local sender is idle,
+// but other readers may hold reservations on these tunnels, so keep our credit until the flush completes.
+func (p *stagedTx) inline(slot *txSlot) {
+	p.metricInline.Inc(1)
+	for i := range slot.items {
+		p.f.encryptTxItem(&slot.items[i], p.nb, p.sb)
+		if p.sb.Len() >= batch.SendBatchCap {
+			p.f.flushSendBatch(p.sb, p.q)
+		}
+	}
+	p.f.flushSendBatch(p.sb, p.q)
+	slot.releaseBudget()
+	clear(slot.items)
+	slot.items = slot.items[:0]
+}
+
+// inlineSoleReader needs no credit: the interface has no other tun reader and this reader has drained every
+// reservation before taking the inline path.
+func (p *stagedTx) inlineSoleReader(pkts []tio.Packet, fwPacket *firewall.ParsedPacket, rejectBuf []byte, localCache firewall.ConntrackCache) {
+	p.metricInline.Inc(1)
+	for _, pkt := range pkts {
+		p.f.consumeInsidePacket(pkt, fwPacket, p.nb, p.sb, rejectBuf, p.q, localCache)
+		if p.sb.Len() >= batch.SendBatchCap {
+			p.f.flushSendBatch(p.sb, p.q)
+		}
+	}
+	p.f.flushSendBatch(p.sb, p.q)
 }

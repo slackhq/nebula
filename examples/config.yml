@@ -284,6 +284,8 @@ tun:
   # Staged reservations may use half the window, the other half absorbs inline and control traffic, relay forwarding
   # and network reordering; unlimited forwarding or delay can still exceed it. Waiting for credit on a busy tunnel
   # also delays the other tunnels of the same read, and readers are not guaranteed fairness.
+  # Idle batches below 256 TX segments or RX packets stay on the reader. With multiple routines, those sends still
+  # take tunnel reservation credit.
   #staged:
   #  workers: 0
 
@@ -291,6 +293,7 @@ tun:
   # batched sends flowing through one XPS-selected NIC TX ring, so packets within a flow stay ordered on the wire
   # instead of being sprayed across multiple TX rings and reordered. Not reloadable. Coerced to false if routines <= 1.
   # Staged senders are only pinned with an explicit cpu_affinity, see below; otherwise the scheduler places them.
+  # Small batches a reader sends itself can use a different TX ring than its sender.
   #pin_threads: true
 
   # pin_threads_key helps the CPU-auto-selector shuffle which CPUs are chosen for pinning.

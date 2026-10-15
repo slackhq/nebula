@@ -98,6 +98,7 @@ type stagedRx struct {
 
 	readBusy, decryptBusy, writeBusy metrics.Counter
 	metricBatches                    metrics.Counter
+	metricInline                     metrics.Counter
 }
 
 func newStagedRx(f *Interface, q int, wrxc *rxContext) *stagedRx {
@@ -114,6 +115,7 @@ func newStagedRx(f *Interface, q int, wrxc *rxContext) *stagedRx {
 		decryptBusy:   stageBusy("rx_decrypt", q),
 		writeBusy:     stageBusy("rx_write", q),
 		metricBatches: metrics.GetOrRegisterCounter("flow.rx.batches", nil),
+		metricInline:  metrics.GetOrRegisterCounter("flow.rx.inline", nil),
 	}
 	workers := f.staged.workers
 	p.pool = newFlowPool(workers, stagedRxSlots*2*workers, p.decryptBusy)
@@ -230,6 +232,14 @@ func (p *stagedRx) endBatch() {
 	p.precheck(b)
 	n := len(b.items)
 	if n == 0 {
+		b.reset()
+		return
+	}
+
+	if p.inFlight == 0 && n < p.f.staged.inlineBelow {
+		// The writer is idle with nothing in flight, so the listener may commit with its context and flush the tun
+		p.metricInline.Inc(1)
+		p.process(b, p.wrxc)
 		b.reset()
 		return
 	}

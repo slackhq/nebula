@@ -20,16 +20,19 @@ import (
 // with GRO their buffers take about 9 MiB and 24 MiB per routine. Small-MSS TX arenas can grow.
 //
 // Metrics are registered only for active pipelines. flow.{tx,rx}.batches counts reads handed to the ordered stage and
-// flow.tx.inline oversized reads the reader sent itself. flow.stage.<stage>.q<queue>.busy_ns locates the limiting
-// stage: tx_read, tx_encrypt, tx_send, rx_read, rx_decrypt or rx_write. Take rates; 1e9 ns/s fills a serial stage.
-// These are elapsed times that exclude read syscalls and downstream waits; descheduling inflates them and worker
-// times add up across the pool. Small RX batches sent to the writer include decryption in writer time.
+// flow.{tx,rx}.inline those an idle reader handled itself (TX inline also counts oversized reads); their rates show
+// whether staging is used. flow.stage.<stage>.q<queue>.busy_ns locates the limiting stage: tx_read, tx_encrypt,
+// tx_send, rx_read, rx_decrypt or rx_write. Take rates; 1e9 ns/s fills a serial stage. These are elapsed times that
+// exclude read syscalls and downstream waits; descheduling inflates them and worker times add up across the pool.
+// Inline work counts at the reader; small RX batches sent to the writer include decryption in writer time.
 
 // stagedConfig is tun.staged. workers is per routine and direction; zero keeps processing inline.
 type stagedConfig struct {
 	workers int
 	tx      bool
 	rx      bool
+	// inlineBelow is the TX segment or RX packet count below which an idle reader skips the worker handoff
+	inlineBelow int
 }
 
 // parseStagedConfig enables staging on Linux only; queues and conns that cannot hand off batches also stay inline.
@@ -43,6 +46,8 @@ func parseStagedConfig(c *config.C, l *slog.Logger) stagedConfig {
 		return stagedConfig{}
 	}
 	sc.tx, sc.rx = true, true
+	// 256 is the measured crossover
+	sc.inlineBelow = 256
 	if noiseutil.EncryptLockNeeded {
 		l.Warn("tun.staged cannot encrypt in parallel with boringcrypto or fips140; transmit stays inline")
 		sc.tx = false

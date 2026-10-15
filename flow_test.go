@@ -358,10 +358,17 @@ func stagedOn(n int) stagedConfig {
 	return stagedConfig{workers: n, tx: true, rx: true}
 }
 
+// adaptive is staging with the inline threshold parseStagedConfig sets.
+func adaptive(n int) stagedConfig {
+	return stagedConfig{workers: n, tx: true, rx: true, inlineBelow: 256}
+}
+
 func stagedName(sc stagedConfig) string {
 	switch {
 	case sc.workers == 0:
 		return "inline"
+	case sc.inlineBelow > 0:
+		return "adaptive"
 	default:
 		return "staged"
 	}
