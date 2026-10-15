@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -193,4 +194,16 @@ func TestSSHDReload_BadHostKeyFileStops(t *testing.T) {
 	require.NoError(t, os.WriteFile(h.keyFile, []byte("not a key"), 0o600))
 	assert.True(t, h.c.ReloadConfigString(h.config()).Failed)
 	require.Eventually(t, func() bool { return !h.server.Running() }, 5*time.Second, 10*time.Millisecond)
+}
+
+// A reload that can't bind the new address says so, rather than finding out in the background
+func TestSSHDReload_BusyPortFails(t *testing.T) {
+	h := newSSHDReloadHarness(t)
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = busy.Close() })
+
+	res := h.c.ReloadConfigString(strings.Replace(h.config(), "127.0.0.1:0", busy.Addr().String(), 1))
+	require.NoError(t, res.Err)
+	assert.True(t, res.Failed)
 }
