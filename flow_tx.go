@@ -120,15 +120,6 @@ func (f *Interface) encryptTxSegmentVia(it *txItem, c, rc uint64, seg, nb []byte
 	sb.Commit(toSend, remote)
 }
 
-// segmentCount reports how many segments tio.SegmentSuperpacket will cut pkt into, without touching its bytes.
-func segmentCount(pkt tio.Packet) uint64 {
-	if !pkt.GSO.IsSuperpacket() {
-		return 1
-	}
-	n := (len(pkt.Bytes) - int(pkt.GSO.HdrLen) + int(pkt.GSO.Size) - 1) / int(pkt.GSO.Size)
-	return uint64(max(n, 1))
-}
-
 // txTunnel accumulates one tunnel's counter needs across a batch so the batch reserves them with one atomic add.
 type txTunnel struct {
 	ci        *ConnectionState
@@ -159,7 +150,7 @@ func (r *txReserver) collect(items []txItem, pkts []tio.Packet, fwPacket *firewa
 		if !f.prepareTxItem(&it, hostinfo, pkt) {
 			continue
 		}
-		it.segs = segmentCount(pkt)
+		it.segs = uint64(pkt.SegmentCount())
 		it.counter = r.need(it.hostinfo, it.ci, it.segs)
 		if it.relayHI != nil {
 			// The relay bookkeeping inline sends do per segment in prepareSendVia, once per item
@@ -496,7 +487,7 @@ func (p *stagedTx) small(pkts []tio.Packet) bool {
 	}
 	var n uint64
 	for _, pkt := range pkts {
-		if n += segmentCount(pkt); n >= below {
+		if n += uint64(pkt.SegmentCount()); n >= below {
 			return false
 		}
 	}

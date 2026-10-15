@@ -43,15 +43,15 @@ func TestReservedEncryptionMatchesInline(t *testing.T) {
 	require.Equal(t, want, decryptWire(t, receiver, sender.conn.captured()))
 }
 
-// TestSegmentCount checks segmentCount predicts exactly the segments tio.SegmentSuperpacket cuts, odd tails included.
+// TestSegmentCount checks tio.Packet.SegmentCount predicts exactly the segments tio.SegmentSuperpacket cuts, odd tails included.
 func TestSegmentCount(t *testing.T) {
-	require.Equal(t, uint64(1), segmentCount(tio.Packet{Bytes: make([]byte, 60)}))
+	require.Equal(t, 1, tio.Packet{Bytes: make([]byte, 60)}.SegmentCount())
 	for _, segs := range []int{1, 2, 3, 45} {
 		for _, tail := range []int{0, 1, flowTestMSS - 1} {
 			pkt := flowTCPSuperpacket(0, 0, segs)
 			pkt.Bytes = pkt.Bytes[:len(pkt.Bytes)-tail]
 			pkt.GSO = tio.GSOInfo{Size: flowTestMSS, HdrLen: 40, CsumStart: 20, Proto: tio.GSOProtoTCP}
-			want, got := segmentCount(pkt), uint64(0)
+			want, got := pkt.SegmentCount(), 0
 			require.NoError(t, tio.SegmentSuperpacket(pkt, func([]byte) error { got++; return nil }))
 			require.Equal(t, want, got, "segs %d tail %d", segs, tail)
 		}
@@ -212,7 +212,7 @@ type affinityQueue struct {
 func (q *affinityQueue) Read() ([]tio.Packet, error) {
 	if n := q.reads.Load(); n > 0 {
 		for _, p := range q.batches[n-1] {
-			q.sent += int(segmentCount(p))
+			q.sent += p.SegmentCount()
 		}
 	}
 	q.boundaries = append(q.boundaries, q.conn.waitFor(q.sent))
