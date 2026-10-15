@@ -32,7 +32,7 @@ func TestParseCpuAffinity(t *testing.T) {
 	}
 
 	// unset -> nil (listenIn falls back to spreading across the allowed set)
-	assert.Nil(t, parseCpuAffinity(newConfig(nil), l, 1))
+	assert.Nil(t, parseCpuAffinity(newConfig(nil), l, 1, nil))
 
 	// Pick a CPU we're actually allowed to run on so a valid list survives
 	// validation regardless of the host's affinity mask.
@@ -43,40 +43,59 @@ func TestParseCpuAffinity(t *testing.T) {
 	}
 
 	// valid list -> parsed through unchanged
-	assert.Equal(t, []int{validCPU, validCPU}, parseCpuAffinity(newConfig([]any{validCPU, validCPU}), l, 2))
+	assert.Equal(t, []int{validCPU, validCPU}, parseCpuAffinity(newConfig([]any{validCPU, validCPU}), l, 2, nil))
 
 	// a negative entry is out of range on every platform -> disables the override
-	assert.Nil(t, parseCpuAffinity(newConfig([]any{validCPU, -1}), l, 2))
+	assert.Nil(t, parseCpuAffinity(newConfig([]any{validCPU, -1}), l, 2, nil))
 
 	// a non-integer entry -> disables the override
-	assert.Nil(t, parseCpuAffinity(newConfig([]any{validCPU, "not-a-cpu"}), l, 2))
+	assert.Nil(t, parseCpuAffinity(newConfig([]any{validCPU, "not-a-cpu"}), l, 2, nil))
 
 	// a CPU id outside the allowed set -> disables the override. Only assertable
 	// where we can enumerate the allowed set (e.g. linux); 1<<20 is far beyond
 	// any representable CPU id so it can never be in the mask.
 	if len(allowed) > 0 {
-		assert.Nil(t, parseCpuAffinity(newConfig([]any{1 << 20}), l, 1))
+		assert.Nil(t, parseCpuAffinity(newConfig([]any{1 << 20}), l, 1, nil))
 	}
+
+	// an entry also listed in tun.avoid_cpus -> disables the override
+	assert.Nil(t, parseCpuAffinity(newConfig([]any{validCPU}), l, 1, []int{validCPU}))
 }
 
-func TestConfigureAvoidCPUs(t *testing.T) {
+func TestParseAvoidCPUs(t *testing.T) {
 	l := test.NewLogger()
 	for _, tc := range []struct {
 		value any
+		want  []int
 		valid bool
 	}{
-		{nil, true}, {[]any{}, true}, {"auto", false}, {"1,2", false}, {[]any{-1}, false}, {[]any{1.5}, false},
-		{[]any{"2"}, false},
+		{nil, nil, true}, {[]any{}, []int{}, true}, {[]any{1, 1 << 20}, []int{1, 1 << 20}, true},
+		{"auto", nil, false}, {"1,2", nil, false}, {[]any{-1}, nil, false}, {[]any{1.5}, nil, false},
+		{[]any{"2"}, nil, false},
 	} {
 		c := config.NewC(l)
 		if tc.value != nil {
 			c.Settings["tun"] = map[string]any{"avoid_cpus": tc.value}
 		}
-		if err := configureAvoidCPUs(c, l, true); tc.valid {
+		got, err := parseAvoidCPUs(c)
+		if tc.valid {
 			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
 		} else {
 			require.Error(t, err, "%v", tc.value)
 		}
+	}
+
+	// avoiding every allowed CPU leaves nowhere to pin; only checkable where the allowed set is known
+	if allowed, _ := util.AllowedCPUs(); len(allowed) > 0 {
+		all := make([]any, len(allowed))
+		for i, cpu := range allowed {
+			all[i] = cpu
+		}
+		c := config.NewC(l)
+		c.Settings["tun"] = map[string]any{"avoid_cpus": all}
+		_, err := parseAvoidCPUs(c)
+		require.Error(t, err)
 	}
 }
 

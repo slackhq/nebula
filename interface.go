@@ -437,7 +437,7 @@ func (f *Interface) pinThisThread(i int) {
 	var cpu int
 	if n := len(f.cpuAffinity); n > 0 {
 		// Explicit tun.cpu_affinity list wins; parseCpuAffinity already
-		// validated the entries against the allowed CPU set.
+		// validated the entries against the allowed CPU set and tun.avoid_cpus.
 		cpu = f.cpuAffinity[i%n]
 	} else if allowed, err := util.AllowedCPUs(); err == nil && len(allowed) > 0 {
 		// Default: spread queues across the CPUs we're actually allowed to

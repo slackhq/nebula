@@ -17,13 +17,14 @@
 // core demoted to last resort, and the order rotated by a stable per-instance
 // key so co-located instances spread instead of stacking.
 //
-// Avoid narrows the process-wide allowed set before any of that happens
-// (tun.avoid_cpus), so Default and tun.cpu_affinity validation only ever see
-// the CPUs left over.
+// CPUs the operator asked to keep readers off (tun.avoid_cpus, typically the
+// underlay NIC's receive IRQ CPUs) are removed from the allowed set before
+// any of that, so no rule can bring one back.
 package cpupick
 
 import (
 	"log/slog"
+	"slices"
 
 	"github.com/slackhq/nebula/util"
 )
@@ -61,12 +62,17 @@ func flatTopology(cpus []int) topology {
 // Default computes the pin order for `routines` tun readers. key is any
 // stable per-instance value; the bound UDP port is ideal — distinct across
 // co-located instances, stable across restarts so benchmark runs stay
-// comparable. Returns nil when there is nothing useful to say (no affinity
-// support on this platform, lookup failure); callers keep their existing
-// fallback spread.
-func Default(routines int, key uint64, l *slog.Logger) []int {
+// comparable. avoid lists CPUs never to return, matched literally. Returns
+// nil when there is nothing useful to say (no affinity support on this
+// platform, lookup failure, avoid covering every allowed CPU); callers keep
+// their existing fallback spread.
+func Default(routines int, key uint64, avoid []int, l *slog.Logger) []int {
 	allowed, err := util.AllowedCPUs()
-	if err != nil || len(allowed) == 0 {
+	if err != nil {
+		return nil
+	}
+	allowed = slices.DeleteFunc(allowed, func(c int) bool { return slices.Contains(avoid, c) })
+	if len(allowed) == 0 {
 		return nil
 	}
 	perf, signal := perfCPUs(allowed)
@@ -81,7 +87,8 @@ func Default(routines int, key uint64, l *slog.Logger) []int {
 	if l != nil {
 		l.Info("chose default pin CPUs for tun readers",
 			"cpus", cpus[:min(routines, len(cpus))],
-			"perfSignal", signal)
+			"perfSignal", signal,
+			"avoided", avoid)
 	}
 	return cpus
 }

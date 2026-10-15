@@ -15,8 +15,8 @@ import (
 // Avoid removes cpus from the affinity of every thread of the process, for use at startup. New threads inherit
 // their parent's mask, so it repeats until a pass finds nothing left to change; a thread that exits meanwhile is
 // skipped. Every mask is checked before any is changed. With apply false it only validates, for configuration tests.
-// This affects the entire process, including other users of an embedded Nebula. Run it before Default, which then
-// picks from what remains.
+// This affects the entire process, including other users of an embedded Nebula. Not wired up yet: tun.avoid_cpus
+// only steers Default for now.
 func Avoid(cpus []int, apply bool) error {
 	const capacity = int(unsafe.Sizeof(unix.CPUSet{})) * 8
 	for _, cpu := range cpus {
