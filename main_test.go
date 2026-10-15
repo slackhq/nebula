@@ -67,23 +67,15 @@ func TestParseAvoidCPUs(t *testing.T) {
 	for _, tc := range []struct {
 		value any
 		want  []int
-		valid bool
 	}{
-		{nil, nil, true}, {[]any{}, []int{}, true}, {[]any{1, 1 << 20}, []int{1, 1 << 20}, true},
-		{"auto", nil, false}, {"1,2", nil, false}, {[]any{-1}, nil, false}, {[]any{1.5}, nil, false},
-		{[]any{"2"}, nil, false},
+		{nil, nil}, {[]any{}, []int{}}, {[]any{1, 1 << 20}, []int{1, 1 << 20}},
+		{"auto", nil}, {"1,2", nil}, {[]any{-1}, nil}, {[]any{1.5}, nil}, {[]any{1, "2"}, nil},
 	} {
 		c := config.NewC(l)
 		if tc.value != nil {
 			c.Settings["tun"] = map[string]any{"avoid_cpus": tc.value}
 		}
-		got, err := parseAvoidCPUs(c)
-		if tc.valid {
-			require.NoError(t, err)
-			assert.Equal(t, tc.want, got)
-		} else {
-			require.Error(t, err, "%v", tc.value)
-		}
+		assert.Equal(t, tc.want, parseAvoidCPUs(c, l), "%v", tc.value)
 	}
 
 	// avoiding every allowed CPU leaves nowhere to pin; only checkable where the allowed set is known
@@ -94,8 +86,7 @@ func TestParseAvoidCPUs(t *testing.T) {
 		}
 		c := config.NewC(l)
 		c.Settings["tun"] = map[string]any{"avoid_cpus": all}
-		_, err := parseAvoidCPUs(c)
-		require.Error(t, err)
+		assert.Nil(t, parseAvoidCPUs(c, l))
 	}
 }
 

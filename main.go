@@ -243,10 +243,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	}
 
 	pinThreads := c.GetBool("tun.pin_threads", true)
-	avoidCPUs, err := parseAvoidCPUs(c)
-	if err != nil {
-		return nil, err
-	}
+	avoidCPUs := parseAvoidCPUs(c, l)
 	if len(avoidCPUs) > 0 && !pinThreads {
 		l.Warn("tun.avoid_cpus has no effect with tun.pin_threads disabled")
 	}
@@ -255,12 +252,10 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	//	return nil, fmt.Errorf("tun.avoid_cpus: %w", err)
 	//}
 	cpuAffinity := parseCpuAffinity(c, l, routines, avoidCPUs)
-	if pinThreads && (routines > 1 || len(avoidCPUs) > 0) && len(cpuAffinity) == 0 && !configTest {
+	if pinThreads && routines > 1 && len(cpuAffinity) == 0 && !configTest {
 		// The operator didn't choose pin CPUs, so pick a default set that
 		// prefers performance cores, skips tun.avoid_cpus and doesn't stack
-		// co-located instances onto allowed[0]. A single reader would
-		// otherwise just take allowed[0], so it only comes here to dodge
-		// tun.avoid_cpus.
+		// co-located instances onto allowed[0].
 
 		// key is used to seed the spreading of routines->cores.
 		// use PID if you want to ensure many different Nebulas in VMs or containers land on different cores
@@ -308,6 +303,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		punchy:                punchy,
 		ConntrackCacheTimeout: conntrackCacheTimeout,
 		CpuAffinity:           cpuAffinity,
+		AvoidCPUs:             avoidCPUs,
 		PinThreads:            pinThreads,
 		l:                     l,
 	}
@@ -437,30 +433,33 @@ func parseCpuAffinity(c *config.C, l *slog.Logger, routines int, avoid []int) []
 }
 
 // parseAvoidCPUs reads tun.avoid_cpus, a list of CPU IDs the tun readers must not be pinned to. IDs outside the
-// allowed set are accepted, since one config may serve differently shaped hosts. Unlike tun.cpu_affinity, a bad
-// entry, or a list covering every allowed CPU, fails startup rather than being ignored.
-func parseAvoidCPUs(c *config.C) ([]int, error) {
+// allowed set are accepted, since one config may serve differently shaped hosts. Like tun.cpu_affinity, an invalid
+// list is a warning and is ignored entirely, as is one covering every allowed CPU, which would leave nowhere to pin.
+func parseAvoidCPUs(c *config.C, l *slog.Logger) []int {
 	raw := c.Get("tun.avoid_cpus")
 	if raw == nil {
-		return nil, nil
+		return nil
 	}
 	values, ok := raw.([]any)
 	if !ok {
-		return nil, fmt.Errorf("tun.avoid_cpus must be a list of non-negative integers")
+		l.Warn("tun.avoid_cpus must be a list of integers; ignoring", "value", raw)
+		return nil
 	}
 	cpus := make([]int, 0, len(values))
-	for _, value := range values {
+	for i, value := range values {
 		cpu, ok := value.(int)
 		if !ok || cpu < 0 {
-			return nil, fmt.Errorf("tun.avoid_cpus must contain non-negative integers, got %v", value)
+			l.Warn("tun.avoid_cpus entry not a non-negative integer; ignoring avoid_cpus", "index", i, "value", value)
+			return nil
 		}
 		cpus = append(cpus, cpu)
 	}
 	if allowed, err := util.AllowedCPUs(); err == nil && len(allowed) > 0 &&
 		!slices.ContainsFunc(allowed, func(cpu int) bool { return !slices.Contains(cpus, cpu) }) {
-		return nil, fmt.Errorf("tun.avoid_cpus %v leaves none of the allowed CPUs %v", cpus, allowed)
+		l.Warn("tun.avoid_cpus covers every allowed CPU; ignoring avoid_cpus", "cpus", cpus, "allowed", allowed)
+		return nil
 	}
-	return cpus, nil
+	return cpus
 }
 
 func moduleVersion() string {
