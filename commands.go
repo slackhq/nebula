@@ -528,7 +528,7 @@ func sshLogFormat(l *slog.Logger, fs any, a []string, w commands.StringWriter) e
 	}
 
 	if err := ctrl.SetFormat(strings.ToLower(a[0])); err != nil {
-		return err
+		return w.WriteLine(fmt.Sprintf("Unable to set log format: %s", err))
 	}
 	return w.WriteLine(fmt.Sprintf("Log format is: %s", ctrl.GetFormat()))
 }
