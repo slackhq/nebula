@@ -355,12 +355,12 @@ func delayCrypto(peer *flowTestPeer, before func(uint64)) {
 
 // stagedOn enables staging with n workers.
 func stagedOn(n int) stagedConfig {
-	return stagedConfig{workers: n, tx: true, rx: true}
+	return stagedConfig{workers: n, tx: true, rx: true, txSlots: stagedTxSlots, rxSlots: 6}
 }
 
 // adaptive is staging with the inline threshold parseStagedConfig sets.
 func adaptive(n int) stagedConfig {
-	return stagedConfig{workers: n, tx: true, rx: true, inlineBelow: 256}
+	return stagedConfig{workers: n, tx: true, rx: true, inlineBelow: 256, txSlots: stagedTxSlots, rxSlots: 6}
 }
 
 func stagedName(sc stagedConfig) string {

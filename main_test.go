@@ -142,6 +142,26 @@ func TestParseStagedConfig(t *testing.T) {
 		require.Equal(t, stagedConfig{}, staged(2))
 		return
 	}
-	want := stagedConfig{workers: 2, tx: !noiseutil.EncryptLockNeeded, rx: true, inlineBelow: 256}
+	want := stagedConfig{workers: 2, tx: !noiseutil.EncryptLockNeeded, rx: true, inlineBelow: 256, txSlots: 8, rxSlots: 6}
 	require.Equal(t, want, staged(2))
+
+	c := config.NewC(l)
+	c.Settings["listen"] = map[string]any{"batch": 128}
+	c.Settings["tun"] = map[string]any{"staged": map[string]any{"workers": 2, "tx_slots": 3, "rx_slots": 1}}
+	got := parseStagedConfig(c, l)
+	require.Equal(t, []int{3, 2}, []int{got.txSlots, got.rxSlots}, "overrides apply, down to the minimum")
+}
+
+func TestStagedSlots(t *testing.T) {
+	for _, tt := range []struct{ workers, batch, tx, rx int }{
+		{workers: 2, batch: 64, tx: 8, rx: 6},
+		{workers: 12, batch: 64, tx: 14, rx: 6},
+		{workers: 2, batch: 96, tx: 8, rx: 4},
+		{workers: 2, batch: 512, tx: 8, rx: 4},
+		{workers: 2, batch: 32, tx: 8, rx: 6},
+		{workers: 2, batch: 1, tx: 8, rx: 6},
+	} {
+		tx, rx := stagedSlots(tt.workers, tt.batch, 0, 0)
+		require.Equal(t, []int{tt.tx, tt.rx}, []int{tx, rx}, "workers %d batch %d", tt.workers, tt.batch)
+	}
 }

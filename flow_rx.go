@@ -16,7 +16,6 @@ type handoffConn interface {
 	ListenOutHandoff(udp.EncReader, func([][]byte) [][]byte) error
 }
 
-const stagedRxSlots = 6
 const rxChunkMin = 16
 
 // rxItem is one received packet. A data packet for an established tunnel has ci set; out and err are written by
@@ -108,8 +107,8 @@ func newStagedRx(f *Interface, q int, wrxc *rxContext) *stagedRx {
 		h:             &header.H{},
 		hostmapCache:  map[uint32]*HostInfo{},
 		wrxc:          wrxc,
-		ordered:       make(chan *rxBatch, stagedRxSlots),
-		returned:      make(chan *rxBatch, stagedRxSlots),
+		ordered:       make(chan *rxBatch, f.staged.rxSlots),
+		returned:      make(chan *rxBatch, f.staged.rxSlots),
 		writerDone:    make(chan struct{}),
 		readBusy:      stageBusy("rx_read", q),
 		decryptBusy:   stageBusy("rx_decrypt", q),
@@ -118,8 +117,8 @@ func newStagedRx(f *Interface, q int, wrxc *rxContext) *stagedRx {
 		metricInline:  metrics.GetOrRegisterCounter("flow.rx.inline", nil),
 	}
 	workers := f.staged.workers
-	p.pool = newFlowPool(workers, stagedRxSlots*2*workers, p.decryptBusy)
-	for range stagedRxSlots {
+	p.pool = newFlowPool(workers, f.staged.rxSlots*2*workers, p.decryptBusy)
+	for range f.staged.rxSlots {
 		// Two chunks per worker, so the writer can start committing while the workers are still on the rest
 		b := &rxBatch{items: make([]rxItem, 0, 256), chunks: make([]rxChunk, 2*workers)}
 		for i := range b.chunks {

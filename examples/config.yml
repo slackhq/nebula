@@ -286,8 +286,14 @@ tun:
   # also delays the other tunnels of the same read, and readers are not guaranteed fairness.
   # Idle batches below 256 TX segments or RX packets stay on the reader. With multiple routines, those sends still
   # take tunnel reservation credit.
+  # tx_slots and rx_slots bound the batches each routine has in flight per direction, minimum 2. A TX slot holds one
+  # tun read and its ciphertext, about 1.1 MiB; the default is 8, or workers + 2 if more. An RX slot holds one
+  # recvmmsg batch, listen.batch * 64 KiB with udp_offloads or * 9 KiB without; the default keeps up to 384 receive
+  # entries in flight in 4 to 6 slots: 6 slots or 24 MiB at the default listen.batch of 64. Lower them to save memory.
   #staged:
   #  workers: 0
+  #  tx_slots: 8
+  #  rx_slots: 6
 
   # Linux only. pin_threads pins each tun reader/encrypt OS thread to a single CPU. This keeps every goroutine's
   # batched sends flowing through one XPS-selected NIC TX ring, so packets within a flow stay ordered on the wire

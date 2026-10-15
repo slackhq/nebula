@@ -234,8 +234,6 @@ type handoffQueue interface {
 	SwapRxBuf([]byte) []byte
 }
 
-const stagedTxSlots = 8
-
 // txSlot is one staged batch. The reader fills items, a worker encrypts them into sb and signals done, and the
 // ordered sender flushes sb.
 type txSlot struct {
@@ -292,8 +290,8 @@ func newStagedTx(f *Interface, queue handoffQueue, q int) *stagedTx {
 		queue:         queue,
 		sb:            batch.NewSendBatch(f.writers[q], batch.SendBatchCap, batch.SendBatchCap*(udp.MTU+32)),
 		nb:            make([]byte, 12),
-		ordered:       make(chan *txSlot, stagedTxSlots),
-		returned:      make(chan *txSlot, stagedTxSlots),
+		ordered:       make(chan *txSlot, f.staged.txSlots),
+		returned:      make(chan *txSlot, f.staged.txSlots),
 		senderDone:    make(chan struct{}),
 		readBusy:      stageBusy("tx_read", q),
 		encryptBusy:   stageBusy("tx_encrypt", q),
@@ -309,12 +307,12 @@ func newStagedTx(f *Interface, queue handoffQueue, q int) *stagedTx {
 			p.senderCPU = f.cpuAffinity[(q+1)%n]
 		}
 	}
-	p.pool = newFlowPool(f.staged.workers, stagedTxSlots, p.encryptBusy)
+	p.pool = newFlowPool(f.staged.workers, f.staged.txSlots, p.encryptBusy)
 
 	// Ciphertext adds per-segment headers and tags; the arena can grow for small segments.
 	buf := queue.SwapRxBuf(nil)
 	bufSize := len(buf)
-	for i := range stagedTxSlots {
+	for i := range f.staged.txSlots {
 		if i > 0 {
 			buf = make([]byte, bufSize)
 		}
