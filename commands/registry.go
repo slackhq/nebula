@@ -120,6 +120,10 @@ func (r *Registry) DispatchArgs(args []string, orig string, w StringWriter) erro
 	}
 
 	if checkHelpArgs(args) {
+		// Through the registered help command, so -h and `help <name>` are one path.
+		if h := r.Get(Help); h != nil {
+			return execCommand(h, []string{string(c.Name)}, w)
+		}
 		return r.Help([]string{string(c.Name)}, w)
 	}
 
