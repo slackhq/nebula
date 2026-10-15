@@ -108,13 +108,27 @@ func newFlowPool(workers, queueLen int, busy metrics.Counter) *flowPool {
 		p.wg.Go(func() {
 			nb := make([]byte, 12)
 			for job := range p.jobs {
+				// One pair of clock reads covers a run of jobs that are queued back to back
 				t := time.Now()
-				job.run(nb)
+				for job != nil {
+					job.run(nb)
+					job = p.next()
+				}
 				busy.Inc(int64(time.Since(t)))
 			}
 		})
 	}
 	return p
+}
+
+// next returns the next queued job without waiting, or nil.
+func (p *flowPool) next() flowJob {
+	select {
+	case job := <-p.jobs:
+		return job
+	default:
+		return nil
+	}
 }
 
 func (p *flowPool) close() { close(p.jobs); p.wg.Wait() }

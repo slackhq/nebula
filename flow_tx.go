@@ -338,6 +338,9 @@ func (p *stagedTx) run(fwPacket *firewall.ParsedPacket, rejectBuf []byte, conntr
 		if err != nil {
 			return err
 		}
+		// Waiting for a slot is backpressure, not reader work, so it comes before the clock read. The loop reads the
+		// clock twice, more only when it waits for tunnel credit or drains for an oversized read.
+		p.ready()
 		t := time.Now()
 		stall := p.handle(pkts, fwPacket, rejectBuf, conntrackCache.Get())
 		p.readBusy.Inc(int64(time.Since(t) - stall))
@@ -345,9 +348,9 @@ func (p *stagedTx) run(fwPacket *firewall.ParsedPacket, rejectBuf []byte, conntr
 }
 
 // handle takes one tun read through the pipeline. It returns once the batch is queued, or sent when the reader sent
-// it itself, with how long it waited for the sender.
+// it itself, with how long it waited for tunnel credit.
 func (p *stagedTx) handle(pkts []tio.Packet, fwPacket *firewall.ParsedPacket, rejectBuf []byte, localCache firewall.ConntrackCache) time.Duration {
-	p.reap()
+	p.ready()
 	inline := p.inFlight == 0 && p.small(pkts)
 	if inline && p.f.routines == 1 {
 		// With only one reader and an empty pipeline, no other staged reservation can be overtaken. Keep this common
@@ -356,7 +359,9 @@ func (p *stagedTx) handle(pkts []tio.Packet, fwPacket *firewall.ParsedPacket, re
 		return 0
 	}
 
-	slot, stall := p.acquire()
+	slot := p.free[len(p.free)-1]
+	p.free = p.free[:len(p.free)-1]
+	var stall time.Duration
 	items := p.collect(slot.items[:0], pkts, fwPacket, rejectBuf, p.q, localCache)
 	if len(items) == 0 {
 		slot.items = items
@@ -406,18 +411,12 @@ func (p *stagedTx) handle(pkts []tio.Packet, fwPacket *firewall.ParsedPacket, re
 	return stall
 }
 
-// acquire returns an idle slot, waiting for the sender to give one back when all of them are in flight, and how long
-// it waited.
-func (p *stagedTx) acquire() (*txSlot, time.Duration) {
-	var stall time.Duration
+// ready takes back every slot the sender has finished with, and waits for one when all of them are in flight.
+func (p *stagedTx) ready() {
+	p.reap()
 	if len(p.free) == 0 {
-		t := time.Now()
 		p.release(<-p.returned)
-		stall = time.Since(t)
 	}
-	s := p.free[len(p.free)-1]
-	p.free = p.free[:len(p.free)-1]
-	return s, stall
 }
 
 // reap takes back every slot the sender has finished with, without waiting.

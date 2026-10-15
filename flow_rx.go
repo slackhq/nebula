@@ -209,10 +209,7 @@ func (p *stagedRx) precheck(b *rxBatch) {
 func (p *stagedRx) handoff(bufs [][]byte) [][]byte {
 	p.cur.bufs = bufs
 	p.endBatch()
-	if !p.started.IsZero() {
-		p.readBusy.Inc(int64(time.Since(p.started)))
-		p.started = time.Time{}
-	}
+	p.stopClock()
 	b := p.cur
 	if len(b.bufs) != len(bufs) || len(b.bufs[0]) < len(bufs[0]) {
 		b.bufs = make([][]byte, len(bufs))
@@ -262,13 +259,21 @@ func (p *stagedRx) endBatch() {
 
 	if len(p.free) == 0 {
 		// Every batch is in flight, wait for the writer: the socket buffer absorbs the backlog meanwhile. The wait is
-		// downstream backpressure, not listener busy time.
-		t := time.Now()
+		// downstream backpressure, so the listener's busy time ends here.
+		p.stopClock()
 		p.release(<-p.returned)
-		p.started = p.started.Add(time.Since(t))
 	}
 	p.cur = p.free[len(p.free)-1]
 	p.free = p.free[:len(p.free)-1]
+}
+
+// stopClock adds the listener's busy time since the first packet of the batch, once per batch: the clock is read
+// when that packet arrives and when the batch is handed off or has to wait.
+func (p *stagedRx) stopClock() {
+	if !p.started.IsZero() {
+		p.readBusy.Inc(int64(time.Since(p.started)))
+		p.started = time.Time{}
+	}
 }
 
 // reap takes back every batch the writer has finished with, without waiting.

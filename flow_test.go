@@ -533,3 +533,34 @@ func TestFlowStagedCipherFallback(t *testing.T) {
 	require.Greater(t, rxBatches.Count(), rx0)
 	require.Equal(t, want, receiver.tun.segments(t))
 }
+
+// TestFlowStagedBusyExcludesBackpressure runs both directions with a slow downstream stage and only two slots, so the
+// reader keeps waiting for one: the reader's busy time must leave those waits out.
+func TestFlowStagedBusyExcludesBackpressure(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	const delay = 20 * time.Millisecond
+	sc := stagedOn(2)
+	sc.txSlots, sc.rxSlots = 2, 2
+	sender, receiver := newFlowTestPair(t, noise.CipherChaChaPoly, sc)
+	batches, want := flowTestBatches(10, 2, 1, 8)
+
+	sender.conn.delay = delay
+	txRead, txSend := stageBusy("tx_read", 0), stageBusy("tx_send", 0)
+	read0, send0 := txRead.Count(), txSend.Count()
+	start := time.Now()
+	sender.f.listenIn(newFlowBatchQueue(batches), 0)
+	elapsed := time.Since(start)
+	require.GreaterOrEqual(t, elapsed, time.Duration(len(batches)-2)*delay, "the reader must have waited for slots")
+	require.GreaterOrEqual(t, time.Duration(txSend.Count()-send0), time.Duration(len(batches))*delay)
+	require.Less(t, time.Duration(txRead.Count()-read0), elapsed/2, "tx_read must not count slot waits")
+
+	receiver.tun.delay = delay / 10
+	rxRead := stageBusy("rx_read", 0)
+	read0 = rxRead.Count()
+	start = time.Now()
+	receiver.receive(&rxConn{wire: sender.conn.captured(), batchLen: 16})
+	elapsed = time.Since(start)
+	require.Equal(t, want, receiver.tun.segments(t))
+	require.GreaterOrEqual(t, elapsed, 3*delay/10, "the listener must have waited for batches")
+	require.Less(t, time.Duration(rxRead.Count()-read0), elapsed/2, "rx_read must not count batch waits")
+}
