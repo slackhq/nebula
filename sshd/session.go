@@ -1,6 +1,7 @@
 package sshd
 
 import (
+	"errors"
 	"log/slog"
 	"strings"
 
@@ -145,12 +146,17 @@ func (s *session) handleInput() {
 	}
 }
 
-// dispatchCommand runs line and returns the command's error, which it has logged: the
-// command has already told the user what went wrong, or chosen not to, so the log line
-// is for the operator reading the daemon's log.
+// dispatchCommand runs line and returns the command's error, which it has logged unless
+// the command already told the user everything: the log line is for the operator reading
+// the daemon's log, who learns nothing from a failure the user caused.
 func (s *session) dispatchCommand(line string, w commands.StringWriter) error {
 	err := s.commands.Dispatch(line, w)
-	if err != nil {
+	if err == nil {
+		return nil
+	}
+
+	var f *commands.Failure
+	if !errors.As(err, &f) {
 		s.l.Debug("Command returned an error", "line", line, "error", err)
 	}
 	return err

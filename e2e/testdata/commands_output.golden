@@ -158,66 +158,84 @@ $ print-cert -pretty -raw
 
 $ print-cert 10.222.0.9
 Could not find tunnel for vpn addr: 10.222.0.9
+exit status 1
 
 $ print-cert -json 10.222.0.9
 Could not find tunnel for vpn addr: 10.222.0.9
+exit status 1
 
 $ print-cert -pretty 10.222.0.9
 Could not find tunnel for vpn addr: 10.222.0.9
+exit status 1
 
 $ print-cert 10.222.0.250
 Could not find tunnel for vpn addr: 10.222.0.250
+exit status 1
 
 $ print-cert -json 10.222.0.250
 Could not find tunnel for vpn addr: 10.222.0.250
+exit status 1
 
 $ print-cert -pretty 10.222.0.250
 Could not find tunnel for vpn addr: 10.222.0.250
+exit status 1
 
 $ print-cert not-an-address
 The provided vpn addr could not be parsed: not-an-address
+exit status 1
 
 $ print-cert -json not-an-address
 The provided vpn addr could not be parsed: not-an-address
+exit status 1
 
 $ print-cert -pretty not-an-address
 The provided vpn addr could not be parsed: not-an-address
+exit status 1
 
 $ print-tunnel
 No vpn address was provided
+exit status 1
 
 $ print-tunnel -json
 flag provided but not defined: -json
 Usage:
   -pretty
     	pretty prints json
+exit status 1
 
 $ print-tunnel -pretty
 No vpn address was provided
+exit status 1
 
 $ print-tunnel 10.222.0.9
 Could not find tunnel for vpn addr: 10.222.0.9
+exit status 1
 
 $ print-tunnel -json 10.222.0.9
 flag provided but not defined: -json
 Usage:
   -pretty
     	pretty prints json
+exit status 1
 
 $ print-tunnel -pretty 10.222.0.9
 Could not find tunnel for vpn addr: 10.222.0.9
+exit status 1
 
 $ print-tunnel 10.222.0.250
 Could not find tunnel for vpn addr: 10.222.0.250
+exit status 1
 
 $ print-tunnel -json 10.222.0.250
 flag provided but not defined: -json
 Usage:
   -pretty
     	pretty prints json
+exit status 1
 
 $ print-tunnel -pretty 10.222.0.250
 Could not find tunnel for vpn addr: 10.222.0.250
+exit status 1
 
 $ print-relays
 {"Relays":null}
@@ -227,6 +245,7 @@ flag provided but not defined: -json
 Usage:
   -pretty
     	pretty prints json
+exit status 1
 
 $ print-relays -pretty
 {
@@ -235,183 +254,230 @@ $ print-relays -pretty
 
 $ query-lighthouse
 No vpn address was provided
+exit status 1
 
 $ query-lighthouse -json
 The provided vpn address could not be parsed: -json
+exit status 1
 
 $ query-lighthouse -pretty
 The provided vpn address could not be parsed: -pretty
+exit status 1
 
 $ query-lighthouse 10.222.0.9
 {}
 
 $ query-lighthouse -json 10.222.0.9
 The provided vpn address could not be parsed: -json
+exit status 1
 
 $ query-lighthouse -pretty 10.222.0.9
 The provided vpn address could not be parsed: -pretty
+exit status 1
 
 $ query-lighthouse not-an-address
 The provided vpn address could not be parsed: not-an-address
+exit status 1
 
 $ query-lighthouse -json not-an-address
 The provided vpn address could not be parsed: -json
+exit status 1
 
 $ query-lighthouse -pretty not-an-address
 The provided vpn address could not be parsed: -pretty
+exit status 1
 
 $ log-level
 Log level is not reconfigurable on this logger
+exit status 1
 
 $ log-level -json
 Log level is not reconfigurable on this logger
+exit status 1
 
 $ log-level -pretty
 Log level is not reconfigurable on this logger
+exit status 1
 
 $ log-level debug
 Log level is not reconfigurable on this logger
+exit status 1
 
 $ log-level -json debug
 Log level is not reconfigurable on this logger
+exit status 1
 
 $ log-level -pretty debug
 Log level is not reconfigurable on this logger
+exit status 1
 
 $ log-level bogus
 Log level is not reconfigurable on this logger
+exit status 1
 
 $ log-level -json bogus
 Log level is not reconfigurable on this logger
+exit status 1
 
 $ log-level -pretty bogus
 Log level is not reconfigurable on this logger
+exit status 1
 
 $ log-level info
 Log level is not reconfigurable on this logger
+exit status 1
 
 $ log-level -json info
 Log level is not reconfigurable on this logger
+exit status 1
 
 $ log-level -pretty info
 Log level is not reconfigurable on this logger
+exit status 1
 
 $ log-format
 Log format is not reconfigurable on this logger
+exit status 1
 
 $ log-format -json
 Log format is not reconfigurable on this logger
+exit status 1
 
 $ log-format -pretty
 Log format is not reconfigurable on this logger
+exit status 1
 
 $ log-format json
 Log format is not reconfigurable on this logger
+exit status 1
 
 $ log-format -json json
 Log format is not reconfigurable on this logger
+exit status 1
 
 $ log-format -pretty json
 Log format is not reconfigurable on this logger
+exit status 1
 
 $ log-format text
 Log format is not reconfigurable on this logger
+exit status 1
 
 $ log-format -json text
 Log format is not reconfigurable on this logger
+exit status 1
 
 $ log-format -pretty text
 Log format is not reconfigurable on this logger
+exit status 1
 
 $ change-remote
 No vpn address was provided
+exit status 1
 
 $ change-remote -json
 flag provided but not defined: -json
 Usage:
   -address string
     	The new remote address, ip:port
+exit status 1
 
 $ change-remote -pretty
 flag provided but not defined: -pretty
 Usage:
   -address string
     	The new remote address, ip:port
+exit status 1
 
 $ change-remote 10.222.0.9
 No address was provided
+exit status 1
 
 $ change-remote -json 10.222.0.9
 flag provided but not defined: -json
 Usage:
   -address string
     	The new remote address, ip:port
+exit status 1
 
 $ change-remote -pretty 10.222.0.9
 flag provided but not defined: -pretty
 Usage:
   -address string
     	The new remote address, ip:port
+exit status 1
 
 $ change-remote -address 10.94.0.10:4242 10.222.0.9
 Could not find tunnel for vpn address: 10.222.0.9
+exit status 1
 
 $ change-remote -json -address 10.94.0.10:4242 10.222.0.9
 flag provided but not defined: -json
 Usage:
   -address string
     	The new remote address, ip:port
+exit status 1
 
 $ change-remote -pretty -address 10.94.0.10:4242 10.222.0.9
 flag provided but not defined: -pretty
 Usage:
   -address string
     	The new remote address, ip:port
+exit status 1
 
 $ change-remote -address 10.94.0.10:4242 10.222.0.250
 Could not find tunnel for vpn address: 10.222.0.250
+exit status 1
 
 $ change-remote -json -address 10.94.0.10:4242 10.222.0.250
 flag provided but not defined: -json
 Usage:
   -address string
     	The new remote address, ip:port
+exit status 1
 
 $ change-remote -pretty -address 10.94.0.10:4242 10.222.0.250
 flag provided but not defined: -pretty
 Usage:
   -address string
     	The new remote address, ip:port
+exit status 1
 
 $ create-tunnel
 No vpn address was provided
+exit status 1
 
 $ create-tunnel -json
 flag provided but not defined: -json
 Usage:
   -address string
     	Optionally provide a real remote address, ip:port 
+exit status 1
 
 $ create-tunnel -pretty
 flag provided but not defined: -pretty
 Usage:
   -address string
     	Optionally provide a real remote address, ip:port 
+exit status 1
 
 $ create-tunnel 10.222.0.9
 Tunnel already handshaking
+exit status 1
 
 $ create-tunnel -json 10.222.0.9
 flag provided but not defined: -json
 Usage:
   -address string
     	Optionally provide a real remote address, ip:port 
+exit status 1
 
 $ create-tunnel -pretty 10.222.0.9
 flag provided but not defined: -pretty
 Usage:
   -address string
     	Optionally provide a real remote address, ip:port 
+exit status 1
 
 $ create-tunnel -address 10.94.0.10:4242 10.222.0.10
 Created
@@ -421,72 +487,86 @@ flag provided but not defined: -json
 Usage:
   -address string
     	Optionally provide a real remote address, ip:port 
+exit status 1
 
 $ create-tunnel -pretty -address 10.94.0.10:4242 10.222.0.10
 flag provided but not defined: -pretty
 Usage:
   -address string
     	Optionally provide a real remote address, ip:port 
+exit status 1
 
 $ create-tunnel not-an-address
 The provided vpn address could not be parsed: not-an-address
+exit status 1
 
 $ create-tunnel -json not-an-address
 flag provided but not defined: -json
 Usage:
   -address string
     	Optionally provide a real remote address, ip:port 
+exit status 1
 
 $ create-tunnel -pretty not-an-address
 flag provided but not defined: -pretty
 Usage:
   -address string
     	Optionally provide a real remote address, ip:port 
+exit status 1
 
 $ close-tunnel
 No vpn address was provided
+exit status 1
 
 $ close-tunnel -json
 flag provided but not defined: -json
 Usage:
   -local-only
     	Disables notifying the remote that the tunnel is shutting down
+exit status 1
 
 $ close-tunnel -pretty
 flag provided but not defined: -pretty
 Usage:
   -local-only
     	Disables notifying the remote that the tunnel is shutting down
+exit status 1
 
 $ close-tunnel 10.222.0.250
 Could not find tunnel for vpn address: 10.222.0.250
+exit status 1
 
 $ close-tunnel -json 10.222.0.250
 flag provided but not defined: -json
 Usage:
   -local-only
     	Disables notifying the remote that the tunnel is shutting down
+exit status 1
 
 $ close-tunnel -pretty 10.222.0.250
 flag provided but not defined: -pretty
 Usage:
   -local-only
     	Disables notifying the remote that the tunnel is shutting down
+exit status 1
 
 $ close-tunnel not-an-address
 The provided vpn address could not be parsed: not-an-address
+exit status 1
 
 $ close-tunnel -json not-an-address
 flag provided but not defined: -json
 Usage:
   -local-only
     	Disables notifying the remote that the tunnel is shutting down
+exit status 1
 
 $ close-tunnel -pretty not-an-address
 flag provided but not defined: -pretty
 Usage:
   -local-only
     	Disables notifying the remote that the tunnel is shutting down
+exit status 1
 
 $ help
 Available commands:
@@ -511,9 +591,11 @@ version - Prints the currently running version of nebula
 
 $ help -json
 Command not available -json
+exit status 1
 
 $ help -pretty
 Command not available -pretty
+exit status 1
 
 $ help print-cert
 print-cert - Prints the current certificate being used or the certificate for the provided vpn addr
@@ -526,18 +608,22 @@ print-cert - Prints the current certificate being used or the certificate for th
 
 $ help -json print-cert
 Command not available -json
+exit status 1
 
 $ help -pretty print-cert
 Command not available -pretty
+exit status 1
 
 $ help logout
 logout - Ends the current session
 
 $ help -json logout
 Command not available -json
+exit status 1
 
 $ help -pretty logout
 Command not available -pretty
+exit status 1
 
 $ logout -h
 logout - Ends the current session
@@ -569,6 +655,7 @@ query-lighthouse - Query the lighthouses for the provided vpn address
 reload - Reloads configuration from disk, same as sending HUP to the process
 version - Prints the currently running version of nebula
 
+exit status 1
 
 $ not-a-command -json 10.222.0.9
 did not understand: not-a-command
@@ -591,6 +678,7 @@ query-lighthouse - Query the lighthouses for the provided vpn address
 reload - Reloads configuration from disk, same as sending HUP to the process
 version - Prints the currently running version of nebula
 
+exit status 1
 
 $ not-a-command -pretty 10.222.0.9
 did not understand: not-a-command
@@ -613,16 +701,20 @@ query-lighthouse - Query the lighthouses for the provided vpn address
 reload - Reloads configuration from disk, same as sending HUP to the process
 version - Prints the currently running version of nebula
 
+exit status 1
 
 $ reload
 Reloading config
 Config reload failed, the new config did not load: no config files found at 
+exit status 1
 
 $ reload -json
 Reloading config
 Config reload failed, the new config did not load: no config files found at 
+exit status 1
 
 $ reload -pretty
 Reloading config
 Config reload failed, the new config did not load: no config files found at 
+exit status 1
 

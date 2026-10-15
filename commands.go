@@ -248,7 +248,7 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 func sshListHostMap(hl controlHostLister, a any, w commands.StringWriter) error {
 	fs, ok := a.(*sshListHostMapFlags)
 	if !ok {
-		return nil
+		return fmt.Errorf("internal error: expected *sshListHostMapFlags but was %T", a)
 	}
 
 	var hm []ControlHostInfo
@@ -288,7 +288,7 @@ func sshListHostMap(hl controlHostLister, a any, w commands.StringWriter) error 
 func sshListLighthouseMap(lightHouse *LightHouse, a any, w commands.StringWriter) error {
 	fs, ok := a.(*sshListHostMapFlags)
 	if !ok {
-		return nil
+		return fmt.Errorf("internal error: expected *sshListHostMapFlags but was %T", a)
 	}
 
 	type lighthouseInfo struct {
@@ -345,16 +345,16 @@ func sshVersion(ifce *Interface, fs any, a []string, w commands.StringWriter) er
 
 func sshQueryLighthouse(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
 	if len(a) == 0 {
-		return w.WriteLine("No vpn address was provided")
+		return commands.Fail(w, "No vpn address was provided")
 	}
 
 	vpnAddr, err := netip.ParseAddr(a[0])
 	if err != nil {
-		return w.WriteLine(fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
+		return commands.Fail(w, fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
 	}
 
 	if !vpnAddr.IsValid() {
-		return w.WriteLine(fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
+		return commands.Fail(w, fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
 	}
 
 	var cm *CacheMap
@@ -368,25 +368,25 @@ func sshQueryLighthouse(ifce *Interface, fs any, a []string, w commands.StringWr
 func sshCloseTunnel(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
 	flags, ok := fs.(*sshCloseTunnelFlags)
 	if !ok {
-		return nil
+		return fmt.Errorf("internal error: expected *sshCloseTunnelFlags but was %T", fs)
 	}
 
 	if len(a) == 0 {
-		return w.WriteLine("No vpn address was provided")
+		return commands.Fail(w, "No vpn address was provided")
 	}
 
 	vpnAddr, err := netip.ParseAddr(a[0])
 	if err != nil {
-		return w.WriteLine(fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
+		return commands.Fail(w, fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
 	}
 
 	if !vpnAddr.IsValid() {
-		return w.WriteLine(fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
+		return commands.Fail(w, fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
 	}
 
 	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
 	if hostInfo == nil {
-		return w.WriteLine(fmt.Sprintf("Could not find tunnel for vpn address: %v", a[0]))
+		return commands.Fail(w, fmt.Sprintf("Could not find tunnel for vpn address: %v", a[0]))
 	}
 
 	if !flags.LocalOnly {
@@ -408,37 +408,37 @@ func sshCloseTunnel(ifce *Interface, fs any, a []string, w commands.StringWriter
 func sshCreateTunnel(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
 	flags, ok := fs.(*sshCreateTunnelFlags)
 	if !ok {
-		return nil
+		return fmt.Errorf("internal error: expected *sshCreateTunnelFlags but was %T", fs)
 	}
 
 	if len(a) == 0 {
-		return w.WriteLine("No vpn address was provided")
+		return commands.Fail(w, "No vpn address was provided")
 	}
 
 	vpnAddr, err := netip.ParseAddr(a[0])
 	if err != nil {
-		return w.WriteLine(fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
+		return commands.Fail(w, fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
 	}
 
 	if !vpnAddr.IsValid() {
-		return w.WriteLine(fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
+		return commands.Fail(w, fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
 	}
 
 	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
 	if hostInfo != nil {
-		return w.WriteLine(fmt.Sprintf("Tunnel already exists"))
+		return commands.Fail(w, fmt.Sprintf("Tunnel already exists"))
 	}
 
 	hostInfo = ifce.handshakeManager.QueryVpnAddr(vpnAddr)
 	if hostInfo != nil {
-		return w.WriteLine(fmt.Sprintf("Tunnel already handshaking"))
+		return commands.Fail(w, fmt.Sprintf("Tunnel already handshaking"))
 	}
 
 	var addr netip.AddrPort
 	if flags.Address != "" {
 		addr, err = netip.ParseAddrPort(flags.Address)
 		if err != nil {
-			return w.WriteLine("Address could not be parsed")
+			return commands.Fail(w, "Address could not be parsed")
 		}
 	}
 
@@ -457,34 +457,34 @@ func sshCreateTunnel(ifce *Interface, fs any, a []string, w commands.StringWrite
 func sshChangeRemote(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
 	flags, ok := fs.(*sshChangeRemoteFlags)
 	if !ok {
-		return nil
+		return fmt.Errorf("internal error: expected *sshChangeRemoteFlags but was %T", fs)
 	}
 
 	if len(a) == 0 {
-		return w.WriteLine("No vpn address was provided")
+		return commands.Fail(w, "No vpn address was provided")
 	}
 
 	if flags.Address == "" {
-		return w.WriteLine("No address was provided")
+		return commands.Fail(w, "No address was provided")
 	}
 
 	addr, err := netip.ParseAddrPort(flags.Address)
 	if err != nil {
-		return w.WriteLine("Address could not be parsed")
+		return commands.Fail(w, "Address could not be parsed")
 	}
 
 	vpnAddr, err := netip.ParseAddr(a[0])
 	if err != nil {
-		return w.WriteLine(fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
+		return commands.Fail(w, fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
 	}
 
 	if !vpnAddr.IsValid() {
-		return w.WriteLine(fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
+		return commands.Fail(w, fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
 	}
 
 	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
 	if hostInfo == nil {
-		return w.WriteLine(fmt.Sprintf("Could not find tunnel for vpn address: %v", a[0]))
+		return commands.Fail(w, fmt.Sprintf("Could not find tunnel for vpn address: %v", a[0]))
 	}
 
 	hostInfo.SetRemote(addr)
@@ -497,7 +497,7 @@ func sshLogLevel(l *slog.Logger, fs any, a []string, w commands.StringWriter) er
 		SetLevel(slog.Level)
 	})
 	if !ok {
-		return w.WriteLine("Log level is not reconfigurable on this logger")
+		return commands.Fail(w, "Log level is not reconfigurable on this logger")
 	}
 
 	if len(a) == 0 {
@@ -506,7 +506,7 @@ func sshLogLevel(l *slog.Logger, fs any, a []string, w commands.StringWriter) er
 
 	level, err := logging.ParseLevel(strings.ToLower(a[0]))
 	if err != nil {
-		return w.WriteLine(fmt.Sprintf("Unknown log level %s. Possible log levels: trace, debug, info, warn, error", a))
+		return commands.Fail(w, fmt.Sprintf("Unknown log level %s. Possible log levels: trace, debug, info, warn, error", a))
 	}
 
 	ctrl.SetLevel(level)
@@ -519,7 +519,7 @@ func sshLogFormat(l *slog.Logger, fs any, a []string, w commands.StringWriter) e
 		SetFormat(string) error
 	})
 	if !ok {
-		return w.WriteLine("Log format is not reconfigurable on this logger")
+		return commands.Fail(w, "Log format is not reconfigurable on this logger")
 	}
 
 	if len(a) == 0 {
@@ -527,7 +527,7 @@ func sshLogFormat(l *slog.Logger, fs any, a []string, w commands.StringWriter) e
 	}
 
 	if err := ctrl.SetFormat(strings.ToLower(a[0])); err != nil {
-		return w.WriteLine(fmt.Sprintf("Unable to set log format: %s", err))
+		return commands.Fail(w, fmt.Sprintf("Unable to set log format: %s", err))
 	}
 	return w.WriteLine(fmt.Sprintf("Log format is: %s", ctrl.GetFormat()))
 }
@@ -535,23 +535,23 @@ func sshLogFormat(l *slog.Logger, fs any, a []string, w commands.StringWriter) e
 func sshPrintCert(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
 	args, ok := fs.(*sshPrintCertFlags)
 	if !ok {
-		return nil
+		return fmt.Errorf("internal error: expected *sshPrintCertFlags but was %T", fs)
 	}
 
 	cert := ifce.pki.getCertState().GetDefaultCertificate()
 	if len(a) > 0 {
 		vpnAddr, err := netip.ParseAddr(a[0])
 		if err != nil {
-			return w.WriteLine(fmt.Sprintf("The provided vpn addr could not be parsed: %s", a[0]))
+			return commands.Fail(w, fmt.Sprintf("The provided vpn addr could not be parsed: %s", a[0]))
 		}
 
 		if !vpnAddr.IsValid() {
-			return w.WriteLine(fmt.Sprintf("The provided vpn addr could not be parsed: %s", a[0]))
+			return commands.Fail(w, fmt.Sprintf("The provided vpn addr could not be parsed: %s", a[0]))
 		}
 
 		hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
 		if hostInfo == nil {
-			return w.WriteLine(fmt.Sprintf("Could not find tunnel for vpn addr: %v", a[0]))
+			return commands.Fail(w, fmt.Sprintf("Could not find tunnel for vpn addr: %v", a[0]))
 		}
 
 		cert = hostInfo.GetCert().Certificate
@@ -590,8 +590,7 @@ func sshPrintCert(ifce *Interface, fs any, a []string, w commands.StringWriter) 
 func sshPrintRelays(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
 	args, ok := fs.(*sshPrintTunnelFlags)
 	if !ok {
-		w.WriteLine(fmt.Sprintf("sshPrintRelays failed to convert args type"))
-		return nil
+		return fmt.Errorf("internal error: expected *sshPrintTunnelFlags but was %T", fs)
 	}
 
 	relays := map[uint32]*HostInfo{}
@@ -685,25 +684,25 @@ func sshPrintRelays(ifce *Interface, fs any, a []string, w commands.StringWriter
 func sshPrintTunnel(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
 	args, ok := fs.(*sshPrintTunnelFlags)
 	if !ok {
-		return nil
+		return fmt.Errorf("internal error: expected *sshPrintTunnelFlags but was %T", fs)
 	}
 
 	if len(a) == 0 {
-		return w.WriteLine("No vpn address was provided")
+		return commands.Fail(w, "No vpn address was provided")
 	}
 
 	vpnAddr, err := netip.ParseAddr(a[0])
 	if err != nil {
-		return w.WriteLine(fmt.Sprintf("The provided vpn addr could not be parsed: %s", a[0]))
+		return commands.Fail(w, fmt.Sprintf("The provided vpn addr could not be parsed: %s", a[0]))
 	}
 
 	if !vpnAddr.IsValid() {
-		return w.WriteLine(fmt.Sprintf("The provided vpn addr could not be parsed: %s", a[0]))
+		return commands.Fail(w, fmt.Sprintf("The provided vpn addr could not be parsed: %s", a[0]))
 	}
 
 	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
 	if hostInfo == nil {
-		return w.WriteLine(fmt.Sprintf("Could not find tunnel for vpn addr: %v", a[0]))
+		return commands.Fail(w, fmt.Sprintf("Could not find tunnel for vpn addr: %v", a[0]))
 	}
 
 	enc := json.NewEncoder(w.GetWriter())
@@ -751,5 +750,11 @@ func sshReload(l *slog.Logger, c *config.C, w commands.StringWriter) error {
 	if err := w.WriteLine(res.String()); writeErr == nil {
 		writeErr = err
 	}
-	return writeErr
+	if writeErr != nil {
+		return writeErr
+	}
+	if res.Err != nil || res.Failed {
+		return &commands.Failure{Msg: res.String()}
+	}
+	return nil
 }

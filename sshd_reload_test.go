@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -269,4 +270,12 @@ func TestSSHExecExitStatusReflectsTheCommand(t *testing.T) {
 	out, err = sess.CombinedOutput("help fails")
 	require.NoError(t, err)
 	assert.Equal(t, "fails - \n", string(out))
+
+	// A word that is not a command is a failure too, with the command list as before.
+	sess, err = client.NewSession()
+	require.NoError(t, err)
+	out, err = sess.CombinedOutput("nope")
+	require.ErrorAs(t, err, &exit)
+	assert.Equal(t, 1, exit.ExitStatus())
+	assert.True(t, strings.HasPrefix(string(out), "did not understand: nope\nAvailable commands:\n"), string(out))
 }
