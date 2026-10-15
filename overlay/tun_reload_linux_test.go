@@ -4,6 +4,7 @@ package overlay
 
 import (
 	"net/netip"
+	"os"
 	"testing"
 
 	"github.com/slackhq/nebula/config"
@@ -55,8 +56,9 @@ func TestReloadMaxMTUIsTheLargestRoute(t *testing.T) {
 	assert.Equal(t, 1300, tn.DefaultMTU)
 }
 
-// There is no device behind this tun, so the system refuses every route change and the reload has to say so
-func TestReloadRefusedRoutesFail(t *testing.T) {
+// There is no device behind this tun, so adding a route always fails. Removing one is refused without root, as root the
+// kernel answers that the route isn't there, which is what we wanted
+func TestReloadRouteFailures(t *testing.T) {
 	route := "tun:\n  mtu: 1300\n  unsafe_routes:\n    - route: 192.168.100.0/24\n      via: 10.1.0.1\n"
 	cases := []struct {
 		name      string
@@ -64,7 +66,7 @@ func TestReloadRefusedRoutesFail(t *testing.T) {
 		wantFails bool
 	}{
 		{"added", "tun:\n  mtu: 1300\n", route, true},
-		{"removed", route, "tun:\n  mtu: 1300\n", true},
+		{"removed", route, "tun:\n  mtu: 1300\n", os.Geteuid() != 0},
 		{"unchanged", route, route + "punchy:\n  punch: true\n", false},
 	}
 	for _, tc := range cases {
@@ -93,13 +95,13 @@ func TestReloadRefusedRoutesFail(t *testing.T) {
 func TestTunReloadRestartKeys(t *testing.T) {
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString("tun:\n  dev: nebrk0\n"))
-	tn, err := newTun(c, test.NewLogger(), []netip.Prefix{netip.MustParsePrefix("10.1.0.2/24")}, false)
+	tn, err := NewDeviceFromConfig(c, test.NewLogger(), []netip.Prefix{netip.MustParsePrefix("10.1.0.2/24")}, 1)
 	if err != nil {
 		t.Skipf("can't create a tun device here: %v", err)
 	}
 	t.Cleanup(func() { _ = tn.Close() })
 
-	res := c.ReloadConfigString("tun:\n  dev: nebrk1\n  tx_queue: 100\n")
+	res := c.ReloadConfigString("tun:\n  disabled: true\n  dev: nebrk1\n  tx_queue: 100\n")
 	require.NoError(t, res.Err)
-	assert.ElementsMatch(t, []string{"tun.dev", "tun.tx_queue"}, res.RestartKeys)
+	assert.ElementsMatch(t, []string{"tun.disabled", "tun.dev", "tun.tx_queue"}, res.RestartKeys)
 }

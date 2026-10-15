@@ -169,17 +169,15 @@ func TestWinTun_ReloadMatchesAFreshStart(t *testing.T) {
 	})
 }
 
-// Removing a route that is already gone fails the reload
-func TestWinTun_ReloadFailedRemoveFails(t *testing.T) {
+// Removing a route that is already gone is what we wanted, not a failure
+func TestWinTun_ReloadRouteAlreadyGone(t *testing.T) {
 	forFamilies(t, func(t *testing.T, a, b string) {
 		rt := newRouteTest(t, unsafeRoutes(a, b))
 		require.NoError(t, rt.tun.Activate())
 		p := netip.MustParsePrefix(b)
 		require.NoError(t, rt.luid.DeleteRoute(p, unspecifiedNextHop(p)))
 
-		res := rt.c.ReloadConfigString(unsafeRoutes(a))
-		require.NoError(t, res.Err)
-		assert.True(t, res.Failed)
+		rt.reload(t, unsafeRoutes(a))
 	})
 }
 

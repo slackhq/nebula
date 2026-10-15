@@ -109,7 +109,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*w
 	disableDNSRegistration(l, *guid)
 
 	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
-		r.RestartRequiredIfChanged("tun.disabled", "tun.dev", "tun.mtu", "tun.network_category")
+		r.RestartRequiredIfChanged("tun.dev", "tun.mtu", "tun.network_category")
 		r.RestartRequiredIfChanged(interfaceBypassKeys...)
 		err := t.reload(c, false, r)
 		if err != nil {
@@ -290,7 +290,10 @@ func (t *winTun) removeRoutes(routes []Route, rl *config.Reload) error {
 
 		// See comment on luid.AddRoute
 		err := luid.DeleteRoute(r.Cidr, unspecifiedNextHop(r.Cidr))
-		if err != nil {
+		if errors.Is(err, windows.ERROR_NOT_FOUND) {
+			// Already gone, which is what we wanted
+			t.l.Info("Route was already removed", "route", r)
+		} else if err != nil {
 			t.l.Error("Failed to remove route", "error", err, "route", r)
 			rl.Failed()
 		} else {

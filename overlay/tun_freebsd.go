@@ -392,7 +392,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 	closeOnErr = false
 
 	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
-		r.RestartRequiredIfChanged("tun.disabled", "tun.dev", "tun.mtu")
+		r.RestartRequiredIfChanged("tun.dev", "tun.mtu")
 		err := t.reload(c, false, r)
 		if err != nil {
 			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
@@ -600,7 +600,10 @@ func (t *tun) removeRoutes(routes []Route, rl *config.Reload) error {
 		}
 
 		err := delRoute(r.Cidr, t.linkAddr)
-		if err != nil {
+		if errors.Is(err, unix.ESRCH) {
+			// Already gone, which is what we wanted
+			t.l.Info("Route was already removed", "route", r)
+		} else if err != nil {
 			t.l.Error("Failed to remove route", "error", err, "route", r)
 			rl.Failed()
 		} else {

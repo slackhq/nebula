@@ -154,7 +154,8 @@ func (c *C) CatchHUP(ctx context.Context) {
 	}()
 }
 
-// ReloadConfig reloads the config from the path provided to Load and runs every registered callback.
+// ReloadConfig reloads the config from the path provided to Load and runs every registered callback. A config that
+// fails to load is logged here, like any other failure, and the result carries the error for the summary.
 func (c *C) ReloadConfig() ReloadResult {
 	c.reloadLock.Lock()
 	defer c.reloadLock.Unlock()

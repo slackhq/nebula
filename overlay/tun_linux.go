@@ -187,7 +187,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue 
 	t.Device = name
 	// Only read when we create the device, an fd handed to us already has its name and offloads
 	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
-		r.RestartRequiredIfChanged("tun.disabled", "tun.dev", "tun.use_offloads")
+		r.RestartRequiredIfChanged("tun.dev", "tun.use_offloads")
 	})
 
 	return t, nil
@@ -652,7 +652,10 @@ func (t *tun) removeRoutes(routes []Route, rl *config.Reload) {
 		}
 
 		err := netlink.RouteDel(&nr)
-		if err != nil {
+		if errors.Is(err, unix.ESRCH) {
+			// Already gone, which is what we wanted
+			t.l.Info("Route was already removed", "route", r)
+		} else if err != nil {
 			t.l.Error("Failed to remove route", "error", err, "route", r)
 			rl.Failed()
 		} else {

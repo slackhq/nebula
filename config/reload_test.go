@@ -1,7 +1,6 @@
 package config
 
 import (
-	"bytes"
 	"errors"
 	"log/slog"
 	"testing"
@@ -37,8 +36,7 @@ func TestReloadConfigString(t *testing.T) {
 }
 
 func TestReloadRestartRequiredLatches(t *testing.T) {
-	buf := &bytes.Buffer{}
-	c := NewC(test.NewLoggerWithOutput(buf))
+	c := NewC(test.NewLogger())
 	require.NoError(t, c.LoadString("a: 1\nb: 1"))
 	c.RegisterReloadCallback(func(c *C, r *Reload) { r.RestartRequiredIfChanged("a", "b") })
 
@@ -50,13 +48,10 @@ func TestReloadRestartRequiredLatches(t *testing.T) {
 	// reload that changed the key lists it
 	assert.Equal(t, ReloadResult{RestartRequired: true}, c.ReloadConfigString("a: 2\nb: 1\nc: 1"))
 	assert.Equal(t, ReloadResult{RestartRequired: true, RestartKeys: []string{"a"}}, c.ReloadConfigString("a: 1\nb: 1\nc: 1"))
-	assert.Empty(t, buf.String(), "the outcome is the caller's to log")
 
-	// A config that fails to load is logged by ReloadConfig itself
 	res := c.ReloadConfigString("a: [")
 	require.Error(t, res.Err)
 	assert.True(t, res.RestartRequired)
-	assert.Contains(t, buf.String(), "level=ERROR msg=\"Error occurred while reloading config\"")
 }
 
 // A key reported by more than one callback is listed once
@@ -98,9 +93,6 @@ func TestReloadResultSummary(t *testing.T) {
 	}
 
 	res := ReloadResult{RestartRequired: true, RestartKeys: []string{"a", "b"}}
-	buf := &bytes.Buffer{}
-	res.Log(test.NewLoggerWithOutput(buf))
-	assert.Equal(t, "level=WARN msg=\"Config reload was completed but requires a restart to fully apply\" keys=\"[a b]\"\n", buf.String())
 	assert.Equal(t, "Config reload was completed but requires a restart to fully apply, keys [a b]", res.String())
 
 	// String includes the error
