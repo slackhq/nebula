@@ -45,7 +45,7 @@ func newSSHDReloadHarness(t *testing.T) *sshdReloadHarness {
 	h.server, err = sshd.NewSSHServer(t.Context(), l)
 	require.NoError(t, err)
 	wireSSHReload(l, h.server, h.c)
-	run, err := configSSH(l, h.server, h.c)
+	run, err := configSSH(l, h.server, h.c, nil)
 	require.NoError(t, err)
 	go run()
 	t.Cleanup(h.server.Stop)
@@ -193,4 +193,28 @@ func TestSSHDReload_BadHostKeyFileStops(t *testing.T) {
 	require.NoError(t, os.WriteFile(h.keyFile, []byte("not a key"), 0o600))
 	assert.True(t, h.c.ReloadConfigString(h.config()).Failed)
 	require.Eventually(t, func() bool { return !h.server.Running() }, 5*time.Second, 10*time.Millisecond)
+}
+
+// A trusted CA or authorized user that is skipped with a warning fails the reload, the valid ones are still used
+func TestSSHDReload_SkippedEntriesFail(t *testing.T) {
+	cases := map[string]string{
+		"bad trusted ca":             "  trusted_cas: [nope]\n",
+		"user entry not a map":       "    - nope\n",
+		"user missing":               "    - keys: [nope]\n",
+		"bad key":                    "    - user: other\n      keys: nope\n",
+		"key in a list not a string": "    - user: other\n      keys: [5]\n",
+		"bad key in a list":          "    - user: other\n      keys: [nope]\n",
+		"keys missing":               "    - user: other\n",
+	}
+	for name, extra := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newSSHDReloadHarness(t)
+			h.extra = extra
+			res := h.c.ReloadConfigString(h.config())
+			require.NoError(t, res.Err)
+			assert.True(t, res.Failed)
+			require.Eventually(t, h.server.Running, 5*time.Second, 10*time.Millisecond)
+			h.connect(t)
+		})
+	}
 }

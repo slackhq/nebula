@@ -316,9 +316,9 @@ type cachedPacketMetrics struct {
 func NewHostMapFromConfig(l *slog.Logger, c *config.C) *HostMap {
 	hm := newHostMap(l)
 
-	hm.reload(c, true)
-	c.RegisterReloadCallback(func(c *config.C, _ *config.Reload) {
-		hm.reload(c, false)
+	hm.reload(c, true, nil)
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		hm.reload(c, false, r)
 	})
 
 	l.Info("Main HostMap created", "preferredRanges", hm.GetPreferredRanges())
@@ -337,7 +337,8 @@ func newHostMap(l *slog.Logger) *HostMap {
 	}
 }
 
-func (hm *HostMap) reload(c *config.C, initial bool) {
+// r is nil on the initial load
+func (hm *HostMap) reload(c *config.C, initial bool, r *config.Reload) {
 	if initial || c.HasChanged("preferred_ranges") {
 		var preferredRanges []netip.Prefix
 		rawPreferredRanges := c.GetStringSlice("preferred_ranges", []string{})
@@ -350,6 +351,7 @@ func (hm *HostMap) reload(c *config.C, initial bool) {
 					"error", err,
 					"range", rawPreferredRanges,
 				)
+				r.Failed()
 				continue
 			}
 

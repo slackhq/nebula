@@ -296,7 +296,7 @@ func TestLighthouse_reload(t *testing.T) {
 	require.NoError(t, err)
 	c.ReloadConfigString(string(rc))
 
-	err = lh.reload(c, false)
+	err = lh.reload(c, false, nil)
 	require.NoError(t, err)
 }
 
@@ -1013,4 +1013,32 @@ func TestLighthouse_reloadRestartRequired(t *testing.T) {
 	res = c.ReloadConfigString(base + "listen:\n  port: 4243\n")
 	require.NoError(t, res.Err)
 	assert.True(t, res.RestartRequired)
+}
+
+// A relay that doesn't parse is skipped and the rest are used, the reload says one was skipped
+func TestLighthouse_reloadBadRelayFails(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	require.NoError(t, c.LoadString("listen:\n  port: 4242\n"))
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, testCertState(netip.MustParsePrefix("10.128.0.1/24")), nil, nil)
+	require.NoError(t, err)
+
+	res := c.ReloadConfigString("listen:\n  port: 4242\nrelay:\n  relays: [10.128.0.2, nope]\n")
+	require.NoError(t, res.Err)
+	assert.True(t, res.Failed)
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("10.128.0.2")}, lh.GetRelaysForMe())
+}
+
+// An advertise_addrs entry inside our own network is skipped and the rest are used, the reload says one was skipped
+func TestLighthouse_reloadAdvertiseAddrInNetworkFails(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	require.NoError(t, c.LoadString("listen:\n  port: 4242\n"))
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, testCertState(netip.MustParsePrefix("10.128.0.1/24")), nil, nil)
+	require.NoError(t, err)
+
+	res := c.ReloadConfigString("listen:\n  port: 4242\nlighthouse:\n  advertise_addrs: [\"1.2.3.4:4242\", \"10.128.0.5:4242\"]\n")
+	require.NoError(t, res.Err)
+	assert.True(t, res.Failed)
+	assert.Equal(t, []netip.AddrPort{netip.MustParseAddrPort("1.2.3.4:4242")}, lh.GetAdvertiseAddrs())
 }
