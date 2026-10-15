@@ -19,11 +19,11 @@ import (
 // the crypto and then drops packets whose destination has closed. TX uses eight slots and RX six; at listen.batch=64
 // with GRO their buffers take about 9 MiB and 24 MiB per routine. Small-MSS TX arenas can grow.
 //
-// Metrics are registered only for active pipelines. flow.{tx,rx}.batches counts reads handed to the ordered stage.
-// flow.stage.<stage>.q<queue>.busy_ns locates the limiting stage: tx_read, tx_encrypt, tx_send, rx_read, rx_decrypt
-// or rx_write. Take rates; 1e9 ns/s fills a serial stage. These are elapsed times that exclude read syscalls and
-// downstream waits; descheduling inflates them and worker times add up across the pool. Small RX batches sent to the
-// writer include decryption in writer time.
+// Metrics are registered only for active pipelines. flow.{tx,rx}.batches counts reads handed to the ordered stage and
+// flow.tx.inline oversized reads the reader sent itself. flow.stage.<stage>.q<queue>.busy_ns locates the limiting
+// stage: tx_read, tx_encrypt, tx_send, rx_read, rx_decrypt or rx_write. Take rates; 1e9 ns/s fills a serial stage.
+// These are elapsed times that exclude read syscalls and downstream waits; descheduling inflates them and worker
+// times add up across the pool. Small RX batches sent to the writer include decryption in writer time.
 
 // stagedConfig is tun.staged. workers is per routine and direction; zero keeps processing inline.
 type stagedConfig struct {

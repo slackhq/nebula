@@ -14,6 +14,9 @@ import (
 )
 
 const (
+	// ReplayWindow is the build-time receive window and the assumed peer window
+	// for TX reservation credit. Use a power of two; peers must match or have a
+	// larger receive window. The bitmap costs ReplayWindow/8 bytes per tunnel.
 	ReplayWindow = 8192
 
 	// RehandshakeAfterMessages rolls keys inside the AES-GCM data-volume margin (~2^-36 advantage at 64KB frames).
@@ -41,6 +44,7 @@ type ConnectionState struct {
 	peerCert       *cert.CachedCertificate
 	initiator      bool
 	messageCounter atomic.Uint64
+	txBudget       txBudget
 	window         *Bits
 	decryptLock    sync.Mutex
 	writeLock      sync.Mutex

@@ -367,6 +367,18 @@ func stagedName(sc stagedConfig) string {
 	}
 }
 
+// send takes one read through the pipeline, as run does.
+func (p *stagedTx) send(pkts []tio.Packet) {
+	p.handle(pkts, &firewall.ParsedPacket{}, make([]byte, mtu), nil)
+}
+
+// drain waits until every batch p has in flight is on the wire.
+func (p *stagedTx) drain() {
+	for p.inFlight > 0 {
+		p.release(<-p.returned)
+	}
+}
+
 // TestFlowStagedFallback: a tun queue that cannot hand off its buffer, or a conn that cannot hand off its batches,
 // keeps that direction on the inline path.
 func TestFlowStagedFallback(t *testing.T) {

@@ -7,6 +7,8 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -115,20 +117,27 @@ func TestFlowStagedTXExhausted(t *testing.T) {
 	require.Empty(t, sender.conn.captured())
 	require.Equal(t, RejectAfterMessages, ci.messageCounter.Load())
 	require.Equal(t, int64(12), sender.f.messageMetrics.txExhausted.Count())
+	require.Zero(t, ci.txBudget.state.Load())
 }
 
 // TestFlowStagedTXRelay sends staged batches, and an empty read, through a relay: outer and inner layers both verify,
 // in order, and go to the relay.
+// With a tiny MSS, the middle superpacket alone exceeds the tunnels' whole credit: it must be split, not admitted as an
+// unbounded lone batch, with either replay window.
 func TestFlowStagedTXRelay(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-	for _, window := range []uint64{ReplayWindow} {
+	for _, window := range budgetWindows {
 		t.Run(fmt.Sprintf("window=%d", window), func(t *testing.T) {
 			sender, receiver := newFlowTestPair(t, noise.CipherChaChaPoly, stagedOn(2))
 			sender.hostinfo.ConnectionState.window = NewBits(window)
 			receiver.hostinfo.ConnectionState.window = NewBits(window)
-			relayRemote, _, relayPeer := addTestRelay(t, sender, window)
+			relayRemote, relayHI, relayPeer := addTestRelay(t, sender, window)
 			batches, want := flowTestBatches(2, 3, 1, 6)
 			var payload []byte
+			large := flowTCPSuperpacket(0, 9, 45)
+			large.GSO.Size = 1
+			payload = append([]byte(nil), large.Bytes[40:]...)
+			batches = [][]tio.Packet{batches[0], {large}, batches[1]}
 			sender.f.listenIn(newFlowBatchQueue(append(batches, nil)), 0)
 			wire := sender.conn.captured()
 			require.Len(t, wire, len(want)+len(payload))
@@ -156,6 +165,8 @@ func TestFlowStagedTXRelay(t *testing.T) {
 			}
 			require.Equal(t, want, got)
 			require.Equal(t, payload, tiny)
+			require.Zero(t, sender.hostinfo.ConnectionState.txBudget.state.Load())
+			require.Zero(t, relayHI.ConnectionState.txBudget.state.Load())
 		})
 	}
 }
@@ -328,4 +339,69 @@ func TestFlowStagedTXAffinity(t *testing.T) {
 // sendPaths is inline, staged and, with the threshold, adaptive transmit.
 func sendPaths() []stagedConfig {
 	return []stagedConfig{{}, stagedOn(2)}
+}
+
+// requireAccepted checks the receiver accepts every packet of wire in the order given. With several readers the wire
+// order differs from counter order, but every packet must still authenticate and fit within the replay window.
+func requireAccepted(t *testing.T, receiver *flowTestPeer, wire [][]byte) {
+	t.Helper()
+	for _, pkt := range wire {
+		h := &header.H{}
+		require.NoError(t, h.Parse(pkt))
+		_, err := receiver.hostinfo.ConnectionState.Decrypt(receiver.f.l, h.MessageCounter, pkt, make([]byte, 12))
+		require.NoError(t, err, "counter %d", h.MessageCounter)
+	}
+}
+
+// slowConn delays every WriteBatch, then writes to the shared capture.
+type slowConn struct {
+	*flowCaptureConn
+	delay time.Duration
+}
+
+func (c slowConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
+	time.Sleep(c.delay)
+	return c.flowCaptureConn.WriteBatch(bufs, addrs)
+}
+
+// TestFlowTXBudgetManyReaders saturates one tunnel from eight readers, one of them on a slow socket that lets the
+// others overtake it, alongside a burst of unreserved control messages: in the order they reach the wire, every packet
+// is accepted by the receiver's replay window, so none was sent twice or displaced past the window.
+func TestFlowTXBudgetManyReaders(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	for _, window := range budgetWindows {
+		t.Run(fmt.Sprintf("window=%d", window), func(t *testing.T) {
+			sender, receiver := newFlowTestPair(t, noise.CipherChaChaPoly, stagedOn(3))
+			ci := sender.hostinfo.ConnectionState
+			ci.window = NewBits(window)
+			receiver.hostinfo.ConnectionState.window = NewBits(window)
+			sender.f.routines = 8
+			sender.f.writers = append([]udp.Conn{slowConn{sender.conn, 4 * time.Millisecond}}, slices.Repeat(sender.f.writers, 8)...)
+			start := ci.messageCounter.Load()
+			var wg sync.WaitGroup
+			for q := range 8 {
+				wg.Go(func() {
+					batches, _ := flowTestBatches(28, 8, 2, 45)
+					p := newStagedTx(sender.f, newFlowBatchQueue(nil), q)
+					defer p.close()
+					for _, packets := range batches {
+						p.send(packets)
+					}
+				})
+			}
+			// A bounded burst of unreserved control messages uses the documented margin, on writer 8
+			wg.Go(func() {
+				for range 128 {
+					sender.f.sendNoMetrics(header.Test, header.TestRequest, ci, sender.hostinfo, flowTestUnder, []byte("x"), make([]byte, 12), make([]byte, mtu), 8)
+					time.Sleep(100 * time.Microsecond)
+				}
+			})
+			wg.Wait()
+			require.Zero(t, ci.txBudget.state.Load())
+			wire := sender.conn.captured()
+			require.Len(t, wire, 8*28*360+128)
+			require.Equal(t, start+uint64(len(wire)), ci.messageCounter.Load())
+			requireAccepted(t, receiver, wire)
+		})
+	}
 }

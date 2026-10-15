@@ -11,6 +11,7 @@ import (
 	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/overlay/batch"
 	"github.com/slackhq/nebula/overlay/tio"
+	"github.com/slackhq/nebula/udp"
 )
 
 var errFlowSegmentOverrun = errors.New("superpacket has more segments than counters reserved for it")
@@ -142,6 +143,7 @@ type txTunnel struct {
 type txReserver struct {
 	f       *Interface
 	tunnels []txTunnel
+	owner   uint64
 }
 
 // collect runs the filter over pkts and appends the sendable ones to items, tallying each tunnel's counter needs.
@@ -252,8 +254,8 @@ type txSlot struct {
 	buf  []byte
 	sb   *batch.SendBatch
 	done chan struct{}
-	// reserved is how many counters the batch reserved, for the reader's maxReserved budget
-	reserved uint64
+	// reservations hold shared tunnel credit until the flush, including for dropped counters
+	reservations []txTunnel
 }
 
 func (s *txSlot) run(nb []byte) {
@@ -272,6 +274,9 @@ type stagedTx struct {
 	senderCPU int // -1 leaves the sender within its inherited affinity
 	queue     handoffQueue
 	pool      *flowPool
+	// sb and nb are the reader's own, for the sends it does itself
+	sb *batch.SendBatch
+	nb []byte
 
 	// free holds the reader's idle slots. A dispatched slot goes to the workers and, in the same order, to the
 	// sender on ordered; the sender gives it back on returned once it is on the wire.
@@ -280,30 +285,30 @@ type stagedTx struct {
 	returned   chan *txSlot
 	inFlight   int
 	senderDone chan struct{}
-	// reserved is the counters held by in-flight slots, maxReserved this reader's half-window share
-	reserved    uint64
-	maxReserved uint64
 
 	readBusy, encryptBusy, sendBusy metrics.Counter
 	metricBatches                   metrics.Counter
+	metricInline                    metrics.Counter
 }
 
 // newStagedTx needs a queue that hands over whole read batches, the offload (TSO/USO) queue on linux. On any other
 // queue a read is one packet, and staging it would cost a handoff per packet.
 func newStagedTx(f *Interface, queue handoffQueue, q int) *stagedTx {
 	p := &stagedTx{
-		txReserver:    txReserver{f: f, tunnels: make([]txTunnel, 0, 4)},
+		txReserver:    txReserver{f: f, tunnels: make([]txTunnel, 0, 4), owner: txBudgetOwner(q)},
 		q:             q,
 		senderCPU:     -1,
 		queue:         queue,
+		sb:            batch.NewSendBatch(f.writers[q], batch.SendBatchCap, batch.SendBatchCap*(udp.MTU+32)),
+		nb:            make([]byte, 12),
 		ordered:       make(chan *txSlot, stagedTxSlots),
 		returned:      make(chan *txSlot, stagedTxSlots),
 		senderDone:    make(chan struct{}),
-		maxReserved:   (ReplayWindow / 2) / uint64(max(f.routines, 1)),
 		readBusy:      stageBusy("tx_read", q),
 		encryptBusy:   stageBusy("tx_encrypt", q),
 		sendBusy:      stageBusy("tx_send", q),
 		metricBatches: metrics.GetOrRegisterCounter("flow.tx.batches", nil),
+		metricInline:  metrics.GetOrRegisterCounter("flow.tx.inline", nil),
 	}
 	if f.pinThreads {
 		p.cpu = f.threadCPU(q)
@@ -363,21 +368,26 @@ func (p *stagedTx) handle(pkts []tio.Packet, fwPacket *firewall.ParsedPacket, re
 		return stall
 	}
 
-	var total uint64
-	for _, t := range p.tunnels {
-		total += t.n
+	if p.oversized() {
+		p.metricInline.Inc(1)
+		stall += p.sendLarge(items)
+		slot.items = items[:0]
+		p.free = append(p.free, slot)
+		return stall
 	}
-	// Over this reader's share of the window, wait for its oldest batches to go out first. A lone batch always goes.
-	if p.inFlight > 0 && p.reserved+total > p.maxReserved {
-		t := time.Now()
-		for p.inFlight > 0 && p.reserved+total > p.maxReserved {
-			p.release(<-p.returned)
-		}
-		stall += time.Since(t)
+	d, ok := p.waitBudget()
+	stall += d
+	if !ok {
+		clear(items)
+		slot.items = items[:0]
+		p.free = append(p.free, slot)
+		return stall
 	}
+	slot.reservations = append(slot.reservations[:0], p.tunnels...)
 	items = p.reserve(items)
 	slot.items = items
 	if len(items) == 0 {
+		slot.releaseBudget()
 		p.free = append(p.free, slot)
 		return stall
 	}
@@ -385,8 +395,6 @@ func (p *stagedTx) handle(pkts []tio.Packet, fwPacket *firewall.ParsedPacket, re
 	// The packets now live in the slot, and the queue reads into the slot's old buffer
 	slot.buf = p.queue.SwapRxBuf(slot.buf)
 
-	slot.reserved = total
-	p.reserved += total
 	p.inFlight++
 	p.metricBatches.Inc(1)
 	// Counters were reserved above on this goroutine and the slot takes its place in the sender's order right here,
@@ -422,9 +430,17 @@ func (p *stagedTx) reap() {
 	}
 }
 
+// flushOldest waits for the oldest batch in flight to reach the wire and takes its slot back. It reports false when
+// nothing is in flight.
+func (p *stagedTx) flushOldest() bool {
+	if p.inFlight == 0 {
+		return false
+	}
+	p.release(<-p.returned)
+	return true
+}
+
 func (p *stagedTx) release(s *txSlot) {
-	p.reserved -= s.reserved
-	s.reserved = 0
 	p.inFlight--
 	p.free = append(p.free, s)
 }
@@ -444,6 +460,7 @@ func (p *stagedTx) sender() {
 		} else {
 			p.f.flushSendBatch(s.sb, p.q)
 		}
+		s.releaseBudget()
 		p.sendBusy.Inc(int64(time.Since(t)))
 		clear(s.items)
 		s.items = s.items[:0]
