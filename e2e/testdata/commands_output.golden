@@ -548,6 +548,72 @@ logout - Ends the current session
 $ logout -pretty -h
 logout - Ends the current session
 
+$ not-a-command 10.222.0.9
+did not understand: not-a-command
+Available commands:
+change-remote - Changes the remote address used in the tunnel for the provided vpn addr
+close-tunnel - Closes a tunnel for the provided vpn addr
+create-tunnel - Creates a tunnel for the provided vpn address
+device-info - Prints information about the network device.
+help - prints available commands or help <command> for specific usage info
+list-hostmap - List all known previously connected hosts
+list-lighthouse-addrmap - List all lighthouse map entries
+list-pending-hostmap - List all handshaking hosts
+log-format - Gets or sets the current log format
+log-level - Gets or sets the current log level
+logout - Ends the current session
+print-cert - Prints the current certificate being used or the certificate for the provided vpn addr
+print-relays - Prints json details about all relay info
+print-tunnel - Prints json details about a tunnel for the provided vpn addr
+query-lighthouse - Query the lighthouses for the provided vpn address
+reload - Reloads configuration from disk, same as sending HUP to the process
+version - Prints the currently running version of nebula
+
+
+$ not-a-command -json 10.222.0.9
+did not understand: not-a-command
+Available commands:
+change-remote - Changes the remote address used in the tunnel for the provided vpn addr
+close-tunnel - Closes a tunnel for the provided vpn addr
+create-tunnel - Creates a tunnel for the provided vpn address
+device-info - Prints information about the network device.
+help - prints available commands or help <command> for specific usage info
+list-hostmap - List all known previously connected hosts
+list-lighthouse-addrmap - List all lighthouse map entries
+list-pending-hostmap - List all handshaking hosts
+log-format - Gets or sets the current log format
+log-level - Gets or sets the current log level
+logout - Ends the current session
+print-cert - Prints the current certificate being used or the certificate for the provided vpn addr
+print-relays - Prints json details about all relay info
+print-tunnel - Prints json details about a tunnel for the provided vpn addr
+query-lighthouse - Query the lighthouses for the provided vpn address
+reload - Reloads configuration from disk, same as sending HUP to the process
+version - Prints the currently running version of nebula
+
+
+$ not-a-command -pretty 10.222.0.9
+did not understand: not-a-command
+Available commands:
+change-remote - Changes the remote address used in the tunnel for the provided vpn addr
+close-tunnel - Closes a tunnel for the provided vpn addr
+create-tunnel - Creates a tunnel for the provided vpn address
+device-info - Prints information about the network device.
+help - prints available commands or help <command> for specific usage info
+list-hostmap - List all known previously connected hosts
+list-lighthouse-addrmap - List all lighthouse map entries
+list-pending-hostmap - List all handshaking hosts
+log-format - Gets or sets the current log format
+log-level - Gets or sets the current log level
+logout - Ends the current session
+print-cert - Prints the current certificate being used or the certificate for the provided vpn addr
+print-relays - Prints json details about all relay info
+print-tunnel - Prints json details about a tunnel for the provided vpn addr
+query-lighthouse - Query the lighthouses for the provided vpn address
+reload - Reloads configuration from disk, same as sending HUP to the process
+version - Prints the currently running version of nebula
+
+
 $ reload
 Reloading config
 Config reload failed, the new config did not load: no config files found at 

@@ -72,7 +72,7 @@ func TestCommandOutput(t *testing.T) {
 
 	run := func(args ...string) string {
 		buf := &bytes.Buffer{}
-		_ = reg.DispatchArgs(args, strings.Join(args, " "), commands.NewStringWriter(buf))
+		_ = reg.DispatchArgs(args, commands.NewStringWriter(buf))
 		return buf.String()
 	}
 
@@ -126,6 +126,7 @@ func TestCommandOutput(t *testing.T) {
 		{"help", []string{"print-cert"}},
 		{"help", []string{"logout"}},
 		{"logout", []string{"-h"}},
+		{"not-a-command", []string{"10.222.0.9"}},
 		// reload is last so that whatever a reload does to the daemon cannot leak into an
 		// earlier case. In this harness it fails: the config was loaded from a string and
 		// has no path to re-read, which is what the recorded result says.

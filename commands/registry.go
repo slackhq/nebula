@@ -100,13 +100,11 @@ func (r *Registry) Dispatch(line string, w StringWriter) error {
 		return err
 	}
 
-	return r.DispatchArgs(args, line, w)
+	return r.DispatchArgs(args, w)
 }
 
-// DispatchArgs runs an already tokenized command line. orig is what the user typed,
-// used only for the "did not understand" message; callers that have no raw line may
-// pass "" and the joined args are used instead. The error is as for Dispatch.
-func (r *Registry) DispatchArgs(args []string, orig string, w StringWriter) error {
+// DispatchArgs runs an already tokenized command line. The error is as for Dispatch.
+func (r *Registry) DispatchArgs(args []string, w StringWriter) error {
 	if len(args) == 0 {
 		r.dumpCommands(w)
 		return nil
@@ -114,11 +112,8 @@ func (r *Registry) DispatchArgs(args []string, orig string, w StringWriter) erro
 
 	c := r.Get(Name(args[0]))
 	if c == nil {
-		if orig == "" {
-			orig = strings.Join(args, " ")
-		}
-
-		if err := w.WriteLine(fmt.Sprintf("did not understand: %s", orig)); err != nil {
+		// Only the first word was looked up, so only it is named.
+		if err := w.WriteLine(fmt.Sprintf("did not understand: %s", args[0])); err != nil {
 			return err
 		}
 

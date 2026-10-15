@@ -46,7 +46,7 @@ func TestFlagUsageGoesToTheWriter(t *testing.T) {
 	})
 
 	merged := &bytes.Buffer{}
-	require.Error(t, r.DispatchArgs([]string{"emit", "-nope"}, "", NewStringWriter(merged)))
+	require.Error(t, r.DispatchArgs([]string{"emit", "-nope"}, NewStringWriter(merged)))
 	assert.Contains(t, merged.String(), "flag provided but not defined")
 }
 
@@ -140,4 +140,12 @@ func TestDispatchReturnsTheCommandsError(t *testing.T) {
 	require.EqualError(t, r.Dispatch("fails", NewStringWriter(out)), "boom")
 	assert.Error(t, r.Dispatch(`fails "unterminated`, NewStringWriter(out)))
 	assert.Empty(t, out.String())
+}
+
+// TestUnknownCommandNamesTheWord: only the first word is looked up, so only it is
+// reported, followed by the command list.
+func TestUnknownCommandNamesTheWord(t *testing.T) {
+	out := &bytes.Buffer{}
+	require.NoError(t, testRegistry().Dispatch(`nope "with args"`, NewStringWriter(out)))
+	assert.True(t, strings.HasPrefix(out.String(), "did not understand: nope\nAvailable commands:\n"), out.String())
 }
