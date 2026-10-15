@@ -65,10 +65,10 @@ func TestReloadFirewall_CertUnsafeNetworksChanged(t *testing.T) {
 	pki.cs.Store(&CertState{v2Cert: c2, initiatingVersion: cert.Version2})
 
 	// Reload with the same YAML so HasChanged("firewall") reports false.
-	require.NoError(t, cfg.ReloadConfigString(rawYAML))
+	require.NoError(t, cfg.ReloadConfigString(rawYAML).Err)
 	require.False(t, cfg.HasChanged("firewall"))
 
-	f.reloadFirewall(cfg)
+	f.reloadFirewall(cfg, nil)
 
 	assert.NotSame(t, fw, f.firewall, "firewall pointer should have been replaced")
 	assert.Equal(t, newUnsafe, f.firewall.unsafeNetworks)
@@ -113,8 +113,30 @@ func TestReloadFirewall_NoChange(t *testing.T) {
 		l:        l,
 	}
 
-	require.NoError(t, cfg.ReloadConfigString(rawYAML))
-	f.reloadFirewall(cfg)
+	require.NoError(t, cfg.ReloadConfigString(rawYAML).Err)
+	f.reloadFirewall(cfg, nil)
 
 	assert.Same(t, fw, f.firewall, "firewall should not have been replaced")
+}
+
+// Rules that don't parse keep the old firewall, and the reload says it could not apply them
+func TestReloadFirewall_BadRulesFailTheReload(t *testing.T) {
+	l := test.NewLogger()
+	pki := &PKI{}
+	pki.cs.Store(&CertState{v2Cert: &dummyCert{version: cert.Version2, networks: []netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")}}, initiatingVersion: cert.Version2})
+
+	rules := func(proto string) string {
+		return "firewall:\n  outbound:\n    - port: any\n      proto: any\n      host: any\n  inbound:\n    - port: any\n      proto: " + proto + "\n      host: any\n"
+	}
+	cfg := config.NewC(l)
+	require.NoError(t, cfg.LoadString(rules("any")))
+	fw, err := NewFirewallFromConfig(l, pki.getCertState(), cfg)
+	require.NoError(t, err)
+	f := &Interface{pki: pki, firewall: fw, l: l}
+	cfg.RegisterReloadCallback(f.reloadFirewall)
+
+	res := cfg.ReloadConfigString(rules("nope"))
+	require.NoError(t, res.Err)
+	assert.True(t, res.Failed)
+	assert.Same(t, fw, f.firewall)
 }

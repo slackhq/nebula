@@ -13,6 +13,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// watchesNetworkChanges is true where Start does anything
+const watchesNetworkChanges = true
+
 const (
 	// netChangeSettleWindow is how long we keep swallowing routing messages after the first interesting one. A
 	// single network change is never a single message, it is a burst: the link drops, addresses go away, new ones

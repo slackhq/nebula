@@ -317,7 +317,7 @@ func NewHostMapFromConfig(l *slog.Logger, c *config.C) *HostMap {
 	hm := newHostMap(l)
 
 	hm.reload(c, true)
-	c.RegisterReloadCallback(func(c *config.C) {
+	c.RegisterReloadCallback(func(c *config.C, _ *config.Reload) {
 		hm.reload(c, false)
 	})
 

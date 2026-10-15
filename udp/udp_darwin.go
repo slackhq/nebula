@@ -171,7 +171,7 @@ func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 	}
 }
 
-func (u *StdConn) ReloadConfig(c *config.C) {
+func (u *StdConn) ReloadConfig(c *config.C, r *config.Reload) {
 	// TODO
 }
 

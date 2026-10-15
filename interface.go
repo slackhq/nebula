@@ -509,10 +509,11 @@ func (f *Interface) flushSendBatch(sb *batch.SendBatch, q int) {
 
 func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
 	c.RegisterReloadCallback(f.reloadFirewall)
-	c.RegisterReloadCallback(f.reloadSendRecvError)
-	c.RegisterReloadCallback(f.reloadAcceptRecvError)
-	c.RegisterReloadCallback(f.reloadDisconnectInvalid)
-	c.RegisterReloadCallback(f.reloadMisc)
+	for _, reload := range []func(*config.C){
+		f.reloadSendRecvError, f.reloadAcceptRecvError, f.reloadDisconnectInvalid, f.reloadMisc,
+	} {
+		c.RegisterReloadCallback(func(c *config.C, _ *config.Reload) { reload(c) })
+	}
 
 	for _, udpConn := range f.writers {
 		c.RegisterReloadCallback(udpConn.ReloadConfig)
@@ -529,7 +530,7 @@ func (f *Interface) reloadDisconnectInvalid(c *config.C) {
 	}
 }
 
-func (f *Interface) reloadFirewall(c *config.C) {
+func (f *Interface) reloadFirewall(c *config.C, r *config.Reload) {
 	cs := f.pki.getCertState()
 	curCert := cs.getCertificate(cert.Version2)
 	if curCert == nil {
@@ -548,6 +549,7 @@ func (f *Interface) reloadFirewall(c *config.C) {
 	fw, err := NewFirewallFromConfig(f.l, cs, c)
 	if err != nil {
 		f.l.Error("Error while creating firewall during reload", "error", err)
+		r.Failed()
 		return
 	}
 

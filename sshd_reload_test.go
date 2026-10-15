@@ -130,7 +130,7 @@ func TestSSHDReload_UnchangedKeepsSessions(t *testing.T) {
 	h := newSSHDReloadHarness(t)
 	client, _ := h.connect(t)
 
-	require.NoError(t, h.c.ReloadConfigString(h.config()+"punchy:\n  punch: true\n"))
+	require.NoError(t, h.c.ReloadConfigString(h.config()+"punchy:\n  punch: true\n").Err)
 	assert.False(t, dropped(client, 500*time.Millisecond), "an unchanged sshd was restarted")
 }
 
@@ -139,7 +139,7 @@ func TestSSHDReload_ChangedConfigRestarts(t *testing.T) {
 	client, _ := h.connect(t)
 
 	h.extra = "  trusted_cas: []\n"
-	require.NoError(t, h.c.ReloadConfigString(h.config()))
+	require.NoError(t, h.c.ReloadConfigString(h.config()).Err)
 	assert.True(t, dropped(client, 5*time.Second), "a changed sshd config was not applied")
 	require.Eventually(t, h.server.Running, 5*time.Second, 10*time.Millisecond)
 	h.connect(t)
@@ -152,7 +152,7 @@ func TestSSHDReload_ChangedHostKeyFile(t *testing.T) {
 	client, _ := h.connect(t)
 
 	want := h.writeHostKey(t, newEd25519Key(t))
-	require.NoError(t, h.c.ReloadConfigString(h.config()))
+	require.NoError(t, h.c.ReloadConfigString(h.config()).Err)
 	_, got := h.connect(t)
 	assert.Equal(t, want.Marshal(), got.Marshal(), "a new host key was not applied")
 	assert.False(t, dropped(client, 500*time.Millisecond), "a new host key restarted sshd")
@@ -166,7 +166,7 @@ func TestSSHDReload_HostKeyAlgorithmChange(t *testing.T) {
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
 	want := h.writeHostKey(t, rsaKey)
-	require.NoError(t, h.c.ReloadConfigString(h.config()))
+	require.NoError(t, h.c.ReloadConfigString(h.config()).Err)
 
 	_, got := h.connect(t)
 	assert.Equal(t, want.Marshal(), got.Marshal())
@@ -180,7 +180,7 @@ func TestSSHDReload_NotRunningRestarts(t *testing.T) {
 	h.server.Stop()
 	require.Eventually(t, func() bool { return !h.server.Running() }, 5*time.Second, 10*time.Millisecond)
 
-	require.NoError(t, h.c.ReloadConfigString(h.config()))
+	require.NoError(t, h.c.ReloadConfigString(h.config()).Err)
 	require.Eventually(t, h.server.Running, 5*time.Second, 10*time.Millisecond)
 	h.connect(t)
 }
@@ -191,6 +191,6 @@ func TestSSHDReload_BadHostKeyFileStops(t *testing.T) {
 	h.connect(t)
 
 	require.NoError(t, os.WriteFile(h.keyFile, []byte("not a key"), 0o600))
-	require.NoError(t, h.c.ReloadConfigString(h.config()))
+	assert.True(t, h.c.ReloadConfigString(h.config()).Failed)
 	require.Eventually(t, func() bool { return !h.server.Running() }, 5*time.Second, 10*time.Millisecond)
 }

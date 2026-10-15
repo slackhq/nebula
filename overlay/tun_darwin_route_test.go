@@ -72,8 +72,8 @@ func TestTunRoutesBeforeActivate(t *testing.T) {
 	}}
 	tn.Routes.Store(&routes)
 
-	assert.NoError(t, tn.addRoutes(true))
-	assert.NoError(t, tn.removeRoutes(routes))
+	assert.NoError(t, tn.addRoutes(true, nil))
+	assert.NoError(t, tn.removeRoutes(routes, nil))
 }
 
 // A tun.routes entry with no via is never installed, so removing it must not delete a route for the same cidr that
@@ -96,7 +96,9 @@ func TestTunReloadLeavesRoutesItNeverInstalled(t *testing.T) {
 	t.Cleanup(func() { _ = tn.Close() })
 	require.NoError(t, tn.Activate())
 
-	require.NoError(t, c.ReloadConfigString("tun: {}\n"))
+	res := c.ReloadConfigString("tun: {}\n")
+	require.NoError(t, res.Err)
+	assert.False(t, res.Failed, "removing a route we never installed failed the reload")
 	msgs, err := fetchRoutes()
 	require.NoError(t, err)
 	assert.Equal(t, lo0.Index, routeInterfaceIn(msgs, netip.MustParsePrefix(cidr)))

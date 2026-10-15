@@ -28,10 +28,11 @@ func NewRelayManager(ctx context.Context, l *slog.Logger, hostmap *HostMap, c *c
 		hostmap: hostmap,
 	}
 	rm.reload(c, true)
-	c.RegisterReloadCallback(func(c *config.C) {
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
 		err := rm.reload(c, false)
 		if err != nil {
 			rm.l.Error("Failed to reload relay_manager", "error", err)
+			r.Failed()
 		}
 	})
 	return rm

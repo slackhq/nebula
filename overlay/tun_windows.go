@@ -84,7 +84,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*w
 		l:               l,
 	}
 
-	err = t.reload(c, true)
+	err = t.reload(c, true, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -108,17 +108,20 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*w
 	// Disable registration before Activate assigns addresses and triggers it.
 	disableDNSRegistration(l, *guid)
 
-	c.RegisterReloadCallback(func(c *config.C) {
-		err := t.reload(c, false)
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		r.RestartRequiredIfChanged("tun.dev", "tun.mtu", "tun.network_category")
+		r.RestartRequiredIfChanged(interfaceBypassKeys...)
+		err := t.reload(c, false, r)
 		if err != nil {
 			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
+			r.Failed()
 		}
 	})
 
 	return t, nil
 }
 
-func (t *winTun) reload(c *config.C, initial bool) error {
+func (t *winTun) reload(c *config.C, initial bool, r *config.Reload) error {
 	change, routes, err := getAllRoutesFromConfig(t.l, c, t.vpnNetworks, initial)
 	if err != nil {
 		return err
@@ -139,16 +142,18 @@ func (t *winTun) reload(c *config.C, initial bool) error {
 
 	if !initial {
 		// Remove first, if the system removes a wanted route hopefully it will be re-added next
-		err := t.removeRoutes(findRemovedSystemRoutes(routes, *oldRoutes))
+		err := t.removeRoutes(findRemovedSystemRoutes(routes, *oldRoutes), r)
 		if err != nil {
 			util.LogWithContextIfNeeded("Failed to remove routes", err, t.l)
+			r.Failed()
 		}
 
 		// Ensure any routes we actually want are installed
-		err = t.addRoutes(true)
+		err = t.addRoutes(true, r)
 		if err != nil {
 			// Catch any stray logs
 			util.LogWithContextIfNeeded("Failed to add routes", err, t.l)
+			r.Failed()
 		}
 	}
 
@@ -163,7 +168,7 @@ func (t *winTun) Activate() error {
 		return fmt.Errorf("failed to set address: %w", err)
 	}
 
-	err = t.addRoutes(false)
+	err = t.addRoutes(false, nil)
 	if err != nil {
 		return err
 	}
@@ -182,7 +187,7 @@ func (t *winTun) Activate() error {
 	return nil
 }
 
-func (t *winTun) addRoutes(logErrors bool) error {
+func (t *winTun) addRoutes(logErrors bool, rl *config.Reload) error {
 	luid := winipcfg.LUID(t.tun.LUID())
 	routes := *t.Routes.Load()
 	foundDefault4 := false
@@ -213,6 +218,7 @@ func (t *winTun) addRoutes(logErrors bool) error {
 			retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
 			if logErrors {
 				retErr.Log(t.l)
+				rl.Failed()
 				continue
 			} else {
 				return retErr
@@ -274,7 +280,7 @@ func (t *winTun) setMTU(luid winipcfg.LUID, foundDefault4, carriesV6 bool) error
 	return nil
 }
 
-func (t *winTun) removeRoutes(routes []Route) error {
+func (t *winTun) removeRoutes(routes []Route, rl *config.Reload) error {
 	luid := winipcfg.LUID(t.tun.LUID())
 
 	for _, r := range routes {
@@ -284,8 +290,12 @@ func (t *winTun) removeRoutes(routes []Route) error {
 
 		// See comment on luid.AddRoute
 		err := luid.DeleteRoute(r.Cidr, unspecifiedNextHop(r.Cidr))
-		if err != nil {
+		if errors.Is(err, windows.ERROR_NOT_FOUND) {
+			// Already gone, which is what we wanted
+			t.l.Info("Route was already removed", "route", r)
+		} else if err != nil {
 			t.l.Error("Failed to remove route", "error", err, "route", r)
+			rl.Failed()
 		} else {
 			t.l.Info("Removed route", "route", r)
 		}

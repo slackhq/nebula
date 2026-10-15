@@ -58,7 +58,9 @@ type sshDeviceInfoFlags struct {
 }
 
 func wireSSHReload(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) {
-	c.RegisterReloadCallback(func(c *config.C) {
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		// sshd.sandbox_dir is read once, when the commands are attached
+		r.RestartRequiredIfChanged("sshd.sandbox_dir")
 		if c.GetBool("sshd.enabled", false) {
 			// Restarting the server drops every open session, the one that asked for this reload included. Only restart
 			// when it isn't running or its config changed. The host key file can change under the same config, new
@@ -71,6 +73,7 @@ func wireSSHReload(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) {
 				if err != nil {
 					l.Error("Failed to reconfigure the sshd", "error", err)
 					ssh.Stop()
+					r.Failed()
 				}
 				return
 			}
@@ -78,6 +81,7 @@ func wireSSHReload(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) {
 			if err != nil {
 				l.Error("Failed to reconfigure the sshd", "error", err)
 				ssh.Stop()
+				r.Failed()
 			}
 			if sshRun != nil {
 				go sshRun()
@@ -276,7 +280,7 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 		Name:             "reload",
 		ShortDescription: "Reloads configuration from disk, same as sending HUP to the process",
 		Callback: func(fs any, a []string, w sshd.StringWriter) error {
-			return sshReload(c, w)
+			return sshReload(l, c, w)
 		},
 	})
 
@@ -1075,8 +1079,13 @@ func sshDeviceInfo(ifce *Interface, fs any, w sshd.StringWriter) error {
 	}
 }
 
-func sshReload(c *config.C, w sshd.StringWriter) error {
-	err := w.WriteLine("Reloading config")
-	c.ReloadConfig()
-	return err
+// sshReload reloads the config and writes the result to the client. It reloads even if the client has gone away
+func sshReload(l *slog.Logger, c *config.C, w sshd.StringWriter) error {
+	writeErr := w.WriteLine("Reloading config")
+	res := c.ReloadConfig()
+	res.Log(l)
+	if err := w.WriteLine(res.String()); writeErr == nil {
+		writeErr = err
+	}
+	return writeErr
 }

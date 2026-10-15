@@ -143,13 +143,16 @@ func NewLightHouseFromConfig(ctx context.Context, l *slog.Logger, c *config.C, c
 		return nil, err
 	}
 
-	c.RegisterReloadCallback(func(c *config.C) {
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		r.RestartRequiredIfChanged("lighthouse.am_lighthouse", "listen.port", "handshakes.query_buffer", "stats.lighthouse_metrics")
 		err := h.reload(c, false)
 		switch v := err.(type) {
 		case *util.ContextualError:
 			v.Log(l)
+			r.Failed()
 		case error:
 			l.Error("failed to reload lighthouse", "error", err)
+			r.Failed()
 		}
 	})
 

@@ -50,15 +50,19 @@ type CertState struct {
 	myVpnBroadcastAddrsTable *bart.Lite
 }
 
+// errCertNeedsRestart marks a new cert that is refused on reload because only a restart can apply it
+var errCertNeedsRestart = errors.New("a restart is required to use the new cert")
+
 func NewPKIFromConfig(l *slog.Logger, c *config.C) (*PKI, error) {
 	pki := &PKI{l: l}
-	err := pki.reload(c, true)
+	err := pki.reload(c, true, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	c.RegisterReloadCallback(func(c *config.C) {
-		rErr := pki.reload(c, false)
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		r.RestartRequiredIfChanged("cipher")
+		rErr := pki.reload(c, false, r)
 		if rErr != nil {
 			util.LogWithContextIfNeeded("Failed to reload PKI from config", rErr, l)
 		}
@@ -75,13 +79,29 @@ func (p *PKI) getCertState() *CertState {
 	return p.cs.Load()
 }
 
-func (p *PKI) reload(c *config.C, initial bool) error {
+// r is nil on the initial load
+func (p *PKI) reload(c *config.C, initial bool, r *config.Reload) error {
+	before := p.cs.Load()
 	err := p.reloadCerts(c, initial)
 	if err != nil {
 		if initial {
 			return err
 		}
 		err.Log(p.l)
+		if errors.Is(err, errCertNeedsRestart) {
+			r.RestartRequired()
+		} else {
+			r.Failed()
+		}
+	} else if !initial {
+		// A cert for a version we weren't running is accepted without comparing its networks to ours. The tun and the
+		// lighthouse keep the networks they started with
+		after := p.cs.Load()
+		if !slices.Equal(before.myVpnNetworks, after.myVpnNetworks) {
+			p.l.Warn("The new cert changes our networks, a restart is required to use them",
+				"old_networks", before.myVpnNetworks, "new_networks", after.myVpnNetworks)
+			r.RestartRequired()
+		}
 	}
 
 	err = p.reloadCAPool(c)
@@ -90,6 +110,7 @@ func (p *PKI) reload(c *config.C, initial bool) error {
 			return err
 		}
 		err.Log(p.l)
+		r.Failed()
 	}
 
 	return nil
@@ -132,7 +153,7 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 					return util.NewContextualError(
 						"Networks in new cert was different from old",
 						m{"new_networks": newState.v1Cert.Networks(), "old_networks": currentState.v1Cert.Networks(), "cert_version": cert.Version1},
-						nil,
+						errCertNeedsRestart,
 					)
 				}
 
@@ -140,7 +161,7 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 					return util.NewContextualError(
 						"Curve in new v1 cert was different from old",
 						m{"new_curve": newState.v1Cert.Curve(), "old_curve": currentState.v1Cert.Curve(), "cert_version": cert.Version1},
-						nil,
+						errCertNeedsRestart,
 					)
 				}
 			}
@@ -155,7 +176,7 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 					return util.NewContextualError(
 						"Networks in new cert was different from old",
 						m{"new_networks": newState.v2Cert.Networks(), "old_networks": currentState.v2Cert.Networks(), "cert_version": cert.Version2},
-						nil,
+						errCertNeedsRestart,
 					)
 				}
 
@@ -163,7 +184,7 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 					return util.NewContextualError(
 						"Curve in new cert was different from old",
 						m{"new_curve": newState.v2Cert.Curve(), "old_curve": currentState.v2Cert.Curve(), "cert_version": cert.Version2},
-						nil,
+						errCertNeedsRestart,
 					)
 				}
 			}
@@ -178,7 +199,7 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 				return util.NewContextualError(
 					"Removing a V2 cert is not permitted unless it has identical networks to the new V1 cert",
 					m{"new_v1_networks": newState.v1Cert.Networks(), "old_v2_networks": currentState.v2Cert.Networks()},
-					nil,
+					errCertNeedsRestart,
 				)
 			}
 		}

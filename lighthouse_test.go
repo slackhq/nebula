@@ -87,15 +87,15 @@ func TestReloadLighthouseInterval(t *testing.T) {
 	lh.ifce = &mockEncWriter{}
 
 	// The first one routine is kicked off by main.go currently, lets make sure that one dies
-	require.NoError(t, c.ReloadConfigString("lighthouse:\n  interval: 5"))
+	require.NoError(t, c.ReloadConfigString("lighthouse:\n  interval: 5").Err)
 	assert.Equal(t, int64(5), lh.interval.Load())
 
 	// Subsequent calls are killed off by the LightHouse.Reload function
-	require.NoError(t, c.ReloadConfigString("lighthouse:\n  interval: 10"))
+	require.NoError(t, c.ReloadConfigString("lighthouse:\n  interval: 10").Err)
 	assert.Equal(t, int64(10), lh.interval.Load())
 
 	// If this completes then nothing is stealing our reload routine
-	require.NoError(t, c.ReloadConfigString("lighthouse:\n  interval: 11"))
+	require.NoError(t, c.ReloadConfigString("lighthouse:\n  interval: 11").Err)
 	assert.Equal(t, int64(11), lh.interval.Load())
 }
 
@@ -334,7 +334,7 @@ func TestLighthouse_reloadStaticHostMap(t *testing.T) {
 	}
 	rc, err := yaml.Marshal(nc)
 	require.NoError(t, err)
-	require.NoError(t, c.ReloadConfigString(string(rc)))
+	require.NoError(t, c.ReloadConfigString(string(rc)).Err)
 
 	rl := lh.Query(staticHost)
 	require.NotNil(t, rl)
@@ -350,7 +350,7 @@ func TestLighthouse_reloadStaticHostMap(t *testing.T) {
 	}
 	rc, err = yaml.Marshal(nc)
 	require.NoError(t, err)
-	require.NoError(t, c.ReloadConfigString(string(rc)))
+	require.NoError(t, c.ReloadConfigString(string(rc)).Err)
 
 	rl = lh.Query(staticHost)
 	require.NotNil(t, rl)
@@ -358,7 +358,7 @@ func TestLighthouse_reloadStaticHostMap(t *testing.T) {
 	assert.Equal(t, []netip.AddrPort{netip.MustParseAddrPort("1.1.1.1:4242")}, rl.CopyAddrs([]netip.Prefix{}))
 
 	// Reload with the same config. An unchanged entry must not duplicate.
-	require.NoError(t, c.ReloadConfigString(string(rc)))
+	require.NoError(t, c.ReloadConfigString(string(rc)).Err)
 
 	rl = lh.Query(staticHost)
 	require.NotNil(t, rl)
@@ -373,7 +373,7 @@ func TestLighthouse_reloadStaticHostMap(t *testing.T) {
 	}
 	rc, err = yaml.Marshal(nc)
 	require.NoError(t, err)
-	require.NoError(t, c.ReloadConfigString(string(rc)))
+	require.NoError(t, c.ReloadConfigString(string(rc)).Err)
 
 	// Add a second host alongside the first. Both should be present, neither duplicated.
 	nc = map[string]any{
@@ -384,7 +384,7 @@ func TestLighthouse_reloadStaticHostMap(t *testing.T) {
 	}
 	rc, err = yaml.Marshal(nc)
 	require.NoError(t, err)
-	require.NoError(t, c.ReloadConfigString(string(rc)))
+	require.NoError(t, c.ReloadConfigString(string(rc)).Err)
 
 	rl = lh.Query(staticHost)
 	require.NotNil(t, rl)
@@ -406,7 +406,7 @@ func TestLighthouse_reloadStaticHostMap(t *testing.T) {
 	}
 	rc, err = yaml.Marshal(nc)
 	require.NoError(t, err)
-	require.NoError(t, c.ReloadConfigString(string(rc)))
+	require.NoError(t, c.ReloadConfigString(string(rc)).Err)
 
 	_, isStatic := lh.GetStaticHostList()[staticHost]
 	assert.False(t, isStatic)
@@ -966,13 +966,13 @@ func TestLighthouse_reloadRelaysTriggersUpdate(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, lh.updateTrigger)
 
-	require.NoError(t, c.ReloadConfigString(base+"relay:\n  relays: [10.128.0.6]\n"))
+	require.NoError(t, c.ReloadConfigString(base+"relay:\n  relays: [10.128.0.6]\n").Err)
 	assert.Equal(t, []netip.Addr{netip.MustParseAddr("10.128.0.6")}, lh.GetRelaysForMe())
 	require.Len(t, lh.updateTrigger, 1)
 	<-lh.updateTrigger
 
 	// The config changed but what we advertise did not, a bad entry is skipped
-	require.NoError(t, c.ReloadConfigString(base+"relay:\n  relays: [10.128.0.6, nope]\n"))
+	require.NoError(t, c.ReloadConfigString(base+"relay:\n  relays: [10.128.0.6, nope]\n").Err)
 	assert.Equal(t, []netip.Addr{netip.MustParseAddr("10.128.0.6")}, lh.GetRelaysForMe())
 	assert.Empty(t, lh.updateTrigger)
 }
@@ -988,12 +988,29 @@ func TestLighthouse_reloadAmRelayAlone(t *testing.T) {
 	assert.Equal(t, []netip.Addr{netip.MustParseAddr("10.128.0.5")}, lh.GetRelaysForMe())
 
 	// Relays aren't allowed to have relays, flipping am_relay alone must drop them and tell the lighthouses
-	require.NoError(t, c.ReloadConfigString(base+"  am_relay: true\n"))
+	require.NoError(t, c.ReloadConfigString(base+"  am_relay: true\n").Err)
 	assert.Empty(t, lh.GetRelaysForMe())
 	require.Len(t, lh.updateTrigger, 1)
 	<-lh.updateTrigger
 
-	require.NoError(t, c.ReloadConfigString(base+"  am_relay: false\n"))
+	require.NoError(t, c.ReloadConfigString(base+"  am_relay: false\n").Err)
 	assert.Equal(t, []netip.Addr{netip.MustParseAddr("10.128.0.5")}, lh.GetRelaysForMe())
 	require.Len(t, lh.updateTrigger, 1)
+}
+
+func TestLighthouse_reloadRestartRequired(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	base := "lighthouse:\n  am_lighthouse: true\n"
+	require.NoError(t, c.LoadString(base+"listen:\n  port: 4242\n"))
+
+	_, err := NewLightHouseFromConfig(t.Context(), l, c, testCertState(netip.MustParsePrefix("10.128.0.1/24")), nil, nil)
+	require.NoError(t, err)
+
+	res := c.ReloadConfigString(base + "listen:\n  port: 4242\n")
+	require.NoError(t, res.Err)
+	assert.False(t, res.RestartRequired)
+	res = c.ReloadConfigString(base + "listen:\n  port: 4243\n")
+	require.NoError(t, res.Err)
+	assert.True(t, res.RestartRequired)
 }

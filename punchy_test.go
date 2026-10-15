@@ -76,7 +76,7 @@ punchy:
   punch: true
   delay: 10m
   respond: true
-`))
+`).Err)
 	p.reload(c, false)
 	assert.True(t, p.punch.Load())
 	assert.Equal(t, newDelay, time.Duration(p.delay.Load()))
@@ -170,7 +170,7 @@ func TestPunchy_LogFormat_ReloadPunch(t *testing.T) {
 	NewPunchyFromConfig(l, c, nil)
 	hook.entries = nil
 
-	require.NoError(t, c.ReloadConfigString(`punchy: {punch: true}`))
+	require.NoError(t, c.ReloadConfigString(`punchy: {punch: true}`).Err)
 
 	entry := findEntry(t, hook.entries, "punchy.punch changed")
 	assert.Equal(t, slog.LevelInfo, entry.Level)
@@ -184,7 +184,7 @@ func TestPunchy_LogFormat_ReloadRespond(t *testing.T) {
 	NewPunchyFromConfig(l, c, nil)
 	hook.entries = nil
 
-	require.NoError(t, c.ReloadConfigString(`punchy: {respond: true}`))
+	require.NoError(t, c.ReloadConfigString(`punchy: {respond: true}`).Err)
 
 	entry := findEntry(t, hook.entries, "punchy.respond changed")
 	assert.Equal(t, slog.LevelInfo, entry.Level)
@@ -198,7 +198,7 @@ func TestPunchy_LogFormat_ReloadDelay(t *testing.T) {
 	NewPunchyFromConfig(l, c, nil)
 	hook.entries = nil
 
-	require.NoError(t, c.ReloadConfigString(`punchy: {delay: 10s}`))
+	require.NoError(t, c.ReloadConfigString(`punchy: {delay: 10s}`).Err)
 
 	entry := findEntry(t, hook.entries, "punchy.delay changed")
 	assert.Equal(t, slog.LevelInfo, entry.Level)
@@ -212,7 +212,7 @@ func TestPunchy_LogFormat_ReloadTargetAllRemotes(t *testing.T) {
 	NewPunchyFromConfig(l, c, nil)
 	hook.entries = nil
 
-	require.NoError(t, c.ReloadConfigString(`punchy: {target_all_remotes: true}`))
+	require.NoError(t, c.ReloadConfigString(`punchy: {target_all_remotes: true}`).Err)
 
 	entry := findEntry(t, hook.entries, "punchy.target_all_remotes changed")
 	assert.Equal(t, slog.LevelInfo, entry.Level)
@@ -226,9 +226,19 @@ func TestPunchy_LogFormat_ReloadRespondDelay(t *testing.T) {
 	NewPunchyFromConfig(l, c, nil)
 	hook.entries = nil
 
-	require.NoError(t, c.ReloadConfigString(`punchy: {respond_delay: 15s}`))
+	require.NoError(t, c.ReloadConfigString(`punchy: {respond_delay: 15s}`).Err)
 
 	entry := findEntry(t, hook.entries, "punchy.respond_delay changed")
 	assert.Equal(t, slog.LevelInfo, entry.Level)
 	assert.Equal(t, map[string]any{"respond_delay": 15 * time.Second}, entry.Attrs)
+}
+
+func TestPunchyReloadRestartRequired(t *testing.T) {
+	c := config.NewC(test.NewLogger())
+	require.NoError(t, c.LoadString("stats:\n  lighthouse_metrics: false\n"))
+	NewPunchyFromConfig(test.NewLogger(), c, nil)
+
+	res := c.ReloadConfigString("stats:\n  lighthouse_metrics: true\n")
+	require.NoError(t, res.Err)
+	assert.True(t, res.RestartRequired)
 }
