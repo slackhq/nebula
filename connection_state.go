@@ -104,7 +104,7 @@ func (cs *ConnectionState) Decrypt(l *slog.Logger, messageCounter uint64, packet
 		return nil, ErrAlreadySeen
 	}
 
-	out, err := cs.dKey.DecryptDanger(packet[header.Len:header.Len], packet[:header.Len], packet[header.Len:], messageCounter, nb)
+	out, err := cs.decryptPacket(messageCounter, packet, nb)
 	if err != nil {
 		return nil, err
 	}
@@ -116,6 +116,11 @@ func (cs *ConnectionState) Decrypt(l *slog.Logger, messageCounter uint64, packet
 		return nil, ErrAlreadySeen
 	}
 	return out, nil
+}
+
+// decryptPacket authenticates and decrypts packet in place, leaving the replay window to the caller.
+func (cs *ConnectionState) decryptPacket(messageCounter uint64, packet, nb []byte) ([]byte, error) {
+	return cs.dKey.DecryptDanger(packet[header.Len:header.Len], packet[:header.Len], packet[header.Len:], messageCounter, nb)
 }
 
 func (cs *ConnectionState) VerifyRelay(l *slog.Logger, messageCounter uint64, packet []byte, nb []byte) error {

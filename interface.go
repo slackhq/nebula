@@ -65,6 +65,7 @@ type InterfaceConfig struct {
 	// goroutine's sendmmsg on one XPS-selected NIC TX ring so per-flow
 	// packets stay ordered on the wire.
 	PinThreads bool
+	staged     stagedConfig
 
 	l *slog.Logger
 }
@@ -99,6 +100,7 @@ type Interface struct {
 	// a CPU at all (tun.pin_threads, default true). When false, threads are
 	// left free to migrate as on stock nebula.
 	pinThreads   bool
+	staged       stagedConfig
 	relayManager *relayManager
 
 	tryPromoteEvery atomic.Uint32
@@ -248,6 +250,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
 		cpuAffinity:           c.CpuAffinity,
 		pinThreads:            c.PinThreads,
+		staged:                c.staged,
 		udpTxErrLimiter:       udpTxErrLimiter,
 		udpRelayTxErrLimiter:  udpRelayTxErrLimiter,
 		txOversizeLimiter:     txOversizeLimiter,
@@ -413,14 +416,18 @@ func (f *Interface) listenOut(i int) {
 		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, payload, rxc)
 	}
 
-	flusher := func() {
-		if err := f.batchers[i].Flush(); err != nil {
-			f.l.Error("Failed to flush tun coalescer", "error", err)
-		}
-		clear(rxc.hostmapCache)
-	}
+	flusher := func() { f.flushOutside(rxc) }
 
-	err := li.ListenOut(listener, flusher)
+	var err error
+	if hc, ok := li.(handoffConn); ok && f.staged.workers > 0 {
+		// Every stage on its own goroutine, see flow_rx.go. rxc becomes the ordered writer's context.
+		err = newStagedRx(f, i, rxc).listen(hc)
+	} else {
+		if f.staged.workers > 0 {
+			f.l.Info("udp conn cannot hand off receive batches, receive stays inline", "reader", i)
+		}
+		err = li.ListenOut(listener, flusher)
+	}
 
 	// An error after teardown began is shutdown noise, the closed flag covers resources
 	// Close releases itself and the cancelled ctx covers ones torn down by their owners

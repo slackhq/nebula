@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -122,4 +123,24 @@ firewall:
 	ctrl, err := Main(c, true, "config-test", l, nil)
 	require.NoError(t, err)
 	require.Nil(t, ctrl, "a config test hands back nothing to stop, so it must stop itself")
+}
+
+func TestParseStagedConfig(t *testing.T) {
+	l := test.NewLogger()
+	staged := func(workers any) stagedConfig {
+		c := config.NewC(l)
+		if workers != nil {
+			c.Settings["tun"] = map[string]any{"staged": map[string]any{"workers": workers}}
+		}
+		return parseStagedConfig(c, l)
+	}
+	for _, workers := range []any{nil, -1, 0} {
+		require.Equal(t, stagedConfig{}, staged(workers))
+	}
+	if runtime.GOOS != "linux" {
+		require.Equal(t, stagedConfig{}, staged(2))
+		return
+	}
+	want := stagedConfig{workers: 2, inlineBelow: 256}
+	require.Equal(t, want, staged(2))
 }
