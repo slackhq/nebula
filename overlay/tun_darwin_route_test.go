@@ -168,9 +168,7 @@ func TestRoutesMayBeFreed(t *testing.T) {
 // newRouteTestTun is an activated tun for the root tests below with an unsafe_route for each of cidrs. sweep replaces
 // the minute between sweeps when it isn't zero.
 func newRouteTestTun(t *testing.T, sweep time.Duration, cidrs ...string) (*tun, *config.C, string) {
-	if os.Geteuid() != 0 {
-		t.Skip("creating a utun and adding routes needs root")
-	}
+	requireRoot(t)
 
 	cfg := "tun:\n  unsafe_routes:\n"
 	for _, cidr := range cidrs {
@@ -192,6 +190,12 @@ func newRouteTestTun(t *testing.T, sweep time.Duration, cidrs ...string) (*tun, 
 	t.Cleanup(func() { _ = tn.Close() })
 	require.NoError(t, tn.Activate())
 	return tn, c, cfg
+}
+
+func requireRoot(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("creating interfaces and adding routes needs root")
+	}
 }
 
 // routeVia is the index of the interface that routes cidr, 0 if none does
@@ -221,6 +225,7 @@ func cleanupRoute(t *testing.T, cidr string) {
 
 // routeThroughLo0 routes cidr through lo0, like a lan nebula started on
 func routeThroughLo0(t *testing.T, cidr string) int {
+	requireRoot(t)
 	routeCmd(t, "add", cidr, "-interface", "lo0")
 	cleanupRoute(t, cidr)
 	lo0, err := net.InterfaceByName("lo0")
@@ -289,9 +294,7 @@ func TestTunLeavesRouteDeletedByHand(t *testing.T) {
 // Detaching an interface deletes its routes without a routing socket message for each, like unplugging the dock whose
 // ethernet configd routed the lan through
 func TestTunAddsRouteWhenItsInterfaceDetaches(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("creating interfaces and adding routes needs root")
-	}
+	requireRoot(t)
 	var feth string
 	for i := 100; i < 200 && feth == ""; i++ {
 		if _, err := net.InterfaceByName(fmt.Sprintf("feth%d", i)); err != nil {
