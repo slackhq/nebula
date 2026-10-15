@@ -496,3 +496,28 @@ func TestFlowStagedTXAdaptiveBudget(t *testing.T) {
 		})
 	}
 }
+
+// BenchmarkFlowStagedTX runs reads of eight 45-segment superpackets through listenIn into a socket that discards
+// them, inline and staged.
+func BenchmarkFlowStagedTX(b *testing.B) {
+	for _, cipher := range []noise.CipherFunc{noiseutil.CipherAESGCM, noise.CipherChaChaPoly} {
+		for _, sc := range []stagedConfig{{}, stagedOn(4)} {
+			b.Run(cipher.CipherName()+"/"+stagedName(sc), func(b *testing.B) {
+				if sc.tx && cipher.CipherName() == noiseutil.CipherAESGCM.CipherName() && noiseutil.EncryptLockNeeded {
+					b.Skip("AES-GCM requires encryption in nonce order")
+				}
+				sender, _ := newFlowTestPair(b, cipher, sc)
+				sender.f.writers = []udp.Conn{udp.NoopConn{}}
+				batch, _ := flowTestBatches(1, 8, 4, 45)
+				batches := make([][]tio.Packet, b.N)
+				for i := range batches {
+					batches[i] = batch[0]
+				}
+				b.SetBytes(int64(8 * 45 * flowTestMSS))
+				b.ReportAllocs()
+				b.ResetTimer()
+				sender.f.listenIn(newFlowBatchQueue(batches), 0)
+			})
+		}
+	}
+}
