@@ -70,3 +70,28 @@ func TestAllSortsByName(t *testing.T) {
 	}
 	assert.Equal(t, []Name{"aa", ChangeRemote, Help, Version, "zz"}, got)
 }
+
+// TestHelpFlagAgreesWithHelpCommand pins that -h answers through the registered help
+// command. On a clone, help is bound to the source, so a command registered only on the
+// clone is known to neither -h nor `help <name>`, and the two never disagree.
+func TestHelpFlagAgreesWithHelpCommand(t *testing.T) {
+	r := testRegistry()
+	c := r.Clone()
+	c.Register(&Command{
+		Name:             Logout,
+		ShortDescription: "ends the session",
+		Callback:         func(fs any, a []string, w StringWriter) error { return nil },
+	})
+
+	flag := &bytes.Buffer{}
+	c.Dispatch("logout -h", NewStringWriter(flag))
+	cmd := &bytes.Buffer{}
+	c.Dispatch("help logout", NewStringWriter(cmd))
+	assert.Equal(t, cmd.String(), flag.String())
+	assert.Equal(t, "Command not available logout\n", flag.String())
+
+	// And a command both hold is described either way.
+	flag.Reset()
+	c.Dispatch("served -h", NewStringWriter(flag))
+	assert.Equal(t, "served - a command this surface serves\n", flag.String())
+}
