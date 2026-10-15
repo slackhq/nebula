@@ -103,7 +103,7 @@ func TestTunReloadLeavesRoutesItNeverInstalled(t *testing.T) {
 	assert.Equal(t, lo0.Index, routeInterfaceIn(msgs, netip.MustParsePrefix(cidr)))
 }
 
-func TestRouteRemoved(t *testing.T) {
+func TestRoutesMayBeFreed(t *testing.T) {
 	cidr := netip.MustParsePrefix("192.168.1.0/24")
 	via := routing.Gateways{routing.NewGateway(netip.MustParseAddr("10.250.0.2"), 1)}
 	routes := []Route{{Cidr: cidr, Via: via, Install: true}}
@@ -124,12 +124,12 @@ func TestRouteRemoved(t *testing.T) {
 	}
 	lan, mask := [4]byte{192, 168, 1, 0}, [4]byte{255, 255, 255, 0}
 
-	assert.True(t, routeRemoved(msg(unix.RTM_DELETE, unix.RTF_UP, lan, mask), routes))
-	assert.False(t, routeRemoved(msg(unix.RTM_ADD, unix.RTF_UP, lan, mask), routes))
-	assert.False(t, routeRemoved(msg(unix.RTM_DELETE, unix.RTF_UP|unix.RTF_IFSCOPE, lan, mask), routes), "a scoped route never held the prefix")
-	assert.False(t, routeRemoved(msg(unix.RTM_DELETE, unix.RTF_UP, lan, [4]byte{255, 255, 0, 0}), routes), "only an exact prefix counts")
-	assert.False(t, routeRemoved(msg(unix.RTM_DELETE, unix.RTF_UP, lan, mask), []Route{{Cidr: cidr, Install: true}}), "a route with no via is never installed")
-	assert.False(t, routeRemoved(msg(unix.RTM_DELETE, unix.RTF_UP, lan, mask), []Route{{Cidr: cidr, Via: via}}), "install: false")
+	assert.True(t, routesMayBeFreed(msg(unix.RTM_DELETE, unix.RTF_UP, lan, mask), routes))
+	assert.False(t, routesMayBeFreed(msg(unix.RTM_ADD, unix.RTF_UP, lan, mask), routes))
+	assert.False(t, routesMayBeFreed(msg(unix.RTM_DELETE, unix.RTF_UP|unix.RTF_IFSCOPE, lan, mask), routes), "a scoped route never held the prefix")
+	assert.False(t, routesMayBeFreed(msg(unix.RTM_DELETE, unix.RTF_UP, lan, [4]byte{255, 255, 0, 0}), routes), "only an exact prefix counts")
+	assert.False(t, routesMayBeFreed(msg(unix.RTM_DELETE, unix.RTF_UP, lan, mask), []Route{{Cidr: cidr, Install: true}}), "a route with no via is never installed")
+	assert.False(t, routesMayBeFreed(msg(unix.RTM_DELETE, unix.RTF_UP, lan, mask), []Route{{Cidr: cidr, Via: via}}), "install: false")
 }
 
 // newRouteTestTun is a tun for the root tests below whose unsafe_route cidr is already routed through lo0, like a lan
@@ -178,4 +178,41 @@ func TestTunReloadLeavesRouteItYielded(t *testing.T) {
 	msgs, err := fetchRoutes()
 	require.NoError(t, err)
 	assert.Equal(t, lo0.Index, routeInterfaceIn(msgs, netip.MustParsePrefix(cidr)))
+}
+
+// Detaching an interface deletes its routes without a routing socket message for each, like unplugging the dock whose
+// ethernet configd routed the lan through
+func TestTunAddsRouteWhenItsInterfaceDetaches(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("creating interfaces and adding routes needs root")
+	}
+	cidr := "10.251.2.0/24"
+	feth := "feth9"
+	require.NoError(t, exec.Command("ifconfig", feth, "create").Run())
+	t.Cleanup(func() { _ = exec.Command("ifconfig", feth, "destroy").Run() })
+	require.NoError(t, exec.Command("ifconfig", feth, "inet", "198.51.100.5/24", "up").Run())
+	// Static, like the lan routes configd installs, the kernel only announces the deletion of the address's own route
+	require.NoError(t, exec.Command("route", "-q", "-n", "add", "-net", cidr, "-interface", feth).Run())
+	t.Cleanup(func() { _ = exec.Command("route", "-q", "-n", "delete", "-net", cidr).Run() })
+	ifc, err := net.InterfaceByName(feth)
+	require.NoError(t, err)
+
+	l := test.NewLogger()
+	c := config.NewC(l)
+	require.NoError(t, c.LoadString("tun:\n  unsafe_routes:\n    - route: "+cidr+"\n      via: 10.250.0.2\n"))
+	tn, err := newTun(c, l, []netip.Prefix{netip.MustParsePrefix("10.250.0.1/24")}, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tn.Close() })
+	require.NoError(t, tn.Activate())
+
+	prefix := netip.MustParsePrefix(cidr)
+	msgs, err := fetchRoutes()
+	require.NoError(t, err)
+	require.Equal(t, ifc.Index, routeInterfaceIn(msgs, prefix))
+
+	require.NoError(t, exec.Command("ifconfig", feth, "destroy").Run())
+	assert.Eventually(t, func() bool {
+		msgs, err := fetchRoutes()
+		return err == nil && routeInterfaceIn(msgs, prefix) == tn.linkAddr.Load().Index
+	}, 5*time.Second, 50*time.Millisecond)
 }
