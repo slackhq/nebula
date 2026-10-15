@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/gaissmai/bart"
@@ -35,7 +36,17 @@ type tun struct {
 	// and routes for it. NEPacketTunnelProvider on darwin does this.
 	hostOwned bool
 	l         *slog.Logger
+
+	// routesMu serializes changes to the system routing table between reload and the route watcher
+	routesMu sync.Mutex
+	// routeWatch is the routing socket watchRoutes reads, Close closes it
+	routeWatch *os.File
+	closed     bool
 }
+
+// routeRetryDelay is how long the system routing table must be quiet before a freed unsafe_route is added. configd
+// replaces a route by deleting and adding, adding ours in between would take the prefix back from it
+const routeRetryDelay = time.Second
 
 type ifReq struct {
 	Name  [unix.IFNAMSIZ]byte
@@ -199,6 +210,13 @@ func utunNameFromFd(fd int) string {
 }
 
 func (t *tun) Close() error {
+	t.routesMu.Lock()
+	t.closed = true
+	if t.routeWatch != nil {
+		_ = t.routeWatch.Close()
+	}
+	t.routesMu.Unlock()
+
 	if t.f != nil {
 		return t.f.Close()
 	}
@@ -267,8 +285,26 @@ func (t *tun) Activate() error {
 		return fmt.Errorf("failed to run tun device: %s", err)
 	}
 
+	// Watch before adding so a route removed in between still triggers a retry
+	watch, err := openRouteSocket()
+	if err != nil {
+		return err
+	}
+
 	// Unsafe path routes
-	return t.addRoutes(false)
+	if err = t.addRoutes(false); err != nil {
+		_ = watch.Close()
+		return err
+	}
+
+	t.routesMu.Lock()
+	defer t.routesMu.Unlock()
+	if t.closed {
+		return watch.Close()
+	}
+	t.routeWatch = watch
+	go t.watchRoutes(watch)
+	return nil
 }
 
 // activate4 assigns our vpn address as a /32 and routes the vpn network to the tun explicitly.
@@ -495,9 +531,12 @@ func (t *tun) addRoutes(logErrors bool) error {
 		return nil
 	}
 
+	t.routesMu.Lock()
+	defer t.routesMu.Unlock()
+
 	// Activate hasn't run yet, it will install the routes
 	linkAddr := t.linkAddr.Load()
-	if linkAddr == nil {
+	if linkAddr == nil || t.closed {
 		return nil
 	}
 
@@ -513,12 +552,13 @@ func (t *tun) addRoutes(logErrors bool) error {
 		err := addRoute(r.Cidr, linkAddr)
 		if err != nil {
 			if errors.Is(err, unix.EEXIST) {
-				// Every route we added already exists on a reload, only warn about someone else's
+				// Every route we added already exists on a reload, only warn about someone else's. Darwin has no
+				// route metrics, the prefix holds one route, so theirs stays until watchRoutes sees it removed
 				msgs, err := systemRoutes()
 				if err != nil {
 					t.l.Warn("unable to add unsafe_route, a route already exists but its interface could not be determined", "route", r.Cidr, "error", err)
 				} else if routeInterfaceIn(msgs, r.Cidr) != linkAddr.Index {
-					t.l.Warn("unable to add unsafe_route, the destination is already routed through another interface", "route", r.Cidr)
+					t.l.Warn("unable to add unsafe_route, the destination is already routed through another interface, it will be added once that route is removed", "route", r.Cidr)
 				}
 			} else {
 				retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
@@ -539,10 +579,20 @@ func (t *tun) addRoutes(logErrors bool) error {
 }
 
 func (t *tun) removeRoutes(routes []Route) error {
-	linkAddr := t.linkAddr.Load()
-	if t.hostOwned || linkAddr == nil {
+	if t.hostOwned {
 		return nil
 	}
+
+	t.routesMu.Lock()
+	defer t.routesMu.Unlock()
+
+	linkAddr := t.linkAddr.Load()
+	if linkAddr == nil || t.closed {
+		return nil
+	}
+
+	// The kernel deletes a route by its prefix alone, whichever interface holds it. Only delete the ones that are ours
+	systemRoutes := sync.OnceValues(fetchRoutes)
 
 	for _, r := range routes {
 		if len(r.Via) == 0 || !r.Install {
@@ -550,14 +600,103 @@ func (t *tun) removeRoutes(routes []Route) error {
 			continue
 		}
 
-		err := delRoute(r.Cidr, linkAddr)
+		msgs, err := systemRoutes()
+		if err != nil {
+			return fmt.Errorf("failed to read the system routing table: %w", err)
+		}
+		if routeInterfaceIn(msgs, r.Cidr) != linkAddr.Index {
+			continue
+		}
+
+		err = delRoute(r.Cidr, linkAddr)
 		if err != nil {
 			t.l.Error("Failed to remove route", "error", err, "route", r)
 		} else {
 			t.l.Info("Removed route", "route", r)
+			// A cidr listed twice would otherwise find our deleted route still in an older fetch
+			systemRoutes = sync.OnceValues(fetchRoutes)
 		}
 	}
 	return nil
+}
+
+func openRouteSocket() (*os.File, error) {
+	fd, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW, unix.AF_UNSPEC)
+	if err != nil {
+		return nil, fmt.Errorf("unable to create AF_ROUTE socket: %w", err)
+	}
+	// Non-blocking puts it on the poller, so Close interrupts a Read
+	if err = unix.SetNonblock(fd, true); err != nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("failed to set the AF_ROUTE socket to non-blocking mode: %w", err)
+	}
+	return os.NewFile(uintptr(fd), "route"), nil
+}
+
+// watchRoutes adds an unsafe_route once its prefix is free. The routing socket reports a route that is removed, either
+// one that held the prefix before us, like a lan we have since left, or ours that someone else deleted. The prefix is
+// retried after the table settles, a route that took it back meanwhile keeps it.
+func (t *tun) watchRoutes(f *os.File) {
+	var retry *time.Timer
+	schedule := func() {
+		if retry == nil {
+			retry = time.AfterFunc(routeRetryDelay, func() {
+				if err := t.addRoutes(true); err != nil {
+					util.LogWithContextIfNeeded("Failed to add routes", err, t.l)
+				}
+			})
+		} else {
+			retry.Reset(routeRetryDelay)
+		}
+	}
+
+	b := make([]byte, os.Getpagesize())
+	for {
+		n, err := f.Read(b)
+		if err != nil {
+			if errors.Is(err, unix.ENOBUFS) {
+				// The socket overflowed, a removal may be among the lost messages
+				schedule()
+				continue
+			}
+			if retry != nil {
+				retry.Stop()
+			}
+			if !errors.Is(err, os.ErrClosed) {
+				t.l.Error("Stopped watching the system routing table, unsafe_routes held by another interface will not be added when it lets go", "error", err)
+			}
+			return
+		}
+
+		if routeRemoved(b[:n], *t.Routes.Load()) {
+			schedule()
+		}
+	}
+}
+
+// routeRemoved reports whether b is a routing socket message removing a route for a prefix one of routes installs
+func routeRemoved(b []byte, routes []Route) bool {
+	msgs, err := netroute.ParseRIB(unix.NET_RT_DUMP, b)
+	if err != nil {
+		return false
+	}
+	for _, msg := range msgs {
+		m, ok := msg.(*netroute.RouteMessage)
+		// A scoped route never held the prefix, removing it frees nothing
+		if !ok || m.Type != unix.RTM_DELETE || m.Err != nil || m.Flags&unix.RTF_IFSCOPE != 0 || len(m.Addrs) <= unix.RTAX_NETMASK {
+			continue
+		}
+		p, ok := routePrefix(m.Addrs[unix.RTAX_DST], m.Addrs[unix.RTAX_NETMASK])
+		if !ok {
+			continue
+		}
+		for _, r := range routes {
+			if len(r.Via) > 0 && r.Install && r.Cidr.Masked() == p {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func addRoute(prefix netip.Prefix, gateway netroute.Addr) error {
