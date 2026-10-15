@@ -38,8 +38,8 @@ type dnsServer struct {
 
 	serverMu sync.Mutex
 	server   *dns.Server
-	// started is closed once `server` has finished binding (or after
-	// ListenAndServe returns on a bind failure). Stop waits on it before
+	// started is closed once `server` is serving (or after serve returns
+	// without ever starting). Stop waits on it before
 	// calling Shutdown to avoid the miekg/dns "server not started" race
 	// where a Shutdown that arrives before bind completes is silently
 	// ignored, leaving the listener running forever.
@@ -84,7 +84,7 @@ func newDnsServerFromConfig(ctx context.Context, l *slog.Logger, pki *PKI, hostM
 }
 
 // reload applies the latest config and reconciles the running state with it:
-//   - enabled toggled on  -> spawn a runner
+//   - enabled toggled on  -> bind, then serve in the background
 //   - enabled toggled off -> stop the runner
 //   - listen address changed (while running) -> restart on the new address
 //   - everything else     -> no-op
@@ -121,13 +121,20 @@ func (d *dnsServer) reload(c *config.C, initial bool) error {
 		return nil
 	}
 
-	if !running {
-		// Was disabled (or never started); bring it up now.
-		go d.Start()
-	} else if !sameAddr {
-		// Stop clears the slot before shutting down, otherwise the Start below can find the dying server and refuse
+	if running && !sameAddr {
+		// Stop clears the slot before shutting down, otherwise the listen below can find the dying server and refuse
 		d.Stop()
-		go d.Start()
+		running = false
+	}
+	if !running {
+		// Bind here rather than in the background, so a reload that can't listen says so
+		server, started, err := d.listen()
+		if err != nil {
+			return err
+		}
+		if server != nil {
+			go d.serve(server, started)
+		}
 	}
 
 	// Refresh the self entry every enabled reload so cert renewals that change our name or VPN addresses are picked up.
@@ -156,30 +163,50 @@ func (d *dnsServer) shutdownServer(srv *dns.Server, started chan struct{}, reaso
 // Must be invoked after the tun device is active so that lighthouse.dns.host
 // may bind to a nebula IP.
 func (d *dnsServer) Start() {
-	if !d.enabled.Load() {
+	server, started, err := d.listen()
+	if err != nil {
+		d.l.Warn("Failed to run the DNS responder", "error", err)
 		return
+	}
+	if server != nil {
+		d.serve(server, started)
+	}
+}
+
+// listen binds the responder and claims the server slot for serve. It returns a nil server, and no error, when DNS is
+// disabled or a server is already running.
+func (d *dnsServer) listen() (*dns.Server, chan struct{}, error) {
+	if !d.enabled.Load() {
+		return nil, nil, nil
 	}
 
 	started := make(chan struct{})
 	d.serverMu.Lock()
+	defer d.serverMu.Unlock()
 	// Re-check enabled under the lock, a disable that raced our check above snapshots the slot under it too.
-	// Two reloads in quick succession can both spawn a Start, the loser would orphan the live listener past Stop
+	// A reload and Control.Start can both get here, the loser would orphan the live listener past Stop
 	if d.ctx.Err() != nil || d.server != nil || !d.enabled.Load() {
-		d.serverMu.Unlock()
-		return
+		return nil, nil, nil
 	}
-	addr := d.addr
+	pc, err := net.ListenPacket("udp", d.addr)
+	if err != nil {
+		return nil, nil, err
+	}
 	server := &dns.Server{
-		Addr:              addr,
-		Net:               "udp",
+		Addr:              d.addr,
+		PacketConn:        pc,
 		Handler:           d.mux,
 		NotifyStartedFunc: func() { close(started) },
 	}
 	d.server = server
 	d.started = started
-	d.serverMu.Unlock()
+	d.l.Info("Starting DNS responder", "dnsListener", pc.LocalAddr())
+	return server, started, nil
+}
 
-	// Per-invocation ctx watcher. Exits when Start does, so we don't leak a
+// serve answers queries on a server from listen until Stop or the context ends it.
+func (d *dnsServer) serve(server *dns.Server, started chan struct{}) {
+	// Per-invocation ctx watcher. Exits when serve does, so we don't leak a
 	// watcher per reload-driven restart.
 	done := make(chan struct{})
 	go func() {
@@ -190,16 +217,16 @@ func (d *dnsServer) Start() {
 		}
 	}()
 
-	d.l.Info("Starting DNS responder", "dnsListener", addr)
-	err := server.ListenAndServe()
+	err := server.ActivateAndServe()
 	close(done)
 
-	// If the listener never bound (bind error) NotifyStartedFunc never fires,
-	// so close started here to release any Stop caller waiting on it.
+	// If serving failed before it started NotifyStartedFunc never fires, so close started here to release any Stop
+	// caller waiting on it. ActivateAndServe doesn't close the socket on that path either
 	select {
 	case <-started:
 	default:
 		close(started)
+		_ = server.PacketConn.Close()
 	}
 
 	// Release our slot, unless a reload already replaced us, so a dead listener can't block a future Start

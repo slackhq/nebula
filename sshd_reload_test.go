@@ -279,3 +279,15 @@ func TestSSHExecExitStatusReflectsTheCommand(t *testing.T) {
 	assert.Equal(t, 1, exit.ExitStatus())
 	assert.True(t, strings.HasPrefix(string(out), "did not understand: nope\nAvailable commands:\n"), string(out))
 }
+
+// A reload that can't bind the new address says so, rather than finding out in the background
+func TestSSHDReload_BusyPortFails(t *testing.T) {
+	h := newSSHDReloadHarness(t)
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = busy.Close() })
+
+	res := h.c.ReloadConfigString(strings.Replace(h.config(), "127.0.0.1:0", busy.Addr().String(), 1))
+	require.NoError(t, res.Err)
+	assert.True(t, res.Failed)
+}
