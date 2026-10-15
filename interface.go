@@ -426,7 +426,7 @@ func (f *Interface) listenOut(i int) {
 	var err error
 	if hc, ok := li.(handoffConn); ok && f.staged.workers > 0 {
 		// Every stage on its own goroutine, see flow_rx.go. rxc becomes the ordered writer's context.
-		err = newStagedRx(f, i, rxc).listen(hc)
+		err = newStagedRx(f, i, rxc, hc).listen()
 	} else {
 		if f.staged.workers > 0 {
 			f.l.Info("udp conn cannot hand off receive batches, receive stays inline", "reader", i)

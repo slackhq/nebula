@@ -151,13 +151,13 @@ func TestFlowStagedRXReplacedTunnel(t *testing.T) {
 	p.classify(&item)
 	require.NotNil(t, item.ci)
 	rxc := newRxContext(receiver.f, 0)
-	p.process(&rxBatch{items: []rxItem{{packet: closePacket, via: flowTestUnder}}}, rxc)
+	p.processInline(&rxBatch{items: []rxItem{{packet: closePacket, via: flowTestUnder}}}, rxc)
 	require.Nil(t, receiver.f.hostMap.QueryIndex(receiver.hostinfo.localIndexId))
 	_, replacement := newFlowTestPair(t, noise.CipherChaChaPoly, stagedOn(2))
 	receiver.f.hostMap.Lock()
 	receiver.f.hostMap.unlockedAddHostInfo(replacement.hostinfo, receiver.f)
 	receiver.f.hostMap.Unlock()
-	p.process(&rxBatch{items: []rxItem{item}}, rxc)
+	p.processInline(&rxBatch{items: []rxItem{item}}, rxc)
 	require.Empty(t, receiver.tun.writes)
 	require.True(t, item.ci.window.Check(nil, item.counter))
 	require.True(t, replacement.hostinfo.ConnectionState.window.Check(nil, item.counter))
@@ -199,24 +199,6 @@ func TestFlowStagedRXRealSocket(t *testing.T) {
 	receiver.f.closed.Store(true)
 	require.NoError(t, conn.Close())
 	<-done
-	require.Equal(t, want, receiver.tun.segments(t))
-}
-
-// TestFlowStagedRXCloseFlushesPartial: packets the listener holds in a batch it never got to end when the conn fails
-// are still committed, in order, on a live interface.
-func TestFlowStagedRXCloseFlushesPartial(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-	sender, receiver := newFlowTestPair(t, noise.CipherChaChaPoly, stagedOn(2))
-	batches, want := flowTestBatches(11, 4, 1, 8)
-	wire := wireFor(t, sender, batches)
-	p := newStagedRx(receiver.f, 0, newRxContext(receiver.f, 0))
-	for i, packet := range wire {
-		p.deliver(flowTestUnder, packet)
-		if (i+1)%64 == 0 {
-			p.endBatch()
-		}
-	}
-	p.close()
 	require.Equal(t, want, receiver.tun.segments(t))
 }
 

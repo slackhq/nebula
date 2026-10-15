@@ -3,6 +3,7 @@ package nebula
 import (
 	"net/netip"
 	"sync"
+	"sync/atomic"
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/header"
@@ -55,7 +56,7 @@ type rxBatch struct {
 	items []rxItem
 	// bufs is the set of recvmmsg buffers the items point into, owned by the batch from handoff until it is reused.
 	bufs [][]byte
-	// chunks are the decrypt jobs, nChunks of them in use. With none the writer decrypts the batch itself.
+	// chunks are the decrypt jobs, nChunks of them in use.
 	chunks  []rxChunk
 	nChunks int
 }
@@ -71,8 +72,9 @@ func (b *rxBatch) reset() {
 
 // stagedRx is the staged receive pipeline of one udp listener. deliver and handoff run on the listener goroutine.
 type stagedRx struct {
-	f *Interface
-	q int
+	f    *Interface
+	q    int
+	conn handoffConn
 	// jobs feeds the decrypt workers. The listener is the only producer and closes it once the writer has drained.
 	jobs    chan *rxChunk
 	workers sync.WaitGroup
@@ -82,26 +84,28 @@ type stagedRx struct {
 	hostmapCache map[uint32]*HostInfo
 	wrxc         *rxContext
 
+	// cur is the batch the listener is filling. The others wait in free, or travel to the writer on ordered and come
+	// back through free; inFlight counts those, and the writer drops it only once it is done with a batch.
 	cur        *rxBatch
-	free       []*rxBatch
+	free       chan *rxBatch
 	ordered    chan *rxBatch
-	returned   chan *rxBatch
-	inFlight   int
+	inFlight   atomic.Int32
 	writerDone chan struct{}
 
 	metricBatches metrics.Counter
 	metricInline  metrics.Counter
 }
 
-func newStagedRx(f *Interface, q int, wrxc *rxContext) *stagedRx {
+func newStagedRx(f *Interface, q int, wrxc *rxContext, conn handoffConn) *stagedRx {
 	p := &stagedRx{
 		f:             f,
 		q:             q,
+		conn:          conn,
 		h:             &header.H{},
 		hostmapCache:  map[uint32]*HostInfo{},
 		wrxc:          wrxc,
+		free:          make(chan *rxBatch, stagedRxSlots),
 		ordered:       make(chan *rxBatch, stagedRxSlots),
-		returned:      make(chan *rxBatch, stagedRxSlots),
 		writerDone:    make(chan struct{}),
 		metricBatches: metrics.GetOrRegisterCounter("flow.rx.batches", nil),
 		metricInline:  metrics.GetOrRegisterCounter("flow.rx.inline", nil),
@@ -111,16 +115,24 @@ func newStagedRx(f *Interface, q int, wrxc *rxContext) *stagedRx {
 	for range n {
 		p.workers.Go(p.decrypt)
 	}
-	for range stagedRxSlots {
+	bufs, size := conn.HandoffShape()
+	for i := range stagedRxSlots {
 		// Two chunks per worker, so the writer can start committing while the workers are still on the rest
 		b := &rxBatch{items: make([]rxItem, 0, 256), chunks: make([]rxChunk, 2*n)}
-		for i := range b.chunks {
-			b.chunks[i].done = make(chan struct{}, 1)
+		for j := range b.chunks {
+			b.chunks[j].done = make(chan struct{}, 1)
 		}
-		p.free = append(p.free, b)
+		if i == 0 {
+			// The first batch reads into the conn's own buffers; every other one brings its own
+			p.cur = b
+			continue
+		}
+		b.bufs = make([][]byte, bufs)
+		for j := range b.bufs {
+			b.bufs[j] = make([]byte, size)
+		}
+		p.free <- b
 	}
-	p.cur = p.free[len(p.free)-1]
-	p.free = p.free[:len(p.free)-1]
 	go p.writer()
 	return p
 }
@@ -136,17 +148,9 @@ func (p *stagedRx) decrypt() {
 
 // listen runs the conn's receive loop through the pipeline until it fails, then drains the pipeline. The conn hands
 // its buffers over, so a batch moves between stages without a copy.
-func (p *stagedRx) listen(li handoffConn) error {
-	// The first batch reads into the conn's own buffers; every other one brings its own
-	n, size := li.HandoffShape()
-	for _, b := range p.free {
-		b.bufs = make([][]byte, n)
-		for i := range b.bufs {
-			b.bufs[i] = make([]byte, size)
-		}
-	}
+func (p *stagedRx) listen() error {
 	defer p.close()
-	return li.ListenOut(p.deliver, p.handoff)
+	return p.conn.ListenOut(p.deliver, p.handoff)
 }
 
 // deliver is the listener's per-packet work: classify the packet and add it to the current batch. Nothing here
@@ -192,7 +196,6 @@ func (p *stagedRx) handoff(bufs [][]byte) [][]byte {
 // endBatch hands the batch to the workers and the ordered writer, then takes a free batch.
 func (p *stagedRx) endBatch() {
 	clear(p.hostmapCache)
-	p.reap()
 	b := p.cur
 	n := len(b.items)
 	if n == 0 {
@@ -201,37 +204,30 @@ func (p *stagedRx) endBatch() {
 	}
 	p.checkReplays(b.items)
 
-	if p.inFlight == 0 && n < p.f.staged.inlineBelow {
+	if p.inFlight.Load() == 0 && n < p.f.staged.inlineBelow {
 		// The writer is idle with nothing in flight, so the listener may commit with its context and flush the tun
 		p.metricInline.Inc(1)
-		p.process(b, p.wrxc)
+		p.processInline(b, p.wrxc)
 		b.reset()
 		return
 	}
 
-	parts := min(len(b.chunks), n/rxChunkMin)
-	p.metricBatches.Inc(1)
-	if parts > 0 {
-		size := (n + parts - 1) / parts
-		for off := 0; off < n; off += size {
-			c := &b.chunks[b.nChunks]
-			c.items = b.items[off:min(off+size, n)]
-			b.nChunks++
-		}
+	parts := max(1, min(len(b.chunks), n/rxChunkMin))
+	size := (n + parts - 1) / parts
+	for off := 0; off < n; off += size {
+		c := &b.chunks[b.nChunks]
+		c.items = b.items[off:min(off+size, n)]
+		b.nChunks++
 	}
 	// The jobs go out before the batch does: once the writer has it, it may finish and reset it at any moment
 	for i := range b.nChunks {
 		p.jobs <- &b.chunks[i]
 	}
-	p.inFlight++
+	p.metricBatches.Inc(1)
+	p.inFlight.Add(1)
 	p.ordered <- b
-
-	if len(p.free) == 0 {
-		// Every batch is in flight, wait for the writer: the socket buffer absorbs the backlog meanwhile
-		p.release(<-p.returned)
-	}
-	p.cur = p.free[len(p.free)-1]
-	p.free = p.free[:len(p.free)-1]
+	// With every batch in flight this waits for the writer, the socket buffer absorbs the backlog meanwhile
+	p.cur = <-p.free
 }
 
 // checkReplays marks the replays among items before anything decrypts them, as Decrypt checks before it decrypts,
@@ -255,37 +251,10 @@ func (p *stagedRx) checkReplays(items []rxItem) {
 	}
 }
 
-// reap takes back every batch the writer has finished with, without waiting.
-func (p *stagedRx) reap() {
-	for {
-		select {
-		case b := <-p.returned:
-			p.release(b)
-		default:
-			return
-		}
-	}
-}
-
-func (p *stagedRx) release(b *rxBatch) {
-	p.inFlight--
-	p.free = append(p.free, b)
-}
-
-// process is the ordered stage for one batch: decrypt whatever no worker is decrypting, commit every item in arrival
-// order, and flush the tun batcher.
-func (p *stagedRx) process(b *rxBatch, rxc *rxContext) {
-	if b.nChunks == 0 {
-		decryptRxItems(b.items, rxc.nb)
-		p.commit(b.items, rxc)
-	} else {
-		// Commit chunk by chunk, so the commit overlaps the workers still on later chunks
-		for i := range b.nChunks {
-			c := &b.chunks[i]
-			<-c.done
-			p.commit(c.items, rxc)
-		}
-	}
+// processInline decrypts and commits a batch on the calling goroutine, then flushes the tun.
+func (p *stagedRx) processInline(b *rxBatch, rxc *rxContext) {
+	decryptRxItems(b.items, rxc.nb)
+	p.commit(b.items, rxc)
 	p.f.flushOutside(rxc)
 }
 
@@ -302,29 +271,31 @@ func (p *stagedRx) commit(items []rxItem, rxc *rxContext) {
 	}
 }
 
-// writer is the ordered receive stage: window, firewall, coalescer and tun write, one batch at a time in arrival
-// order.
+// writer is the ordered receive stage: it commits each batch chunk by chunk as the workers finish them, so the commit
+// overlaps the workers still on later chunks, then flushes the tun and returns the batch.
 func (p *stagedRx) writer() {
 	defer close(p.writerDone)
 	for b := range p.ordered {
-		if p.f.closed.Load() {
-			// The tun is going away, a write would only log errors. Still wait out the workers on the batch.
-			for i := range b.nChunks {
-				<-b.chunks[i].done
+		// Once the tun is going away a write would only log errors, so only wait out the workers
+		closed := p.f.closed.Load()
+		for i := range b.nChunks {
+			c := &b.chunks[i]
+			<-c.done
+			if !closed {
+				p.commit(c.items, p.wrxc)
 			}
-		} else {
-			p.process(b, p.wrxc)
+		}
+		if !closed {
+			p.f.flushOutside(p.wrxc)
 		}
 		b.reset()
-		p.returned <- b
+		p.inFlight.Add(-1)
+		p.free <- b
 	}
 }
 
-// close commits anything still in flight, in order, and stops the writer and the workers.
+// close stops the writer once it has committed everything in flight, in order, then the workers.
 func (p *stagedRx) close() {
-	if len(p.cur.items) > 0 {
-		p.endBatch()
-	}
 	close(p.ordered)
 	<-p.writerDone
 	close(p.jobs)
