@@ -552,13 +552,17 @@ func (t *tun) setDefaultRoute(cidr netip.Prefix) error {
 	if cidr.Addr().Is6() {
 		nr.Priority = 256
 	}
-	err := netlink.RouteReplace(&nr)
+	held, err := t.otherLinkRoutes()
+	if err != nil {
+		return err
+	}
+	err = t.replaceRoute(&nr, held)
 	if err != nil {
 		t.l.Warn("Failed to set default route MTU, retrying", "error", err, "cidr", cidr)
 		//retry twice more -- on some systems there appears to be a race condition where if we set routes too soon, netlink says `invalid argument`
 		for range 2 {
 			time.Sleep(100 * time.Millisecond)
-			err = netlink.RouteReplace(&nr)
+			err = t.replaceRoute(&nr, held)
 			if err == nil {
 				break
 			} else {
@@ -578,6 +582,15 @@ func (t *tun) setDefaultRoute(cidr netip.Prefix) error {
 }
 
 func (t *tun) addRoutes(logErrors bool) error {
+	held, err := t.otherLinkRoutes()
+	if err != nil {
+		if logErrors {
+			t.l.Error("Failed to add routes", "error", err)
+			return nil
+		}
+		return err
+	}
+
 	// Path routes
 	routes := *t.Routes.Load()
 	for _, r := range routes {
@@ -602,7 +615,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 			nr.Priority = r.Metric
 		}
 
-		err := netlink.RouteReplace(&nr)
+		err := t.replaceRoute(&nr, held)
 		if err != nil {
 			retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
 			if logErrors {
@@ -616,6 +629,86 @@ func (t *tun) addRoutes(logErrors bool) error {
 	}
 
 	return nil
+}
+
+// ip6RoutePrioUser is the metric the kernel gives an IPv6 route added without one
+const ip6RoutePrioUser = 1024
+
+// routeKey is where the main table files a route. Replacing a route replaces the first one with the same key, whatever
+// device it is on
+type routeKey struct {
+	dst      netip.Prefix
+	priority int
+}
+
+func routeKeyOf(dst *net.IPNet, family, priority int) (routeKey, bool) {
+	var p netip.Prefix
+	if dst == nil {
+		// A default route
+		if family == unix.AF_INET6 {
+			p = netip.PrefixFrom(netip.IPv6Unspecified(), 0)
+		} else {
+			p = netip.PrefixFrom(netip.IPv4Unspecified(), 0)
+		}
+	} else {
+		addr, ok := netip.AddrFromSlice(dst.IP)
+		if !ok {
+			return routeKey{}, false
+		}
+		ones, _ := dst.Mask.Size()
+		p = netip.PrefixFrom(addr.Unmap(), ones).Masked()
+	}
+	if priority == 0 && p.Addr().Is6() {
+		priority = ip6RoutePrioUser
+	}
+	return routeKey{dst: p, priority: priority}, true
+}
+
+// otherLinkRoutes returns the keys of the main table routes that are not on our device
+func (t *tun) otherLinkRoutes() (map[routeKey]struct{}, error) {
+	routes, err := netlink.RouteListFiltered(netlink.FAMILY_ALL, &netlink.Route{Table: unix.RT_TABLE_MAIN}, netlink.RT_FILTER_TABLE)
+	// An interrupted dump may miss a route, which then gets replaced like it always used to be
+	if err != nil && !errors.Is(err, netlink.ErrDumpInterrupted) {
+		return nil, fmt.Errorf("failed to list the system routes: %w", err)
+	}
+	held := make(map[routeKey]struct{}, len(routes))
+	for _, r := range routes {
+		if r.LinkIndex == t.deviceIndex {
+			continue
+		}
+		if k, ok := routeKeyOf(r.Dst, r.Family, r.Priority); ok {
+			held[k] = struct{}{}
+		}
+	}
+	return held, nil
+}
+
+// replaceRoute puts nr in the main table in place of our own route with its key. Replacing would take the route of
+// another device holding that key, so ours goes in behind it instead. Theirs keeps routing and the kernel falls back
+// to ours once theirs is removed, like when leaving the lan that had it. A different metric decides which one wins.
+func (t *tun) replaceRoute(nr *netlink.Route, held map[routeKey]struct{}) error {
+	family := unix.AF_INET6
+	if nr.Dst.IP.To4() != nil {
+		family = unix.AF_INET
+	}
+	k, ok := routeKeyOf(nr.Dst, family, nr.Priority)
+	if _, taken := held[k]; !ok || !taken {
+		return netlink.RouteReplace(nr)
+	}
+
+	// Appending doesn't update a route that is already ours, it adds a second one
+	ours := netlink.Route{
+		LinkIndex: nr.LinkIndex,
+		Dst:       nr.Dst,
+		Scope:     nr.Scope,
+		Table:     nr.Table,
+		Priority:  k.priority,
+	}
+	if err := netlink.RouteDel(&ours); err != nil && !errors.Is(err, unix.ESRCH) {
+		return err
+	}
+	t.l.Warn("Another interface already routes this destination at the same metric, our route is used once theirs is removed", "destination", k.dst, "metric", k.priority)
+	return netlink.RouteAppend(nr)
 }
 
 func (t *tun) removeRoutes(routes []Route) {
