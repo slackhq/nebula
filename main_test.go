@@ -5,12 +5,14 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/slackhq/nebula/cert"
 	cert_test "github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
@@ -122,4 +124,24 @@ firewall:
 	ctrl, err := Main(c, true, "config-test", l, nil)
 	require.NoError(t, err)
 	require.Nil(t, ctrl, "a config test hands back nothing to stop, so it must stop itself")
+}
+
+func TestParseStagedConfig(t *testing.T) {
+	l := test.NewLogger()
+	staged := func(workers any) stagedConfig {
+		c := config.NewC(l)
+		if workers != nil {
+			c.Settings["tun"] = map[string]any{"staged": map[string]any{"workers": workers}}
+		}
+		return parseStagedConfig(c, l)
+	}
+	for _, workers := range []any{nil, -1, 0} {
+		require.Equal(t, stagedConfig{}, staged(workers))
+	}
+	if runtime.GOOS != "linux" {
+		require.Equal(t, stagedConfig{}, staged(2))
+		return
+	}
+	want := stagedConfig{workers: 2, tx: !noiseutil.EncryptLockNeeded}
+	require.Equal(t, want, staged(2))
 }

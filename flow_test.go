@@ -7,7 +7,9 @@ import (
 	"io"
 	"math"
 	"net/netip"
+	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,11 +20,13 @@ import (
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/overlay/batch"
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 )
 
 // flowTestMSS is the segment payload size of the synthetic TSO superpackets.
@@ -106,7 +110,7 @@ type flowTestPeer struct {
 
 // newFlowTestPair builds two interfaces joined by one real tunnel (keys from an actual handshake). sender sends from
 // flowTestLocal to flowTestRemote, receiver is the far side.
-func newFlowTestPair(t testing.TB, cipher noise.CipherFunc) (sender, receiver *flowTestPeer) {
+func newFlowTestPair(t testing.TB, cipher noise.CipherFunc, sc stagedConfig) (sender, receiver *flowTestPeer) {
 	t.Helper()
 	initR, respR := runTestHandshakeWith(t, cipher)
 	sci, err := newConnectionStateFromResult(initR)
@@ -115,6 +119,7 @@ func newFlowTestPair(t testing.TB, cipher noise.CipherFunc) (sender, receiver *f
 	require.NoError(t, err)
 	sender = newFlowTestPeer(t, flowTestLocal, flowTestRemote, sci, 100, 200)
 	receiver = newFlowTestPeer(t, flowTestRemote, flowTestLocal, rci, 200, 100)
+	sender.f.staged, receiver.f.staged = sc, sc
 	return sender, receiver
 }
 
@@ -254,3 +259,109 @@ func decryptWire(t testing.TB, receiver *flowTestPeer, wire [][]byte) []decodedS
 	}
 	return out
 }
+
+// flowBatchQueue is a handoffQueue that hands out scripted Read batches, then fails with io.EOF. Every batch is copied
+// into the current receive buffer, so a test sees the buffer ownership the Offload queue has.
+type flowBatchQueue struct {
+	batches [][]tio.Packet
+	rxBuf   []byte
+	out     []tio.Packet
+	closed  chan struct{}
+	// reads counts the batches handed out
+	reads atomic.Int64
+}
+
+func newFlowBatchQueue(batches [][]tio.Packet) *flowBatchQueue {
+	return &flowBatchQueue{batches: batches, rxBuf: make([]byte, 8*65536), closed: make(chan struct{})}
+}
+
+func (q *flowBatchQueue) Read() ([]tio.Packet, error) {
+	select {
+	case <-q.closed:
+		return nil, os.ErrClosed
+	default:
+	}
+	n := int(q.reads.Load())
+	if n == len(q.batches) {
+		return nil, io.EOF
+	}
+	q.out = q.out[:0]
+	off := 0
+	for _, p := range q.batches[n] {
+		l := copy(q.rxBuf[off:], p.Bytes)
+		q.out = append(q.out, tio.Packet{Bytes: q.rxBuf[off : off+l : off+l], GSO: p.GSO})
+		off += l
+	}
+	q.reads.Add(1)
+	return q.out, nil
+}
+
+func (q *flowBatchQueue) SwapRxBuf(buf []byte) []byte {
+	if buf == nil {
+		buf = make([]byte, len(q.rxBuf))
+	}
+	old := q.rxBuf
+	q.rxBuf = buf
+	// Scribble over the buffer we are handed, a staged batch that still pointed into it would be corrupted
+	for i := range buf {
+		buf[i] = 0xa5
+	}
+	return old
+}
+
+func (q *flowBatchQueue) Write(b []byte) (int, error) { return len(b), nil }
+
+func (q *flowBatchQueue) Close() error { close(q.closed); return nil }
+
+// delayedCipher changes scheduling through the real cipher interface, only in tests.
+type delayedCipher struct {
+	noiseutil.CipherState
+	before func(uint64)
+}
+
+func (c delayedCipher) EncryptDanger(out, ad, plain []byte, n uint64, nb []byte) ([]byte, error) {
+	c.before(n)
+	return c.CipherState.EncryptDanger(out, ad, plain, n, nb)
+}
+
+func (c delayedCipher) DecryptDanger(out, ad, ciphertext []byte, n uint64, nb []byte) ([]byte, error) {
+	c.before(n)
+	return c.CipherState.DecryptDanger(out, ad, ciphertext, n, nb)
+}
+
+func delayCrypto(peer *flowTestPeer, before func(uint64)) {
+	ci := peer.hostinfo.ConnectionState
+	ci.eKey = delayedCipher{ci.eKey, before}
+	ci.dKey = delayedCipher{ci.dKey, before}
+}
+
+// stagedOn enables staging with n workers.
+func stagedOn(n int) stagedConfig {
+	return stagedConfig{workers: n, tx: true}
+}
+
+func stagedName(sc stagedConfig) string {
+	switch {
+	case sc.workers == 0:
+		return "inline"
+	default:
+		return "staged"
+	}
+}
+
+// TestFlowStagedFallback: a tun queue that cannot hand off its buffer, or a conn that cannot hand off its batches,
+// keeps that direction on the inline path.
+func TestFlowStagedFallback(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	sender, receiver := newFlowTestPair(t, noise.CipherChaChaPoly, stagedOn(3))
+	batches, want := flowTestBatches(10, 2, 1, 4)
+	tx := metrics.GetOrRegisterCounter("flow.tx.batches", nil)
+	tx0 := tx.Count()
+	sender.f.listenIn(plainQueue{newFlowBatchQueue(batches)}, 0)
+	wire := sender.conn.captured()
+	require.Equal(t, want, decryptWire(t, receiver, wire))
+	require.Equal(t, tx0, tx.Count())
+}
+
+// plainQueue and plainConn hide SwapRxBuf and ListenOutHandoff, so they cannot hand off their batches.
+type plainQueue struct{ tio.Queue }

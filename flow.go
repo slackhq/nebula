@@ -1,0 +1,81 @@
+package nebula
+
+import (
+	"fmt"
+	"log/slog"
+	"runtime"
+	"sync"
+	"time"
+
+	"github.com/rcrowley/go-metrics"
+	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/noiseutil"
+)
+
+// Staged transmit (tun.staged.workers) moves encryption off each tun reader onto worker goroutines, behind which an
+// ordered sender flushes every batch in read order. It reuses the inline filter and encryption: staging changes
+// ownership and scheduling, not policy. Each routine has its own workers and sender, so order is per routine. Full
+// queues block the reader. A read error drains the batches in flight, while shutdown waits for the crypto and then
+// drops packets whose sockets have closed. Eight slots take about 9 MiB per routine; small-MSS arenas can grow.
+//
+// Metrics are registered only for active pipelines. flow.tx.batches counts reads handed to the sender.
+// flow.stage.<stage>.q<queue>.busy_ns locates the limiting stage: tx_read, tx_encrypt or tx_send. Take rates; 1e9
+// ns/s fills a serial stage. These are elapsed times that exclude read syscalls and downstream waits; descheduling
+// inflates them and worker times add up across the pool.
+
+// stagedConfig is tun.staged. workers is per routine and direction; zero keeps processing inline.
+type stagedConfig struct {
+	workers int
+	tx      bool
+}
+
+// parseStagedConfig enables staging on Linux only; queues and conns that cannot hand off batches also stay inline.
+func parseStagedConfig(c *config.C, l *slog.Logger) stagedConfig {
+	sc := stagedConfig{workers: c.GetInt("tun.staged.workers", 0)}
+	if sc.workers <= 0 {
+		return stagedConfig{}
+	}
+	if runtime.GOOS != "linux" {
+		l.Warn("tun.staged is only supported on Linux; packet processing stays inline")
+		return stagedConfig{}
+	}
+	sc.tx = true
+	if noiseutil.EncryptLockNeeded {
+		l.Warn("tun.staged cannot encrypt in parallel with boringcrypto or fips140; transmit stays inline")
+		sc.tx = false
+	}
+	l.Info("Staged packet processing enabled", "workers", sc.workers, "tx", sc.tx)
+	return sc
+}
+
+// flowJob is one batch of crypto work. It owns its packet buffers until run returns; jobs and queues are reused.
+type flowJob interface{ run(nb []byte) }
+
+// flowPool runs one reader's crypto jobs. The reader is the only producer and closes the pool once its ordered stage
+// has drained.
+type flowPool struct {
+	jobs chan flowJob
+	wg   sync.WaitGroup
+}
+
+func newFlowPool(workers, queueLen int, busy metrics.Counter) *flowPool {
+	p := &flowPool{jobs: make(chan flowJob, queueLen)}
+	for range workers {
+		p.wg.Go(func() {
+			nb := make([]byte, 12)
+			for job := range p.jobs {
+				t := time.Now()
+				job.run(nb)
+				busy.Inc(int64(time.Since(t)))
+			}
+		})
+	}
+	return p
+}
+
+func (p *flowPool) close() { close(p.jobs); p.wg.Wait() }
+
+// stageBusy is the busy time counter of one stage of routine q.
+func stageBusy(stage string, q int) metrics.Counter {
+	return metrics.GetOrRegisterCounter(fmt.Sprintf("flow.stage.%s.q%d.busy_ns", stage, q), nil)
+}

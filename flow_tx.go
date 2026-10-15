@@ -3,7 +3,9 @@ package nebula
 import (
 	"errors"
 	"net/netip"
+	"time"
 
+	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/noiseutil"
@@ -230,4 +232,228 @@ func (r *txReserver) reserve(items []txItem) []txItem {
 	}
 	clear(items[n:])
 	return items[:n]
+}
+
+// handoffQueue is a tun queue that can give up the buffer its last Read filled. SwapRxBuf(nil) allocates a
+// correctly sized replacement; later swaps recycle the buffers handed back.
+type handoffQueue interface {
+	tio.Queue
+	SwapRxBuf([]byte) []byte
+}
+
+const stagedTxSlots = 8
+
+// txSlot is one staged batch. The reader fills items, a worker encrypts them into sb and signals done, and the
+// ordered sender flushes sb.
+type txSlot struct {
+	f     *Interface
+	items []txItem
+	// buf owns the queue receive buffer the items point into, swapped out at dispatch
+	buf  []byte
+	sb   *batch.SendBatch
+	done chan struct{}
+	// reserved is how many counters the batch reserved, for the reader's maxReserved budget
+	reserved uint64
+}
+
+func (s *txSlot) run(nb []byte) {
+	for i := range s.items {
+		s.f.encryptTxItem(&s.items[i], nb, s.sb)
+	}
+	s.done <- struct{}{}
+}
+
+// stagedTx is the staged transmit pipeline of one tun reader. Everything but the workers and the sender runs on the
+// reader goroutine.
+type stagedTx struct {
+	txReserver
+	q         int
+	cpu       int // reader CPU
+	senderCPU int // -1 leaves the sender within its inherited affinity
+	queue     handoffQueue
+	pool      *flowPool
+
+	// free holds the reader's idle slots. A dispatched slot goes to the workers and, in the same order, to the
+	// sender on ordered; the sender gives it back on returned once it is on the wire.
+	free       []*txSlot
+	ordered    chan *txSlot
+	returned   chan *txSlot
+	inFlight   int
+	senderDone chan struct{}
+	// reserved is the counters held by in-flight slots, maxReserved this reader's half-window share
+	reserved    uint64
+	maxReserved uint64
+
+	readBusy, encryptBusy, sendBusy metrics.Counter
+	metricBatches                   metrics.Counter
+}
+
+// newStagedTx needs a queue that hands over whole read batches, the offload (TSO/USO) queue on linux. On any other
+// queue a read is one packet, and staging it would cost a handoff per packet.
+func newStagedTx(f *Interface, queue handoffQueue, q int) *stagedTx {
+	p := &stagedTx{
+		txReserver:    txReserver{f: f, tunnels: make([]txTunnel, 0, 4)},
+		q:             q,
+		senderCPU:     -1,
+		queue:         queue,
+		ordered:       make(chan *txSlot, stagedTxSlots),
+		returned:      make(chan *txSlot, stagedTxSlots),
+		senderDone:    make(chan struct{}),
+		maxReserved:   (ReplayWindow / 2) / uint64(max(f.routines, 1)),
+		readBusy:      stageBusy("tx_read", q),
+		encryptBusy:   stageBusy("tx_encrypt", q),
+		sendBusy:      stageBusy("tx_send", q),
+		metricBatches: metrics.GetOrRegisterCounter("flow.tx.batches", nil),
+	}
+	if f.pinThreads {
+		p.cpu = f.threadCPU(q)
+		// Only an explicit list pins the sender, and never onto its reader's CPU, where the two would serialise.
+		// Automatic placement by queue index can put a busy sender on a slow core; unpinned, the scheduler moves it.
+		if n := len(f.cpuAffinity); n > 0 && f.cpuAffinity[(q+1)%n] != p.cpu {
+			p.senderCPU = f.cpuAffinity[(q+1)%n]
+		}
+	}
+	p.pool = newFlowPool(f.staged.workers, stagedTxSlots, p.encryptBusy)
+
+	// Ciphertext adds per-segment headers and tags; the arena can grow for small segments.
+	buf := queue.SwapRxBuf(nil)
+	bufSize := len(buf)
+	for i := range stagedTxSlots {
+		if i > 0 {
+			buf = make([]byte, bufSize)
+		}
+		p.free = append(p.free, &txSlot{
+			f:    f,
+			buf:  buf,
+			sb:   batch.NewSendBatch(f.writers[q], 4*batch.SendBatchCap, bufSize+bufSize/4),
+			done: make(chan struct{}, 1),
+		})
+	}
+	go p.sender()
+	return p
+}
+
+// run is listenIn's loop with the staged pipeline: read, then hand each batch on, until the queue fails.
+func (p *stagedTx) run(fwPacket *firewall.ParsedPacket, rejectBuf []byte, conntrackCache *firewall.ConntrackCacheTicker) error {
+	defer p.close()
+	if p.f.pinThreads {
+		p.f.pinThreadToCPU(p.q, p.cpu)
+	}
+	for {
+		pkts, err := p.queue.Read()
+		if err != nil {
+			return err
+		}
+		t := time.Now()
+		stall := p.handle(pkts, fwPacket, rejectBuf, conntrackCache.Get())
+		p.readBusy.Inc(int64(time.Since(t) - stall))
+	}
+}
+
+// handle takes one tun read through the pipeline. It returns once the batch is queued, or sent when the reader sent
+// it itself, with how long it waited for the sender.
+func (p *stagedTx) handle(pkts []tio.Packet, fwPacket *firewall.ParsedPacket, rejectBuf []byte, localCache firewall.ConntrackCache) time.Duration {
+	p.reap()
+
+	slot, stall := p.acquire()
+	items := p.collect(slot.items[:0], pkts, fwPacket, rejectBuf, p.q, localCache)
+	if len(items) == 0 {
+		slot.items = items
+		p.free = append(p.free, slot)
+		return stall
+	}
+
+	var total uint64
+	for _, t := range p.tunnels {
+		total += t.n
+	}
+	// Over this reader's share of the window, wait for its oldest batches to go out first. A lone batch always goes.
+	if p.inFlight > 0 && p.reserved+total > p.maxReserved {
+		t := time.Now()
+		for p.inFlight > 0 && p.reserved+total > p.maxReserved {
+			p.release(<-p.returned)
+		}
+		stall += time.Since(t)
+	}
+	items = p.reserve(items)
+	slot.items = items
+	if len(items) == 0 {
+		p.free = append(p.free, slot)
+		return stall
+	}
+
+	// The packets now live in the slot, and the queue reads into the slot's old buffer
+	slot.buf = p.queue.SwapRxBuf(slot.buf)
+
+	slot.reserved = total
+	p.reserved += total
+	p.inFlight++
+	p.metricBatches.Inc(1)
+	// Counters were reserved above on this goroutine and the slot takes its place in the sender's order right here,
+	// before any other batch can, so the sender puts them on the wire in counter order.
+	p.ordered <- slot
+	p.pool.jobs <- slot
+	return stall
+}
+
+// acquire returns an idle slot, waiting for the sender to give one back when all of them are in flight, and how long
+// it waited.
+func (p *stagedTx) acquire() (*txSlot, time.Duration) {
+	var stall time.Duration
+	if len(p.free) == 0 {
+		t := time.Now()
+		p.release(<-p.returned)
+		stall = time.Since(t)
+	}
+	s := p.free[len(p.free)-1]
+	p.free = p.free[:len(p.free)-1]
+	return s, stall
+}
+
+// reap takes back every slot the sender has finished with, without waiting.
+func (p *stagedTx) reap() {
+	for {
+		select {
+		case s := <-p.returned:
+			p.release(s)
+		default:
+			return
+		}
+	}
+}
+
+func (p *stagedTx) release(s *txSlot) {
+	p.reserved -= s.reserved
+	s.reserved = 0
+	p.inFlight--
+	p.free = append(p.free, s)
+}
+
+// sender is the ordered send stage: it puts each batch on the wire once its worker is done, in dispatch order.
+func (p *stagedTx) sender() {
+	defer close(p.senderDone)
+	if p.senderCPU >= 0 {
+		p.f.pinThreadToCPU(p.q, p.senderCPU)
+	}
+	for s := range p.ordered {
+		<-s.done
+		t := time.Now()
+		if p.f.closed.Load() {
+			// The sockets are gone, a flush would only log errors
+			s.sb.Reset()
+		} else {
+			p.f.flushSendBatch(s.sb, p.q)
+		}
+		p.sendBusy.Inc(int64(time.Since(t)))
+		clear(s.items)
+		s.items = s.items[:0]
+		p.returned <- s
+	}
+}
+
+// close sends everything still in flight, in order, and stops the sender and the workers.
+func (p *stagedTx) close() {
+	close(p.ordered)
+	<-p.senderDone
+	p.pool.close()
 }

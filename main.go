@@ -244,6 +244,8 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 
 	pinThreads := c.GetBool("tun.pin_threads", true)
 	cpuAffinity := parseCpuAffinity(c, l, routines)
+	var defaultCpuAffinity []int
+	staged := parseStagedConfig(c, l)
 	if pinThreads && routines > 1 && len(cpuAffinity) == 0 && !configTest {
 		// The operator didn't choose pin CPUs, so pick a default set that
 		// prefers performance cores and doesn't stack co-located instances
@@ -270,7 +272,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 			l.Warn("tun.pin_threads_key is invalid, using PID")
 		}
 
-		cpuAffinity = cpupick.Default(routines, key, l)
+		defaultCpuAffinity = cpupick.Default(routines, key, l)
 	}
 
 	ifConfig := &InterfaceConfig{
@@ -295,7 +297,9 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		punchy:                punchy,
 		ConntrackCacheTimeout: conntrackCacheTimeout,
 		CpuAffinity:           cpuAffinity,
+		defaultCpuAffinity:    defaultCpuAffinity,
 		PinThreads:            pinThreads,
+		staged:                staged,
 		l:                     l,
 	}
 
