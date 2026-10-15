@@ -629,3 +629,22 @@ func TestDnsServer_Start_refusesWhenDisabledUnderLock(t *testing.T) {
 	require.NoError(t, err, "an orphaned listener is still holding the port")
 	_ = pc.Close()
 }
+
+// A reload that can't bind says so, rather than finding out in the background
+func TestDnsServer_reload_busyPortFails(t *testing.T) {
+	busy, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = busy.Close() })
+	_, port, err := net.SplitHostPort(busy.LocalAddr().String())
+	require.NoError(t, err)
+
+	ds, c := newTestDnsServer(t)
+	setDnsConfig(c, "127.0.0.1", port, false, true)
+	require.NoError(t, ds.reload(c, true))
+
+	setDnsConfig(c, "127.0.0.1", port, true, true)
+	require.Error(t, ds.reload(c, false))
+	ds.serverMu.Lock()
+	assert.Nil(t, ds.server, "a failed bind kept the slot")
+	ds.serverMu.Unlock()
+}

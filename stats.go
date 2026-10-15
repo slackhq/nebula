@@ -140,8 +140,13 @@ func (s *statsServer) reload(c *config.C, initial bool) error {
 
 	// Even with nothing running, a runtime whose listener failed can still be finishing its last pass
 	s.Stop()
-	if enabled && !s.configTest {
-		go s.Start()
+	// Bind here rather than in the background, so a reload that can't listen says so
+	run, err := s.start()
+	if err != nil {
+		return err
+	}
+	if run != nil {
+		go run()
 	}
 	return nil
 }
@@ -151,36 +156,64 @@ func (s *statsServer) reload(c *config.C, initial bool) error {
 // the HTTP listener. For graphite it blocks on the capture loop's context.
 // Safe to call when stats are disabled or already running (both no-op).
 func (s *statsServer) Start() {
-	if !s.enabled.Load() || s.configTest {
+	run, err := s.start()
+	if err != nil {
+		s.l.Error("Failed to start the prometheus stats listener", "error", err)
 		return
+	}
+	if run != nil {
+		run()
+	}
+}
+
+// start claims the runtime and binds the prometheus listener. The returned run serves it and blocks until Stop or ctx
+// ends it. A nil run and no error means stats are off or already running.
+func (s *statsServer) start() (func(), error) {
+	if !s.enabled.Load() || s.configTest {
+		return nil, nil
 	}
 
 	s.runMu.Lock()
+	defer s.runMu.Unlock()
 	if s.ctx.Err() != nil || s.run != nil || s.runCfg == nil {
-		s.runMu.Unlock()
-		return
+		return nil, nil
 	}
 	cfg := *s.runCfg
 	runCtx, cancel := context.WithCancel(s.ctx)
 	captureFns, listener := s.buildRuntime(runCtx, cfg)
+	var ln net.Listener
+	if listener != nil {
+		var err error
+		ln, err = net.Listen("tcp", listener.Addr)
+		if err != nil {
+			cancel()
+			// Drop the config so a SIGHUP with the same one tries again once the problem is fixed
+			s.runCfg = nil
+			return nil, err
+		}
+	}
 	rt := &statsRuntime{cancel: cancel, listener: listener}
 	s.run = rt
 	done := make(chan struct{})
 	s.loopDone = done
-	s.runMu.Unlock()
 
+	return func() { s.serve(runCtx, rt, captureFns, cfg.interval, ln, done) }, nil
+}
+
+// serve runs the capture loop, and the prometheus listener on ln, until Stop or ctx ends them.
+func (s *statsServer) serve(runCtx context.Context, rt *statsRuntime, captureFns []func(), interval time.Duration, ln net.Listener, done chan struct{}) {
 	// Prime before serving, so a scrape that lands before the first tick sees real values instead of zeros (issue #907)
 	for _, fn := range captureFns {
 		fn()
 	}
-	go captureStatsLoop(runCtx, cfg.interval, captureFns, done)
+	go captureStatsLoop(runCtx, interval, captureFns, done)
 
 	cleanExit := true
-	if listener == nil {
+	if rt.listener == nil {
 		// Graphite: no HTTP listener to serve; block until teardown.
 		<-runCtx.Done()
 	} else {
-		cleanExit = s.serveListener(listener)
+		cleanExit = s.serveListener(rt.listener, ln)
 	}
 
 	// Clear our runtime only if nothing has replaced it. Stop races through
@@ -189,10 +222,9 @@ func (s *statsServer) Start() {
 	if s.run == rt {
 		rt.cancel()
 		s.run = nil
-		// A listener that exited with an error (e.g., bind conflict) leaves
-		// runCfg cached as if it were applied. Drop it so a SIGHUP with the
-		// same config re-triggers Start once the user fixes the underlying
-		// problem.
+		// A listener that exited with an error leaves runCfg cached as if it
+		// were applied. Drop it so a SIGHUP with the same config re-triggers
+		// Start once the user fixes the underlying problem.
 		if !cleanExit {
 			s.runCfg = nil
 		}
@@ -200,12 +232,12 @@ func (s *statsServer) Start() {
 	s.runMu.Unlock()
 }
 
-// serveListener runs ListenAndServe and ensures ctx cancellation unblocks it.
+// serveListener serves listener on ln and ensures ctx cancellation unblocks it.
 // Returns true if the listener exited cleanly (Stop, ctx cancellation, or any
 // other http.ErrServerClosed path), false on an unexpected error.
-func (s *statsServer) serveListener(listener *http.Server) bool {
+func (s *statsServer) serveListener(listener *http.Server, ln net.Listener) bool {
 	// Per-invocation watcher: ctx cancellation triggers a listener shutdown
-	// which in turn unblocks ListenAndServe. Closing `done` on exit keeps
+	// which in turn unblocks Serve. Closing `done` on exit keeps
 	// the watcher from outliving this call.
 	done := make(chan struct{})
 	go func() {
@@ -221,8 +253,8 @@ func (s *statsServer) serveListener(listener *http.Server) bool {
 	}()
 	defer close(done)
 
-	s.l.Info("Starting prometheus stats listener", "addr", listener.Addr)
-	err := listener.ListenAndServe()
+	s.l.Info("Starting prometheus stats listener", "addr", ln.Addr())
+	err := listener.Serve(ln)
 	if err == nil || errors.Is(err, http.ErrServerClosed) {
 		return true
 	}

@@ -77,15 +77,20 @@ func wireSSHReload(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) {
 				}
 				return
 			}
-			sshRun, err := configSSH(l, ssh, c)
-			if err != nil {
+			if _, err := configSSH(l, ssh, c); err != nil {
 				l.Error("Failed to reconfigure the sshd", "error", err)
 				ssh.Stop()
 				r.Failed()
+				return
 			}
-			if sshRun != nil {
-				go sshRun()
+			// Bind here rather than in the background, so a reload that can't listen says so
+			listener, err := ssh.Listen(c.GetString("sshd.listen", ""))
+			if err != nil {
+				l.Error("Failed to run the SSH server", "error", err)
+				r.Failed()
+				return
 			}
+			go ssh.Serve(listener)
 		} else {
 			ssh.Stop()
 		}
