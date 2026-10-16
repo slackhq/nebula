@@ -447,3 +447,16 @@ func TestHostInfo_markOutOnly(t *testing.T) {
 	assert.True(t, h.markOut(6), "a relayed send must not consume the epoch edge")
 	assert.False(t, h.markOut(6))
 }
+
+// A preferred range that doesn't parse is skipped and the rest are used, the reload says one was skipped
+func TestHostMap_reloadBadPreferredRangeFails(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	require.NoError(t, c.LoadString("preferred_ranges: [10.0.0.0/8]\n"))
+	hm := NewHostMapFromConfig(l, c)
+
+	res := c.ReloadConfigString("preferred_ranges: [10.0.0.0/8, nope]\n")
+	require.NoError(t, res.Err)
+	assert.True(t, res.Failed)
+	assert.Equal(t, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, hm.GetPreferredRanges())
+}

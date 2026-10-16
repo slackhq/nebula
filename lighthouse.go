@@ -138,14 +138,14 @@ func NewLightHouseFromConfig(ctx context.Context, l *slog.Logger, c *config.C, c
 		h.metrics = newLighthouseMetrics()
 	}
 
-	err := h.reload(c, true)
+	err := h.reload(c, true, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
 		r.RestartRequiredIfChanged("lighthouse.am_lighthouse", "listen.port", "handshakes.query_buffer", "stats.lighthouse_metrics")
-		err := h.reload(c, false)
+		err := h.reload(c, false, r)
 		switch v := err.(type) {
 		case *util.ContextualError:
 			v.Log(l)
@@ -193,7 +193,8 @@ func (lh *LightHouse) GetUpdateInterval() int64 {
 	return lh.interval.Load()
 }
 
-func (lh *LightHouse) reload(c *config.C, initial bool) error {
+// r is nil on the initial load
+func (lh *LightHouse) reload(c *config.C, initial bool, r *config.Reload) error {
 	if initial || c.HasChanged("lighthouse.advertise_addrs") {
 		rawAdvAddrs := c.GetStringSlice("lighthouse.advertise_addrs", []string{})
 		advAddrs := make([]netip.AddrPort, 0)
@@ -228,6 +229,7 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 					"addr", rawAddr,
 					"entry", i+1,
 				)
+				r.Failed()
 				continue
 			}
 
@@ -386,6 +388,7 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 						"relay", v,
 						"error", err,
 					)
+					r.Failed()
 				} else {
 					lh.l.Info("Read relay from config", "relay", v)
 					relaysForMe = append(relaysForMe, configRIP)

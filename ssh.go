@@ -78,7 +78,7 @@ func wireSSHReload(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) {
 				}
 				return
 			}
-			sshRun, err := configSSH(l, ssh, c)
+			sshRun, err := configSSH(l, ssh, c, r)
 			if err != nil {
 				l.Error("Failed to reconfigure the sshd", "error", err)
 				ssh.Stop()
@@ -117,7 +117,8 @@ func loadSSHHostKey(c *config.C) ([]byte, error) {
 // updates the passed-in SSHServer. On success, it returns a function
 // that callers may invoke to run the configured ssh server. On
 // failure, it returns nil, error.
-func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error) {
+// r is nil at startup, entries that are skipped with a warning fail it on a reload
+func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C, r *config.Reload) (func(), error) {
 	listen := c.GetString("sshd.listen", "")
 	if listen == "" {
 		return nil, fmt.Errorf("sshd.listen must be provided")
@@ -150,6 +151,7 @@ func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error)
 		err := ssh.AddTrustedCA(caAuthorizedKey)
 		if err != nil {
 			l.Warn("SSH CA had an error, ignoring", "error", err, "sshCA", caAuthorizedKey)
+			r.Failed()
 			continue
 		}
 	}
@@ -161,12 +163,14 @@ func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error)
 			kDef, ok := rk.(map[string]any)
 			if !ok {
 				l.Warn("Authorized user had an error, ignoring", "sshKeyConfig", rk)
+				r.Failed()
 				continue
 			}
 
 			user, ok := kDef["user"].(string)
 			if !ok {
 				l.Warn("Authorized user is missing the user field", "sshKeyConfig", rk)
+				r.Failed()
 				continue
 			}
 
@@ -180,6 +184,7 @@ func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error)
 						"sshKeyConfig", rk,
 						"sshKey", v,
 					)
+					r.Failed()
 					continue
 				}
 
@@ -191,6 +196,7 @@ func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error)
 							"sshKeyConfig", rk,
 							"sshKey", subK,
 						)
+						r.Failed()
 						continue
 					}
 
@@ -200,12 +206,14 @@ func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error)
 							"error", err,
 							"sshKeyConfig", sk,
 						)
+						r.Failed()
 						continue
 					}
 				}
 
 			default:
 				l.Warn("Authorized user is missing the keys field or was not understood", "sshKeyConfig", rk)
+				r.Failed()
 			}
 		}
 	} else {
