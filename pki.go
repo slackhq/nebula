@@ -2,7 +2,9 @@ package nebula
 
 import (
 	"crypto/fips140"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -613,7 +615,12 @@ func loadCAPoolFromConfig(l *slog.Logger, c *config.C) (*cert.CAPool, error) {
 
 	bl := c.GetStringSlice("pki.blocklist", []string{})
 	if len(bl) > 0 {
-		for _, fp := range bl {
+		for i, raw := range bl {
+			// Fingerprints are compared as lowercase hex strings, a malformed entry would silently block nothing
+			fp := strings.ToLower(strings.TrimSpace(raw))
+			if b, err := hex.DecodeString(fp); err != nil || len(b) != sha256.Size {
+				return nil, fmt.Errorf("pki.blocklist entry %d is not a 64 character hex certificate fingerprint: %q", i+1, raw)
+			}
 			caPool.BlocklistFingerprint(fp)
 		}
 
