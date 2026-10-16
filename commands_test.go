@@ -21,11 +21,11 @@ func TestLogFormatRefusalIsShown(t *testing.T) {
 	w := commands.NewStringWriter(out)
 
 	var f *commands.Failure
-	require.ErrorAs(t, sshLogFormat(l, nil, []string{"bogus"}, w), &f)
+	require.ErrorAs(t, logFormatCommand(l, nil, []string{"bogus"}, w), &f)
 	assert.Equal(t, "Unable to set log format: unknown log format `bogus`. possible formats: [text json]\n", out.String())
 
 	out.Reset()
-	require.NoError(t, sshLogFormat(l, nil, []string{"JSON"}, w))
+	require.NoError(t, logFormatCommand(l, nil, []string{"JSON"}, w))
 	assert.Equal(t, "Log format is: json\n", out.String())
 }
 
@@ -42,7 +42,7 @@ func TestPrintRelaysReportsErrorsAsText(t *testing.T) {
 	ifce := &Interface{hostMap: hm}
 
 	out := &bytes.Buffer{}
-	require.NoError(t, sshPrintRelays(ifce, &sshPrintTunnelFlags{}, nil, commands.NewStringWriter(out)))
+	require.NoError(t, printRelaysCommand(ifce, &printTunnelFlags{}, nil, commands.NewStringWriter(out)))
 	assert.JSONEq(t, `{"Relays":[{"NebulaAddr":"10.0.0.1","RelayForAddrs":[{"Error":"could not find hostinfo","Type":"","State":"","PeerAddr":"","LocalIndex":0,"RemoteIndex":0,"RelayedThrough":null}]}]}`, out.String())
 
 	// The same relay host, found, relaying for a peer whose index matches: no Error key.
@@ -55,13 +55,13 @@ func TestPrintRelaysReportsErrorsAsText(t *testing.T) {
 	hm.Hosts[relay] = hi
 
 	out.Reset()
-	require.NoError(t, sshPrintRelays(ifce, &sshPrintTunnelFlags{}, nil, commands.NewStringWriter(out)))
+	require.NoError(t, printRelaysCommand(ifce, &printTunnelFlags{}, nil, commands.NewStringWriter(out)))
 	assert.JSONEq(t, `{"Relays":[{"NebulaAddr":"10.0.0.1","RelayForAddrs":[{"Type":"forwarding","State":"established","PeerAddr":"10.0.0.2","LocalIndex":1,"RemoteIndex":2,"RelayedThrough":null}]}]}`, out.String())
 
 	// And an index mismatch names it.
 	hm.Relays[7] = hi
 	delete(hm.Relays, 1)
 	out.Reset()
-	require.NoError(t, sshPrintRelays(ifce, &sshPrintTunnelFlags{}, nil, commands.NewStringWriter(out)))
+	require.NoError(t, printRelaysCommand(ifce, &printTunnelFlags{}, nil, commands.NewStringWriter(out)))
 	assert.Contains(t, out.String(), `"Error":"hostmap LocalIndex '7' does not match RelayState LocalIndex"`)
 }
