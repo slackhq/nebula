@@ -476,8 +476,10 @@ func parseV4(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, messageCounter uint64, out []byte, rxc *rxContext) {
 	err := newPacket(out, true, rxc.fwPacket)
 	if err != nil {
-		hostinfo.logger(f.l).Warn("Error while validating inbound packet", "error", err, "packet", out)
-		return
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			hostinfo.logger(f.l).Debug("Error while validating inbound packet", "error", err, "packet", out)
+			return
+		}
 	}
 
 	dropReason := f.firewall.Drop(rxc.fwPacket.Packet, true, hostinfo, f.pki.GetCAPool(), rxc.ctCache.Get())
