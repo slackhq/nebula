@@ -78,11 +78,15 @@ func (r *Registry) All() []*Command {
 	return cmds
 }
 
-// Clone returns a copy holding the same commands.
+// Clone returns a copy holding the same commands, with help bound to the copy: a
+// command registered on the clone alone is listed and described there, and one the
+// clone withholds is not.
 func (r *Registry) Clone() *Registry {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return &Registry{commands: maps.Clone(r.commands)}
+	c := &Registry{commands: maps.Clone(r.commands)}
+	r.mu.RUnlock()
+	c.registerHelp()
+	return c
 }
 
 // Dispatch parses a command line and runs it, reporting problems to w. The error is the

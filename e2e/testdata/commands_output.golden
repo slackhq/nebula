@@ -500,6 +500,7 @@ list-lighthouse-addrmap - List all lighthouse map entries
 list-pending-hostmap - List all handshaking hosts
 log-format - Gets or sets the current log format
 log-level - Gets or sets the current log level
+logout - Ends the current session
 print-cert - Prints the current certificate being used or the certificate for the provided vpn addr
 print-relays - Prints json details about all relay info
 print-tunnel - Prints json details about a tunnel for the provided vpn addr
@@ -528,6 +529,24 @@ Command not available -json
 
 $ help -pretty print-cert
 Command not available -pretty
+
+$ help logout
+logout - Ends the current session
+
+$ help -json logout
+Command not available -json
+
+$ help -pretty logout
+Command not available -pretty
+
+$ logout -h
+logout - Ends the current session
+
+$ logout -json -h
+logout - Ends the current session
+
+$ logout -pretty -h
+logout - Ends the current session
 
 $ reload
 Reloading config

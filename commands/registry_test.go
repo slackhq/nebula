@@ -73,8 +73,8 @@ func TestAllSortsByName(t *testing.T) {
 }
 
 // TestHelpFlagAgreesWithHelpCommand pins that -h answers through the registered help
-// command. On a clone, help is bound to the source, so a command registered only on the
-// clone is known to neither -h nor `help <name>`, and the two never disagree.
+// command, and that help on a clone describes the clone: a command registered only there
+// is known to both -h and `help <name>`, and one withheld from it is known to neither.
 func TestHelpFlagAgreesWithHelpCommand(t *testing.T) {
 	r := testRegistry()
 	c := r.Clone()
@@ -89,12 +89,40 @@ func TestHelpFlagAgreesWithHelpCommand(t *testing.T) {
 	cmd := &bytes.Buffer{}
 	c.Dispatch("help logout", NewStringWriter(cmd))
 	assert.Equal(t, cmd.String(), flag.String())
-	assert.Equal(t, "Command not available logout\n", flag.String())
+	assert.Equal(t, "logout - ends the session\n", flag.String())
+
+	// The source never learns of it.
+	src := &bytes.Buffer{}
+	r.Dispatch("help logout", NewStringWriter(src))
+	assert.Equal(t, "Command not available logout\n", src.String())
 
 	// And a command both hold is described either way.
 	flag.Reset()
 	c.Dispatch("served -h", NewStringWriter(flag))
 	assert.Equal(t, "served - a command this surface serves\n", flag.String())
+}
+
+// TestCloneHelpListsTheClone: the command list help prints is the clone's, so a clone
+// that withholds a command does not name it, and the source still does.
+func TestCloneHelpListsTheClone(t *testing.T) {
+	r := testRegistry()
+	c := New()
+	c.Register(r.Get("served"))
+	c = c.Clone()
+
+	out := &bytes.Buffer{}
+	c.Dispatch("help", NewStringWriter(out))
+	assert.Equal(t, "Available commands:\n"+
+		"help - prints available commands or help <command> for specific usage info\n"+
+		"served - a command this surface serves\n\n", out.String())
+
+	out.Reset()
+	c.Dispatch("help withheld", NewStringWriter(out))
+	assert.Equal(t, "Command not available withheld\n", out.String())
+
+	out.Reset()
+	r.Dispatch("help withheld", NewStringWriter(out))
+	assert.Equal(t, "withheld - a command this surface withholds\n", out.String())
 }
 
 // TestDispatchReturnsTheCommandsError: what the callback returns reaches the caller, so
