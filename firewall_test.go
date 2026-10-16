@@ -1053,6 +1053,109 @@ func TestFirewall_ConntrackUnsafeNetworkPeers(t *testing.T) {
 	}
 }
 
+// fakeSiblings maps each gateway to the conntrack peers of the gateways it shares a route with
+type fakeSiblings map[*HostInfo][]netip.Addr
+
+func (s fakeSiblings) siblingPeers(_ netip.Addr, h *HostInfo, buf []netip.Addr) []netip.Addr {
+	return append(buf, s[h]...)
+}
+
+func TestFirewall_ConntrackGatewaySiblings(t *testing.T) {
+	l := test.NewLoggerWithOutput(&bytes.Buffer{})
+
+	myVpnNetworksTable := new(bart.Lite)
+	myVpnNetworksTable.Insert(netip.MustParsePrefix("192.0.2.1/24"))
+
+	owner := &dummyCert{
+		name:     "owner",
+		networks: []netip.Prefix{netip.MustParsePrefix("192.0.2.1/24")},
+	}
+
+	// Routers for the same unsafe network. a and b are both our gateways for it, c only claims it in its cert
+	router := func(name string, addr string, groups ...string) *HostInfo {
+		inverted := map[string]struct{}{}
+		for _, g := range groups {
+			inverted[g] = struct{}{}
+		}
+		c := &cert.CachedCertificate{
+			Certificate: &dummyCert{
+				name:           name,
+				groups:         groups,
+				networks:       []netip.Prefix{netip.MustParsePrefix(addr + "/24")},
+				unsafeNetworks: []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24")},
+			},
+			InvertedGroups: inverted,
+		}
+		h := &HostInfo{
+			ConnectionState: &ConnectionState{peerCert: c},
+			vpnAddrs:        []netip.Addr{netip.MustParseAddr(addr)},
+		}
+		h.buildNetworks(myVpnNetworksTable, c.Certificate)
+		return h
+	}
+	a := router("a", "192.0.2.2", "trusted")
+	b := router("b", "192.0.2.3", "trusted")
+	c := router("c", "192.0.2.4", "trusted")
+	siblings := fakeSiblings{a: {b.vpnAddrs[0]}, b: {a.vpnAddrs[0]}}
+
+	cp := cert.NewCAPool()
+	flow := firewall.Packet{
+		LocalAddr:  netip.MustParseAddr("192.0.2.1"),
+		RemoteAddr: netip.MustParseAddr("198.51.100.5"),
+		LocalPort:  55000,
+		RemotePort: 443,
+		Protocol:   iputil.IPProtocolTCP,
+	}
+
+	// We open flows through our gateways, nothing is allowed in on its own
+	newFirewall := func(outGroup string) *Firewall {
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, owner)
+		require.NoError(t, fw.AddRule(false, firewall.ProtoAny, 0, 0, []string{outGroup}, "", "", "", "", ""))
+		fw.siblings = siblings
+		return fw
+	}
+
+	t.Run("reply through the other gateway", func(t *testing.T) {
+		fw := newFirewall("trusted")
+		require.NoError(t, fw.Drop(flow, false, b, cp, nil))
+		require.NoError(t, fw.Drop(flow, true, a, cp, nil))
+
+		// a has its own entry now, and keeps the flow when b's is gone
+		delete(fw.Conntrack.Conns, firewall.ConntrackKey{Packet: flow, Peer: b.vpnAddrs[0]})
+		require.NoError(t, fw.Drop(flow, true, a, cp, nil))
+	})
+
+	t.Run("not our gateway", func(t *testing.T) {
+		fw := newFirewall("trusted")
+		require.NoError(t, fw.Drop(flow, false, b, cp, nil))
+		assert.Equal(t, ErrNoMatchingRule, fw.Drop(flow, true, c, cp, nil))
+	})
+
+	t.Run("off without siblings", func(t *testing.T) {
+		fw := newFirewall("trusted")
+		fw.siblings = nil
+		require.NoError(t, fw.Drop(flow, false, b, cp, nil))
+		assert.Equal(t, ErrNoMatchingRule, fw.Drop(flow, true, a, cp, nil))
+	})
+
+	t.Run("expired sibling entry", func(t *testing.T) {
+		fw := newFirewall("trusted")
+		require.NoError(t, fw.Drop(flow, false, b, cp, nil))
+		fw.Conntrack.Conns[firewall.ConntrackKey{Packet: flow, Peer: b.vpnAddrs[0]}].Expires = time.Now().Add(-time.Second)
+		assert.Equal(t, ErrNoMatchingRule, fw.Drop(flow, true, a, cp, nil))
+	})
+
+	t.Run("the original rules must allow the new gateway", func(t *testing.T) {
+		fw := newFirewall("b-only")
+		b.ConnectionState.peerCert.InvertedGroups["b-only"] = struct{}{}
+		defer delete(b.ConnectionState.peerCert.InvertedGroups, "b-only")
+
+		require.NoError(t, fw.Drop(flow, false, b, cp, nil))
+		assert.Equal(t, ErrNoMatchingRule, fw.Drop(flow, true, a, cp, nil))
+	})
+
+}
+
 func TestFirewall_ConntrackPeerRehandshake(t *testing.T) {
 	l := test.NewLoggerWithOutput(&bytes.Buffer{})
 

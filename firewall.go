@@ -43,6 +43,10 @@ type conn struct {
 type Firewall struct {
 	Conntrack *FirewallConntrack
 
+	// siblings finds the other gateways we route an unsafe network through, so a reply that comes back through a
+	// different gateway than the flow went out through can be matched to it. Nil turns that off.
+	siblings gatewaySiblings
+
 	InRules  *FirewallTable
 	OutRules *FirewallTable
 
@@ -426,6 +430,7 @@ var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 // returns nil if the packet should not be dropped.
 func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) error {
 	// Make sure remote address matches nebula certificate, and determine how to treat it
+	unsafe := false
 	if h.networks == nil {
 		// Simple case: Certificate has one address and no unsafe networks
 		if h.vpnAddrs[0] != fp.RemoteAddr {
@@ -445,7 +450,7 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
 			return ErrPeerRejected // reject for now, one day this may have different FW rules
 		case NetworkTypeUnsafe:
-			break // nothing special, one day this may have different FW rules
+			unsafe = true // nothing else special, one day this may have different FW rules
 		default:
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
 			return ErrUnknownNetworkType //should never happen
@@ -474,6 +479,9 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 
 	// We now know which firewall table to check against
 	if !table.match(fp, incoming, h.ConnectionState.peerCert, caPool) {
+		if unsafe && f.inheritConn(key, incoming, h, caPool) {
+			return nil
+		}
 		f.metrics(incoming).droppedNoRule.Inc(1)
 		return ErrNoMatchingRule
 	}
@@ -614,6 +622,57 @@ func (f *Firewall) addConn(key firewall.ConntrackKey, incoming bool, h *HostInfo
 	c.Expires = time.Now().Add(timeout)
 	conntrack.Conns[key] = c
 	conntrack.Unlock()
+}
+
+// gatewaySiblings finds the other gateways we route an unsafe network through
+type gatewaySiblings interface {
+	// siblingPeers appends to buf the conntrack peer of every other gateway we route remote through, if h is one of
+	// those gateways
+	siblingPeers(remote netip.Addr, h *HostInfo, buf []netip.Addr) []netip.Addr
+}
+
+// inheritConn lets h carry a flow that another of our gateways for the same unsafe network already carries. We
+// spread the flows we open across the gateways, but the hosts behind them answer through whichever gateway their own
+// routing picks, so a reply can come back through a different gateway than the flow went out through. The flow is
+// checked against the rules that allowed it in the first place with h's certificate, the same check an entry gets
+// when its peer reconnects. Peers that aren't one of our gateways for the network never inherit a flow.
+func (f *Firewall) inheritConn(key firewall.ConntrackKey, incoming bool, h *HostInfo, caPool *cert.CAPool) bool {
+	if f.siblings == nil {
+		return false
+	}
+
+	var buf [4]netip.Addr
+	now := time.Now()
+	for _, peer := range f.siblings.siblingPeers(key.RemoteAddr, h, buf[:0]) {
+		sk := key
+		sk.Peer = peer
+		conntrack := f.Conntrack
+		conntrack.Lock()
+		c, ok := conntrack.Conns[sk]
+		live := ok && c.Expires.After(now)
+		var allowedIncoming bool
+		if live {
+			allowedIncoming = c.incoming
+		}
+		conntrack.Unlock()
+
+		// The rules for this packet's own direction already said no, only a flow allowed the other way can help
+		if !live || allowedIncoming == incoming {
+			continue
+		}
+
+		table := f.OutRules
+		if allowedIncoming {
+			table = f.InRules
+		}
+		if !table.match(key.Packet, allowedIncoming, h.ConnectionState.peerCert, caPool) {
+			continue
+		}
+
+		f.addConn(key, allowedIncoming, h)
+		return true
+	}
+	return false
 }
 
 // Evict checks if a conntrack entry has expired, if so it is removed, if not it is re-added to the wheel

@@ -25,6 +25,7 @@ import (
 	"github.com/slackhq/nebula/overlay/batch"
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/ratelimit"
+	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -268,6 +269,9 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	ifce.reQueryWait.Store(int64(c.reQueryWait))
 
 	ifce.connectionManager.intf = ifce
+	if ifce.firewall != nil {
+		ifce.firewall.siblings = ifce
+	}
 
 	// Held until Close so waiting on the interface blocks until the resources are actually released
 	ifce.wg.Add(1)
@@ -554,6 +558,7 @@ func (f *Interface) reloadFirewall(c *config.C, r *config.Reload) {
 	}
 
 	oldFw := f.firewall
+	fw.siblings = f
 	conntrack := oldFw.Conntrack
 	conntrack.Lock()
 	defer conntrack.Unlock()
@@ -710,4 +715,25 @@ func (f *Interface) Close() error {
 	// Release the construction token so waiters know the resources are gone
 	f.wg.Done()
 	return errors.Join(errs...)
+}
+
+// siblingPeers implements gatewaySiblings from the routes and tunnels we have now. Routes name a gateway by any of its
+// vpn addresses, conntrack keys a peer by its highest one, so each gateway is resolved through its tunnel. A gateway
+// we have no tunnel to can't be carrying a live flow.
+func (f *Interface) siblingPeers(remote netip.Addr, h *HostInfo, buf []netip.Addr) []netip.Addr {
+	gateways := f.inside.RoutesFor(remote)
+	isGateway := func(g routing.Gateway) bool { return slices.Contains(h.vpnAddrs, g.Addr()) }
+	if len(gateways) < 2 || !slices.ContainsFunc(gateways, isGateway) {
+		return buf
+	}
+
+	for _, g := range gateways {
+		if isGateway(g) {
+			continue
+		}
+		if s := f.hostMap.QueryVpnAddr(g.Addr()); s != nil && s != h {
+			buf = append(buf, s.vpnAddrs[len(s.vpnAddrs)-1])
+		}
+	}
+	return buf
 }
