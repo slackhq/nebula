@@ -32,10 +32,11 @@ type conn struct {
 	Expires time.Time // Time when this conntrack entry will expire
 
 	// record why the original connection passed the firewall, so we can re-validate
-	// after ruleset changes. Note, rulesVersion is a uint16 so that these two
-	// fields pack for free after the uint32 above
+	// after ruleset changes or when the peer handshakes again, which may present a
+	// cert with different groups. These pack into the word after Expires.
 	incoming     bool
 	rulesVersion uint16
+	localIndex   uint32
 }
 
 // TODO: need conntrack max tracked connections handling
@@ -82,8 +83,8 @@ type firewallMetrics struct {
 type FirewallConntrack struct {
 	sync.Mutex
 
-	Conns      map[firewall.Packet]*conn
-	TimerWheel *TimerWheel[firewall.Packet]
+	Conns      map[firewall.ConntrackKey]*conn
+	TimerWheel *TimerWheel[firewall.ConntrackKey]
 }
 
 // FirewallTable is the entry point for a rule, the evaluation order is:
@@ -167,8 +168,8 @@ func NewFirewall(l *slog.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.Dur
 
 	return &Firewall{
 		Conntrack: &FirewallConntrack{
-			Conns:      make(map[firewall.Packet]*conn),
-			TimerWheel: NewTimerWheel[firewall.Packet](tmin, tmax),
+			Conns:      make(map[firewall.ConntrackKey]*conn),
+			TimerWheel: NewTimerWheel[firewall.ConntrackKey](tmin, tmax),
 		},
 		InRules:          newFirewallTable(),
 		OutRules:         newFirewallTable(),
@@ -457,8 +458,12 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 		return ErrInvalidLocalIP
 	}
 
+	// The highest vpn address identifies the peer. v2 certs sort their networks and v1 certs have only one,
+	// so this is the peer's v6 address when it has one, which stays put while v4 addresses come and go.
+	key := firewall.ConntrackKey{Packet: fp, Peer: h.vpnAddrs[len(h.vpnAddrs)-1]}
+
 	// Check if we spoke to this tuple, if we did then allow this packet
-	if f.inConns(fp, h, caPool, localCache) {
+	if f.inConns(key, h, caPool, localCache) {
 		return nil
 	}
 
@@ -474,7 +479,7 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 	}
 
 	// We always want to conntrack since it is a faster operation
-	f.addConn(fp, incoming)
+	f.addConn(key, incoming, h)
 
 	return nil
 }
@@ -503,9 +508,9 @@ func (f *Firewall) EmitStats() {
 	metrics.GetOrRegisterGauge("firewall.rules.hash", nil).Update(int64(f.GetRuleHashFNV()))
 }
 
-func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) bool {
+func (f *Firewall) inConns(key firewall.ConntrackKey, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) bool {
 	if localCache != nil {
-		if _, ok := localCache[fp]; ok {
+		if _, ok := localCache[key]; ok {
 			return true
 		}
 	}
@@ -518,49 +523,52 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 		f.evict(ep)
 	}
 
-	c, ok := conntrack.Conns[fp]
+	c, ok := conntrack.Conns[key]
 
 	if !ok {
 		conntrack.Unlock()
 		return false
 	}
 
-	if c.rulesVersion != f.rulesVersion {
-		// This conntrack entry was for an older rule set, validate
-		// it still passes with the current rule set
+	if c.rulesVersion != f.rulesVersion || c.localIndex != h.localIndexId {
+		// This conntrack entry was allowed by an older rule set or for an earlier tunnel to the peer, validate
+		// it still passes with the current rule set and the peer's current certificate
 		table := f.OutRules
 		if c.incoming {
 			table = f.InRules
 		}
 
 		// We now know which firewall table to check against
-		if !table.match(fp, c.incoming, h.ConnectionState.peerCert, caPool) {
+		if !table.match(key.Packet, c.incoming, h.ConnectionState.peerCert, caPool) {
 			if f.l.Enabled(context.Background(), slog.LevelDebug) {
-				h.logger(f.l).Debug("dropping old conntrack entry, does not match new ruleset",
-					"fwPacket", fp,
+				h.logger(f.l).Debug("dropping old conntrack entry, does not match current ruleset and certificate",
+					"fwPacket", key.Packet,
 					"incoming", c.incoming,
 					"rulesVersion", f.rulesVersion,
 					"oldRulesVersion", c.rulesVersion,
+					"oldLocalIndex", c.localIndex,
 				)
 			}
-			delete(conntrack.Conns, fp)
+			delete(conntrack.Conns, key)
 			conntrack.Unlock()
 			return false
 		}
 
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
-			h.logger(f.l).Debug("keeping old conntrack entry, does match new ruleset",
-				"fwPacket", fp,
+			h.logger(f.l).Debug("keeping old conntrack entry, does match current ruleset and certificate",
+				"fwPacket", key.Packet,
 				"incoming", c.incoming,
 				"rulesVersion", f.rulesVersion,
 				"oldRulesVersion", c.rulesVersion,
+				"oldLocalIndex", c.localIndex,
 			)
 		}
 
 		c.rulesVersion = f.rulesVersion
+		c.localIndex = h.localIndexId
 	}
 
-	switch fp.Protocol {
+	switch key.Protocol {
 	case iputil.IPProtocolTCP:
 		c.Expires = time.Now().Add(f.TCPTimeout)
 	case iputil.IPProtocolUDP:
@@ -572,17 +580,17 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 	conntrack.Unlock()
 
 	if localCache != nil {
-		localCache[fp] = struct{}{}
+		localCache[key] = struct{}{}
 	}
 
 	return true
 }
 
-func (f *Firewall) addConn(fp firewall.Packet, incoming bool) {
+func (f *Firewall) addConn(key firewall.ConntrackKey, incoming bool, h *HostInfo) {
 	var timeout time.Duration
 	c := &conn{}
 
-	switch fp.Protocol {
+	switch key.Protocol {
 	case iputil.IPProtocolTCP:
 		timeout = f.TCPTimeout
 	case iputil.IPProtocolUDP:
@@ -593,26 +601,27 @@ func (f *Firewall) addConn(fp firewall.Packet, incoming bool) {
 
 	conntrack := f.Conntrack
 	conntrack.Lock()
-	if _, ok := conntrack.Conns[fp]; !ok {
+	if _, ok := conntrack.Conns[key]; !ok {
 		conntrack.TimerWheel.Advance(time.Now())
-		conntrack.TimerWheel.Add(fp, timeout)
+		conntrack.TimerWheel.Add(key, timeout)
 	}
 
-	// Record which rulesVersion allowed this connection, so we can retest after
-	// firewall reload
+	// Record which rulesVersion and tunnel allowed this connection, so we can retest after
+	// firewall reload or when the peer handshakes again
 	c.incoming = incoming
 	c.rulesVersion = f.rulesVersion
+	c.localIndex = h.localIndexId
 	c.Expires = time.Now().Add(timeout)
-	conntrack.Conns[fp] = c
+	conntrack.Conns[key] = c
 	conntrack.Unlock()
 }
 
 // Evict checks if a conntrack entry has expired, if so it is removed, if not it is re-added to the wheel
 // Caller must own the connMutex lock!
-func (f *Firewall) evict(p firewall.Packet) {
+func (f *Firewall) evict(key firewall.ConntrackKey) {
 	// Are we still tracking this conn?
 	conntrack := f.Conntrack
-	t, ok := conntrack.Conns[p]
+	t, ok := conntrack.Conns[key]
 	if !ok {
 		return
 	}
@@ -622,12 +631,12 @@ func (f *Firewall) evict(p firewall.Packet) {
 	// Timeout is in the future, re-add the timer
 	if newT > 0 {
 		conntrack.TimerWheel.Advance(time.Now())
-		conntrack.TimerWheel.Add(p, newT)
+		conntrack.TimerWheel.Add(key, newT)
 		return
 	}
 
 	// This conn is done
-	delete(conntrack.Conns, p)
+	delete(conntrack.Conns, key)
 }
 
 func (ft *FirewallTable) match(p firewall.Packet, incoming bool, c *cert.CachedCertificate, caPool *cert.CAPool) bool {

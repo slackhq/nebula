@@ -3,6 +3,7 @@ package nebula
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"net/netip"
@@ -979,6 +980,149 @@ func TestFirewall_ConntrackSourceSpoofingAcrossPeers(t *testing.T) {
 		"SECURITY: attacker spoofed victim's overlay source IP (192.0.2.2) by reusing an existing conntrack 4-tuple; Drop returned %v instead of rejecting", got)
 }
 
+func TestFirewall_ConntrackUnsafeNetworkPeers(t *testing.T) {
+	l := test.NewLoggerWithOutput(&bytes.Buffer{})
+
+	myVpnNetworksTable := new(bart.Lite)
+	myVpnNetworksTable.Insert(netip.MustParsePrefix("192.0.2.1/24"))
+
+	owner := &dummyCert{
+		name:     "owner",
+		networks: []netip.Prefix{netip.MustParsePrefix("192.0.2.1/24")},
+	}
+
+	// Two routers for the same unsafe network, only one of them is trusted inbound
+	router := func(name string, addr string, groups ...string) *HostInfo {
+		inverted := map[string]struct{}{}
+		for _, g := range groups {
+			inverted[g] = struct{}{}
+		}
+		c := &cert.CachedCertificate{
+			Certificate: &dummyCert{
+				name:           name,
+				groups:         groups,
+				networks:       []netip.Prefix{netip.MustParsePrefix(addr + "/24")},
+				unsafeNetworks: []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24")},
+			},
+			InvertedGroups: inverted,
+		}
+		h := &HostInfo{
+			ConnectionState: &ConnectionState{peerCert: c},
+			vpnAddrs:        []netip.Addr{netip.MustParseAddr(addr)},
+		}
+		h.buildNetworks(myVpnNetworksTable, c.Certificate)
+		return h
+	}
+	trusted := router("trusted", "192.0.2.2", "trusted")
+	other := router("other", "192.0.2.3")
+
+	cp := cert.NewCAPool()
+	flow := firewall.Packet{
+		LocalAddr:  netip.MustParseAddr("192.0.2.1"),
+		RemoteAddr: netip.MustParseAddr("198.51.100.5"),
+		LocalPort:  443,
+		RemotePort: 55000,
+		Protocol:   iputil.IPProtocolTCP,
+	}
+
+	for _, useCache := range []bool{false, true} {
+		var cache firewall.ConntrackCache
+		if useCache {
+			cache = firewall.ConntrackCache{}
+		}
+
+		t.Run(fmt.Sprintf("inbound flow allowed for one peer/cache=%v", useCache), func(t *testing.T) {
+			fw := NewFirewall(l, time.Second, time.Minute, time.Hour, owner)
+			require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"trusted"}, "", "", "", "", ""))
+			clear(cache)
+
+			require.NoError(t, fw.Drop(flow, true, trusted, cp, cache))
+			assert.Equal(t, ErrNoMatchingRule, fw.Drop(flow, true, other, cp, cache))
+			require.NoError(t, fw.Drop(flow, true, trusted, cp, cache))
+		})
+
+		t.Run(fmt.Sprintf("reply to a flow opened via one peer/cache=%v", useCache), func(t *testing.T) {
+			fw := NewFirewall(l, time.Second, time.Minute, time.Hour, owner)
+			require.NoError(t, fw.AddRule(false, firewall.ProtoAny, 0, 0, []string{"any"}, "", "", "", "", ""))
+			clear(cache)
+
+			require.NoError(t, fw.Drop(flow, false, trusted, cp, cache))
+			require.NoError(t, fw.Drop(flow, true, trusted, cp, cache))
+			assert.Equal(t, ErrNoMatchingRule, fw.Drop(flow, true, other, cp, cache))
+		})
+	}
+}
+
+func TestFirewall_ConntrackPeerRehandshake(t *testing.T) {
+	l := test.NewLoggerWithOutput(&bytes.Buffer{})
+
+	myVpnNetworksTable := new(bart.Lite)
+	myVpnNetworksTable.Insert(netip.MustParsePrefix("192.0.2.1/24"))
+
+	owner := &dummyCert{
+		name:     "owner",
+		networks: []netip.Prefix{netip.MustParsePrefix("192.0.2.1/24")},
+	}
+
+	// Each call is a new tunnel to the same peer, presenting a cert with the given groups
+	tunnel := func(localIndex uint32, groups ...string) *HostInfo {
+		inverted := map[string]struct{}{}
+		for _, g := range groups {
+			inverted[g] = struct{}{}
+		}
+		c := &cert.CachedCertificate{
+			Certificate: &dummyCert{
+				name:     "peer",
+				groups:   groups,
+				networks: []netip.Prefix{netip.MustParsePrefix("192.0.2.2/24"), netip.MustParsePrefix("2001:db8::2/64")},
+			},
+			InvertedGroups: inverted,
+		}
+		h := &HostInfo{
+			ConnectionState: &ConnectionState{peerCert: c},
+			vpnAddrs:        []netip.Addr{netip.MustParseAddr("192.0.2.2"), netip.MustParseAddr("2001:db8::2")},
+			localIndexId:    localIndex,
+		}
+		h.buildNetworks(myVpnNetworksTable, c.Certificate)
+		return h
+	}
+
+	cp := cert.NewCAPool()
+	flow := firewall.Packet{
+		LocalAddr:  netip.MustParseAddr("192.0.2.1"),
+		RemoteAddr: netip.MustParseAddr("192.0.2.2"),
+		LocalPort:  443,
+		RemotePort: 55000,
+		Protocol:   iputil.IPProtocolTCP,
+	}
+	key := firewall.ConntrackKey{Packet: flow, Peer: netip.MustParseAddr("2001:db8::2")}
+
+	t.Run("inbound flow follows the peer's groups", func(t *testing.T) {
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, owner)
+		require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"trusted"}, "", "", "", "", ""))
+
+		require.NoError(t, fw.Drop(flow, true, tunnel(1, "trusted"), cp, nil))
+
+		// Same groups on a new tunnel keeps the entry and moves it to the new tunnel
+		require.NoError(t, fw.Drop(flow, true, tunnel(2, "trusted"), cp, nil))
+		require.Contains(t, fw.Conntrack.Conns, key)
+		assert.Equal(t, uint32(2), fw.Conntrack.Conns[key].localIndex)
+
+		// Losing the group on a new tunnel removes the entry
+		assert.Equal(t, ErrNoMatchingRule, fw.Drop(flow, true, tunnel(3), cp, nil))
+		assert.NotContains(t, fw.Conntrack.Conns, key)
+	})
+
+	t.Run("reply to a flow we opened survives a new tunnel", func(t *testing.T) {
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, owner)
+		require.NoError(t, fw.AddRule(false, firewall.ProtoAny, 0, 0, []string{"any"}, "", "", "", "", ""))
+
+		require.NoError(t, fw.Drop(flow, false, tunnel(1, "trusted"), cp, nil))
+		require.NoError(t, fw.Drop(flow, true, tunnel(2), cp, nil))
+		assert.Equal(t, uint32(2), fw.Conntrack.Conns[key].localIndex)
+	})
+}
+
 // BenchmarkFirewallDropConntrackHit measures Drop on an already-established flow
 // (a conntrack hit). This is the fast path that the source-IP<->cert binding
 // reordering adds work to, so it quantifies the cost of moving the address checks
@@ -1742,6 +1886,6 @@ func (mf *mockFirewall) AddRule(incoming bool, proto uint8, startPort int32, end
 
 func resetConntrack(fw *Firewall) {
 	fw.Conntrack.Lock()
-	fw.Conntrack.Conns = map[firewall.Packet]*conn{}
+	fw.Conntrack.Conns = map[firewall.ConntrackKey]*conn{}
 	fw.Conntrack.Unlock()
 }

@@ -3,15 +3,23 @@ package firewall
 import (
 	"context"
 	"log/slog"
+	"net/netip"
 	"sync/atomic"
 	"time"
 
 	"github.com/slackhq/nebula/logging"
 )
 
+// ConntrackKey identifies a tracked flow by its packet and the peer it was allowed for, so peers that route
+// the same unsafe network never share a conntrack entry.
+type ConntrackKey struct {
+	Peer netip.Addr
+	Packet
+}
+
 // ConntrackCache is used as a local routine cache to know if a given flow
 // has been seen in the conntrack table.
-type ConntrackCache map[Packet]struct{}
+type ConntrackCache map[ConntrackKey]struct{}
 
 type ConntrackCacheTicker struct {
 	cacheV    uint64
