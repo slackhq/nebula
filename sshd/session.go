@@ -25,17 +25,23 @@ func NewSession(reg *commands.Registry, conn *ssh.ServerConn, chans <-chan ssh.N
 		cancel:   cancel,
 	}
 
-	s.commands.Register(&commands.Command{
-		Name:             commands.Logout,
-		ShortDescription: "Ends the current session",
-		Callback: func(a any, args []string, w commands.StringWriter) error {
-			s.Close()
-			return nil
-		},
-	})
+	s.commands.Register(LogoutCommand(s.Close))
 
 	go s.handleChannels(chans)
 	return s
+}
+
+// LogoutCommand is the logout command a session registers on its clone of the registry,
+// with end as what it does. Exported so a test can serve what a session serves.
+func LogoutCommand(end func()) *commands.Command {
+	return &commands.Command{
+		Name:             commands.Logout,
+		ShortDescription: "Ends the current session",
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
+			end()
+			return nil
+		},
+	}
 }
 
 func (s *session) handleChannels(chans <-chan ssh.NewChannel) {

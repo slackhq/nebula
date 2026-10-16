@@ -14,6 +14,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/commands"
+	"github.com/slackhq/nebula/sshd"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/require"
 )
@@ -64,7 +65,10 @@ func TestCommandOutput(t *testing.T) {
 	control.Start()
 	t.Cleanup(func() { control.Stop() })
 
+	// As an ssh session does: a clone of the daemon's registry with logout added, which
+	// help on the clone lists and describes. There is no session to end here.
 	reg := control.Commands().Clone()
+	reg.Register(sshd.LogoutCommand(func() {}))
 
 	run := func(args ...string) string {
 		buf := &bytes.Buffer{}
@@ -120,6 +124,8 @@ func TestCommandOutput(t *testing.T) {
 		{"close-tunnel", []string{"not-an-address"}},
 		{"help", nil},
 		{"help", []string{"print-cert"}},
+		{"help", []string{"logout"}},
+		{"logout", []string{"-h"}},
 		// reload is last so that whatever a reload does to the daemon cannot leak into an
 		// earlier case. In this harness it fails: the config was loaded from a string and
 		// has no path to re-read, which is what the recorded result says.
