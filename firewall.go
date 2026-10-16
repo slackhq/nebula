@@ -22,7 +22,6 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/iputil"
-	"go.yaml.in/yaml/v3"
 )
 
 type FirewallInterface interface {
@@ -67,7 +66,7 @@ type Firewall struct {
 	rules        string
 	rulesVersion uint16
 
-	// source is firewallSource for the config and cert this firewall was built from
+	// source is the rendered firewall config this firewall was built from, the cert networks are kept above
 	source string
 
 	defaultLocalCIDRAny bool
@@ -250,28 +249,8 @@ func NewFirewallFromConfig(l *slog.Logger, cs *CertState, c *config.C) (*Firewal
 		return nil, err
 	}
 
-	fw.source = firewallSource(l, c, certificate)
+	fw.source = c.Render("firewall")
 	return fw, nil
-}
-
-// firewallSource renders everything a firewall is built from, the firewall config and the cert's networks. A reload
-// compares it with what the running firewall was built from rather than with the last config, so a firewall that
-// failed to build is tried again on the next reload. Comparing a rendering stands in for comparing typed config. Empty
-// means it couldn't be rendered, which never matches
-func firewallSource(l *slog.Logger, c *config.C, certificate cert.Certificate) string {
-	if certificate == nil {
-		return ""
-	}
-	b, err := yaml.Marshal(map[string]any{
-		"firewall":        c.Get("firewall"),
-		"networks":        certificate.Networks(),
-		"unsafe_networks": certificate.UnsafeNetworks(),
-	})
-	if err != nil {
-		l.Debug("Failed to render the firewall config, the firewall is rebuilt on every reload until it renders", "error", err)
-		return ""
-	}
-	return string(b)
 }
 
 // AddRule properly creates the in memory rule structure for a firewall table.
