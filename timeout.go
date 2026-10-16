@@ -147,7 +147,10 @@ func (tw *TimerWheel[T]) Purge() (T, bool) {
 		tw.expired.Tail = nil
 	}
 
-	// Clear out the items references
+	// Clear out the items references, a cached item must not keep its value alive
+	v := ti.Item
+	var zero T
+	ti.Item = zero
 	ti.Next = nil
 
 	// Maybe cache it for later
@@ -157,7 +160,7 @@ func (tw *TimerWheel[T]) Purge() (T, bool) {
 		tw.itemsCached++
 	}
 
-	return ti.Item, true
+	return v, true
 }
 
 // findWheel find the next position in the wheel for the provided timeout given the current tick

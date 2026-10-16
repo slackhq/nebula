@@ -65,7 +65,69 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	assert.NotContains(t, blah.vpnIps, ip)
 }
 
-func testCountTimerWheelEntries(tw *LockingTimerWheel[netip.Addr]) (c int) {
+// newTestHandshakeManager returns a manager whose handshakes never build a stage 0 packet (the cert has no key), so
+// every attempt just bumps the counter and schedules the next one. tick advances its timer wheel by one tryInterval.
+func newTestHandshakeManager() (hm *HandshakeManager, tick func()) {
+	l := test.NewLogger()
+	mainHM := newHostMap(l)
+	mainHM.preferredRanges.Store(&[]netip.Prefix{})
+
+	hm = NewHandshakeManager(l, mainHM, newTestLighthouse(), &udp.NoopConn{}, defaultHandshakeConfig)
+	hm.f = &Interface{handshakeManager: hm, pki: &PKI{}, l: l}
+	hm.f.pki.cs.Store(&CertState{
+		initiatingVersion: cert.Version1,
+		privateKey:        []byte{},
+		v1Cert:            &dummyCert{version: cert.Version1},
+	})
+
+	now := time.Now()
+	hm.NextOutboundHandshakeTimerTick(now)
+	return hm, func() {
+		now = now.Add(DefaultHandshakeTryInterval)
+		hm.NextOutboundHandshakeTimerTick(now)
+	}
+}
+
+func Test_HandshakeManager_RestartDropsOldTimer(t *testing.T) {
+	ip := netip.MustParseAddr("172.1.1.2")
+	hm, tick := newTestHandshakeManager()
+
+	hm.StartHandshake(ip, nil)
+	old := hm.queryVpnIp(ip)
+	tick()
+	tick()
+	require.Equal(t, int64(1), old.counter)
+
+	// Restart the handshake while the old one still has a retry queued
+	hm.DeleteHostInfo(old.hostinfo)
+	hm.StartHandshake(ip, nil)
+	hh := hm.queryVpnIp(ip)
+	require.NotSame(t, old, hh)
+
+	// An entry for timeout d fires d/tryInterval+1 ticks after it is added, so linear backoff lands attempts on ticks
+	// 2, 4 and 7
+	var counters []int64
+	for range 7 {
+		tick()
+		counters = append(counters, hh.counter)
+	}
+	assert.Equal(t, []int64{0, 1, 1, 2, 2, 2, 3}, counters)
+
+	// The old handshake's queued retry ended its chain instead of retrying a deleted handshake
+	assert.Equal(t, int64(1), old.counter)
+	assert.Equal(t, 1, testCountTimerWheelEntries(hm.OutboundHandshakeTimer))
+}
+
+func Test_HandshakeManager_LighthouseTriggerKeepsOneTimer(t *testing.T) {
+	ip := netip.MustParseAddr("172.1.1.2")
+	hm, _ := newTestHandshakeManager()
+
+	hm.StartHandshake(ip, nil)
+	hm.handleOutbound(hm.queryVpnIp(ip), true)
+	assert.Equal(t, 1, testCountTimerWheelEntries(hm.OutboundHandshakeTimer))
+}
+
+func testCountTimerWheelEntries(tw *LockingTimerWheel[*HandshakeHostInfo]) (c int) {
 	for _, i := range tw.t.wheel {
 		n := i.Head
 		for n != nil {

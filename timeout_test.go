@@ -7,6 +7,7 @@ import (
 
 	"github.com/slackhq/nebula/firewall"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewTimerWheel(t *testing.T) {
@@ -150,7 +151,8 @@ func TestTimerWheel_Purge(t *testing.T) {
 	assert.Equal(t, 4, tw.itemsCached)
 	ci := tw.itemCache
 	for range 4 {
-		assert.NotNil(t, ci)
+		require.NotNil(t, ci)
+		assert.Zero(t, ci.Item)
 		ci = ci.Next
 	}
 	assert.Nil(t, ci)
