@@ -1,7 +1,9 @@
-package sshd
+package commands
 
 import "io"
 
+// StringWriter is how a command talks back to whoever invoked it: one stream, which the
+// ssh surface points at its channel.
 type StringWriter interface {
 	WriteLine(string) error
 	Write(string) error
@@ -11,6 +13,11 @@ type StringWriter interface {
 
 type stringWriter struct {
 	w io.Writer
+}
+
+// NewStringWriter returns a StringWriter that writes to w.
+func NewStringWriter(w io.Writer) StringWriter {
+	return &stringWriter{w: w}
 }
 
 func (w *stringWriter) WriteLine(s string) error {

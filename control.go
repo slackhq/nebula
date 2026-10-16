@@ -11,9 +11,9 @@ import (
 	"syscall"
 
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/commands"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/overlay"
-	"github.com/slackhq/nebula/sshd"
 )
 
 type RunState int
@@ -48,9 +48,9 @@ type Control struct {
 
 	f                      *Interface
 	l                      *slog.Logger
+	commands               *commands.Registry
 	ctx                    context.Context
 	cancel                 context.CancelFunc
-	ssh                    *sshd.SSHServer
 	sshStart               func()
 	statsStart             func()
 	dnsStart               func()
@@ -374,9 +374,8 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	return
 }
 
-// SSH returns the ssh debug server, so its command surface can be reached without a connection.
-func (c *Control) SSH() *sshd.SSHServer {
-	return c.ssh
+func (c *Control) Commands() *commands.Registry {
+	return c.commands
 }
 
 func (c *Control) Device() overlay.Device {
