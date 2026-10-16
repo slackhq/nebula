@@ -2,7 +2,6 @@ package sshd
 
 import (
 	"log/slog"
-	"sort"
 	"strings"
 
 	"github.com/slackhq/nebula/commands"
@@ -114,7 +113,6 @@ func (s *session) createTerm(channel ssh.Channel) *term.Terminal {
 				return cmds[0] + " ", len(cmds[0]) + 1, true
 			}
 
-			sort.Strings(cmds)
 			term.Write([]byte(strings.Join(cmds, "\n") + "\n\n"))
 		}
 

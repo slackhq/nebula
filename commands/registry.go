@@ -11,7 +11,7 @@ import (
 	"github.com/anmitsu/go-shlex"
 )
 
-// Registry holds a set of commands.
+// Registry holds a set of commands. New is the only way to make one.
 //
 // It is safe for concurrent use. Commands may be registered while a surface is serving
 // from the registry: the ssh server clones it per session, and a clone may overlap a
@@ -33,7 +33,7 @@ func (r *Registry) registerHelp() {
 		Name:             Help,
 		ShortDescription: "prints available commands or help <command> for specific usage info",
 		Callback: func(a any, args []string, w StringWriter) error {
-			return r.Help(args, w)
+			return r.help(args, w)
 		},
 	})
 }
@@ -101,7 +101,7 @@ func (r *Registry) Dispatch(line string, w StringWriter) {
 // pass "" and the joined args are used instead.
 func (r *Registry) DispatchArgs(args []string, orig string, w StringWriter) error {
 	if len(args) == 0 {
-		r.DumpCommands(w)
+		r.dumpCommands(w)
 		return nil
 	}
 
@@ -115,23 +115,20 @@ func (r *Registry) DispatchArgs(args []string, orig string, w StringWriter) erro
 			return err
 		}
 
-		r.DumpCommands(w)
+		r.dumpCommands(w)
 		return nil
 	}
 
 	if checkHelpArgs(args) {
 		// Through the registered help command, so -h and `help <name>` are one path.
-		if h := r.Get(Help); h != nil {
-			return execCommand(h, []string{string(c.Name)}, w)
-		}
-		return r.Help([]string{string(c.Name)}, w)
+		return execCommand(r.Get(Help), []string{string(c.Name)}, w)
 	}
 
 	return execCommand(c, args[1:], w)
 }
 
-// DumpCommands writes the list of available commands to w.
-func (r *Registry) DumpCommands(w StringWriter) {
+// dumpCommands writes the list of available commands to w.
+func (r *Registry) dumpCommands(w StringWriter) {
 	err := w.WriteLine("Available commands:")
 	if err != nil {
 		return
@@ -146,42 +143,36 @@ func (r *Registry) DumpCommands(w StringWriter) {
 	_ = w.Write(strings.Join(cmds, "\n") + "\n\n")
 }
 
-// Help writes the command list, or usage for the single command named in a.
-func (r *Registry) Help(a []string, w StringWriter) (err error) {
+// help writes the command list, or usage for the single command named in a.
+func (r *Registry) help(a []string, w StringWriter) error {
 	// Just typed help
 	if len(a) == 0 {
-		r.DumpCommands(w)
+		r.dumpCommands(w)
 		return nil
 	}
 
 	// We are printing a specific commands help text
-	if cmd := r.Get(Name(a[0])); cmd != nil {
-		err = w.WriteLine(fmt.Sprintf("%s - %s", cmd.Name, cmd.ShortDescription))
-		if err != nil {
-			return err
-		}
-
-		if cmd.Help != "" {
-			err = w.WriteLine(fmt.Sprintf("  %s", cmd.Help))
-			if err != nil {
-				return err
-			}
-		}
-
-		if cmd.Flags != nil {
-			fs, _ := cmd.Flags()
-			if fs != nil {
-				fs.SetOutput(w.GetWriter())
-				fs.PrintDefaults()
-			}
-		}
-
-		return nil
+	cmd := r.Get(Name(a[0]))
+	if cmd == nil {
+		return w.WriteLine("Command not available " + a[0])
 	}
 
-	err = w.WriteLine("Command not available " + a[0])
-	if err != nil {
+	if err := w.WriteLine(fmt.Sprintf("%s - %s", cmd.Name, cmd.ShortDescription)); err != nil {
 		return err
+	}
+
+	if cmd.Help != "" {
+		if err := w.WriteLine(fmt.Sprintf("  %s", cmd.Help)); err != nil {
+			return err
+		}
+	}
+
+	if cmd.Flags != nil {
+		fs, _ := cmd.Flags()
+		if fs != nil {
+			fs.SetOutput(w.GetWriter())
+			fs.PrintDefaults()
+		}
 	}
 
 	return nil
