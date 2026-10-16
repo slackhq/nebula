@@ -3,7 +3,6 @@ package nebula
 import (
 	"errors"
 	"net/netip"
-	"time"
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/firewall"
@@ -280,9 +279,8 @@ type stagedTx struct {
 
 	metricGateSwitches metrics.Counter
 
-	readBusy, encryptBusy, sendBusy metrics.Counter
-	metricBatches                   metrics.Counter
-	metricInline                    metrics.Counter
+	metricBatches metrics.Counter
+	metricInline  metrics.Counter
 }
 
 // newStagedTx needs a queue that hands over whole read batches, the offload (TSO/USO) queue on linux. On any other
@@ -298,9 +296,6 @@ func newStagedTx(f *Interface, queue handoffQueue, q int) *stagedTx {
 		ordered:       make(chan *txSlot, f.staged.txSlots),
 		returned:      make(chan *txSlot, f.staged.txSlots),
 		senderDone:    make(chan struct{}),
-		readBusy:      stageBusy("tx_read", q),
-		encryptBusy:   stageBusy("tx_encrypt", q),
-		sendBusy:      stageBusy("tx_send", q),
 		metricBatches: metrics.GetOrRegisterCounter("flow.tx.batches", nil),
 		metricInline:  metrics.GetOrRegisterCounter("flow.tx.inline", nil),
 		// Starts inline, the pipeline is empty, unless the threshold never allows it
@@ -315,7 +310,7 @@ func newStagedTx(f *Interface, queue handoffQueue, q int) *stagedTx {
 			p.senderCPU = f.cpuAffinity[(q+1)%n]
 		}
 	}
-	p.pool = newFlowPool(f.staged.workers, f.staged.txSlots, p.encryptBusy)
+	p.pool = newFlowPool(f.staged.workers, f.staged.txSlots)
 
 	// Ciphertext adds per-segment headers and tags; the arena can grow for small segments.
 	buf := queue.SwapRxBuf(nil)
@@ -346,25 +341,21 @@ func (p *stagedTx) run(fwPacket *firewall.ParsedPacket, rejectBuf []byte, conntr
 		if err != nil {
 			return err
 		}
-		// Waiting for a slot is backpressure, not reader work, so it comes before the clock read. The loop reads the
-		// clock twice, more only when it waits for tunnel credit or drains, for an oversized read or a switch to inline.
 		p.ready()
-		t := time.Now()
-		stall := p.handle(pkts, fwPacket, rejectBuf, conntrackCache.Get())
-		p.readBusy.Inc(int64(time.Since(t) - stall))
+		p.handle(pkts, fwPacket, rejectBuf, conntrackCache.Get())
 	}
 }
 
 // handle takes one tun read through the pipeline. It returns once the batch is queued, or sent when the reader sent
-// it itself, with how long it waited for tunnel credit.
-func (p *stagedTx) handle(pkts []tio.Packet, fwPacket *firewall.ParsedPacket, rejectBuf []byte, localCache firewall.ConntrackCache) time.Duration {
+// it itself.
+func (p *stagedTx) handle(pkts []tio.Packet, fwPacket *firewall.ParsedPacket, rejectBuf []byte, localCache firewall.ConntrackCache) {
 	p.ready()
-	inline, stall := p.gate(p.small(pkts))
+	inline := p.gate(p.small(pkts))
 	if inline && p.f.routines == 1 {
 		// With only one reader and an empty pipeline, no other staged reservation can be overtaken. Keep this common
 		// case inexpensive.
 		p.inlineSoleReader(pkts, fwPacket, rejectBuf, localCache)
-		return stall
+		return
 	}
 
 	slot := p.free[len(p.free)-1]
@@ -373,23 +364,21 @@ func (p *stagedTx) handle(pkts []tio.Packet, fwPacket *firewall.ParsedPacket, re
 	if len(items) == 0 {
 		slot.items = items
 		p.free = append(p.free, slot)
-		return stall
+		return
 	}
 
 	if p.oversized() {
 		p.metricInline.Inc(1)
-		stall += p.sendLarge(items)
+		p.sendLarge(items)
 		slot.items = items[:0]
 		p.free = append(p.free, slot)
-		return stall
+		return
 	}
-	d, ok := p.waitBudget()
-	stall += d
-	if !ok {
+	if !p.waitBudget() {
 		clear(items)
 		slot.items = items[:0]
 		p.free = append(p.free, slot)
-		return stall
+		return
 	}
 	slot.reservations = append(slot.reservations[:0], p.tunnels...)
 	items = p.reserve(items)
@@ -397,13 +386,13 @@ func (p *stagedTx) handle(pkts []tio.Packet, fwPacket *firewall.ParsedPacket, re
 	if len(items) == 0 {
 		slot.releaseBudget()
 		p.free = append(p.free, slot)
-		return stall
+		return
 	}
 
 	if inline {
 		p.inline(slot)
 		p.free = append(p.free, slot)
-		return stall
+		return
 	}
 
 	// The packets now live in the slot, and the queue reads into the slot's old buffer
@@ -415,32 +404,30 @@ func (p *stagedTx) handle(pkts []tio.Packet, fwPacket *firewall.ParsedPacket, re
 	// before any other batch can, so the sender puts them on the wire in counter order.
 	p.ordered <- slot
 	p.pool.jobs <- slot
-	return stall
 }
 
-// gate reports whether a read goes inline, and how long it waited for the pipeline to drain. Each routine holds one
+// gate reports whether a read goes inline. Each routine holds one
 // transmit mode, inline on the reader or fanout to the workers and the sender, until gateHold reads in a row want the
 // other one, the last of which goes the new way. Choosing per read let small inline sends leave from the reader's CPU
 // between staged ones leaving from the sender's, and the receiver's TCP saw them reordered. Going inline the reader
 // first waits until everything in flight is on the wire and the sender is idle, so no inline send overtakes a staged
 // one. Going to fanout nothing is in flight: inline sends finish before the reader moves on.
-func (p *stagedTx) gate(small bool) (bool, time.Duration) {
+func (p *stagedTx) gate(small bool) bool {
 	if small == p.gateInline {
 		p.gateStreak = 0
-		return small, 0
+		return small
 	}
 	if p.gateStreak++; p.gateStreak < p.f.staged.gateHold {
-		return p.gateInline, 0
+		return p.gateInline
 	}
 	p.gateInline, p.gateStreak = small, 0
 	p.metricGateSwitches.Inc(1)
 	if !small {
-		return false, 0
+		return false
 	}
-	t := time.Now()
 	for p.flushOldest() {
 	}
-	return true, time.Since(t)
+	return true
 }
 
 // ready takes back every slot the sender has finished with, and waits for one when all of them are in flight.
@@ -486,7 +473,6 @@ func (p *stagedTx) sender() {
 	}
 	for s := range p.ordered {
 		<-s.done
-		t := time.Now()
 		if p.f.closed.Load() {
 			// The sockets are gone, a flush would only log errors
 			s.sb.Reset()
@@ -494,7 +480,6 @@ func (p *stagedTx) sender() {
 			p.f.flushSendBatch(s.sb, p.q)
 		}
 		s.releaseBudget()
-		p.sendBusy.Inc(int64(time.Since(t)))
 		clear(s.items)
 		s.items = s.items[:0]
 		p.returned <- s

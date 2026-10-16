@@ -112,20 +112,19 @@ func (r *txReserver) tryBudget() bool {
 // orders. The sleep is only for readers with no local work, not the uncontended hot path. Acquisition is
 // all-or-nothing per read, so pressure on one tunnel also delays packets for idle tunnels in the read; splitting
 // would need separate slot ownership and coupled inner/relay reservations. Reader fairness is not guaranteed.
-func (p *stagedTx) waitBudget() (time.Duration, bool) {
+func (p *stagedTx) waitBudget() bool {
 	if p.tryBudget() {
-		return 0, true
+		return true
 	}
-	t := time.Now()
 	for {
 		if p.f.closed.Load() {
-			return time.Since(t), false
+			return false
 		}
 		if !p.flushOldest() {
 			time.Sleep(50 * time.Microsecond)
 		}
 		if p.tryBudget() {
-			return time.Since(t), true
+			return true
 		}
 	}
 }
@@ -142,11 +141,9 @@ func (s *txSlot) releaseBudget() {
 // the pipeline, then segments and sends them synchronously with credit for each segment, never exceeding the cap and
 // never filtering or running connection manager side effects twice. This deliberately slow path avoids a lone-batch
 // exception to the shared invariant.
-func (p *stagedTx) sendLarge(items []txItem) time.Duration {
-	t := time.Now()
+func (p *stagedTx) sendLarge(items []txItem) {
 	for p.flushOldest() {
 	}
-	stall := time.Since(t)
 	for _, it := range items {
 		err := tio.SegmentSuperpacket(it.pkt, func(seg []byte) error {
 			if p.f.closed.Load() {
@@ -159,9 +156,7 @@ func (p *stagedTx) sendLarge(items []txItem) time.Duration {
 			if part.relayHI != nil {
 				part.relayCounter = p.need(part.relayHI, part.relayHI.ConnectionState, 1)
 			}
-			d, ok := p.waitBudget()
-			stall += d
-			if !ok {
+			if !p.waitBudget() {
 				return nil
 			}
 			one := [1]txItem{part}
@@ -179,5 +174,4 @@ func (p *stagedTx) sendLarge(items []txItem) time.Duration {
 		}
 	}
 	clear(items)
-	return stall
 }
