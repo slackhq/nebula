@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -134,4 +135,48 @@ func TestCertificate_SignP256_AlwaysNormalized(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, normie)
 	}
+}
+
+func TestCertificateV2_SignRejectsUnparseable(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	var invalid *ErrInvalidCertificateProperties
+
+	newTBS := func() TBSCertificate {
+		return TBSCertificate{
+			Version:   Version2,
+			Name:      "testing",
+			Networks:  []netip.Prefix{mustParsePrefixUnmapped("10.1.1.1/24")},
+			Groups:    []string{"test-group1"},
+			NotBefore: time.Now().Add(-time.Minute),
+			NotAfter:  time.Now().Add(time.Minute),
+			PublicKey: []byte("1234567890abcedfghij1234567890ab"),
+			Curve:     Curve_CURVE25519,
+			IsCA:      true,
+		}
+	}
+
+	tbs := newTBS()
+	tbs.Name = strings.Repeat("a", MaxNameLength)
+	c, err := tbs.Sign(nil, Curve_CURVE25519, priv)
+	require.NoError(t, err)
+	b, err := c.Marshal()
+	require.NoError(t, err)
+	_, err = unmarshalCertificateV2(b, nil, Curve_CURVE25519)
+	require.NoError(t, err)
+
+	tbs = newTBS()
+	tbs.Name = strings.Repeat("a", MaxNameLength+1)
+	_, err = tbs.Sign(nil, Curve_CURVE25519, priv)
+	require.ErrorAs(t, err, &invalid)
+
+	tbs = newTBS()
+	tbs.Name = ""
+	_, err = tbs.Sign(nil, Curve_CURVE25519, priv)
+	require.ErrorAs(t, err, &invalid)
+
+	tbs = newTBS()
+	tbs.Groups = []string{"test-group1", ""}
+	_, err = tbs.Sign(nil, Curve_CURVE25519, priv)
+	require.ErrorAs(t, err, &invalid)
 }
