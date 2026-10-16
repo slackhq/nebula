@@ -56,6 +56,7 @@ func Test_keygen(t *testing.T) {
 	// create temp key file
 	keyF, err := os.CreateTemp("", "test.key")
 	require.NoError(t, err)
+	os.Remove(keyF.Name())
 	defer os.Remove(keyF.Name())
 
 	// failed pub write
@@ -69,9 +70,11 @@ func Test_keygen(t *testing.T) {
 	// create temp pub file
 	pubF, err := os.CreateTemp("", "test.pub")
 	require.NoError(t, err)
+	os.Remove(pubF.Name())
 	defer os.Remove(pubF.Name())
 
 	// test proper keygen
+	os.Remove(keyF.Name())
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-out-pub", pubF.Name(), "-out-key", keyF.Name()}
@@ -93,6 +96,21 @@ func Test_keygen(t *testing.T) {
 	assert.Empty(t, b)
 	require.NoError(t, err)
 	assert.Len(t, lPub, 32)
+
+	// test that we won't overwrite existing key or pub files
+	keyBefore, err := os.ReadFile(keyF.Name())
+	require.NoError(t, err)
+	require.EqualError(t, keygen(args, ob, eb), "refusing to overwrite existing key: "+keyF.Name())
+	keyAfter, err := os.ReadFile(keyF.Name())
+	require.NoError(t, err)
+	assert.Equal(t, keyBefore, keyAfter)
+
+	os.Remove(keyF.Name())
+	require.EqualError(t, keygen(args, ob, eb), "refusing to overwrite existing public key: "+pubF.Name())
+	_, err = os.Stat(keyF.Name())
+	assert.True(t, os.IsNotExist(err), "key must not be written when pub is refused")
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 }
 
 func Test_keygen_stdio(t *testing.T) {
