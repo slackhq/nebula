@@ -136,7 +136,11 @@ func (s *session) handleInput() {
 }
 
 func (s *session) dispatchCommand(line string, w commands.StringWriter) {
-	s.commands.Dispatch(line, w)
+	// The command has already told the user what went wrong, or chosen not to; this is
+	// for the operator reading the daemon's log.
+	if err := s.commands.Dispatch(line, w); err != nil {
+		s.l.Debug("Command returned an error", "line", line, "error", err)
+	}
 }
 
 func (s *session) Close() {

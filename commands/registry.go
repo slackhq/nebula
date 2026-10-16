@@ -38,7 +38,8 @@ func (r *Registry) registerHelp() {
 	})
 }
 
-// Register adds a command that can be run by a user.
+// Register adds a command that can be run by a user. A command registered under a name
+// already held replaces it.
 func (r *Registry) Register(c *Command) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -84,21 +85,23 @@ func (r *Registry) Clone() *Registry {
 	return &Registry{commands: maps.Clone(r.commands)}
 }
 
-// Dispatch parses a command line and runs it, reporting problems to w.
-func (r *Registry) Dispatch(line string, w StringWriter) {
+// Dispatch parses a command line and runs it, reporting problems to w. The error is the
+// command's own, or the flag parse failure; both have already been reported to w, so it
+// is for the caller to log, not to show.
+func (r *Registry) Dispatch(line string, w StringWriter) error {
 	// A line shlex cannot split, an unbalanced quote, gets no answer. sshd was silent
 	// here too; this is a relocation, so it stays silent.
 	args, err := shlex.Split(line, true)
 	if err != nil {
-		return
+		return err
 	}
 
-	_ = r.DispatchArgs(args, line, w)
+	return r.DispatchArgs(args, line, w)
 }
 
 // DispatchArgs runs an already tokenized command line. orig is what the user typed,
 // used only for the "did not understand" message; callers that have no raw line may
-// pass "" and the joined args are used instead.
+// pass "" and the joined args are used instead. The error is as for Dispatch.
 func (r *Registry) DispatchArgs(args []string, orig string, w StringWriter) error {
 	if len(args) == 0 {
 		r.dumpCommands(w)
