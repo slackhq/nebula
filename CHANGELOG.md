@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Signing a v2 certificate with an empty name, a name longer than 253 bytes, or an empty group now fails.
+  These certificates were signed successfully but could not be loaded.
 - `create-tunnel -address <ip:port>` panicked on a nil RemoteList and, over the ssh debug server, took nebula
   down with it. A hostinfo returned by StartHandshake had no RemoteList until the handshake loop's first
   pass attached one, and `create-tunnel -address` set the remote before that. The list is now attached when

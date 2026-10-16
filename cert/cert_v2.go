@@ -389,7 +389,16 @@ func (c *certificateV2) fromTBSCertificate(t *TBSCertificate) error {
 }
 
 func (c *certificateV2) validate() error {
-	// Empty names are allowed
+	// Mirror the name and group rules in unmarshalDetails so signing fails instead of producing an unparseable certificate
+	if c.details.name == "" || len(c.details.name) > MaxNameLength {
+		return NewErrInvalidCertificateProperties("name must be between 1 and %d bytes", MaxNameLength)
+	}
+
+	for _, group := range c.details.groups {
+		if group == "" {
+			return NewErrInvalidCertificateProperties("groups may not be empty")
+		}
+	}
 
 	if len(c.publicKey) == 0 {
 		return ErrInvalidPublicKey
