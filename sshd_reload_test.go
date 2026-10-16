@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/slackhq/nebula/commands"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/sshd"
 	"github.com/slackhq/nebula/test"
@@ -44,7 +45,7 @@ func newSSHDReloadHarness(t *testing.T) *sshdReloadHarness {
 
 	h.c = config.NewC(l)
 	require.NoError(t, h.c.LoadString(h.config()))
-	h.server, err = sshd.NewSSHServer(t.Context(), l)
+	h.server, err = sshd.NewSSHServer(t.Context(), l, commands.New())
 	require.NoError(t, err)
 	wireSSHReload(l, h.server, h.c)
 	run, err := configSSH(l, h.server, h.c, nil)

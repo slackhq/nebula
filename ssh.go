@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/slackhq/nebula/commands"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/logging"
@@ -228,9 +229,9 @@ func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C, r *config.Reloa
 	return runner, nil
 }
 
-func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interface) {
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "list-hostmap",
+func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Interface) {
+	reg.Register(&commands.Command{
+		Name:             commands.ListHostmap,
 		ShortDescription: "List all known previously connected hosts",
 		Flags: func() (*flag.FlagSet, any) {
 			fl := flag.NewFlagSet("", flag.ContinueOnError)
@@ -240,13 +241,13 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 			fl.BoolVar(&s.ByIndex, "by-index", false, "gets all hosts in the hostmap from the index table")
 			return fl, &s
 		},
-		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			return sshListHostMap(f.hostMap, fs, w)
 		},
 	})
 
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "list-pending-hostmap",
+	reg.Register(&commands.Command{
+		Name:             commands.ListPendingHostmap,
 		ShortDescription: "List all handshaking hosts",
 		Flags: func() (*flag.FlagSet, any) {
 			fl := flag.NewFlagSet("", flag.ContinueOnError)
@@ -256,13 +257,13 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 			fl.BoolVar(&s.ByIndex, "by-index", false, "gets all hosts in the hostmap from the index table")
 			return fl, &s
 		},
-		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			return sshListHostMap(f.handshakeManager, fs, w)
 		},
 	})
 
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "list-lighthouse-addrmap",
+	reg.Register(&commands.Command{
+		Name:             commands.ListLighthouseAddrmap,
 		ShortDescription: "List all lighthouse map entries",
 		Flags: func() (*flag.FlagSet, any) {
 			fl := flag.NewFlagSet("", flag.ContinueOnError)
@@ -271,45 +272,45 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
 			return fl, &s
 		},
-		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			return sshListLighthouseMap(f.lightHouse, fs, w)
 		},
 	})
 
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "reload",
+	reg.Register(&commands.Command{
+		Name:             commands.Reload,
 		ShortDescription: "Reloads configuration from disk, same as sending HUP to the process",
-		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			return sshReload(l, c, w)
 		},
 	})
 
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "log-level",
+	reg.Register(&commands.Command{
+		Name:             commands.LogLevel,
 		ShortDescription: "Gets or sets the current log level",
-		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			return sshLogLevel(l, fs, a, w)
 		},
 	})
 
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "log-format",
+	reg.Register(&commands.Command{
+		Name:             commands.LogFormat,
 		ShortDescription: "Gets or sets the current log format",
-		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			return sshLogFormat(l, fs, a, w)
 		},
 	})
 
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "version",
+	reg.Register(&commands.Command{
+		Name:             commands.Version,
 		ShortDescription: "Prints the currently running version of nebula",
-		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			return sshVersion(f, fs, a, w)
 		},
 	})
 
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "device-info",
+	reg.Register(&commands.Command{
+		Name:             commands.DeviceInfo,
 		ShortDescription: "Prints information about the network device.",
 		Flags: func() (*flag.FlagSet, any) {
 			fl := flag.NewFlagSet("", flag.ContinueOnError)
@@ -318,13 +319,13 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
 			return fl, &s
 		},
-		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			return sshDeviceInfo(f, fs, w)
 		},
 	})
 
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "print-cert",
+	reg.Register(&commands.Command{
+		Name:             commands.PrintCert,
 		ShortDescription: "Prints the current certificate being used or the certificate for the provided vpn addr",
 		Flags: func() (*flag.FlagSet, any) {
 			fl := flag.NewFlagSet("", flag.ContinueOnError)
@@ -334,13 +335,13 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 			fl.BoolVar(&s.Raw, "raw", false, "raw prints the PEM encoded certificate, not compatible with -json or -pretty")
 			return fl, &s
 		},
-		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			return sshPrintCert(f, fs, a, w)
 		},
 	})
 
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "print-tunnel",
+	reg.Register(&commands.Command{
+		Name:             commands.PrintTunnel,
 		ShortDescription: "Prints json details about a tunnel for the provided vpn addr",
 		Flags: func() (*flag.FlagSet, any) {
 			fl := flag.NewFlagSet("", flag.ContinueOnError)
@@ -348,13 +349,13 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json")
 			return fl, &s
 		},
-		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			return sshPrintTunnel(f, fs, a, w)
 		},
 	})
 
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "print-relays",
+	reg.Register(&commands.Command{
+		Name:             commands.PrintRelays,
 		ShortDescription: "Prints json details about all relay info",
 		Flags: func() (*flag.FlagSet, any) {
 			fl := flag.NewFlagSet("", flag.ContinueOnError)
@@ -362,13 +363,13 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json")
 			return fl, &s
 		},
-		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			return sshPrintRelays(f, fs, a, w)
 		},
 	})
 
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "change-remote",
+	reg.Register(&commands.Command{
+		Name:             commands.ChangeRemote,
 		ShortDescription: "Changes the remote address used in the tunnel for the provided vpn addr",
 		Flags: func() (*flag.FlagSet, any) {
 			fl := flag.NewFlagSet("", flag.ContinueOnError)
@@ -376,13 +377,13 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 			fl.StringVar(&s.Address, "address", "", "The new remote address, ip:port")
 			return fl, &s
 		},
-		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			return sshChangeRemote(f, fs, a, w)
 		},
 	})
 
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "close-tunnel",
+	reg.Register(&commands.Command{
+		Name:             commands.CloseTunnel,
 		ShortDescription: "Closes a tunnel for the provided vpn addr",
 		Flags: func() (*flag.FlagSet, any) {
 			fl := flag.NewFlagSet("", flag.ContinueOnError)
@@ -390,13 +391,13 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 			fl.BoolVar(&s.LocalOnly, "local-only", false, "Disables notifying the remote that the tunnel is shutting down")
 			return fl, &s
 		},
-		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			return sshCloseTunnel(f, fs, a, w)
 		},
 	})
 
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "create-tunnel",
+	reg.Register(&commands.Command{
+		Name:             commands.CreateTunnel,
 		ShortDescription: "Creates a tunnel for the provided vpn address",
 		Help:             "The lighthouses will be queried for real addresses but you can provide one as well.",
 		Flags: func() (*flag.FlagSet, any) {
@@ -405,22 +406,22 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 			fl.StringVar(&s.Address, "address", "", "Optionally provide a real remote address, ip:port ")
 			return fl, &s
 		},
-		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			return sshCreateTunnel(f, fs, a, w)
 		},
 	})
 
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "query-lighthouse",
+	reg.Register(&commands.Command{
+		Name:             commands.QueryLighthouse,
 		ShortDescription: "Query the lighthouses for the provided vpn address",
 		Help:             "This command is asynchronous. Only currently known udp addresses will be printed.",
-		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			return sshQueryLighthouse(f, fs, a, w)
 		},
 	})
 }
 
-func sshListHostMap(hl controlHostLister, a any, w sshd.StringWriter) error {
+func sshListHostMap(hl controlHostLister, a any, w commands.StringWriter) error {
 	fs, ok := a.(*sshListHostMapFlags)
 	if !ok {
 		return nil
@@ -460,7 +461,7 @@ func sshListHostMap(hl controlHostLister, a any, w sshd.StringWriter) error {
 	return nil
 }
 
-func sshListLighthouseMap(lightHouse *LightHouse, a any, w sshd.StringWriter) error {
+func sshListLighthouseMap(lightHouse *LightHouse, a any, w commands.StringWriter) error {
 	fs, ok := a.(*sshListHostMapFlags)
 	if !ok {
 		return nil
@@ -514,11 +515,11 @@ func sshListLighthouseMap(lightHouse *LightHouse, a any, w sshd.StringWriter) er
 	return nil
 }
 
-func sshVersion(ifce *Interface, fs any, a []string, w sshd.StringWriter) error {
+func sshVersion(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
 	return w.WriteLine(fmt.Sprintf("%s", ifce.version))
 }
 
-func sshQueryLighthouse(ifce *Interface, fs any, a []string, w sshd.StringWriter) error {
+func sshQueryLighthouse(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
 	if len(a) == 0 {
 		return w.WriteLine("No vpn address was provided")
 	}
@@ -540,7 +541,7 @@ func sshQueryLighthouse(ifce *Interface, fs any, a []string, w sshd.StringWriter
 	return json.NewEncoder(w.GetWriter()).Encode(cm)
 }
 
-func sshCloseTunnel(ifce *Interface, fs any, a []string, w sshd.StringWriter) error {
+func sshCloseTunnel(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
 	flags, ok := fs.(*sshCloseTunnelFlags)
 	if !ok {
 		return nil
@@ -580,7 +581,7 @@ func sshCloseTunnel(ifce *Interface, fs any, a []string, w sshd.StringWriter) er
 	return w.WriteLine("Closed")
 }
 
-func sshCreateTunnel(ifce *Interface, fs any, a []string, w sshd.StringWriter) error {
+func sshCreateTunnel(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
 	flags, ok := fs.(*sshCreateTunnelFlags)
 	if !ok {
 		return nil
@@ -629,7 +630,7 @@ func sshCreateTunnel(ifce *Interface, fs any, a []string, w sshd.StringWriter) e
 	return w.WriteLine("Created")
 }
 
-func sshChangeRemote(ifce *Interface, fs any, a []string, w sshd.StringWriter) error {
+func sshChangeRemote(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
 	flags, ok := fs.(*sshChangeRemoteFlags)
 	if !ok {
 		return nil
@@ -666,7 +667,7 @@ func sshChangeRemote(ifce *Interface, fs any, a []string, w sshd.StringWriter) e
 	return w.WriteLine("Changed")
 }
 
-func sshLogLevel(l *slog.Logger, fs any, a []string, w sshd.StringWriter) error {
+func sshLogLevel(l *slog.Logger, fs any, a []string, w commands.StringWriter) error {
 	ctrl, ok := l.Handler().(interface {
 		GetLevel() slog.Level
 		SetLevel(slog.Level)
@@ -688,7 +689,7 @@ func sshLogLevel(l *slog.Logger, fs any, a []string, w sshd.StringWriter) error 
 	return w.WriteLine(fmt.Sprintf("Log level is: %s", logging.LevelName(ctrl.GetLevel())))
 }
 
-func sshLogFormat(l *slog.Logger, fs any, a []string, w sshd.StringWriter) error {
+func sshLogFormat(l *slog.Logger, fs any, a []string, w commands.StringWriter) error {
 	ctrl, ok := l.Handler().(interface {
 		GetFormat() string
 		SetFormat(string) error
@@ -707,7 +708,7 @@ func sshLogFormat(l *slog.Logger, fs any, a []string, w sshd.StringWriter) error
 	return w.WriteLine(fmt.Sprintf("Log format is: %s", ctrl.GetFormat()))
 }
 
-func sshPrintCert(ifce *Interface, fs any, a []string, w sshd.StringWriter) error {
+func sshPrintCert(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
 	args, ok := fs.(*sshPrintCertFlags)
 	if !ok {
 		return nil
@@ -762,7 +763,7 @@ func sshPrintCert(ifce *Interface, fs any, a []string, w sshd.StringWriter) erro
 	return w.WriteLine(cert.String())
 }
 
-func sshPrintRelays(ifce *Interface, fs any, a []string, w sshd.StringWriter) error {
+func sshPrintRelays(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
 	args, ok := fs.(*sshPrintTunnelFlags)
 	if !ok {
 		w.WriteLine(fmt.Sprintf("sshPrintRelays failed to convert args type"))
@@ -857,7 +858,7 @@ func sshPrintRelays(ifce *Interface, fs any, a []string, w sshd.StringWriter) er
 	return nil
 }
 
-func sshPrintTunnel(ifce *Interface, fs any, a []string, w sshd.StringWriter) error {
+func sshPrintTunnel(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
 	args, ok := fs.(*sshPrintTunnelFlags)
 	if !ok {
 		return nil
@@ -889,7 +890,7 @@ func sshPrintTunnel(ifce *Interface, fs any, a []string, w sshd.StringWriter) er
 	return enc.Encode(copyHostInfo(hostInfo, ifce.hostMap.GetPreferredRanges()))
 }
 
-func sshDeviceInfo(ifce *Interface, fs any, w sshd.StringWriter) error {
+func sshDeviceInfo(ifce *Interface, fs any, w commands.StringWriter) error {
 
 	data := struct {
 		Name string         `json:"name"`
@@ -919,7 +920,7 @@ func sshDeviceInfo(ifce *Interface, fs any, w sshd.StringWriter) error {
 }
 
 // sshReload reloads the config and writes the result to the client. It reloads even if the client has gone away
-func sshReload(l *slog.Logger, c *config.C, w sshd.StringWriter) error {
+func sshReload(l *slog.Logger, c *config.C, w commands.StringWriter) error {
 	writeErr := w.WriteLine("Reloading config")
 	res := c.ReloadConfig()
 	res.Log(l)
