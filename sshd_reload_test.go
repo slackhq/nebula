@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -24,6 +25,7 @@ import (
 
 type sshdReloadHarness struct {
 	c       *config.C
+	reg     *commands.Registry
 	server  *sshd.SSHServer
 	keyFile string
 	signer  ssh.Signer
@@ -45,7 +47,8 @@ func newSSHDReloadHarness(t *testing.T) *sshdReloadHarness {
 
 	h.c = config.NewC(l)
 	require.NoError(t, h.c.LoadString(h.config()))
-	h.server, err = sshd.NewSSHServer(t.Context(), l, commands.New())
+	h.reg = commands.New()
+	h.server, err = sshd.NewSSHServer(t.Context(), l, h.reg)
 	require.NoError(t, err)
 	wireSSHReload(l, h.server, h.c)
 	run, err := configSSH(l, h.server, h.c, nil)
@@ -238,4 +241,32 @@ func TestSSHDReload_SkippedEntriesFail(t *testing.T) {
 			h.connect(t)
 		})
 	}
+}
+
+// TestSSHExecExitStatusReflectsTheCommand: an exec request exits 1 when the command
+// returned an error and 0 otherwise, with the command's output either way.
+func TestSSHExecExitStatusReflectsTheCommand(t *testing.T) {
+	h := newSSHDReloadHarness(t)
+	h.reg.Register(&commands.Command{
+		Name: "fails",
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
+			_ = w.WriteLine("nope")
+			return errors.New("failed")
+		},
+	})
+	client, _ := h.connect(t)
+
+	sess, err := client.NewSession()
+	require.NoError(t, err)
+	out, err := sess.CombinedOutput("fails")
+	var exit *ssh.ExitError
+	require.ErrorAs(t, err, &exit)
+	assert.Equal(t, 1, exit.ExitStatus())
+	assert.Equal(t, "nope\n", string(out))
+
+	sess, err = client.NewSession()
+	require.NoError(t, err)
+	out, err = sess.CombinedOutput("help fails")
+	require.NoError(t, err)
+	assert.Equal(t, "fails - \n", string(out))
 }

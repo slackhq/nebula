@@ -90,9 +90,13 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 			}
 
 			req.Reply(true, nil)
-			s.dispatchCommand(payload.Value, commands.NewStringWriter(channel))
+			err := s.dispatchCommand(payload.Value, commands.NewStringWriter(channel))
 
+			// A command that failed exits 1, so `ssh host cmd` callers can tell.
 			status := struct{ Status uint32 }{uint32(0)}
+			if err != nil {
+				status.Status = 1
+			}
 			channel.SendRequest("exit-status", false, ssh.Marshal(status))
 			channel.Close()
 			return
@@ -141,12 +145,15 @@ func (s *session) handleInput() {
 	}
 }
 
-func (s *session) dispatchCommand(line string, w commands.StringWriter) {
-	// The command has already told the user what went wrong, or chosen not to; this is
-	// for the operator reading the daemon's log.
-	if err := s.commands.Dispatch(line, w); err != nil {
+// dispatchCommand runs line and returns the command's error, which it has logged: the
+// command has already told the user what went wrong, or chosen not to, so the log line
+// is for the operator reading the daemon's log.
+func (s *session) dispatchCommand(line string, w commands.StringWriter) error {
+	err := s.commands.Dispatch(line, w)
+	if err != nil {
 		s.l.Debug("Command returned an error", "line", line, "error", err)
 	}
+	return err
 }
 
 func (s *session) Close() {
