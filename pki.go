@@ -61,7 +61,18 @@ func NewPKIFromConfig(l *slog.Logger, c *config.C) (*PKI, error) {
 	}
 
 	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
-		r.RestartRequiredIfChanged("cipher")
+		// Compare with the running cipher, not the last config. A restart with one we can't run would fail, so say that
+		// now rather than ask for one, and going back to the running one after a bad reload needs no restart
+		if cipher := c.GetString("cipher", "aes"); !validCipher(cipher) {
+			l.Error("Unknown cipher, a restart with it would fail", "cipher", cipher)
+			r.Failed()
+		} else if cipher == "chachapoly" && fips140.Enforced() {
+			// newCipherSuite refuses it at startup
+			l.Error("ChaChaPoly is not allowed in FIPS 140-only mode, a restart with it would fail", "cipher", cipher)
+			r.Failed()
+		} else if cipher != pki.getCertState().cipher {
+			r.RestartRequiredIfChanged("cipher")
+		}
 		rErr := pki.reload(c, false, r)
 		if rErr != nil {
 			util.LogWithContextIfNeeded("Failed to reload PKI from config", rErr, l)
@@ -116,16 +127,18 @@ func (p *PKI) reload(c *config.C, initial bool, r *config.Reload) error {
 	return nil
 }
 
+// validCipher is true for the ciphers nebula can run. Each post-handshake CipherState in noiseutil hardcodes its own
+// nonce endianness, so there's nothing to set up for either.
+func validCipher(cipher string) bool {
+	return cipher == "aes" || cipher == "chachapoly"
+}
+
 func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 	var cipher string
 	var currentState *CertState
 	if initial {
 		cipher = c.GetString("cipher", "aes")
-		switch cipher {
-		case "aes", "chachapoly":
-			// Each post-handshake CipherState in noiseutil hardcodes its own
-			// nonce endianness now, so there's nothing to set up here.
-		default:
+		if !validCipher(cipher) {
 			return util.NewContextualError(
 				"unknown cipher",
 				m{"cipher": cipher},

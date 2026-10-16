@@ -73,18 +73,39 @@ func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (*tun, e
 	return nil, fmt.Errorf("newTunFromFd not supported in NetBSD")
 }
 
+// tunDevNeedsRestart is true when tun.dev asks for a particular tun that isn't the running one. Anything else takes the
+// first free one, and the one we have will do
+func tunDevNeedsRestart(name, running string) bool {
+	return deviceNameRE.MatchString(name) && name != running
+}
+
+// openTun opens /dev/name, or the first /dev/tunN nothing else has open when name is empty or not tunN
+func openTun(l *slog.Logger, name string) (int, string, error) {
+	if name != "" && !deviceNameRE.MatchString(name) {
+		// The name doesn't mean anything here, so like darwin a bad one isn't worth refusing to start over
+		l.Warn("interface name must be tun[0-9]+ on NetBSD, ignoring", "name", name)
+		name = ""
+	}
+	if name != "" {
+		fd, err := unix.Open("/dev/"+name, os.O_RDWR, 0)
+		return fd, name, err
+	}
+	for i := 0; ; i++ {
+		name = fmt.Sprintf("tun%d", i)
+		fd, err := unix.Open("/dev/"+name, os.O_RDWR, 0)
+		if err == nil {
+			return fd, name, nil
+		}
+		if !errors.Is(err, unix.EBUSY) {
+			return -1, "", fmt.Errorf("no free tun device, %s: %w", name, err)
+		}
+	}
+}
+
 func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*tun, error) {
 	// Try to open tun device
 	var err error
-	deviceName := c.GetString("tun.dev", "")
-	if deviceName == "" {
-		return nil, fmt.Errorf("a device name in the format of /dev/tunN must be specified")
-	}
-	if !deviceNameRE.MatchString(deviceName) {
-		return nil, fmt.Errorf("a device name in the format of /dev/tunN must be specified")
-	}
-
-	fd, err := unix.Open("/dev/"+deviceName, os.O_RDWR, 0)
+	fd, deviceName, err := openTun(l, c.GetString("tun.dev", ""))
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +130,10 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 	}
 
 	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
-		r.RestartRequiredIfChanged("tun.dev", "tun.mtu")
+		r.RestartRequiredIfChanged("tun.mtu")
+		if tunDevNeedsRestart(c.GetString("tun.dev", ""), t.Device) {
+			r.RestartRequiredIfChanged("tun.dev")
+		}
 		err := t.reload(c, false, r)
 		if err != nil {
 			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)

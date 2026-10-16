@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"crypto/fips140"
 	"fmt"
 	"net/netip"
 	"strings"
@@ -128,6 +129,23 @@ func TestPKIReloadRestartRequired(t *testing.T) {
 	assert.True(t, res.RestartRequired)
 	assert.Equal(t, "aes", p.getCertState().cipher)
 
+	// A cipher we can't run would fail the restart, so it fails the reload instead of asking for one
+	c4 := config.NewC(test.NewLogger())
+	require.NoError(t, c4.LoadString(pkiConfig("aes", "10.1.0.2/24")))
+	_, err = NewPKIFromConfig(test.NewLogger(), c4)
+	require.NoError(t, err)
+	for range 2 {
+		res = c4.ReloadConfigString(pkiConfig("nope", "10.1.0.2/24"))
+		require.NoError(t, res.Err)
+		assert.True(t, res.Failed, "a bad cipher that didn't change since the last reload is still bad")
+		assert.False(t, res.RestartRequired)
+	}
+	// Fixing it back to the running cipher needs nothing
+	res = c4.ReloadConfigString(pkiConfig("aes", "10.1.0.2/24"))
+	require.NoError(t, res.Err)
+	assert.False(t, res.Failed)
+	assert.False(t, res.RestartRequired)
+
 	// A cert that keeps our networks applies without a restart
 	c3 := config.NewC(test.NewLogger())
 	require.NoError(t, c3.LoadString(pkiConfig("aes", "10.1.0.2/24")))
@@ -177,4 +195,27 @@ func TestPKIReloadNewVersionWithOtherNetworks(t *testing.T) {
 		assert.Equal(t, tc.restart, res.RestartRequired, tc.network)
 		assert.Equal(t, []netip.Prefix{netip.MustParsePrefix(tc.network)}, p.getCertState().myVpnNetworks, "accepted either way, as before")
 	}
+}
+
+// FIPS 140-only mode refuses chachapoly at startup, so reloading to it fails rather than asks for a restart. Run with
+// GODEBUG=fips140=only to exercise it
+func TestPKIReloadChachapolyInFIPSOnlyFails(t *testing.T) {
+	if !fips140.Enforced() {
+		t.Skip("needs GODEBUG=fips140=only")
+	}
+	ca, _, caKey, caPEM := cert_test.NewTestCaCert(cert.Version2, cert.Curve_P256, time.Time{}, time.Time{}, nil, nil, nil)
+	_, _, keyPEM, certPEM := cert_test.NewTestCert(cert.Version2, cert.Curve_P256, ca, caKey, "host", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.2/24")}, nil, nil)
+	pkiConfig := func(cipher string) string {
+		return fmt.Sprintf("cipher: %s\npki:\n  ca: %q\n  cert: %q\n  key: %q\n", cipher, caPEM, certPEM, keyPEM)
+	}
+
+	c := config.NewC(test.NewLogger())
+	require.NoError(t, c.LoadString(pkiConfig("aes")))
+	_, err := NewPKIFromConfig(test.NewLogger(), c)
+	require.NoError(t, err)
+
+	res := c.ReloadConfigString(pkiConfig("chachapoly"))
+	require.NoError(t, res.Err)
+	assert.True(t, res.Failed)
+	assert.False(t, res.RestartRequired)
 }
