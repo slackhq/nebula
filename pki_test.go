@@ -217,3 +217,46 @@ func TestPKIReloadChachapolyInFIPSOnlyFails(t *testing.T) {
 	assert.True(t, res.Failed)
 	assert.False(t, res.RestartRequired)
 }
+
+func TestLoadCAPoolBlocklist(t *testing.T) {
+	ca, _, caKey, caPEM := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	crt, _, _, _ := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, ca, caKey, "host", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.2/24")}, nil, nil)
+	fp, err := crt.Fingerprint()
+	require.NoError(t, err)
+
+	load := func(entry string) (*cert.CAPool, error) {
+		c := config.NewC(test.NewLogger())
+		require.NoError(t, c.LoadString(fmt.Sprintf("pki:\n  ca: %q\n  blocklist:\n    - %q\n", caPEM, entry)))
+		return loadCAPoolFromConfig(test.NewLogger(), c)
+	}
+
+	for _, entry := range []string{fp, strings.ToUpper(fp), " " + fp + "\t"} {
+		pool, err := load(entry)
+		require.NoError(t, err, entry)
+		assert.True(t, pool.IsBlocklisted(fp), entry)
+	}
+
+	for _, entry := range []string{fp[1:], fp + "00", "sha256:" + fp, "zz" + fp[2:], ""} {
+		_, err := load(entry)
+		require.Error(t, err, entry)
+	}
+
+	// A bad entry on reload fails it, the valid entries are still blocked
+	_, _, keyPEM, certPEM := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, ca, caKey, "me", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.1/24")}, nil, nil)
+	pkiConfig := func(entry string) string {
+		return fmt.Sprintf("pki:\n  ca: %q\n  cert: %q\n  key: %q\n  blocklist:\n    - %q\n", caPEM, certPEM, keyPEM, entry)
+	}
+	c := config.NewC(test.NewLogger())
+	require.NoError(t, c.LoadString(pkiConfig(fp)))
+	p, err := NewPKIFromConfig(test.NewLogger(), c)
+	require.NoError(t, err)
+
+	other, _, _, _ := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, ca, caKey, "other", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.3/24")}, nil, nil)
+	otherFp, err := other.Fingerprint()
+	require.NoError(t, err)
+
+	res := c.ReloadConfigString(pkiConfig(fp) + fmt.Sprintf("    - %q\n    - %q\n", otherFp, fp[1:]))
+	assert.True(t, res.Failed)
+	assert.True(t, p.GetCAPool().IsBlocklisted(fp))
+	assert.True(t, p.GetCAPool().IsBlocklisted(otherFp))
+}

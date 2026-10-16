@@ -8,6 +8,7 @@ pki:
   cert: /etc/nebula/host.crt
   key: /etc/nebula/host.key
   # blocklist is a list of certificate fingerprints that we will refuse to talk to
+  # Entries are the hex fingerprints shown by `nebula-cert print`, an invalid entry fails startup and reload.
   #blocklist:
   #  - c99d4e650533b92061b09918e838a5a0a6aaee21eed1d12fd937682865936c72
   # disconnect_invalid is a toggle to force a client to be disconnected if the certificate is expired or invalid.
