@@ -15,10 +15,12 @@ import (
 	"time"
 
 	"github.com/gaissmai/bart"
+	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/logging"
+	"github.com/slackhq/nebula/nicfinder"
 	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
 )
@@ -41,6 +43,10 @@ type LightHouse struct {
 	// localAddrsFn enumerates the underlay addresses we advertise. It is a field so tests can supply simulated
 	// addresses rather than whatever this machine's NICs happen to be. Set it before Start.
 	localAddrsFn func(*LocalAllowList) []netip.Addr
+
+	// lastLocalAddrsErr is the previous localAddrsFn failure. Enumeration runs on every update, so an
+	// unchanged failure is demoted to Debug rather than warning every lighthouse.interval forever.
+	lastLocalAddrsErr atomic.Pointer[string]
 
 	// Local cache of answers from light houses
 	// map of vpn addr to answers
@@ -76,6 +82,8 @@ type LightHouse struct {
 
 	updateTrigger chan struct{}
 	queryChan     chan netip.Addr
+	// queryDropped counts queries QueryServer dropped because queryChan was full.
+	queryDropped metrics.Counter
 
 	calculatedRemotes atomic.Pointer[bart.Table[[]*calculatedRemote]] // Maps VpnAddr to []*calculatedRemote
 
@@ -111,11 +119,14 @@ func NewLightHouseFromConfig(ctx context.Context, l *slog.Logger, c *config.C, c
 		nebulaPort:         nebulaPort,
 		punchy:             p,
 		updateTrigger:      make(chan struct{}, 1),
-		queryChan:          make(chan netip.Addr, c.GetUint32("handshakes.query_buffer", 64)),
+		queryChan:          make(chan netip.Addr, c.GetUint32("handshakes.query_buffer", 1024)),
+		queryDropped:       metrics.GetOrRegisterCounter("lighthouse.query.dropped", nil),
 		l:                  l,
 	}
 	h.localAddrsFn = func(al *LocalAllowList) []netip.Addr {
-		return localAddrs(h.l, al)
+		addrs, err := nicfinder.Find(ctx, h.l, al)
+		h.logLocalAddrsErr(err)
+		return addrs
 	}
 
 	lighthouses := make([]netip.Addr, 0)
@@ -127,18 +138,21 @@ func NewLightHouseFromConfig(ctx context.Context, l *slog.Logger, c *config.C, c
 		h.metrics = newLighthouseMetrics()
 	}
 
-	err := h.reload(c, true)
+	err := h.reload(c, true, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	c.RegisterReloadCallback(func(c *config.C) {
-		err := h.reload(c, false)
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		r.RestartRequiredIfChanged("lighthouse.am_lighthouse", "listen.port", "handshakes.query_buffer", "stats.lighthouse_metrics")
+		err := h.reload(c, false, r)
 		switch v := err.(type) {
 		case *util.ContextualError:
 			v.Log(l)
+			r.Failed()
 		case error:
 			l.Error("failed to reload lighthouse", "error", err)
+			r.Failed()
 		}
 	})
 
@@ -179,7 +193,8 @@ func (lh *LightHouse) GetUpdateInterval() int64 {
 	return lh.interval.Load()
 }
 
-func (lh *LightHouse) reload(c *config.C, initial bool) error {
+// r is nil on the initial load
+func (lh *LightHouse) reload(c *config.C, initial bool, r *config.Reload) error {
 	if initial || c.HasChanged("lighthouse.advertise_addrs") {
 		rawAdvAddrs := c.GetStringSlice("lighthouse.advertise_addrs", []string{})
 		advAddrs := make([]netip.AddrPort, 0)
@@ -214,6 +229,7 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 					"addr", rawAddr,
 					"entry", i+1,
 				)
+				r.Failed()
 				continue
 			}
 
@@ -348,7 +364,13 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 		}
 	}
 
-	if initial || c.HasChanged("relay.relays") {
+	// am_relay decides whether relay.relays applies to us at all
+	if initial || c.HasChanged("relay.relays") || c.HasChanged("relay.am_relay") {
+		var before []netip.Addr
+		if !initial {
+			before = lh.GetRelaysForMe()
+		}
+
 		switch c.GetBool("relay.am_relay", false) {
 		case true:
 			// Relays aren't allowed to specify other relays
@@ -366,12 +388,18 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 						"relay", v,
 						"error", err,
 					)
+					r.Failed()
 				} else {
 					lh.l.Info("Read relay from config", "relay", v)
 					relaysForMe = append(relaysForMe, configRIP)
 				}
 			}
 			lh.relaysForMe.Store(&relaysForMe)
+		}
+
+		// Tell the lighthouses now rather than at the next interval, but only when what we advertise changed
+		if !initial && !slices.Equal(before, lh.GetRelaysForMe()) {
+			lh.TriggerUpdate()
 		}
 	}
 
@@ -505,14 +533,19 @@ func (lh *LightHouse) Query(vpnAddr netip.Addr) *RemoteList {
 	return nil
 }
 
-// QueryServer is asynchronous so no reply should be expected
+// QueryServer is asynchronous and non-blocking, no reply should be expected.
+// If the query channel is full, the query is dropped.
 func (lh *LightHouse) QueryServer(vpnAddr netip.Addr) {
 	// Don't put lighthouse addrs in the query channel because we can't query lighthouses about lighthouses
 	if lh.amLighthouse || lh.IsLighthouseAddr(vpnAddr) {
 		return
 	}
 
-	lh.queryChan <- vpnAddr
+	select {
+	case lh.queryChan <- vpnAddr:
+	default:
+		lh.queryDropped.Inc(1)
+	}
 }
 
 func (lh *LightHouse) QueryCache(vpnAddrs []netip.Addr) *RemoteList {
@@ -916,6 +949,26 @@ func (lh *LightHouse) TriggerUpdate() {
 	}
 }
 
+// logLocalAddrsErr reports a localAddrs failure at Warn the first time it is seen and at Debug while
+// it persists unchanged, so a permanent failure does not warn on every update forever.
+func (lh *LightHouse) logLocalAddrsErr(err error) {
+	if err == nil {
+		lh.lastLocalAddrsErr.Store(nil)
+		return
+	}
+
+	msg := err.Error()
+	prev := lh.lastLocalAddrsErr.Swap(&msg)
+	if prev != nil && *prev == msg {
+		if lh.l.Enabled(context.Background(), slog.LevelDebug) {
+			lh.l.Debug("Failed to collect local addresses to advertise", "error", err)
+		}
+		return
+	}
+
+	lh.l.Warn("Failed to collect local addresses to advertise", "error", err)
+}
+
 func (lh *LightHouse) SendUpdate() {
 	var v4 []*V4AddrPort
 	var v6 []*V6AddrPort
@@ -1208,10 +1261,13 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 // sendHostPunchNotification signals the other side to punch some zero byte udp packets
 func (lhh *LightHouseHandler) sendHostPunchNotification(n *NebulaMeta, fromVpnAddrs []netip.Addr, punchNotifDest netip.Addr, w EncWriter) {
 	whereToPunch := fromVpnAddrs[0]
+	// Resolve the target before taking the querier's RemoteList lock below. GetHostInfo takes the
+	// hostmap lock, and the hostmap is taken before the lighthouse, which is taken before a
+	// RemoteList, so looking it up inside the callback would deadlock.
+	targetHI := lhh.lh.ifce.GetHostInfo(punchNotifDest)
 	found, ln, err := lhh.lh.queryAndPrepMessage(whereToPunch, func(c *cache) (int, error) {
 		n = lhh.resetMeta()
 		n.Type = NebulaMeta_HostPunchNotification
-		targetHI := lhh.lh.ifce.GetHostInfo(punchNotifDest)
 		var useVersion cert.Version
 		if targetHI == nil {
 			useVersion = lhh.lh.ifce.GetCertState().initiatingVersion

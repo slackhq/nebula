@@ -160,9 +160,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxCont
 		case header.TestReply:
 			// No-op, useful for the Roaming and connectionManager side-effects above
 		case header.TestRequest:
-			const maxCipherOverhead = 16 //todo we use this too often, needs a real importable const
-			const maxOverhead = header.Len + header.Len + maxCipherOverhead + maxCipherOverhead
-			if maxOverhead+len(out) > len(rxc.scratch) {
+			if header.MaxOverhead+len(out) > len(rxc.scratch) {
 				// A reply that cannot fit in scratch is dropped no matter the log level.
 				if f.l.Enabled(context.Background(), slog.LevelDebug) {
 					hostinfo.logger(f.l).Debug("dropping oversized test request", "payloadLen", len(out), "from", via)
@@ -263,11 +261,16 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 
 // closeTunnel closes a tunnel locally, it does not send a closeTunnel packet to the remote
 func (f *Interface) closeTunnel(hostInfo *HostInfo) {
-	final := f.hostMap.DeleteHostInfo(hostInfo)
-	if final {
-		// We no longer have any tunnels with this vpn addr, clear learned lighthouse state to lower memory usage
-		f.lightHouse.DeleteVpnAddrs(hostInfo.vpnAddrs)
+	// Hold the hostmap lock across both the delete and the lighthouse eviction,
+	// to avoid a race with handshake completion.
+	f.hostMap.Lock()
+	defer f.hostMap.Unlock()
+	if !f.hostMap.unlockedDeleteHostInfo(hostInfo) {
+		return
 	}
+
+	// We no longer have any tunnels with this vpn addr, clear learned lighthouse state to lower memory usage
+	f.lightHouse.DeleteVpnAddrs(hostInfo.vpnAddrs)
 }
 
 // sendCloseTunnel is a helper function to send a proper close tunnel packet to a remote
@@ -354,7 +357,7 @@ func parseV6(data []byte, incoming bool, fp *firewall.ParsedPacket) error {
 	// and cannot drift into misreading an unknown protocol (SCTP, GRE, etc.) as a forged transport.
 	proto, offset, isFragment, anyFragment, err := iputil.IPv6FindUpperProtocol(data)
 	if err != nil {
-		return ErrIPv6PacketTooShort
+		return err
 	}
 
 	fp.Protocol = proto

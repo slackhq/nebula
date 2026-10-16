@@ -7,6 +7,9 @@ import (
 	"log/slog"
 )
 
+// watchesNetworkChanges is true where Start does anything
+const watchesNetworkChanges = false
+
 // watchNetworkChanges is a no-op outside of darwin.
 //
 // Darwin is the platform that scopes a udp socket to the interface it came up on, so it is the platform whose socket

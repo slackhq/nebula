@@ -57,7 +57,8 @@ func newConnectionManagerFromConfig(l *slog.Logger, c *config.C, hm *HostMap, p 
 	}
 
 	cm.reload(c, true)
-	c.RegisterReloadCallback(func(c *config.C) {
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		r.RestartRequiredIfChanged("timers.connection_alive_interval", "timers.pending_deletion_interval")
 		cm.reload(c, false)
 	})
 
@@ -174,10 +175,8 @@ func (cm *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte
 
 	switch decision {
 	case deleteTunnel:
-		if cm.hostMap.DeleteHostInfo(hostinfo) {
-			// Only clearing the lighthouse cache if this is the last hostinfo for this vpn ip in the hostmap
-			cm.intf.lightHouse.DeleteVpnAddrs(hostinfo.vpnAddrs)
-		}
+		// Local delete only, clearing the lighthouse cache if this was the last hostinfo for the vpn addr
+		cm.intf.closeTunnel(hostinfo)
 
 	case closeTunnel:
 		cm.intf.sendCloseTunnel(hostinfo)

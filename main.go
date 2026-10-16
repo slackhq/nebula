@@ -32,9 +32,12 @@ const _ = noiseutil.RejectHeadroom - 4*maxRoutines
 
 func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, deviceFactory overlay.DeviceFactory) (retcon *Control, reterr error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	// Automatically cancel the context if Main returns an error, to signal all created goroutines to quit.
+	// The goroutines started below stop only when this context does, and only a caller holding the
+	// Control can arrange that. Cancel whenever we are not handing one back, which covers an error
+	// and a config test alike: a config test used to leave the lighthouse query worker, and a
+	// hostname resolver per dns named static host, running for the life of the process.
 	defer func() {
-		if reterr != nil {
+		if retcon == nil {
 			cancel()
 		}
 	}()
@@ -75,7 +78,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	wireSSHReload(l, ssh, c)
 	var sshStart func()
 	if c.GetBool("sshd.enabled", false) {
-		sshStart, err = configSSH(l, ssh, c)
+		sshStart, err = configSSH(l, ssh, c, nil)
 		if err != nil {
 			l.Warn("Failed to configure sshd, ssh debugging will not be available", "error", err)
 			sshStart = nil
@@ -194,7 +197,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
-			udpServer.ReloadConfig(c)
+			udpServer.ReloadConfig(c, nil)
 			udpConns[i] = udpServer
 
 			// If port is dynamic, discover it before the next pass through the for loop
@@ -297,6 +300,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	}
 
 	var ifce *Interface
+	var emitStats func()
 	if !configTest {
 		ifce, err = NewInterface(ctx, ifConfig)
 		if err != nil {
@@ -307,6 +311,16 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		lightHouse.ifce = ifce
 
 		ifce.RegisterConfigChangeCallbacks(c)
+		// These are only read at startup
+		c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+			r.RestartRequiredIfChanged(
+				"routines", "tun.routines", "listen.routines", "firewall.conntrack.routine_cache_timeout",
+				"listen.port", "listen.host", "stats.message_metrics",
+				"handshakes.try_interval", "handshakes.retries", "handshakes.trigger_buffer",
+				"tun.drop_local_broadcast", "tun.drop_multicast",
+			)
+			r.RestartRequiredIfChanged(osStartupOnlyKeys...)
+		})
 		ifce.reloadDisconnectInvalid(c)
 		ifce.reloadSendRecvError(c)
 		ifce.reloadAcceptRecvError(c)
@@ -315,9 +329,12 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		go handshakeManager.Run(ctx)
 
 		punchy.Start(ctx, ifce, hostMap, lightHouse)
+
+		// On the stats server's loop, so the gauges follow the interval it accepted
+		emitStats = ifce.statsEmitter()
 	}
 
-	stats, err := newStatsServerFromConfig(ctx, l, c, buildVersion, configTest)
+	stats, err := newStatsServerFromConfig(ctx, l, c, buildVersion, configTest, emitStats)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to start stats emitter", err)
 	}
@@ -325,8 +342,6 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	if configTest {
 		return nil, nil
 	}
-
-	go ifce.emitStats(ctx, c.GetDuration("stats.interval", time.Second*10))
 
 	attachCommands(l, c, ssh, ifce)
 

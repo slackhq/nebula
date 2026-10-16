@@ -4,6 +4,7 @@ package overlay
 
 import (
 	"crypto"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -75,7 +76,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*w
 	t := &winTun{
 		Device:          deviceName,
 		vpnNetworks:     vpnNetworks,
-		MTU:             c.GetInt("tun.mtu", DefaultMTU),
+		MTU:             getMTU(l, c),
 		guid:            *guid,
 		networkCategory: cat,
 		setCategory:     setCat,
@@ -83,7 +84,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*w
 		l:               l,
 	}
 
-	err = t.reload(c, true)
+	err = t.reload(c, true, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -104,18 +105,32 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*w
 	}
 	t.tun = tunDevice.(*wintun.NativeTun)
 
-	c.RegisterReloadCallback(func(c *config.C) {
-		err := t.reload(c, false)
+	// Disable registration before Activate assigns addresses and triggers it.
+	disableDNSRegistration(l, *guid)
+
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		r.RestartRequiredIfChanged("tun.dev", "tun.mtu")
+		// Compare with the running category, not the last config. A restart with one we can't parse would fail, so say
+		// that now rather than ask for one, and going back to the running one after a bad reload needs no restart
+		if cat, setCat, err := parseNetworkCategory(c.GetString("tun.network_category", "private")); err != nil {
+			t.l.Error("Invalid tun.network_category, a restart with it would fail", "error", err)
+			r.Failed()
+		} else if cat != t.networkCategory || setCat != t.setCategory {
+			r.RestartRequiredIfChanged("tun.network_category")
+		}
+		r.RestartRequiredIfChanged(interfaceBypassKeys...)
+		err := t.reload(c, false, r)
 		if err != nil {
 			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
+			r.Failed()
 		}
 	})
 
 	return t, nil
 }
 
-func (t *winTun) reload(c *config.C, initial bool) error {
-	change, routes, err := getAllRoutesFromConfig(c, t.vpnNetworks, initial)
+func (t *winTun) reload(c *config.C, initial bool, r *config.Reload) error {
+	change, routes, err := getAllRoutesFromConfig(t.l, c, t.vpnNetworks, initial)
 	if err != nil {
 		return err
 	}
@@ -135,16 +150,18 @@ func (t *winTun) reload(c *config.C, initial bool) error {
 
 	if !initial {
 		// Remove first, if the system removes a wanted route hopefully it will be re-added next
-		err := t.removeRoutes(findRemovedRoutes(routes, *oldRoutes))
+		err := t.removeRoutes(findRemovedSystemRoutes(routes, *oldRoutes), r)
 		if err != nil {
 			util.LogWithContextIfNeeded("Failed to remove routes", err, t.l)
+			r.Failed()
 		}
 
 		// Ensure any routes we actually want are installed
-		err = t.addRoutes(true)
+		err = t.addRoutes(true, r)
 		if err != nil {
 			// Catch any stray logs
 			util.LogWithContextIfNeeded("Failed to add routes", err, t.l)
+			r.Failed()
 		}
 	}
 
@@ -159,7 +176,7 @@ func (t *winTun) Activate() error {
 		return fmt.Errorf("failed to set address: %w", err)
 	}
 
-	err = t.addRoutes(false)
+	err = t.addRoutes(false, nil)
 	if err != nil {
 		return err
 	}
@@ -178,15 +195,25 @@ func (t *winTun) Activate() error {
 	return nil
 }
 
-func (t *winTun) addRoutes(logErrors bool) error {
+func (t *winTun) addRoutes(logErrors bool, rl *config.Reload) error {
 	luid := winipcfg.LUID(t.tun.LUID())
 	routes := *t.Routes.Load()
 	foundDefault4 := false
 	carriesV6 := slices.ContainsFunc(t.vpnNetworks, func(p netip.Prefix) bool { return p.Addr().Is6() })
 
-	for _, r := range routes {
+	// A CIDR listed twice routes by its last entry, install only that one or each reload would flip between them. The
+	// same rule as systemRoutes
+	last := make(map[netip.Prefix]int, len(routes))
+	for i, r := range routes {
+		last[r.Cidr] = i
+	}
+
+	for i, r := range routes {
 		if len(r.Via) == 0 || !r.Install {
 			// We don't allow route MTUs so only install routes with a via
+			continue
+		}
+		if last[r.Cidr] != i {
 			continue
 		}
 
@@ -194,17 +221,23 @@ func (t *winTun) addRoutes(logErrors bool) error {
 		carriesV6 = carriesV6 || r.Cidr.Addr().Is6()
 
 		// Add our unsafe route as an on-link route to the nebula tun device.
-		err := luid.AddRoute(r.Cidr, unspecifiedNextHop(r.Cidr), uint32(r.Metric))
+		result, err := addRoute(luid, r)
 		if err != nil {
 			retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
 			if logErrors {
 				retErr.Log(t.l)
+				rl.Failed()
 				continue
 			} else {
 				return retErr
 			}
 		} else {
-			t.l.Info("Added route", "route", r)
+			switch result {
+			case routeAdded:
+				t.l.Info("Added route", "route", r)
+			case routeMetricUpdated:
+				t.l.Info("Updated route metric", "route", r)
+			}
 		}
 
 		if !foundDefault4 {
@@ -255,7 +288,7 @@ func (t *winTun) setMTU(luid winipcfg.LUID, foundDefault4, carriesV6 bool) error
 	return nil
 }
 
-func (t *winTun) removeRoutes(routes []Route) error {
+func (t *winTun) removeRoutes(routes []Route, rl *config.Reload) error {
 	luid := winipcfg.LUID(t.tun.LUID())
 
 	for _, r := range routes {
@@ -265,8 +298,12 @@ func (t *winTun) removeRoutes(routes []Route) error {
 
 		// See comment on luid.AddRoute
 		err := luid.DeleteRoute(r.Cidr, unspecifiedNextHop(r.Cidr))
-		if err != nil {
+		if errors.Is(err, windows.ERROR_NOT_FOUND) {
+			// Already gone, which is what we wanted
+			t.l.Info("Route was already removed", "route", r)
+		} else if err != nil {
 			t.l.Error("Failed to remove route", "error", err, "route", r)
+			rl.Failed()
 		} else {
 			t.l.Info("Removed route", "route", r)
 		}
@@ -314,6 +351,61 @@ func (t *winTun) Close() error {
 	}
 
 	return t.tun.Close()
+}
+
+// systemRoutes maps each CIDR to the route that puts it in the system table. A CIDR's last entry decides, including
+// one that says not to install it
+func systemRoutes(routes []Route) map[netip.Prefix]Route {
+	out := make(map[netip.Prefix]Route, len(routes))
+	for _, r := range routes {
+		if len(r.Via) > 0 && r.Install {
+			out[r.Cidr] = r
+		} else {
+			delete(out, r.Cidr)
+		}
+	}
+	return out
+}
+
+// findRemovedSystemRoutes is the routes to delete from the system table. Windows deletes by destination and next hop,
+// so only a CIDR nothing installs anymore goes, a changed metric is set on the route in place by addRoute
+func findRemovedSystemRoutes(newRoutes, oldRoutes []Route) []Route {
+	keep := systemRoutes(newRoutes)
+	var removed []Route
+	for _, r := range systemRoutes(oldRoutes) {
+		if _, ok := keep[r.Cidr]; !ok {
+			removed = append(removed, r)
+		}
+	}
+	return removed
+}
+
+type routeResult int
+
+const (
+	routeAdded routeResult = iota
+	routeMetricUpdated
+	routeAlreadyInstalled
+)
+
+// addRoute installs r on the interface. A reload re-adds every route to catch any the system dropped, and Windows
+// refuses one it has with the same destination and next hop whatever its metric. One that is there with another
+// metric, ours from before a metric change or someone else's, is brought to ours in place
+func addRoute(luid winipcfg.LUID, r Route) (routeResult, error) {
+	nextHop := unspecifiedNextHop(r.Cidr)
+	err := luid.AddRoute(r.Cidr, nextHop, uint32(r.Metric))
+	if !errors.Is(err, windows.ERROR_OBJECT_ALREADY_EXISTS) {
+		return routeAdded, err
+	}
+	row, err := luid.Route(r.Cidr, nextHop)
+	if err != nil {
+		return routeAlreadyInstalled, err
+	}
+	if row.Metric != uint32(r.Metric) {
+		row.Metric = uint32(r.Metric)
+		return routeMetricUpdated, row.Set()
+	}
+	return routeAlreadyInstalled, nil
 }
 
 func unspecifiedNextHop(p netip.Prefix) netip.Addr {

@@ -54,7 +54,8 @@ type HandshakeConfig struct {
 }
 
 type HandshakeManager struct {
-	// Mutex for interacting with the vpnIps and indexes maps
+	// Mutex for interacting with the vpnIps and indexes maps.
+	// Lock order is hostmap, then this lock, then the lighthouse, then a RemoteList.
 	sync.RWMutex
 
 	vpnIps  map[netip.Addr]*HandshakeHostInfo
@@ -259,14 +260,6 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		"style": header.SubTypeName(header.Handshake, hh.machine.Subtype()),
 	}
 
-	// Get a remotes object if we don't already have one.
-	// This is mainly to protect us as this should never be the case
-	// NB ^ This comment doesn't jive. It's how the thing gets initialized.
-	// It's the common path. Should it update every time, in case a future LH query/queries give us more info?
-	if hostinfo.remotes == nil {
-		hostinfo.remotes = hm.lightHouse.QueryCache([]netip.Addr{vpnIp})
-	}
-
 	remotes := hostinfo.remotes.CopyAddrs(hm.mainHostMap.GetPreferredRanges())
 	remotesHaveChanged := !slices.Equal(remotes, hh.lastRemotes)
 
@@ -371,6 +364,9 @@ func (hm *HandshakeManager) StartHandshake(vpnAddr netip.Addr, cacheCb func(*Han
 	hostinfo := &HostInfo{
 		vpnAddrs:        []netip.Addr{vpnAddr},
 		HandshakePacket: make(map[uint8][]byte, 0),
+		// Attached here so a pending hostinfo never exists without one: SetRemote dereferences
+		// it, and create-tunnel -address can reach SetRemote before the handshake loop runs.
+		remotes: hm.lightHouse.QueryCache([]netip.Addr{vpnAddr}),
 		relayState: RelayState{
 			relays:         nil,
 			relayForByAddr: map[netip.Addr]*Relay{},
@@ -946,13 +942,14 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 
 		hm.DeleteHostInfo(hostinfo)
 		hm.StartHandshake(hostinfo.vpnAddrs[0], func(newHH *HandshakeHostInfo) {
-			newHH.hostinfo.remotes = hostinfo.remotes
 			newHH.hostinfo.remotes.BlockRemote(via)
 			newHH.packetStore = hh.packetStore
 			hh.packetStore = []*cachedPacket{}
-			hostinfo.vpnAddrs = vpnAddrs
-			f.sendCloseTunnel(hostinfo)
 		})
+		// sendCloseTunnel may take the hostmap lock, so it must not run under the handshake
+		// manager lock that StartHandshake holds around the callback.
+		hostinfo.vpnAddrs = vpnAddrs
+		f.sendCloseTunnel(hostinfo)
 		return
 	}
 

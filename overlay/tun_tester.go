@@ -31,7 +31,7 @@ type TestTun struct {
 }
 
 func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*TestTun, error) {
-	_, routes, err := getAllRoutesFromConfig(c, vpnNetworks, true)
+	_, routes, err := getAllRoutesFromConfig(l, c, vpnNetworks, true)
 	if err != nil {
 		return nil, err
 	}

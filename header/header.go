@@ -24,6 +24,11 @@ type m = map[string]any
 const (
 	Version uint8 = 1
 	Len           = 16
+
+	// MaxOverhead is the most a payload grows on its way to the underlay.
+	// A relayed packet has two headers and two AEAD tags, one for the inner tunnel and another for the relay tunnel.
+	// Every supported cipher (today) has a 16 byte tag.
+	MaxOverhead = 2 * (Len + 16)
 )
 
 type MessageType uint8

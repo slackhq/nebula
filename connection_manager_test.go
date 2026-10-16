@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/overlay/overlaytest"
@@ -21,6 +22,8 @@ func newTestLighthouse() *LightHouse {
 		l:         test.NewLogger(),
 		addrMap:   map[netip.Addr]*RemoteList{},
 		queryChan: make(chan netip.Addr, 10),
+		// Nothing drains queryChan here, so an 11th query is dropped.
+		queryDropped: metrics.NilCounter{},
 	}
 	lighthouses := []netip.Addr{}
 	staticList := map[netip.Addr]struct{}{}

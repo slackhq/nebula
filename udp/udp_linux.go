@@ -392,7 +392,7 @@ func writeSockaddr(buf []byte, addr netip.AddrPort, isV4 bool) (int, error) {
 	return unix.SizeofSockaddrInet6, nil
 }
 
-func (u *StdConn) ReloadConfig(c *config.C) {
+func (u *StdConn) ReloadConfig(c *config.C, r *config.Reload) {
 	b := c.GetInt("listen.read_buffer", 0)
 	if b > 0 {
 		if err := u.SetRecvBuffer(b); err == nil {
@@ -403,6 +403,7 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 			}
 		} else {
 			u.l.Error("Failed to set listen.read_buffer", "error", err)
+			r.Failed()
 		}
 	}
 
@@ -416,6 +417,7 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 			}
 		} else {
 			u.l.Error("Failed to set listen.write_buffer", "error", err)
+			r.Failed()
 		}
 	}
 
@@ -430,6 +432,7 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 			}
 		} else {
 			u.l.Error("Failed to set listen.so_mark", "error", err)
+			r.Failed()
 		}
 	}
 }

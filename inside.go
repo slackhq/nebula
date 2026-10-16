@@ -10,6 +10,7 @@ import (
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/logging"
 	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/overlay/batch"
 	"github.com/slackhq/nebula/overlay/tio"
@@ -198,8 +199,8 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 		}
 
 		err = tio.SegmentSuperpacket(pkt, func(seg []byte) error {
-			//relay header + header + plaintext + AEAD tag (16 bytes for both AES-GCM and ChaCha20-Poly1305) + relay tag
-			scratch := sendBatch.Reserve(header.Len + header.Len + len(seg) + 16 + 16)
+			//relay header + header + plaintext + AEAD tag + relay tag
+			scratch := sendBatch.Reserve(len(seg) + header.MaxOverhead)
 
 			innerPacket := f.sendInsideEncrypt(hostinfo, ci, seg, scratch[header.Len:], nb)
 			if innerPacket == nil {
@@ -517,7 +518,9 @@ func (f *Interface) SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, noc
 
 	err = f.writers[q].WriteTo(toSend, via.GetRemote())
 	if err != nil {
-		via.logger(f.l).Info("Failed to WriteTo in sendVia", "error", err)
+		if l, ok := logging.RateLimited(f.l, f.udpRelayTxErrLimiter); ok {
+			via.logger(l).Info("Failed to WriteTo in sendVia", "error", err)
+		}
 	}
 }
 
@@ -526,16 +529,26 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		return
 	}
 	useRelay := !remote.IsValid() && !hostinfo.GetRemote().IsValid()
-	fullOut := out
 
+	// The encrypt appends to out in place and a relayed packet is then wrapped in place,
+	// so out has to fit the whole packet up front or the encrypt reallocates out from under SendVia.
+	// We cap the MTU of tun devices and routes we create ourselves, so only a host that set a bigger MTU than we allow gets here.
+	need := header.Len + len(p) + ci.eKey.Overhead()
 	if useRelay {
-		if len(out) < header.Len {
-			// out always has a capacity of mtu, but not always a length greater than the header.Len.
-			// Grow it to make sure the next operation works.
-			out = out[:header.Len]
+		// The relay tunnel runs the same cipher, and adds its own header and tag
+		need += header.Len + ci.eKey.Overhead()
+	}
+	if cap(out) < need {
+		if l, ok := logging.RateLimited(f.l, f.txOversizeLimiter); ok {
+			hostinfo.logger(l).Error("Dropping outbound packet, out buffer not large enough", "outCap", cap(out), "payloadLen", len(p), "relayed", useRelay)
 		}
+		return
+	}
+
+	fullOut := out
+	if useRelay {
 		// Save a header's worth of data at the front of the 'out' buffer.
-		out = out[header.Len:]
+		out = out[header.Len:header.Len]
 	}
 
 	if noiseutil.EncryptLockNeeded {
@@ -582,18 +595,22 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	if remote.IsValid() {
 		err = f.writers[q].WriteTo(out, remote)
 		if err != nil {
-			hostinfo.logger(f.l).Error("Failed to write outgoing packet",
-				"error", err,
-				"udpAddr", remote,
-			)
+			if l, ok := logging.RateLimited(f.l, f.udpTxErrLimiter); ok {
+				hostinfo.logger(l).Error("Failed to write outgoing packet",
+					"error", err,
+					"udpAddr", remote,
+				)
+			}
 		}
 	} else if hr := hostinfo.GetRemote(); hr.IsValid() {
 		err = f.writers[q].WriteTo(out, hr)
 		if err != nil {
-			hostinfo.logger(f.l).Error("Failed to write outgoing packet",
-				"error", err,
-				"udpAddr", hr,
-			)
+			if l, ok := logging.RateLimited(f.l, f.udpTxErrLimiter); ok {
+				hostinfo.logger(l).Error("Failed to write outgoing packet",
+					"error", err,
+					"udpAddr", hr,
+				)
+			}
 		}
 	} else {
 		// Try to send via a relay

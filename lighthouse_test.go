@@ -1,16 +1,21 @@
 package nebula
 
 import (
+	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net/netip"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/test"
+	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.yaml.in/yaml/v3"
@@ -82,15 +87,15 @@ func TestReloadLighthouseInterval(t *testing.T) {
 	lh.ifce = &mockEncWriter{}
 
 	// The first one routine is kicked off by main.go currently, lets make sure that one dies
-	require.NoError(t, c.ReloadConfigString("lighthouse:\n  interval: 5"))
+	require.NoError(t, c.ReloadConfigString("lighthouse:\n  interval: 5").Err)
 	assert.Equal(t, int64(5), lh.interval.Load())
 
 	// Subsequent calls are killed off by the LightHouse.Reload function
-	require.NoError(t, c.ReloadConfigString("lighthouse:\n  interval: 10"))
+	require.NoError(t, c.ReloadConfigString("lighthouse:\n  interval: 10").Err)
 	assert.Equal(t, int64(10), lh.interval.Load())
 
 	// If this completes then nothing is stealing our reload routine
-	require.NoError(t, c.ReloadConfigString("lighthouse:\n  interval: 11"))
+	require.NoError(t, c.ReloadConfigString("lighthouse:\n  interval: 11").Err)
 	assert.Equal(t, int64(11), lh.interval.Load())
 }
 
@@ -291,7 +296,7 @@ func TestLighthouse_reload(t *testing.T) {
 	require.NoError(t, err)
 	c.ReloadConfigString(string(rc))
 
-	err = lh.reload(c, false)
+	err = lh.reload(c, false, nil)
 	require.NoError(t, err)
 }
 
@@ -329,7 +334,7 @@ func TestLighthouse_reloadStaticHostMap(t *testing.T) {
 	}
 	rc, err := yaml.Marshal(nc)
 	require.NoError(t, err)
-	require.NoError(t, c.ReloadConfigString(string(rc)))
+	require.NoError(t, c.ReloadConfigString(string(rc)).Err)
 
 	rl := lh.Query(staticHost)
 	require.NotNil(t, rl)
@@ -345,7 +350,7 @@ func TestLighthouse_reloadStaticHostMap(t *testing.T) {
 	}
 	rc, err = yaml.Marshal(nc)
 	require.NoError(t, err)
-	require.NoError(t, c.ReloadConfigString(string(rc)))
+	require.NoError(t, c.ReloadConfigString(string(rc)).Err)
 
 	rl = lh.Query(staticHost)
 	require.NotNil(t, rl)
@@ -353,7 +358,7 @@ func TestLighthouse_reloadStaticHostMap(t *testing.T) {
 	assert.Equal(t, []netip.AddrPort{netip.MustParseAddrPort("1.1.1.1:4242")}, rl.CopyAddrs([]netip.Prefix{}))
 
 	// Reload with the same config. An unchanged entry must not duplicate.
-	require.NoError(t, c.ReloadConfigString(string(rc)))
+	require.NoError(t, c.ReloadConfigString(string(rc)).Err)
 
 	rl = lh.Query(staticHost)
 	require.NotNil(t, rl)
@@ -368,7 +373,7 @@ func TestLighthouse_reloadStaticHostMap(t *testing.T) {
 	}
 	rc, err = yaml.Marshal(nc)
 	require.NoError(t, err)
-	require.NoError(t, c.ReloadConfigString(string(rc)))
+	require.NoError(t, c.ReloadConfigString(string(rc)).Err)
 
 	// Add a second host alongside the first. Both should be present, neither duplicated.
 	nc = map[string]any{
@@ -379,7 +384,7 @@ func TestLighthouse_reloadStaticHostMap(t *testing.T) {
 	}
 	rc, err = yaml.Marshal(nc)
 	require.NoError(t, err)
-	require.NoError(t, c.ReloadConfigString(string(rc)))
+	require.NoError(t, c.ReloadConfigString(string(rc)).Err)
 
 	rl = lh.Query(staticHost)
 	require.NotNil(t, rl)
@@ -401,7 +406,7 @@ func TestLighthouse_reloadStaticHostMap(t *testing.T) {
 	}
 	rc, err = yaml.Marshal(nc)
 	require.NoError(t, err)
-	require.NoError(t, c.ReloadConfigString(string(rc)))
+	require.NoError(t, c.ReloadConfigString(string(rc)).Err)
 
 	_, isStatic := lh.GetStaticHostList()[staticHost]
 	assert.False(t, isStatic)
@@ -763,4 +768,277 @@ func TestLighthouse_DeletesWork(t *testing.T) {
 	//verify
 	out = lh.Query(testHost)
 	assert.Nil(t, out)
+}
+
+func TestLightHouse_logLocalAddrsErr(t *testing.T) {
+	out := &bytes.Buffer{}
+	lh := &LightHouse{l: test.NewLoggerWithOutput(out)}
+
+	// The first sighting of a failure warns.
+	lh.logLocalAddrsErr(errors.New("permission denied"))
+	assert.Contains(t, out.String(), "level=WARN")
+	assert.Contains(t, out.String(), "permission denied")
+
+	// Repeating unchanged does not warn again, which is what keeps a permanent failure from warning
+	// on every lighthouse.interval for the life of the process.
+	out.Reset()
+	lh.logLocalAddrsErr(errors.New("permission denied"))
+	assert.NotContains(t, out.String(), "level=WARN")
+
+	// A different failure is a new event and warns.
+	out.Reset()
+	lh.logLocalAddrsErr(errors.New("something else"))
+	assert.Contains(t, out.String(), "level=WARN")
+	assert.Contains(t, out.String(), "something else")
+
+	// Recovering resets, so the same failure returning later warns again.
+	out.Reset()
+	lh.logLocalAddrsErr(nil)
+	assert.Empty(t, out.String())
+	lh.logLocalAddrsErr(errors.New("something else"))
+	assert.Contains(t, out.String(), "level=WARN")
+}
+
+// heldEncWriter holds the query worker in its first GetHostInfo until release closes.
+type heldEncWriter struct {
+	mockEncWriter
+	once    sync.Once
+	held    chan struct{}
+	release chan struct{}
+}
+
+func (w *heldEncWriter) GetHostInfo(netip.Addr) *HostInfo {
+	w.once.Do(func() { close(w.held) })
+	<-w.release
+	return nil
+}
+
+// QueryServer never waits on the query worker, since the packet readers call it and nothing drains the channel at
+// shutdown; a query that finds the channel full is dropped and counted. The worker is held on its first query so the
+// channel fills.
+func TestLighthouse_QueryServerDoesNotBlock(t *testing.T) {
+	l := test.NewLogger()
+	cs := testCertState(netip.MustParsePrefix("10.128.0.1/16"))
+	lh1 := "10.128.0.2"
+	c := config.NewC(l)
+	c.Settings["lighthouse"] = map[string]any{"hosts": []any{lh1}}
+	c.Settings["static_host_map"] = map[string]any{lh1: []any{"1.1.1.1:4242"}}
+	c.Settings["handshakes"] = map[string]any{"query_buffer": 1}
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, cs, nil, nil)
+	require.NoError(t, err)
+	w := &heldEncWriter{held: make(chan struct{}), release: make(chan struct{})}
+	lh.ifce = w
+	t.Cleanup(func() { close(w.release) })
+
+	lh.QueryServer(netip.MustParseAddr("10.128.0.10"))
+	select {
+	case <-w.held:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the query worker never took the first query")
+	}
+	dropped := lh.queryDropped.Count()
+	done := make(chan struct{})
+	go func() {
+		lh.QueryServer(netip.MustParseAddr("10.128.0.11"))
+		lh.QueryServer(netip.MustParseAddr("10.128.0.12"))
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("QueryServer blocked on a full query channel")
+	}
+	assert.EqualValues(t, 1, lh.queryDropped.Count()-dropped)
+}
+
+// hostmapEncWriter answers GetHostInfo from a real hostmap, the way Interface does.
+type hostmapEncWriter struct {
+	mockEncWriter
+	hm *HostMap
+}
+
+func (w *hostmapEncWriter) GetHostInfo(a netip.Addr) *HostInfo { return w.hm.QueryVpnAddr(a) }
+func (w *hostmapEncWriter) GetCertState() *CertState {
+	return &CertState{initiatingVersion: cert.Version1}
+}
+
+// A lighthouse runs four paths that each hold one lock while waiting for the next: CheckAndComplete
+// holds the hostmap and takes the handshake manager, StartHandshake holds the handshake manager and
+// takes the lighthouse, a host update holds the lighthouse and takes the sender's RemoteList, and a
+// punch notification holds the querier's RemoteList while it resolves the target. If that last step
+// reaches the hostmap under the RemoteList lock, the four deadlock. Drive them all at once.
+func TestLighthouse_PunchNotificationDoesNotCloseLockCycle(t *testing.T) {
+	l := test.NewLogger()
+	myVpnNet := netip.MustParsePrefix("10.128.0.1/24")
+
+	c := config.NewC(l)
+	c.Settings["lighthouse"] = map[string]any{"am_lighthouse": true}
+	c.Settings["listen"] = map[string]any{"port": 4242}
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, testCertState(myVpnNet), nil, nil)
+	require.NoError(t, err)
+
+	mainHM := newHostMap(l)
+	pr := []netip.Prefix{}
+	mainHM.preferredRanges.Store(&pr)
+	lh.ifce = &hostmapEncWriter{hm: mainHM}
+
+	hm := NewHandshakeManager(l, mainHM, lh, &udp.NoopConn{}, defaultHandshakeConfig)
+	f := &Interface{hostMap: mainHM, lightHouse: lh, handshakeManager: hm, l: l}
+	hm.f = f
+
+	peer := netip.MustParseAddr("10.128.0.2")
+	peerUdp := netip.MustParseAddrPort("10.0.0.2:4242")
+	target := netip.MustParseAddr("10.128.0.3")
+	targetUdp := netip.MustParseAddrPort("10.0.0.3:4242")
+	outbound := netip.MustParseAddr("10.128.0.4")
+	inbound := netip.MustParseAddr("10.128.0.5")
+
+	seed := lh.NewRequestHandler()
+	newLHHostUpdate(peerUdp, peer, []netip.AddrPort{peerUdp}, seed)
+	newLHHostUpdate(targetUdp, target, []netip.AddrPort{targetUdp}, seed)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	loop := func(body func()) {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				body()
+			}
+		}
+	}
+	wg.Add(4)
+
+	// Outbound handshakes keep starting and being dropped.
+	go loop(func() {
+		hm.DeleteHostInfo(hm.StartHandshake(outbound, nil))
+	})
+
+	// Inbound handshakes keep completing and being torn down.
+	var idx uint32
+	go loop(func() {
+		idx++
+		hi := &HostInfo{
+			vpnAddrs:        []netip.Addr{inbound},
+			localIndexId:    idx,
+			remoteIndexId:   idx,
+			remotes:         lh.QueryCache([]netip.Addr{inbound}),
+			HandshakePacket: map[uint8][]byte{handshakePacketStage0: {byte(idx)}},
+		}
+		if _, err := hm.CheckAndComplete(hi, handshakePacketStage0, f); err == nil {
+			mainHM.DeleteHostInfo(hi)
+		}
+	})
+
+	// The peer keeps sending host updates.
+	updates := lh.NewRequestHandler()
+	go loop(func() {
+		newLHHostUpdate(peerUdp, peer, []netip.AddrPort{peerUdp}, updates)
+	})
+
+	// The same peer keeps querying for the target, which ends in a punch notification.
+	queries := lh.NewRequestHandler()
+	go loop(func() {
+		sendLHHostRequest(peerUdp, peer, target, queries, nil)
+	})
+
+	time.Sleep(time.Second)
+	close(stop)
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("deadlock: the lighthouse paths never finished after stop was signalled")
+	}
+}
+
+func TestLighthouse_reloadRelaysTriggersUpdate(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	base := "lighthouse:\n  am_lighthouse: true\nlisten:\n  port: 4242\n"
+	require.NoError(t, c.LoadString(base+"relay:\n  relays: [10.128.0.5]\n"))
+
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, testCertState(netip.MustParsePrefix("10.128.0.1/24")), nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, lh.updateTrigger)
+
+	require.NoError(t, c.ReloadConfigString(base+"relay:\n  relays: [10.128.0.6]\n").Err)
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("10.128.0.6")}, lh.GetRelaysForMe())
+	require.Len(t, lh.updateTrigger, 1)
+	<-lh.updateTrigger
+
+	// The config changed but what we advertise did not, a bad entry is skipped
+	require.NoError(t, c.ReloadConfigString(base+"relay:\n  relays: [10.128.0.6, nope]\n").Err)
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("10.128.0.6")}, lh.GetRelaysForMe())
+	assert.Empty(t, lh.updateTrigger)
+}
+
+func TestLighthouse_reloadAmRelayAlone(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	base := "lighthouse:\n  am_lighthouse: true\nlisten:\n  port: 4242\nrelay:\n  relays: [10.128.0.5]\n"
+	require.NoError(t, c.LoadString(base+"  am_relay: false\n"))
+
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, testCertState(netip.MustParsePrefix("10.128.0.1/24")), nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("10.128.0.5")}, lh.GetRelaysForMe())
+
+	// Relays aren't allowed to have relays, flipping am_relay alone must drop them and tell the lighthouses
+	require.NoError(t, c.ReloadConfigString(base+"  am_relay: true\n").Err)
+	assert.Empty(t, lh.GetRelaysForMe())
+	require.Len(t, lh.updateTrigger, 1)
+	<-lh.updateTrigger
+
+	require.NoError(t, c.ReloadConfigString(base+"  am_relay: false\n").Err)
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("10.128.0.5")}, lh.GetRelaysForMe())
+	require.Len(t, lh.updateTrigger, 1)
+}
+
+func TestLighthouse_reloadRestartRequired(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	base := "lighthouse:\n  am_lighthouse: true\n"
+	require.NoError(t, c.LoadString(base+"listen:\n  port: 4242\n"))
+
+	_, err := NewLightHouseFromConfig(t.Context(), l, c, testCertState(netip.MustParsePrefix("10.128.0.1/24")), nil, nil)
+	require.NoError(t, err)
+
+	res := c.ReloadConfigString(base + "listen:\n  port: 4242\n")
+	require.NoError(t, res.Err)
+	assert.False(t, res.RestartRequired)
+	res = c.ReloadConfigString(base + "listen:\n  port: 4243\n")
+	require.NoError(t, res.Err)
+	assert.True(t, res.RestartRequired)
+}
+
+// A relay that doesn't parse is skipped and the rest are used, the reload says one was skipped
+func TestLighthouse_reloadBadRelayFails(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	require.NoError(t, c.LoadString("listen:\n  port: 4242\n"))
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, testCertState(netip.MustParsePrefix("10.128.0.1/24")), nil, nil)
+	require.NoError(t, err)
+
+	res := c.ReloadConfigString("listen:\n  port: 4242\nrelay:\n  relays: [10.128.0.2, nope]\n")
+	require.NoError(t, res.Err)
+	assert.True(t, res.Failed)
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("10.128.0.2")}, lh.GetRelaysForMe())
+}
+
+// An advertise_addrs entry inside our own network is skipped and the rest are used, the reload says one was skipped
+func TestLighthouse_reloadAdvertiseAddrInNetworkFails(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	require.NoError(t, c.LoadString("listen:\n  port: 4242\n"))
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, testCertState(netip.MustParsePrefix("10.128.0.1/24")), nil, nil)
+	require.NoError(t, err)
+
+	res := c.ReloadConfigString("listen:\n  port: 4242\nlighthouse:\n  advertise_addrs: [\"1.2.3.4:4242\", \"10.128.0.5:4242\"]\n")
+	require.NoError(t, res.Err)
+	assert.True(t, res.Failed)
+	assert.Equal(t, []netip.AddrPort{netip.MustParseAddrPort("1.2.3.4:4242")}, lh.GetAdvertiseAddrs())
 }

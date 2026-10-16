@@ -34,7 +34,7 @@ jobs:
 
     - uses: actions/setup-go@v7
       with:
-        go-version: '1.26'
+        go-version: '1.27'
         check-latest: true
 
     - name: add hashicorp source
@@ -66,7 +66,7 @@ jobs:
 
     - uses: actions/setup-go@v7
       with:
-        go-version: '1.26'
+        go-version: '1.27'
         check-latest: true
 
     - name: add hashicorp source
@@ -92,13 +92,13 @@ jobs:
 
     - uses: actions/setup-go@v7
       with:
-        go-version: '1.26'
+        go-version: '1.27'
         check-latest: true
 
     # WSL2 + Ubuntu so the smoke can run a real linux peer with its own
     # netns. iputils-ping is needed for the in-WSL ping check. WSL1 has no
     # real kernel and would lack /dev/net/tun, so we have to force WSL2.
-    - uses: Vampire/setup-wsl@v3
+    - uses: Vampire/setup-wsl@v7
       with:
         distribution: Ubuntu-24.04
         additional-packages: iputils-ping iproute2

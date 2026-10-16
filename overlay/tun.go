@@ -7,10 +7,26 @@ import (
 	"net/netip"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
 )
 
 const DefaultMTU = 1300
+
+// MaxMTU is the largest tun.mtu, or route mtu, the underlay can carry.
+// Every underlay buffer is udp.MTU bytes, and a relayed packet adds header.MaxOverhead to its plaintext.
+const MaxMTU = udp.MTU - header.MaxOverhead
+
+// getMTU reads tun.mtu, capping a value too big for the underlay to carry.
+func getMTU(l *slog.Logger, c *config.C) int {
+	mtu := c.GetInt("tun.mtu", DefaultMTU)
+	if mtu > MaxMTU {
+		l.Warn("tun.mtu is too big for the underlay to carry, capping it", "mtu", mtu, "maxMTU", MaxMTU)
+		return MaxMTU
+	}
+	return mtu
+}
 
 type NameError struct {
 	Name       string
@@ -25,9 +41,16 @@ func (e *NameError) Error() string {
 type DeviceFactory func(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error)
 
 func NewDeviceFromConfig(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error) {
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		r.RestartRequiredIfChanged("tun.disabled")
+	})
+
 	switch {
 	case c.GetBool("tun.disabled", false):
-		tun := newDisabledTun(vpnNetworks, c.GetInt("tun.tx_queue", 500), c.GetBool("stats.message_metrics", false), l)
+		tun := newDisabledTun(vpnNetworks, c.GetInt("tun.tx_queue", 5000), c.GetBool("stats.message_metrics", false), l)
+		c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+			r.RestartRequiredIfChanged("tun.tx_queue", "stats.message_metrics")
+		})
 		return tun, nil
 
 	default:
@@ -41,7 +64,7 @@ func NewFdDeviceFromConfig(fd *int) DeviceFactory {
 	}
 }
 
-func getAllRoutesFromConfig(c *config.C, vpnNetworks []netip.Prefix, initial bool) (bool, []Route, error) {
+func getAllRoutesFromConfig(l *slog.Logger, c *config.C, vpnNetworks []netip.Prefix, initial bool) (bool, []Route, error) {
 	if !initial && !c.HasChanged("tun.routes") && !c.HasChanged("tun.unsafe_routes") {
 		return false, nil, nil
 	}
@@ -57,6 +80,12 @@ func getAllRoutesFromConfig(c *config.C, vpnNetworks []netip.Prefix, initial boo
 	}
 
 	routes = append(routes, unsafeRoutes...)
+	for i, r := range routes {
+		if r.MTU > MaxMTU {
+			l.Warn("route mtu is too big for the underlay to carry, capping it", "route", r.Cidr, "mtu", r.MTU, "maxMTU", MaxMTU)
+			routes[i].MTU = MaxMTU
+		}
+	}
 	return true, routes, nil
 }
 

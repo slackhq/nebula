@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/netip"
 	"slices"
 	"sync"
@@ -18,7 +17,6 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
-	"github.com/slackhq/nebula/logging"
 )
 
 const defaultPromoteEvery = 1000       // Count of packets sent before we try moving a tunnel to a preferred underlay ip address
@@ -318,9 +316,9 @@ type cachedPacketMetrics struct {
 func NewHostMapFromConfig(l *slog.Logger, c *config.C) *HostMap {
 	hm := newHostMap(l)
 
-	hm.reload(c, true)
-	c.RegisterReloadCallback(func(c *config.C) {
-		hm.reload(c, false)
+	hm.reload(c, true, nil)
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		hm.reload(c, false, r)
 	})
 
 	l.Info("Main HostMap created", "preferredRanges", hm.GetPreferredRanges())
@@ -339,7 +337,8 @@ func newHostMap(l *slog.Logger) *HostMap {
 	}
 }
 
-func (hm *HostMap) reload(c *config.C, initial bool) {
+// r is nil on the initial load
+func (hm *HostMap) reload(c *config.C, initial bool, r *config.Reload) {
 	if initial || c.HasChanged("preferred_ranges") {
 		var preferredRanges []netip.Prefix
 		rawPreferredRanges := c.GetStringSlice("preferred_ranges", []string{})
@@ -350,8 +349,9 @@ func (hm *HostMap) reload(c *config.C, initial bool) {
 			if err != nil {
 				hm.l.Warn("Failed to parse preferred ranges, ignoring",
 					"error", err,
-					"range", rawPreferredRanges,
+					"range", rawPreferredRange,
 				)
+				r.Failed()
 				continue
 			}
 
@@ -929,60 +929,4 @@ func (i *HostInfo) logger(l *slog.Logger) *slog.Logger {
 	}
 
 	return li
-}
-
-// Utility functions
-
-func localAddrs(l *slog.Logger, allowList *LocalAllowList) []netip.Addr {
-	//FIXME: This function is pretty garbage
-	var finalAddrs []netip.Addr
-	ifaces, _ := net.Interfaces()
-	for _, i := range ifaces {
-		allow := allowList.AllowName(i.Name)
-		if l.Enabled(context.Background(), logging.LevelTrace) {
-			l.Log(context.Background(), logging.LevelTrace, "localAllowList.AllowName",
-				"interfaceName", i.Name,
-				"allow", allow,
-			)
-		}
-
-		if !allow {
-			continue
-		}
-		addrs, _ := i.Addrs()
-		for _, rawAddr := range addrs {
-			var addr netip.Addr
-			switch v := rawAddr.(type) {
-			case *net.IPNet:
-				//continue
-				addr, _ = netip.AddrFromSlice(v.IP)
-			case *net.IPAddr:
-				addr, _ = netip.AddrFromSlice(v.IP)
-			}
-
-			if !addr.IsValid() {
-				if l.Enabled(context.Background(), slog.LevelDebug) {
-					l.Debug("addr was invalid", "localAddr", rawAddr)
-				}
-				continue
-			}
-			addr = addr.Unmap()
-
-			if addr.IsLoopback() == false && addr.IsLinkLocalUnicast() == false {
-				isAllowed := allowList.Allow(addr)
-				if l.Enabled(context.Background(), logging.LevelTrace) {
-					l.Log(context.Background(), logging.LevelTrace, "localAllowList.Allow",
-						"localAddr", addr,
-						"allowed", isAllowed,
-					)
-				}
-				if !isAllowed {
-					continue
-				}
-
-				finalAddrs = append(finalAddrs, addr)
-			}
-		}
-	}
-	return finalAddrs
 }

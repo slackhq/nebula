@@ -263,6 +263,20 @@ try {
     }
     Write-Host "OK: WSL peer -> windows lighthouse over v6"
 
+    # The NlMtu check above proves the value was written, not that windows honors it. A payload this size only
+    # crosses the tunnel as fragments cut at NlMtu on the way out of the adapter. Left at the adapter default it
+    # reaches nebula whole, overflows the udp.MTU (9001) write buffer and is dropped, so the ping never answers.
+    # Anything smaller would ride out as one oversized datagram and survive on IP fragmentation of the underlay.
+    $BigPayload = 9000
+    foreach ($target in @(@{ Family = 'v4'; Ip = $Ip2 }, @{ Family = 'v6'; Ip = $Ip6_2 })) {
+        Wait-Until -TimeoutSec 30 -What "$($target.Family) ping with a $BigPayload byte payload from windows lighthouse to WSL peer ($($target.Ip))" -Predicate {
+            if ($peerProc.HasExited) { throw "peer exited (code $($peerProc.ExitCode)) before the large $($target.Family) ping succeeded" }
+            $null = & ping.exe -n 1 -w 1000 -l $BigPayload $target.Ip
+            $LASTEXITCODE -eq 0
+        }
+        Write-Host "OK: windows lighthouse -> WSL peer, $BigPayload byte $($target.Family) payload"
+    }
+
     Write-Host ''
     Write-Host 'All smoke checks passed.'
 }

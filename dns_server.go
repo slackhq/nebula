@@ -69,9 +69,10 @@ func newDnsServerFromConfig(ctx context.Context, l *slog.Logger, pki *PKI, hostM
 	ds.mux = dns.NewServeMux()
 	ds.mux.HandleFunc(".", ds.handleDnsRequest)
 
-	c.RegisterReloadCallback(func(c *config.C) {
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
 		if err := ds.reload(c, false); err != nil {
 			ds.l.Error("Failed to reload DNS responder from config", "error", err)
+			r.Failed()
 		}
 	})
 
