@@ -66,7 +66,7 @@ func NewPKIFromConfig(l *slog.Logger, c *config.C) (*PKI, error) {
 		if cipher := c.GetString("cipher", "aes"); !validCipher(cipher) {
 			l.Error("Unknown cipher, a restart with it would fail", "cipher", cipher)
 			r.Failed()
-		} else if cipher == "chachapoly" && fips140.Enforced() {
+		} else if cipher == "chachapoly" && fipsOnly() {
 			// newCipherSuite refuses it at startup
 			l.Error("ChaChaPoly is not allowed in FIPS 140-only mode, a restart with it would fail", "cipher", cipher)
 			r.Failed()
@@ -126,6 +126,9 @@ func (p *PKI) reload(c *config.C, initial bool, r *config.Reload) error {
 
 	return nil
 }
+
+// fipsOnly is fips140.Enforced, a variable so a test can run the FIPS 140-only reload check without GODEBUG
+var fipsOnly = fips140.Enforced
 
 // validCipher is true for the ciphers nebula can run. Each post-handshake CipherState in noiseutil hardcodes its own
 // nonce endianness, so there's nothing to set up for either.

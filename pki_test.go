@@ -197,12 +197,10 @@ func TestPKIReloadNewVersionWithOtherNetworks(t *testing.T) {
 	}
 }
 
-// FIPS 140-only mode refuses chachapoly at startup, so reloading to it fails rather than asks for a restart. Run with
-// GODEBUG=fips140=only to exercise it
+// FIPS 140-only mode refuses chachapoly at startup, so reloading to it fails rather than asks for a restart
 func TestPKIReloadChachapolyInFIPSOnlyFails(t *testing.T) {
-	if !fips140.Enforced() {
-		t.Skip("needs GODEBUG=fips140=only")
-	}
+	fipsOnly = func() bool { return true }
+	t.Cleanup(func() { fipsOnly = fips140.Enforced })
 	ca, _, caKey, caPEM := cert_test.NewTestCaCert(cert.Version2, cert.Curve_P256, time.Time{}, time.Time{}, nil, nil, nil)
 	_, _, keyPEM, certPEM := cert_test.NewTestCert(cert.Version2, cert.Curve_P256, ca, caKey, "host", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.2/24")}, nil, nil)
 	pkiConfig := func(cipher string) string {
