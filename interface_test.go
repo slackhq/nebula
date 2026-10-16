@@ -158,10 +158,10 @@ func (t routesTun) RoutesFor(ip netip.Addr) routing.Gateways {
 func TestInterface_SiblingPeers(t *testing.T) {
 	addr := netip.MustParseAddr
 	routes := new(bart.Table[routing.Gateways])
-	// a and b carry 198.51.100.0/24, the route names a by its v4 address
+	// a and b carry 198.51.100.0/24, the route names b by its v6 address
 	routes.Insert(netip.MustParsePrefix("198.51.100.0/24"), routing.Gateways{
 		routing.NewGateway(addr("192.0.2.2"), 1),
-		routing.NewGateway(addr("192.0.2.3"), 1),
+		routing.NewGateway(addr("fd00::3"), 1),
 		routing.NewGateway(addr("192.0.2.5"), 1), // no tunnel to this one
 	})
 	routes.Insert(netip.MustParsePrefix("203.0.113.0/24"), routing.Gateways{routing.NewGateway(addr("192.0.2.2"), 1)})
@@ -175,9 +175,9 @@ func TestInterface_SiblingPeers(t *testing.T) {
 	}
 	f := &Interface{inside: routesTun{routes: routes}, hostMap: hm}
 
-	// Siblings come back as their highest vpn address, the one conntrack keys on
-	assert.Equal(t, []netip.Addr{addr("fd00::3")}, f.siblingPeers(addr("198.51.100.5"), a, nil))
-	assert.Equal(t, []netip.Addr{addr("fd00::2")}, f.siblingPeers(addr("198.51.100.5"), b, nil))
+	// Siblings come back as their first vpn address, the one conntrack keys on, whichever address the route names
+	assert.Equal(t, []netip.Addr{addr("192.0.2.3")}, f.siblingPeers(addr("198.51.100.5"), a, nil))
+	assert.Equal(t, []netip.Addr{addr("192.0.2.2")}, f.siblingPeers(addr("198.51.100.5"), b, nil))
 	assert.Empty(t, f.siblingPeers(addr("198.51.100.5"), c, nil), "not one of our gateways for the network")
 	assert.Empty(t, f.siblingPeers(addr("203.0.113.5"), a, nil), "a single gateway route has no siblings")
 	assert.Empty(t, f.siblingPeers(addr("192.0.2.3"), a, nil), "no route")

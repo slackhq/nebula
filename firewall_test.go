@@ -1198,7 +1198,7 @@ func TestFirewall_ConntrackPeerRehandshake(t *testing.T) {
 		RemotePort: 55000,
 		Protocol:   iputil.IPProtocolTCP,
 	}
-	key := firewall.ConntrackKey{Packet: flow, Peer: netip.MustParseAddr("2001:db8::2")}
+	key := firewall.ConntrackKey{Packet: flow, Peer: netip.MustParseAddr("192.0.2.2")}
 
 	t.Run("inbound flow follows the peer's groups", func(t *testing.T) {
 		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, owner)

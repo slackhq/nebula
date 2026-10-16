@@ -718,7 +718,7 @@ func (f *Interface) Close() error {
 }
 
 // siblingPeers implements gatewaySiblings from the routes and tunnels we have now. Routes name a gateway by any of its
-// vpn addresses, conntrack keys a peer by its highest one, so each gateway is resolved through its tunnel. A gateway
+// vpn addresses, conntrack keys a peer by its first one, so each gateway is resolved through its tunnel. A gateway
 // we have no tunnel to can't be carrying a live flow.
 func (f *Interface) siblingPeers(remote netip.Addr, h *HostInfo, buf []netip.Addr) []netip.Addr {
 	gateways := f.inside.RoutesFor(remote)
@@ -732,7 +732,7 @@ func (f *Interface) siblingPeers(remote netip.Addr, h *HostInfo, buf []netip.Add
 			continue
 		}
 		if s := f.hostMap.QueryVpnAddr(g.Addr()); s != nil && s != h {
-			buf = append(buf, s.vpnAddrs[len(s.vpnAddrs)-1])
+			buf = append(buf, s.vpnAddrs[0])
 		}
 	}
 	return buf

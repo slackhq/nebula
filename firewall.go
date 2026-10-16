@@ -463,9 +463,8 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 		return ErrInvalidLocalIP
 	}
 
-	// The highest vpn address identifies the peer. v2 certs sort their networks and v1 certs have only one,
-	// so this is the peer's v6 address when it has one, which stays put while v4 addresses come and go.
-	key := firewall.ConntrackKey{Packet: fp, Peer: h.vpnAddrs[len(h.vpnAddrs)-1]}
+	// The first vpn address identifies the peer, as it does elsewhere. A host's v1 and v2 certs must agree on it
+	key := firewall.ConntrackKey{Packet: fp, Peer: h.vpnAddrs[0]}
 
 	// Check if we spoke to this tuple, if we did then allow this packet
 	if f.inConns(key, h, caPool, localCache) {
