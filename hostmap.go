@@ -349,7 +349,7 @@ func (hm *HostMap) reload(c *config.C, initial bool, r *config.Reload) {
 			if err != nil {
 				hm.l.Warn("Failed to parse preferred ranges, ignoring",
 					"error", err,
-					"range", rawPreferredRanges,
+					"range", rawPreferredRange,
 				)
 				r.Failed()
 				continue
