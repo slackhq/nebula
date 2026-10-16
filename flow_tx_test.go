@@ -295,6 +295,11 @@ func TestFlowStagedTXAffinity(t *testing.T) {
 						if pin && len(allowed) < 2 {
 							t.Skip("requires at least two allowed CPUs")
 						}
+						if sc.inlineBelow > 0 {
+							// Switch on every read that wants the other mode, so the small read goes inline between
+							// staged ones
+							sc.gateHold = 1
+						}
 						sender, receiver := newFlowTestPair(t, noise.CipherChaChaPoly, sc)
 						f := sender.f
 						f.pinThreads, f.routines = pin, routines
@@ -417,20 +422,23 @@ func TestFlowTXBudgetManyReaders(t *testing.T) {
 	}
 }
 
-// TestFlowStagedTXInlineOnlyWhenEmpty: a small read behind a staged batch still in flight must not go inline, it
-// would overtake that batch.
+// TestFlowStagedTXInlineOnlyWhenEmpty: a small read behind a staged batch still in flight must not go inline before
+// that batch is on the wire, it would overtake it.
 func TestFlowStagedTXInlineOnlyWhenEmpty(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	sc := adaptive(2)
-	sc.inlineBelow = 4
+	sc.inlineBelow, sc.gateHold = 4, 1
 	sender, receiver := newFlowTestPair(t, noise.CipherChaChaPoly, sc)
 	p := newStagedTx(sender.f, newFlowBatchQueue(nil), 0)
 	block := make(chan struct{})
 	delayCrypto(sender, func(uint64) { <-block })
 	batches, want := flowTestBatches(1, 4, 1, 3)
-	p.send(batches[0][:3]) // its worker is blocked
-	p.send(batches[0][3:])
-	close(block)
+	p.send(batches[0][:3]) // switches to fanout, its worker is blocked
+	require.Equal(t, 1, p.inFlight)
+	unblock := time.AfterFunc(20*time.Millisecond, func() { close(block) })
+	defer unblock.Stop()
+	p.send(batches[0][3:]) // switches to inline, which waits for the staged batch first
+	require.Zero(t, p.inFlight)
 	p.close()
 	require.Equal(t, want, decryptWire(t, receiver, sender.conn.captured()))
 }
@@ -512,7 +520,10 @@ func TestFlowStagedTXAdaptiveBudget(t *testing.T) {
 	} {
 		t.Run(shape.name, func(t *testing.T) {
 			defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-			sender, receiver := newFlowTestPair(t, noise.CipherChaChaPoly, adaptive(2))
+			sc := adaptive(2)
+			// p0's large read must go to the workers at once, p1 stays inline
+			sc.gateHold = 1
+			sender, receiver := newFlowTestPair(t, noise.CipherChaChaPoly, sc)
 			sender.f.routines = 2
 			sender.f.writers = []udp.Conn{sender.conn, sender.conn}
 			ci := sender.hostinfo.ConnectionState

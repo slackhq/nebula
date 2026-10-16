@@ -274,6 +274,11 @@ type stagedTx struct {
 	returned   chan *txSlot
 	inFlight   int
 	senderDone chan struct{}
+	// gateInline is the routine's transmit mode, gateStreak how many reads in a row wanted the other one
+	gateInline bool
+	gateStreak int
+
+	metricGateSwitches metrics.Counter
 
 	readBusy, encryptBusy, sendBusy metrics.Counter
 	metricBatches                   metrics.Counter
@@ -298,6 +303,9 @@ func newStagedTx(f *Interface, queue handoffQueue, q int) *stagedTx {
 		sendBusy:      stageBusy("tx_send", q),
 		metricBatches: metrics.GetOrRegisterCounter("flow.tx.batches", nil),
 		metricInline:  metrics.GetOrRegisterCounter("flow.tx.inline", nil),
+		// Starts inline, the pipeline is empty, unless the threshold never allows it
+		gateInline:         f.staged.inlineBelow > 0,
+		metricGateSwitches: metrics.GetOrRegisterCounter("flow.tx.gate_switches", nil),
 	}
 	if f.pinThreads {
 		p.cpu = f.threadCPU(q)
@@ -339,7 +347,7 @@ func (p *stagedTx) run(fwPacket *firewall.ParsedPacket, rejectBuf []byte, conntr
 			return err
 		}
 		// Waiting for a slot is backpressure, not reader work, so it comes before the clock read. The loop reads the
-		// clock twice, more only when it waits for tunnel credit or drains for an oversized read.
+		// clock twice, more only when it waits for tunnel credit or drains, for an oversized read or a switch to inline.
 		p.ready()
 		t := time.Now()
 		stall := p.handle(pkts, fwPacket, rejectBuf, conntrackCache.Get())
@@ -351,17 +359,16 @@ func (p *stagedTx) run(fwPacket *firewall.ParsedPacket, rejectBuf []byte, conntr
 // it itself, with how long it waited for tunnel credit.
 func (p *stagedTx) handle(pkts []tio.Packet, fwPacket *firewall.ParsedPacket, rejectBuf []byte, localCache firewall.ConntrackCache) time.Duration {
 	p.ready()
-	inline := p.inFlight == 0 && p.small(pkts)
+	inline, stall := p.gate(p.small(pkts))
 	if inline && p.f.routines == 1 {
 		// With only one reader and an empty pipeline, no other staged reservation can be overtaken. Keep this common
 		// case inexpensive.
 		p.inlineSoleReader(pkts, fwPacket, rejectBuf, localCache)
-		return 0
+		return stall
 	}
 
 	slot := p.free[len(p.free)-1]
 	p.free = p.free[:len(p.free)-1]
-	var stall time.Duration
 	items := p.collect(slot.items[:0], pkts, fwPacket, rejectBuf, p.q, localCache)
 	if len(items) == 0 {
 		slot.items = items
@@ -409,6 +416,31 @@ func (p *stagedTx) handle(pkts []tio.Packet, fwPacket *firewall.ParsedPacket, re
 	p.ordered <- slot
 	p.pool.jobs <- slot
 	return stall
+}
+
+// gate reports whether a read goes inline, and how long it waited for the pipeline to drain. Each routine holds one
+// transmit mode, inline on the reader or fanout to the workers and the sender, until gateHold reads in a row want the
+// other one, the last of which goes the new way. Choosing per read let small inline sends leave from the reader's CPU
+// between staged ones leaving from the sender's, and the receiver's TCP saw them reordered. Going inline the reader
+// first waits until everything in flight is on the wire and the sender is idle, so no inline send overtakes a staged
+// one. Going to fanout nothing is in flight: inline sends finish before the reader moves on.
+func (p *stagedTx) gate(small bool) (bool, time.Duration) {
+	if small == p.gateInline {
+		p.gateStreak = 0
+		return small, 0
+	}
+	if p.gateStreak++; p.gateStreak < p.f.staged.gateHold {
+		return p.gateInline, 0
+	}
+	p.gateInline, p.gateStreak = small, 0
+	p.metricGateSwitches.Inc(1)
+	if !small {
+		return false, 0
+	}
+	t := time.Now()
+	for p.flushOldest() {
+	}
+	return true, time.Since(t)
 }
 
 // ready takes back every slot the sender has finished with, and waits for one when all of them are in flight.

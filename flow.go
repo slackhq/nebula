@@ -23,10 +23,11 @@ import (
 // tun.staged.tx_slots and rx_slots override the counts. Small-MSS TX arenas can grow.
 //
 // Metrics are registered only for active pipelines. flow.{tx,rx}.batches counts reads handed to the ordered stage and
-// flow.{tx,rx}.inline those an idle reader handled itself (TX inline also counts oversized reads); their rates show
-// whether staging is used. flow.stage.<stage>.q<queue>.busy_ns locates the limiting stage: tx_read, tx_encrypt,
-// tx_send, rx_read, rx_decrypt or rx_write. Take rates; 1e9 ns/s fills a serial stage. These are elapsed times that
-// exclude read syscalls and downstream waits; descheduling inflates them and worker times add up across the pool.
+// flow.{tx,rx}.inline those the reader handled itself (TX inline also counts oversized reads); their rates show
+// whether staging is used. flow.tx.gate_switches counts transmit switches between inline and fanout mode.
+// flow.stage.<stage>.q<queue>.busy_ns locates the limiting stage: tx_read, tx_encrypt, tx_send, rx_read, rx_decrypt or
+// rx_write. Take rates; 1e9 ns/s fills a serial stage. These are elapsed times that exclude read syscalls and
+// downstream waits; descheduling inflates them and worker times add up across the pool.
 // Inline work counts at the reader; small RX batches sent to the writer include decryption in writer time.
 
 // stagedConfig is tun.staged. workers is per routine and direction; zero keeps processing inline.
@@ -34,11 +35,18 @@ type stagedConfig struct {
 	workers int
 	tx      bool
 	rx      bool
-	// inlineBelow is the TX segment or RX packet count below which an idle reader skips the worker handoff, 0 never
+	// inlineBelow is the TX segment or RX packet count below which a read may skip the worker handoff, 0 never: a TX
+	// read in inline mode, an RX read with nothing in flight
 	inlineBelow int
 	// txSlots and rxSlots are how many batches each routine can have in flight per direction
 	txSlots, rxSlots int
+	// gateHold is how many TX reads in a row must want the other mode before a routine switches between inline and
+	// fanout transmit
+	gateHold int
 }
+
+// stagedGateHold is the default tun.staged.gate_hold
+const stagedGateHold = 64
 
 const (
 	// stagedTxSlots is the default TX slot count, unless the workers need more
@@ -85,10 +93,12 @@ func parseStagedConfig(c *config.C, l *slog.Logger) stagedConfig {
 		l.Warn("tun.staged cannot encrypt in parallel with boringcrypto or fips140; transmit stays inline")
 		sc.tx = false
 	}
+	sc.gateHold = max(c.GetInt("tun.staged.gate_hold", stagedGateHold), 1)
 	sc.txSlots, sc.rxSlots = stagedSlots(sc.workers, c.GetInt("listen.batch", 64),
 		c.GetInt("tun.staged.tx_slots", 0), c.GetInt("tun.staged.rx_slots", 0))
 	l.Info("Staged packet processing enabled", "workers", sc.workers, "tx", sc.tx, "rx", sc.rx,
-		"inlineBelow", sc.inlineBelow, "txSlots", sc.txSlots, "rxSlots", sc.rxSlots)
+		"inlineBelow", sc.inlineBelow, "gateHold", sc.gateHold,
+		"txSlots", sc.txSlots, "rxSlots", sc.rxSlots)
 	return sc
 }
 

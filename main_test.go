@@ -142,7 +142,8 @@ func TestParseStagedConfig(t *testing.T) {
 		require.Equal(t, stagedConfig{}, staged(2))
 		return
 	}
-	want := stagedConfig{workers: 2, tx: !noiseutil.EncryptLockNeeded, rx: true, inlineBelow: 256, txSlots: 8, rxSlots: 6}
+	want := stagedConfig{workers: 2, tx: !noiseutil.EncryptLockNeeded, rx: true, inlineBelow: 256, gateHold: stagedGateHold,
+		txSlots: 8, rxSlots: 6}
 	require.Equal(t, want, staged(2))
 
 	c := config.NewC(l)
@@ -163,6 +164,19 @@ func TestParseStagedConfig(t *testing.T) {
 	require.Equal(t, 32, parseStagedConfig(c, l).inlineBelow)
 	c.Settings["tun"] = map[string]any{"staged": map[string]any{"workers": 2, "inline_below": -1}}
 	require.Zero(t, parseStagedConfig(c, l).inlineBelow, "a negative threshold is 0")
+
+	for _, tt := range []struct {
+		hold any
+		want int
+	}{{nil, stagedGateHold}, {8, 8}, {0, 1}, {-3, 1}} {
+		c = config.NewC(l)
+		settings := map[string]any{"workers": 2}
+		if tt.hold != nil {
+			settings["gate_hold"] = tt.hold
+		}
+		c.Settings["tun"] = map[string]any{"staged": settings}
+		require.Equal(t, tt.want, parseStagedConfig(c, l).gateHold, "gate_hold %v", tt.hold)
+	}
 }
 
 func TestStagedSlots(t *testing.T) {
