@@ -9,12 +9,12 @@ import (
 type CommandFlags func() (*flag.FlagSet, any)
 
 // CommandCallback is called when your command should execute.
-// fs will be a a pointer to the struct provided by Command.Flags callback, if there was one. -h and -help are reserved
+// fs will be a pointer to the struct provided by Command.Flags callback, if there was one. -h and -help are reserved
 // and handled automatically for you.
 // a will be any unconsumed arguments, if no Command.Flags was available this will be all the flags passed in.
 // w is the writer to use when sending messages back to the client.
-// If an error is returned by the callback it is logged locally, the callback should handle messaging errors to the user
-// where appropriate
+// An error returned by the callback is handed back to whoever dispatched the command; the ssh session logs it. It is
+// not shown to the user, so the callback should handle messaging errors to the user where appropriate.
 type CommandCallback func(fs any, a []string, w StringWriter) error
 
 type Command struct {

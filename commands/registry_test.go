@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"strings"
 	"testing"
@@ -94,4 +95,21 @@ func TestHelpFlagAgreesWithHelpCommand(t *testing.T) {
 	flag.Reset()
 	c.Dispatch("served -h", NewStringWriter(flag))
 	assert.Equal(t, "served - a command this surface serves\n", flag.String())
+}
+
+// TestDispatchReturnsTheCommandsError: what the callback returns reaches the caller, so
+// a surface can log it, and an unparseable line reports why nothing was answered.
+func TestDispatchReturnsTheCommandsError(t *testing.T) {
+	r := New()
+	r.Register(&Command{
+		Name: "fails",
+		Callback: func(fs any, a []string, w StringWriter) error {
+			return errors.New("boom")
+		},
+	})
+
+	out := &bytes.Buffer{}
+	require.EqualError(t, r.Dispatch("fails", NewStringWriter(out)), "boom")
+	assert.Error(t, r.Dispatch(`fails "unterminated`, NewStringWriter(out)))
+	assert.Empty(t, out.String())
 }
