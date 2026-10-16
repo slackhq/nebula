@@ -23,11 +23,20 @@ import (
 // runTestHandshake runs a complete IX handshake between two freshly-built
 // peers and returns the initiator and responder Results. Used to produce
 // real cipher states for tests that need to exercise post-handshake glue.
-func runTestHandshake(t *testing.T) (initR, respR *handshake.Result) {
+func runTestHandshake(t testing.TB) (initR, respR *handshake.Result) {
+	t.Helper()
+	return runTestHandshakeWith(t, noise.CipherChaChaPoly)
+}
+
+// runTestHandshakeWith is runTestHandshake with the data plane cipher picked by the caller.
+func runTestHandshakeWith(t testing.TB, cipher noise.CipherFunc) (initR, respR *handshake.Result) {
 	t.Helper()
 
+	// Valid around now rather than the cert_test default, which is fixed at process start and lapses a minute
+	// later, inside a long -count run
+	now := time.Now()
 	ca, _, caKey, _ := ct.NewTestCaCert(
-		cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil,
+		cert.Version2, cert.Curve_CURVE25519, now.Add(-time.Minute), now.Add(time.Hour), nil, nil, nil,
 	)
 	caPool := ct.NewTestCAPool(ca)
 
@@ -40,7 +49,7 @@ func runTestHandshake(t *testing.T) (initR, respR *handshake.Result) {
 		require.NoError(t, err)
 		hsBytes, err := c.MarshalForHandshakes()
 		require.NoError(t, err)
-		ncs := noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
+		ncs := noise.NewCipherSuite(noise.DH25519, cipher, noise.HashSHA256)
 		cred := handshake.NewCredential(c, hsBytes, priv, ncs)
 		return func(v cert.Version) *handshake.Credential {
 			if v == cert.Version2 {

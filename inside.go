@@ -133,31 +133,6 @@ func (f *Interface) filterInsidePacket(pkt tio.Packet, fwPacket *firewall.Parsed
 	return nil
 }
 
-func (f *Interface) sendInsideEncrypt(hostinfo *HostInfo, ci *ConnectionState, seg, scratch, nb []byte) []byte {
-	if noiseutil.EncryptLockNeeded {
-		ci.writeLock.Lock()
-	}
-	c := ci.messageCounter.Add(1)
-
-	out := header.Encode(scratch, header.Version, header.Message, 0, hostinfo.remoteIndexId, c)
-
-	out, encErr := ci.eKey.EncryptDanger(out, out, seg, c, nb)
-	if noiseutil.EncryptLockNeeded {
-		ci.writeLock.Unlock()
-	}
-	if encErr != nil {
-		hostinfo.logger(f.l).Error("Failed to encrypt outgoing packet",
-			"error", encErr,
-			"udpAddr", hostinfo.GetRemote(),
-			"counter", c,
-		)
-		// Skip this segment; the rest of the superpacket can still go out. TCP will retransmit anything we drop here.
-		return nil
-	}
-
-	return out
-}
-
 // sendInsideMessage encrypts a firewall-approved inside packet (or every
 // segment of a TSO/USO superpacket) into the caller's batch slot for
 // later sendmmsg flush. Segmentation is fused with encryption here so the
@@ -165,88 +140,46 @@ func (f *Interface) sendInsideEncrypt(hostinfo *HostInfo, ci *ConnectionState, s
 // scratch arena: SegmentSuperpacket builds each segment's plaintext in
 // segScratch[:segLen] in turn, and we encrypt directly into a fresh SendBatch slot.
 func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []byte, sendBatch *batch.SendBatch) {
-	ci := hostinfo.ConnectionState
-	if ci.eKey == nil {
-		return
+	var it txItem
+	if f.prepareTxItem(&it, hostinfo, pkt) {
+		f.encryptTxItem(&it, nb, sendBatch)
 	}
+}
 
-	// One traffic-out mark covers every segment of the superpacket; doing it
-	// per segment in sendInsideEncrypt paid an atomic store up to ~45 extra
-	// times per TSO packet, inside writeLock under boring crypto.
-	//
-	// We rebound since this tunnel last sent, ask the lighthouse to get the far side punching at us again
+// recordOutbound marks traffic out on hostinfo, once per packet or superpacket, and when we rebound since this tunnel
+// last sent, asks the lighthouse to get the far side punching at us again.
+func (f *Interface) recordOutbound(hostinfo *HostInfo) {
 	if f.connectionManager.Out(hostinfo) {
 		f.lightHouse.QueryServer(hostinfo.vpnAddrs[0])
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.logger(f.l).Debug("Lighthouse update triggered for punch due to rebind epoch",
-				"vpnAddrs", hostinfo.vpnAddrs,
-			)
+			hostinfo.logger(f.l).Debug("Lighthouse update triggered for punch due to rebind epoch", "vpnAddrs", hostinfo.vpnAddrs)
 		}
 	}
+}
 
-	remote := hostinfo.GetRemote()
-	if !remote.IsValid() { //the relay path
-		//first, find our relay hostinfo:
-		var relayHostInfo *HostInfo
-		var relay *Relay
-		var err error
-		for _, relayIP := range hostinfo.relayState.CopyRelayIps() {
-			relayHostInfo, relay, err = f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relayIP)
-			if err != nil {
-				hostinfo.relayState.DeleteRelay(relayIP)
-				hostinfo.logger(f.l).Info("sendNoMetrics failed to find HostInfo",
-					"relay", relayIP,
-					"error", err,
-				)
-				continue
-			}
-			break
+// findRelay returns the first relay that can reach hostinfo, forgetting the ones that no longer resolve.
+func (f *Interface) findRelay(hostinfo *HostInfo) (*HostInfo, *Relay) {
+	for _, relayIP := range hostinfo.relayState.CopyRelayIps() {
+		via, relay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relayIP)
+		if err == nil {
+			return via, relay
 		}
-		if relayHostInfo == nil || relay == nil {
-			//failure already logged
-			return
-		}
-
-		err = tio.SegmentSuperpacket(pkt, func(seg []byte) error {
-			//relay header + header + plaintext + AEAD tag + relay tag
-			scratch := sendBatch.Reserve(len(seg) + header.MaxOverhead)
-
-			innerPacket := f.sendInsideEncrypt(hostinfo, ci, seg, scratch[header.Len:], nb)
-			if innerPacket == nil {
-				return nil
-			}
-
-			//now we need to do a relay-encrypt:
-			toSend, err := f.prepareSendVia(relayHostInfo, relay, innerPacket, nb, scratch, true)
-			if err != nil {
-				//already logged
-				return nil
-			}
-
-			sendBatch.Commit(toSend, relayHostInfo.GetRemote())
-			return nil
-		})
-		if err != nil {
-			hostinfo.logger(f.l).Error("Failed to segment superpacket for relay send", "error", err)
-		}
-		return
+		hostinfo.relayState.DeleteRelay(relayIP)
+		hostinfo.logger(f.l).Info("sendNoMetrics failed to find HostInfo", "relay", relayIP, "error", err)
 	}
+	return nil, nil
+}
 
-	err := tio.SegmentSuperpacket(pkt, func(seg []byte) error {
-		// header + plaintext + AEAD tag (16 bytes for both AES-GCM and ChaCha20-Poly1305)
-		scratch := sendBatch.Reserve(header.Len + len(seg) + 16)
-
-		out := f.sendInsideEncrypt(hostinfo, ci, seg, scratch, nb)
-		if out == nil {
-			return nil
-		}
-
-		sendBatch.Commit(out, remote)
-		return nil
-	})
+// encryptMessage encodes the header for counter c and encrypts p behind it into out. The caller allocates c and
+// holds writeLock when the cipher requires encryption in nonce order.
+func (f *Interface) encryptMessage(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, ci *ConnectionState, c uint64, p, nb, out []byte, remote netip.AddrPort) []byte {
+	out = header.Encode(out, header.Version, t, st, hostinfo.remoteIndexId, c)
+	out, err := ci.eKey.EncryptDanger(out, out, p, c, nb)
 	if err != nil {
-		hostinfo.logger(f.l).Error("Failed to segment superpacket for send", "error", err)
+		hostinfo.logger(f.l).Error("Failed to encrypt outgoing packet", "error", err, "udpAddr", remote, "counter", c)
+		return nil
 	}
+	return out
 }
 
 func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
@@ -455,27 +388,33 @@ func (f *Interface) prepareSendVia(via *HostInfo,
 	nb,
 	out []byte,
 	nocopy bool,
+	c uint64,
 ) ([]byte, error) {
-	if noiseutil.EncryptLockNeeded {
+	// A nonzero c was reserved by the caller, who also did the connection manager bookkeeping
+	reserved := c != 0
+	locked := !reserved && noiseutil.EncryptLockNeeded
+	if locked {
 		// NOTE: for goboring AESGCMTLS we need to lock because of the nonce check
 		via.ConnectionState.writeLock.Lock()
 	}
-	c, ok := via.ConnectionState.NextMessageCounter()
-	if !ok {
-		if noiseutil.EncryptLockNeeded {
-			via.ConnectionState.writeLock.Unlock()
+	if !reserved {
+		var ok bool
+		c, ok = via.ConnectionState.NextMessageCounter()
+		if !ok {
+			if locked {
+				via.ConnectionState.writeLock.Unlock()
+			}
+			f.dropExhausted(via, c, "Dropping outbound relay packets, tunnel message counter is exhausted")
+			return nil, fmt.Errorf("tunnel message counter is exhausted")
 		}
-		f.dropExhausted(via, c, "Dropping outbound relay packets, tunnel message counter is exhausted")
-		return nil, fmt.Errorf("tunnel message counter is exhausted")
+		f.connectionManager.OutNoRebind(via)
 	}
-
 	out = header.Encode(out, header.Version, header.Message, header.MessageRelay, relay.RemoteIndex, c)
-	f.connectionManager.OutNoRebind(via)
 
 	// Authenticate the header and payload, but do not encrypt for this message type.
 	// The payload consists of the inner, unencrypted Nebula header, as well as the end-to-end encrypted payload.
 	if len(out)+len(ad)+via.ConnectionState.eKey.Overhead() > cap(out) {
-		if noiseutil.EncryptLockNeeded {
+		if locked {
 			via.ConnectionState.writeLock.Unlock()
 		}
 		via.logger(f.l).Error("SendVia out buffer not large enough for relay",
@@ -499,14 +438,16 @@ func (f *Interface) prepareSendVia(via *HostInfo,
 
 	var err error
 	out, err = via.ConnectionState.eKey.EncryptDanger(out, out, nil, c, nb)
-	if noiseutil.EncryptLockNeeded {
+	if locked {
 		via.ConnectionState.writeLock.Unlock()
 	}
 	if err != nil {
 		via.logger(f.l).Info("Failed to EncryptDanger in sendVia", "error", err)
 		return nil, err
 	}
-	f.connectionManager.RelayUsed(relay.LocalIndex)
+	if !reserved {
+		f.connectionManager.RelayUsed(relay.LocalIndex)
+	}
 	return out, nil
 }
 
@@ -519,7 +460,7 @@ func (f *Interface) prepareSendVia(via *HostInfo,
 // out is a buffer used to store the result of the Encrypt operation
 // q indicates which writer to use to send the packet.
 func (f *Interface) SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, nocopy bool, q int) {
-	toSend, err := f.prepareSendVia(via, relay, ad, nb, out, nocopy)
+	toSend, err := f.prepareSendVia(via, relay, ad, nb, out, nocopy, 0)
 	if err != nil {
 		// already logged by prepareSendVia
 		return
@@ -573,34 +514,19 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		return
 	}
 
-	//l.WithField("trace", string(debug.Stack())).Error("out Header ", &Header{Version, t, st, 0, hostinfo.remoteIndexId, c}, p)
-	out = header.Encode(out, header.Version, t, st, hostinfo.remoteIndexId, c)
-	// A closing tunnel is torn down right after this, so skip the connection manager entirely: no point recording
-	// traffic or asking the lighthouse for a punch. Otherwise, if we rebound since this tunnel last sent, ask the
-	// lighthouse to get the far side punching at us again.
-	if t != header.CloseTunnel && f.connectionManager.Out(hostinfo) {
-		f.lightHouse.QueryServer(hostinfo.vpnAddrs[0])
-		if f.l.Enabled(context.Background(), slog.LevelDebug) {
-			f.l.Debug("Lighthouse update triggered for punch due to rebind epoch",
-				"vpnAddrs", hostinfo.vpnAddrs,
-			)
-		}
+	// A closing tunnel needs neither traffic tracking nor another punch.
+	if t != header.CloseTunnel {
+		f.recordOutbound(hostinfo)
 	}
-
-	var err error
-	out, err = ci.eKey.EncryptDanger(out, out, p, c, nb)
+	out = f.encryptMessage(t, st, hostinfo, ci, c, p, nb, out, remote)
 	if noiseutil.EncryptLockNeeded {
 		ci.writeLock.Unlock()
 	}
-	if err != nil {
-		hostinfo.logger(f.l).Error("Failed to encrypt outgoing packet",
-			"error", err,
-			"udpAddr", remote,
-			"counter", c,
-		)
+	if out == nil {
 		return
 	}
 
+	var err error
 	if remote.IsValid() {
 		err = f.writers[q].WriteTo(out, remote)
 		if err != nil {
@@ -622,19 +548,8 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 			}
 		}
 	} else {
-		// Try to send via a relay
-		for _, relayIP := range hostinfo.relayState.CopyRelayIps() {
-			relayHostInfo, relay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relayIP)
-			if err != nil {
-				hostinfo.relayState.DeleteRelay(relayIP)
-				hostinfo.logger(f.l).Info("sendNoMetrics failed to find HostInfo",
-					"relay", relayIP,
-					"error", err,
-				)
-				continue
-			}
-			f.SendVia(relayHostInfo, relay, out, nb, fullOut[:header.Len+len(out)], true, q)
-			break
+		if via, relay := f.findRelay(hostinfo); via != nil && relay != nil {
+			f.SendVia(via, relay, out, nb, fullOut[:header.Len+len(out)], true, q)
 		}
 	}
 }
