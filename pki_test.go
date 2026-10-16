@@ -241,7 +241,7 @@ func TestLoadCAPoolBlocklist(t *testing.T) {
 		require.Error(t, err, entry)
 	}
 
-	// A bad entry on reload fails it and keeps the running blocklist
+	// A bad entry on reload fails it, the valid entries are still blocked
 	_, _, keyPEM, certPEM := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, ca, caKey, "me", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.1/24")}, nil, nil)
 	pkiConfig := func(entry string) string {
 		return fmt.Sprintf("pki:\n  ca: %q\n  cert: %q\n  key: %q\n  blocklist:\n    - %q\n", caPEM, certPEM, keyPEM, entry)
@@ -251,7 +251,12 @@ func TestLoadCAPoolBlocklist(t *testing.T) {
 	p, err := NewPKIFromConfig(test.NewLogger(), c)
 	require.NoError(t, err)
 
-	res := c.ReloadConfigString(pkiConfig(fp[1:]))
+	other, _, _, _ := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, ca, caKey, "other", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.3/24")}, nil, nil)
+	otherFp, err := other.Fingerprint()
+	require.NoError(t, err)
+
+	res := c.ReloadConfigString(pkiConfig(fp) + fmt.Sprintf("    - %q\n    - %q\n", otherFp, fp[1:]))
 	assert.True(t, res.Failed)
 	assert.True(t, p.GetCAPool().IsBlocklisted(fp))
+	assert.True(t, p.GetCAPool().IsBlocklisted(otherFp))
 }

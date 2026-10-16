@@ -235,12 +235,14 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 
 func (p *PKI) reloadCAPool(c *config.C) *util.ContextualError {
 	caPool, err := loadCAPoolFromConfig(p.l, c)
+	if caPool != nil {
+		p.caPool.Store(caPool)
+		p.l.Debug("Trusted CA fingerprints", "fingerprints", caPool.GetFingerprints())
+	}
 	if err != nil {
 		return util.NewContextualError("Failed to load ca from config", nil, err)
 	}
 
-	p.caPool.Store(caPool)
-	p.l.Debug("Trusted CA fingerprints", "fingerprints", caPool.GetFingerprints())
 	return nil
 }
 
@@ -615,16 +617,22 @@ func loadCAPoolFromConfig(l *slog.Logger, c *config.C) (*cert.CAPool, error) {
 
 	bl := c.GetStringSlice("pki.blocklist", []string{})
 	if len(bl) > 0 {
+		var bad []string
 		for i, raw := range bl {
 			// Fingerprints are compared as lowercase hex strings, a malformed entry would silently block nothing
 			fp := strings.ToLower(strings.TrimSpace(raw))
 			if b, err := hex.DecodeString(fp); err != nil || len(b) != sha256.Size {
-				return nil, fmt.Errorf("pki.blocklist entry %d is not a 64 character hex certificate fingerprint: %q", i+1, raw)
+				bad = append(bad, fmt.Sprintf("entry %d %q", i+1, raw))
+				continue
 			}
 			caPool.BlocklistFingerprint(fp)
 		}
 
-		l.Info("Blocklisted certificates", "fingerprintCount", len(bl))
+		l.Info("Blocklisted certificates", "fingerprintCount", len(bl)-len(bad))
+		if len(bad) > 0 {
+			// The valid entries are still returned so a failed reload blocks them, startup refuses the error
+			return caPool, fmt.Errorf("pki.blocklist entries are not hex certificate fingerprints: %s", strings.Join(bad, ", "))
+		}
 	}
 
 	return caPool, nil
