@@ -165,18 +165,6 @@ func TestSSHDReload_ChangedConfigRestarts(t *testing.T) {
 	}
 }
 
-// sandbox_dir is only read at startup, restarting sshd for it would drop every session and still not apply it
-func TestSSHDReload_SandboxDirKeepsSessions(t *testing.T) {
-	h := newSSHDReloadHarness(t)
-	client, _ := h.connect(t)
-
-	h.extra = "  sandbox_dir: " + t.TempDir() + "\n"
-	res := h.c.ReloadConfigString(h.config())
-	require.NoError(t, res.Err)
-	assert.Equal(t, []string{"sshd.sandbox_dir"}, res.RestartKeys)
-	assert.False(t, dropped(client, 500*time.Millisecond), "sshd was restarted")
-}
-
 // The config can stay the same while the host key file it names changes. New connections get the new key, open
 // sessions are left alone
 func TestSSHDReload_ChangedHostKeyFile(t *testing.T) {

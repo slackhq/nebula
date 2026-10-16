@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- The SSH debug server's `start-cpu-profile`, `stop-cpu-profile`, `save-heap-profile`, `save-mutex-profile`, and
+  `mutex-profile-fraction` commands, and `sshd.sandbox_dir`, which is now ignored if set.
+
 ### Fixed
 
 - `create-tunnel -address <ip:port>` panicked on a nil RemoteList and, over the ssh debug server, took nebula

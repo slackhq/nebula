@@ -11,12 +11,8 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"path/filepath"
-	"runtime"
-	"runtime/pprof"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/slackhq/nebula/config"
@@ -60,8 +56,6 @@ type sshDeviceInfoFlags struct {
 
 func wireSSHReload(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) {
 	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
-		// sshd.sandbox_dir is read once, when the commands are attached
-		r.RestartRequiredIfChanged("sshd.sandbox_dir")
 		if c.GetBool("sshd.enabled", false) {
 			// Restarting the server drops every open session, the one that asked for this reload included. Only restart
 			// when it isn't running or its config changed. The host key file can change under the same config, new
@@ -93,8 +87,7 @@ func wireSSHReload(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) {
 	})
 }
 
-// sshdServerKeys are what configSSH reads. sshd.sandbox_dir isn't one, it's read once at startup and restarting the
-// server doesn't apply it
+// sshdServerKeys are what configSSH reads
 var sshdServerKeys = []string{"sshd.enabled", "sshd.listen", "sshd.host_key", "sshd.trusted_cas", "sshd.authorized_users"}
 
 // loadSSHHostKey returns sshd.host_key, read from its file when it names one.
@@ -236,12 +229,6 @@ func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C, r *config.Reloa
 }
 
 func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interface) {
-	// sandboxDir defaults to a dir in temp. The intention is that end user will
-	// create this dir as needed. Overriding this config value to "" allows
-	// writing to anywhere in the system.
-	defaultDir := filepath.Join(os.TempDir(), "nebula-debug")
-	sandboxDir := c.GetString("sshd.sandbox_dir", defaultDir)
-
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "list-hostmap",
 		ShortDescription: "List all known previously connected hosts",
@@ -294,45 +281,6 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 		ShortDescription: "Reloads configuration from disk, same as sending HUP to the process",
 		Callback: func(fs any, a []string, w sshd.StringWriter) error {
 			return sshReload(l, c, w)
-		},
-	})
-
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "start-cpu-profile",
-		ShortDescription: "Starts a cpu profile and write output to the provided file, ex: `cpu-profile.pb.gz`",
-		Callback: func(fs any, a []string, w sshd.StringWriter) error {
-			return sshStartCpuProfile(sandboxDir, fs, a, w)
-		},
-	})
-
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "stop-cpu-profile",
-		ShortDescription: "Stops a cpu profile and writes output to the previously provided file",
-		Callback: func(fs any, a []string, w sshd.StringWriter) error {
-			pprof.StopCPUProfile()
-			return w.WriteLine("If a CPU profile was running it is now stopped")
-		},
-	})
-
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "save-heap-profile",
-		ShortDescription: "Saves a heap profile to the provided path, ex: `heap-profile.pb.gz`",
-		Callback: func(fs any, a []string, w sshd.StringWriter) error {
-			return sshGetHeapProfile(sandboxDir, fs, a, w)
-		},
-	})
-
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "mutex-profile-fraction",
-		ShortDescription: "Gets or sets runtime.SetMutexProfileFraction",
-		Callback:         sshMutexProfileFraction,
-	})
-
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "save-mutex-profile",
-		ShortDescription: "Saves a mutex profile to the provided path, ex: `mutex-profile.pb.gz`",
-		Callback: func(fs any, a []string, w sshd.StringWriter) error {
-			return sshGetMutexProfile(sandboxDir, fs, a, w)
 		},
 	})
 
@@ -566,58 +514,6 @@ func sshListLighthouseMap(lightHouse *LightHouse, a any, w sshd.StringWriter) er
 	return nil
 }
 
-// sshSanitizeFilePath validates that the given file path is within the sandbox directory.
-// If sandboxDir is empty, the path is returned as-is for backwards compatibility.
-func sshSanitizeFilePath(sandboxDir, filePath string) (string, error) {
-	if sandboxDir == "" {
-		return filePath, nil
-	}
-
-	// Clean and resolve the path relative to the sandbox directory
-	if !filepath.IsAbs(filePath) {
-		filePath = filepath.Join(sandboxDir, filePath)
-	}
-	cleaned := filepath.Clean(filePath)
-
-	// Ensure the resolved path is within the sandbox directory
-	cleanedSandbox := filepath.Clean(sandboxDir)
-	if cleaned == cleanedSandbox {
-		return "", fmt.Errorf("path %q resolves to the sandbox directory itself %q", filePath, sandboxDir)
-	}
-	if !strings.HasPrefix(cleaned, cleanedSandbox+string(filepath.Separator)) {
-		return "", fmt.Errorf("path %q is outside the sandbox directory %q", filePath, sandboxDir)
-	}
-
-	return cleaned, nil
-}
-
-func sshStartCpuProfile(sandboxDir string, fs any, a []string, w sshd.StringWriter) error {
-	if len(a) == 0 {
-		err := w.WriteLine("No path to write profile provided")
-		return err
-	}
-
-	filePath, err := sshSanitizeFilePath(sandboxDir, a[0])
-	if err != nil {
-		return w.WriteLine(err.Error())
-	}
-
-	file, err := os.Create(filePath)
-	if err != nil {
-		err = w.WriteLine(fmt.Sprintf("Unable to create profile file: %s", err))
-		return err
-	}
-
-	err = pprof.StartCPUProfile(file)
-	if err != nil {
-		err = w.WriteLine(fmt.Sprintf("Unable to start cpu profile: %s", err))
-		return err
-	}
-
-	err = w.WriteLine(fmt.Sprintf("Started cpu profile, issue stop-cpu-profile to write the output to %s", a))
-	return err
-}
-
 func sshVersion(ifce *Interface, fs any, a []string, w sshd.StringWriter) error {
 	return w.WriteLine(fmt.Sprintf("%s", ifce.version))
 }
@@ -768,76 +664,6 @@ func sshChangeRemote(ifce *Interface, fs any, a []string, w sshd.StringWriter) e
 
 	hostInfo.SetRemote(addr)
 	return w.WriteLine("Changed")
-}
-
-func sshGetHeapProfile(sandboxDir string, fs any, a []string, w sshd.StringWriter) error {
-	if len(a) == 0 {
-		return w.WriteLine("No path to write profile provided")
-	}
-
-	filePath, err := sshSanitizeFilePath(sandboxDir, a[0])
-	if err != nil {
-		return w.WriteLine(err.Error())
-	}
-
-	file, err := os.Create(filePath)
-	if err != nil {
-		err = w.WriteLine(fmt.Sprintf("Unable to create profile file: %s", err))
-		return err
-	}
-
-	err = pprof.WriteHeapProfile(file)
-	if err != nil {
-		err = w.WriteLine(fmt.Sprintf("Unable to write profile: %s", err))
-		return err
-	}
-
-	err = w.WriteLine(fmt.Sprintf("Mem profile created at %s", a))
-	return err
-}
-
-func sshMutexProfileFraction(fs any, a []string, w sshd.StringWriter) error {
-	if len(a) == 0 {
-		rate := runtime.SetMutexProfileFraction(-1)
-		return w.WriteLine(fmt.Sprintf("Current value: %d", rate))
-	}
-
-	newRate, err := strconv.Atoi(a[0])
-	if err != nil {
-		return w.WriteLine(fmt.Sprintf("Invalid argument: %s", a[0]))
-	}
-
-	oldRate := runtime.SetMutexProfileFraction(newRate)
-	return w.WriteLine(fmt.Sprintf("New value: %d. Old value: %d", newRate, oldRate))
-}
-
-func sshGetMutexProfile(sandboxDir string, fs any, a []string, w sshd.StringWriter) error {
-	if len(a) == 0 {
-		return w.WriteLine("No path to write profile provided")
-	}
-
-	filePath, err := sshSanitizeFilePath(sandboxDir, a[0])
-	if err != nil {
-		return w.WriteLine(err.Error())
-	}
-
-	file, err := os.Create(filePath)
-	if err != nil {
-		return w.WriteLine(fmt.Sprintf("Unable to create profile file: %s", err))
-	}
-	defer file.Close()
-
-	mutexProfile := pprof.Lookup("mutex")
-	if mutexProfile == nil {
-		return w.WriteLine("Unable to get pprof.Lookup(\"mutex\")")
-	}
-
-	err = mutexProfile.WriteTo(file, 0)
-	if err != nil {
-		return w.WriteLine(fmt.Sprintf("Unable to write profile: %s", err))
-	}
-
-	return w.WriteLine(fmt.Sprintf("Mutex profile created at %s", a))
 }
 
 func sshLogLevel(l *slog.Logger, fs any, a []string, w sshd.StringWriter) error {
