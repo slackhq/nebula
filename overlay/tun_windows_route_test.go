@@ -181,6 +181,27 @@ func TestWinTun_ReloadRouteAlreadyGone(t *testing.T) {
 	})
 }
 
+// A network category we can't parse would fail the restart, so it fails the reload instead of asking for one
+func TestWinTun_ReloadInvalidNetworkCategoryFails(t *testing.T) {
+	rt := newRouteTest(t, unsafeRoutes())
+	for range 2 {
+		res := rt.c.ReloadConfigString(unsafeRoutes() + "  network_category: nope\n")
+		require.NoError(t, res.Err)
+		assert.True(t, res.Failed, "a bad category that didn't change since the last reload is still bad")
+		assert.False(t, res.RestartRequired)
+	}
+
+	// Fixing it back to the running category needs nothing
+	res := rt.c.ReloadConfigString(unsafeRoutes() + "  network_category: private\n")
+	require.NoError(t, res.Err)
+	assert.False(t, res.Failed)
+	assert.False(t, res.RestartRequired)
+
+	res = rt.c.ReloadConfigString(unsafeRoutes() + "  network_category: public\n")
+	require.NoError(t, res.Err)
+	assert.Equal(t, []string{"tun.network_category"}, res.RestartKeys)
+}
+
 // forFamilies runs f with two unsafe_routes CIDRs of each address family, the tun's own network stays IPv4
 func forFamilies(t *testing.T, f func(t *testing.T, a, b string)) {
 	t.Run("ipv4", func(t *testing.T) { f(t, "10.251.1.0/24", "10.251.2.0/24") })

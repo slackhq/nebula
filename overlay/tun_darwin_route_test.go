@@ -103,3 +103,16 @@ func TestTunReloadLeavesRoutesItNeverInstalled(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, lo0.Index, routeInterfaceIn(msgs, netip.MustParsePrefix(cidr)))
 }
+
+// Only naming a different utun asks for a restart. Empty, plain utun and names that aren't utunN take whichever is free
+func TestTunDevNeedsRestart(t *testing.T) {
+	for name, want := range map[string]bool{
+		"":      false,
+		"utun":  false,
+		"nope":  false,
+		"utun7": false,
+		"utun3": true,
+	} {
+		assert.Equal(t, want, tunDevNeedsRestart(name, "utun7"), name)
+	}
+}

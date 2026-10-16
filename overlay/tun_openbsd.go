@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/netip"
 	"os"
-	"regexp"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
@@ -58,24 +57,12 @@ type tun struct {
 	fd          int
 }
 
-var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
-
 func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (*tun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in openbsd")
 }
 
 func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*tun, error) {
-	// Try to open tun device
-	var err error
-	deviceName := c.GetString("tun.dev", "")
-	if deviceName == "" {
-		return nil, fmt.Errorf("a device name in the format of /dev/tunN must be specified")
-	}
-	if !deviceNameRE.MatchString(deviceName) {
-		return nil, fmt.Errorf("a device name in the format of /dev/tunN must be specified")
-	}
-
-	fd, err := unix.Open("/dev/"+deviceName, os.O_RDWR, 0)
+	fd, deviceName, err := openTun(l, c.GetString("tun.dev", ""))
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +87,10 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 	}
 
 	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
-		r.RestartRequiredIfChanged("tun.dev", "tun.mtu")
+		r.RestartRequiredIfChanged("tun.mtu")
+		if tunDevNeedsRestart(c.GetString("tun.dev", ""), t.Device) {
+			r.RestartRequiredIfChanged("tun.dev")
+		}
 		err := t.reload(c, false, r)
 		if err != nil {
 			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)

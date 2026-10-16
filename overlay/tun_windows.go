@@ -109,7 +109,15 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*w
 	disableDNSRegistration(l, *guid)
 
 	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
-		r.RestartRequiredIfChanged("tun.dev", "tun.mtu", "tun.network_category")
+		r.RestartRequiredIfChanged("tun.dev", "tun.mtu")
+		// Compare with the running category, not the last config. A restart with one we can't parse would fail, so say
+		// that now rather than ask for one, and going back to the running one after a bad reload needs no restart
+		if cat, setCat, err := parseNetworkCategory(c.GetString("tun.network_category", "private")); err != nil {
+			t.l.Error("Invalid tun.network_category, a restart with it would fail", "error", err)
+			r.Failed()
+		} else if cat != t.networkCategory || setCat != t.setCategory {
+			r.RestartRequiredIfChanged("tun.network_category")
+		}
 		r.RestartRequiredIfChanged(interfaceBypassKeys...)
 		err := t.reload(c, false, r)
 		if err != nil {
