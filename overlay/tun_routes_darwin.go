@@ -13,6 +13,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/util"
 	netroute "golang.org/x/net/route"
 	"golang.org/x/sys/unix"
@@ -77,7 +78,7 @@ func installRoutes(routes []Route) []Route {
 
 // addRoutes puts every unsafe_route in the system routing table, including ones someone deleted, unless another
 // interface holds its prefix. It runs on start and on every reload.
-func (t *tun) addRoutes(logErrors bool) error {
+func (t *tun) addRoutes(logErrors bool, rl *config.Reload) error {
 	// The route tree is still ours, the system routing table is not
 	if t.hostOwned {
 		return nil
@@ -113,6 +114,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 				return retErr
 			}
 			retErr.Log(t.l)
+			rl.Failed()
 			states[p] = routeState{kind: routeFailed}
 			continue
 		}
@@ -146,7 +148,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 	return nil
 }
 
-func (t *tun) removeRoutes(routes []Route) error {
+func (t *tun) removeRoutes(routes []Route, rl *config.Reload) error {
 	if t.hostOwned {
 		return nil
 	}
@@ -178,8 +180,12 @@ func (t *tun) removeRoutes(routes []Route) error {
 		}
 
 		err = delRoute(p, linkAddr)
-		if err != nil {
+		if errors.Is(err, unix.ESRCH) {
+			// Already gone, which is what we wanted
+			t.l.Info("Route was already removed", "route", r)
+		} else if err != nil {
 			t.l.Error("Failed to remove route", "error", err, "route", r)
+			rl.Failed()
 		} else {
 			t.l.Info("Removed route", "route", r)
 		}

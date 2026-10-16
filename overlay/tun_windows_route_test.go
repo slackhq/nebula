@@ -53,6 +53,14 @@ func (rt *routeTest) metric(t *testing.T, cidr string) uint32 {
 	return row.Metric
 }
 
+// reload applies cfg and expects nothing in it to fail
+func (rt *routeTest) reload(t *testing.T, cfg string) {
+	t.Helper()
+	res := rt.c.ReloadConfigString(cfg)
+	require.NoError(t, res.Err)
+	assert.False(t, res.Failed, "the reload reported a failure")
+}
+
 func unsafeRoutes(routes ...string) string {
 	var b strings.Builder
 	b.WriteString("tun:\n  dev: nebroutetest\n  unsafe_routes:\n")
@@ -77,7 +85,7 @@ func TestWinTun_ReloadKeepsInstalledRoutes(t *testing.T) {
 		rt := newRouteTest(t, unsafeRoutes(a))
 		require.NoError(t, rt.tun.Activate())
 
-		require.NoError(t, rt.c.ReloadConfigString(unsafeRoutes(a, b)))
+		rt.reload(t, unsafeRoutes(a, b))
 		assert.NotContains(t, rt.log.String(), "Failed to add route")
 		rt.metric(t, a)
 		rt.metric(t, b)
@@ -92,7 +100,7 @@ func TestWinTun_ReloadMetricChangeApplies(t *testing.T) {
 		require.NoError(t, rt.tun.Activate())
 		require.Equal(t, uint32(100), rt.metric(t, a))
 
-		require.NoError(t, rt.c.ReloadConfigString(unsafeRoutes(a+"@200")))
+		rt.reload(t, unsafeRoutes(a+"@200"))
 		assert.NotContains(t, rt.log.String(), "Failed to add route")
 		assert.NotContains(t, rt.log.String(), "Removed route")
 		assert.Equal(t, uint32(200), rt.metric(t, a))
@@ -120,7 +128,7 @@ func TestWinTun_DuplicateCidrInstallsTheLastEntry(t *testing.T) {
 		require.NoError(t, rt.tun.Activate())
 		assert.Equal(t, uint32(200), rt.metric(t, a))
 
-		require.NoError(t, rt.c.ReloadConfigString(unsafeRoutes(a+"@100", a+"@200", b)))
+		rt.reload(t, unsafeRoutes(a+"@100", a+"@200", b))
 		assert.Equal(t, uint32(200), rt.metric(t, a))
 		assert.NotContains(t, rt.log.String(), "Updated route metric")
 		assert.NotContains(t, rt.log.String(), "Failed to add route")
@@ -134,7 +142,7 @@ func TestWinTun_DroppingAnUninstalledDuplicateKeepsTheRoute(t *testing.T) {
 		rt := newRouteTest(t, unsafeRoutes(a+"@100", a+"@200"))
 		require.NoError(t, rt.tun.Activate())
 
-		require.NoError(t, rt.c.ReloadConfigString(unsafeRoutes(a+"@200")))
+		rt.reload(t, unsafeRoutes(a+"@200"))
 		assert.NotContains(t, rt.log.String(), "Removed route")
 		assert.Equal(t, uint32(200), rt.metric(t, a))
 	})
@@ -155,10 +163,43 @@ func TestWinTun_ReloadMatchesAFreshStart(t *testing.T) {
 
 		rt := newRouteTest(t, unsafeRoutes(a+"@100"))
 		require.NoError(t, rt.tun.Activate())
-		require.NoError(t, rt.c.ReloadConfigString(routes))
+		rt.reload(t, routes)
 		_, err = rt.luid.Route(cidr, unspecifiedNextHop(cidr))
 		assert.Error(t, err, "the reload left it installed")
 	})
+}
+
+// Removing a route that is already gone is what we wanted, not a failure
+func TestWinTun_ReloadRouteAlreadyGone(t *testing.T) {
+	forFamilies(t, func(t *testing.T, a, b string) {
+		rt := newRouteTest(t, unsafeRoutes(a, b))
+		require.NoError(t, rt.tun.Activate())
+		p := netip.MustParsePrefix(b)
+		require.NoError(t, rt.luid.DeleteRoute(p, unspecifiedNextHop(p)))
+
+		rt.reload(t, unsafeRoutes(a))
+	})
+}
+
+// A network category we can't parse would fail the restart, so it fails the reload instead of asking for one
+func TestWinTun_ReloadInvalidNetworkCategoryFails(t *testing.T) {
+	rt := newRouteTest(t, unsafeRoutes())
+	for range 2 {
+		res := rt.c.ReloadConfigString(unsafeRoutes() + "  network_category: nope\n")
+		require.NoError(t, res.Err)
+		assert.True(t, res.Failed, "a bad category that didn't change since the last reload is still bad")
+		assert.False(t, res.RestartRequired)
+	}
+
+	// Fixing it back to the running category needs nothing
+	res := rt.c.ReloadConfigString(unsafeRoutes() + "  network_category: private\n")
+	require.NoError(t, res.Err)
+	assert.False(t, res.Failed)
+	assert.False(t, res.RestartRequired)
+
+	res = rt.c.ReloadConfigString(unsafeRoutes() + "  network_category: public\n")
+	require.NoError(t, res.Err)
+	assert.Equal(t, []string{"tun.network_category"}, res.RestartKeys)
 }
 
 // forFamilies runs f with two unsafe_routes CIDRs of each address family, the tun's own network stays IPv4

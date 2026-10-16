@@ -43,7 +43,8 @@ type Conn interface {
 	// its own packet, so a short count means some peers were undeliverable, not that the batch failed.
 	// Not safe for concurrent use on the same Conn.
 	WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error)
-	ReloadConfig(c *config.C)
+	// ReloadConfig applies the listen settings that can change, r is nil at startup
+	ReloadConfig(c *config.C, r *config.Reload)
 	SupportsMultipleReaders() bool
 	Close() error
 }
@@ -68,7 +69,7 @@ func (NoopConn) WriteTo(_ []byte, _ netip.AddrPort) error {
 func (NoopConn) WriteBatch(bufs [][]byte, _ []netip.AddrPort) (int, error) {
 	return len(bufs), nil
 }
-func (NoopConn) ReloadConfig(_ *config.C) {
+func (NoopConn) ReloadConfig(_ *config.C, _ *config.Reload) {
 	return
 }
 func (NoopConn) Close() error {

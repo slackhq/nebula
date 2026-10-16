@@ -78,7 +78,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	wireSSHReload(l, ssh, c)
 	var sshStart func()
 	if c.GetBool("sshd.enabled", false) {
-		sshStart, err = configSSH(l, ssh, c)
+		sshStart, err = configSSH(l, ssh, c, nil)
 		if err != nil {
 			l.Warn("Failed to configure sshd, ssh debugging will not be available", "error", err)
 			sshStart = nil
@@ -197,7 +197,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
-			udpServer.ReloadConfig(c)
+			udpServer.ReloadConfig(c, nil)
 			udpConns[i] = udpServer
 
 			// If port is dynamic, discover it before the next pass through the for loop
@@ -311,6 +311,16 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		lightHouse.ifce = ifce
 
 		ifce.RegisterConfigChangeCallbacks(c)
+		// These are only read at startup
+		c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+			r.RestartRequiredIfChanged(
+				"routines", "tun.routines", "listen.routines", "firewall.conntrack.routine_cache_timeout",
+				"listen.port", "listen.host", "stats.message_metrics",
+				"handshakes.try_interval", "handshakes.retries", "handshakes.trigger_buffer",
+				"tun.drop_local_broadcast", "tun.drop_multicast",
+			)
+			r.RestartRequiredIfChanged(osStartupOnlyKeys...)
+		})
 		ifce.reloadDisconnectInvalid(c)
 		ifce.reloadSendRecvError(c)
 		ifce.reloadAcceptRecvError(c)

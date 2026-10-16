@@ -76,8 +76,8 @@ func TestTunRoutesBeforeActivate(t *testing.T) {
 	}}
 	tn.Routes.Store(&routes)
 
-	assert.NoError(t, tn.addRoutes(true))
-	assert.NoError(t, tn.removeRoutes(routes))
+	assert.NoError(t, tn.addRoutes(true, nil))
+	assert.NoError(t, tn.removeRoutes(routes, nil))
 }
 
 // A tun.routes entry with no via is never installed, so removing it must not delete a route for the same cidr that
@@ -100,7 +100,9 @@ func TestTunReloadLeavesRoutesItNeverInstalled(t *testing.T) {
 	t.Cleanup(func() { _ = tn.Close() })
 	require.NoError(t, tn.Activate())
 
-	require.NoError(t, c.ReloadConfigString("tun: {}\n"))
+	res := c.ReloadConfigString("tun: {}\n")
+	require.NoError(t, res.Err)
+	assert.False(t, res.Failed, "removing a route we never installed failed the reload")
 	msgs, err := fetchRoutes()
 	require.NoError(t, err)
 	assert.Equal(t, lo0.Index, routeInterfaceIn(msgs, netip.MustParsePrefix(cidr)))
@@ -253,7 +255,9 @@ func TestTunReloadLeavesRouteItYielded(t *testing.T) {
 	lo0 := routeThroughLo0(t, cidr)
 	_, c, _ := newRouteTestTun(t, 0, cidr)
 
-	require.NoError(t, c.ReloadConfigString("tun: {}\n"))
+	res := c.ReloadConfigString("tun: {}\n")
+	require.NoError(t, res.Err)
+	assert.False(t, res.Failed)
 	assert.Equal(t, lo0, routeVia(t, cidr))
 }
 
@@ -287,7 +291,9 @@ func TestTunLeavesRouteDeletedByHand(t *testing.T) {
 	assert.Never(t, func() bool { return routeVia(t, cidr) != 0 }, 3*routeRetryDelay, 50*time.Millisecond)
 
 	// A reload with nothing changed is how to ask for it back
-	require.NoError(t, c.ReloadConfigString(cfg))
+	res := c.ReloadConfigString(cfg)
+	require.NoError(t, res.Err)
+	assert.False(t, res.Failed)
 	assert.Equal(t, ours, routeVia(t, cidr))
 }
 
@@ -338,4 +344,17 @@ func TestTunSweepAddsRouteTheWatcherMissed(t *testing.T) {
 
 	routeCmd(t, "delete", cidr)
 	assert.Eventually(t, func() bool { return routeVia(t, cidr) == tn.linkAddr.Load().Index }, 5*time.Second, 50*time.Millisecond)
+}
+
+// Only naming a different utun asks for a restart. Empty, plain utun and names that aren't utunN take whichever is free
+func TestTunDevNeedsRestart(t *testing.T) {
+	for name, want := range map[string]bool{
+		"":      false,
+		"utun":  false,
+		"nope":  false,
+		"utun7": false,
+		"utun3": true,
+	} {
+		assert.Equal(t, want, tunDevNeedsRestart(name, "utun7"), name)
+	}
 }

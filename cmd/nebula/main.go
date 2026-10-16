@@ -71,9 +71,10 @@ func main() {
 		fmt.Printf("failed to apply logging config: %s", err)
 		os.Exit(1)
 	}
-	c.RegisterReloadCallback(func(c *config.C) {
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
 		if err := logging.ApplyConfig(l, c); err != nil {
 			l.Error("Failed to reconfigure logger on reload", "error", err)
+			r.Failed()
 		}
 	})
 

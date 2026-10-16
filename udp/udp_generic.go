@@ -73,7 +73,7 @@ func (u *GenericConn) LocalAddr() (netip.AddrPort, error) {
 	}
 }
 
-func (u *GenericConn) ReloadConfig(c *config.C) {
+func (u *GenericConn) ReloadConfig(c *config.C, r *config.Reload) {
 
 }
 

@@ -99,9 +99,10 @@ func newStatsServerFromConfig(ctx context.Context, l *slog.Logger, c *config.C, 
 		emitStats:    emitStats,
 	}
 
-	c.RegisterReloadCallback(func(c *config.C) {
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
 		if err := s.reload(c, false); err != nil {
 			s.l.Error("Failed to reload stats from config", "error", err)
+			r.Failed()
 		}
 	})
 

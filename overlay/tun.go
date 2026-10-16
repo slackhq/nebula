@@ -41,9 +41,16 @@ func (e *NameError) Error() string {
 type DeviceFactory func(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error)
 
 func NewDeviceFromConfig(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error) {
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		r.RestartRequiredIfChanged("tun.disabled")
+	})
+
 	switch {
 	case c.GetBool("tun.disabled", false):
 		tun := newDisabledTun(vpnNetworks, c.GetInt("tun.tx_queue", 5000), c.GetBool("stats.message_metrics", false), l)
+		c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+			r.RestartRequiredIfChanged("tun.tx_queue", "stats.message_metrics")
+		})
 		return tun, nil
 
 	default:

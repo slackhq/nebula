@@ -95,17 +95,31 @@ type ifreqAlias6 struct {
 	Lifetime   addrLifetime
 }
 
+// utunIndex is the utun tun.dev asks for, or -1 for whichever is free. ok is false for a name that isn't utunN, which
+// also gets whichever is free
+func utunIndex(name string) (index int, ok bool) {
+	if name == "" || name == "utun" {
+		return -1, true
+	}
+	if _, err := fmt.Sscanf(name, "utun%d", &index); err != nil || index < 0 {
+		return -1, false
+	}
+	return index, true
+}
+
+// tunDevNeedsRestart is true when tun.dev asks for a particular utun that isn't the running one. Anything else takes
+// whichever is free, and the one we have will do
+func tunDevNeedsRestart(name, running string) bool {
+	index, _ := utunIndex(name)
+	return index >= 0 && fmt.Sprintf("utun%d", index) != running
+}
+
 func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*tun, error) {
-	name := c.GetString("tun.dev", "")
-	ifIndex := -1
-	if name != "" && name != "utun" {
-		_, err := fmt.Sscanf(name, "utun%d", &ifIndex)
-		if err != nil || ifIndex < 0 {
-			// NOTE: we don't make this error so we don't break existing
-			// configs that set a name before it was used.
-			l.Warn("interface name must be utun[0-9]+ on Darwin, ignoring")
-			ifIndex = -1
-		}
+	ifIndex, ok := utunIndex(c.GetString("tun.dev", ""))
+	if !ok {
+		// NOTE: we don't make this error so we don't break existing
+		// configs that set a name before it was used.
+		l.Warn("interface name must be utun[0-9]+ on Darwin, ignoring")
 	}
 
 	fd, err := unix.Socket(unix.AF_SYSTEM, unix.SOCK_DGRAM, unix.AF_SYS_CONTROL)
@@ -129,7 +143,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 		return nil, fmt.Errorf("SYS_CONNECT: %v", err)
 	}
 
-	name, err = unix.GetsockoptString(fd, unix.AF_SYS_CONTROL, _UTUN_OPT_IFNAME)
+	name, err := unix.GetsockoptString(fd, unix.AF_SYS_CONTROL, _UTUN_OPT_IFNAME)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve tun name: %w", err)
 	}
@@ -148,15 +162,20 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 		l:               l,
 	}
 
-	err = t.reload(c, true)
+	err = t.reload(c, true, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	c.RegisterReloadCallback(func(c *config.C) {
-		err := t.reload(c, false)
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		r.RestartRequiredIfChanged("tun.mtu")
+		if tunDevNeedsRestart(c.GetString("tun.dev", ""), t.Device) {
+			r.RestartRequiredIfChanged("tun.dev")
+		}
+		err := t.reload(c, false, r)
 		if err != nil {
 			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
+			r.Failed()
 		}
 	})
 
@@ -190,14 +209,15 @@ func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip
 		l:           l,
 	}
 
-	if err := t.reload(c, true); err != nil {
+	if err := t.reload(c, true, nil); err != nil {
 		_ = file.Close()
 		return nil, err
 	}
 
-	c.RegisterReloadCallback(func(c *config.C) {
-		if err := t.reload(c, false); err != nil {
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		if err := t.reload(c, false, r); err != nil {
 			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
+			r.Failed()
 		}
 	})
 
@@ -300,7 +320,7 @@ func (t *tun) Activate() error {
 	}
 
 	// Unsafe path routes
-	if err = t.addRoutes(false); err != nil {
+	if err = t.addRoutes(false, nil); err != nil {
 		if watch != nil {
 			_ = watch.Close()
 		}
@@ -406,7 +426,7 @@ func (t *tun) activate6(network netip.Prefix) error {
 	return nil
 }
 
-func (t *tun) reload(c *config.C, initial bool) error {
+func (t *tun) reload(c *config.C, initial bool, r *config.Reload) error {
 	change, routes, err := getAllRoutesFromConfig(t.l, c, t.vpnNetworks, initial)
 	if err != nil {
 		return err
@@ -414,7 +434,7 @@ func (t *tun) reload(c *config.C, initial bool) error {
 
 	if !initial && !change {
 		// Any reload puts back the unsafe_routes someone deleted
-		return t.addRoutes(true)
+		return t.addRoutes(true, r)
 	}
 
 	routeTree, err := makeRouteTree(t.l, routes, false)
@@ -428,16 +448,18 @@ func (t *tun) reload(c *config.C, initial bool) error {
 
 	if !initial {
 		// Remove first, if the system removes a wanted route hopefully it will be re-added next
-		err := t.removeRoutes(findRemovedRoutes(routes, *oldRoutes))
+		err := t.removeRoutes(findRemovedRoutes(routes, *oldRoutes), r)
 		if err != nil {
 			util.LogWithContextIfNeeded("Failed to remove routes", err, t.l)
+			r.Failed()
 		}
 
 		// Ensure any routes we actually want are installed
-		err = t.addRoutes(true)
+		err = t.addRoutes(true, r)
 		if err != nil {
 			// Catch any stray logs
 			util.LogWithContextIfNeeded("Failed to add routes", err, t.l)
+			r.Failed()
 		}
 	}
 

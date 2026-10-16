@@ -351,7 +351,7 @@ func (u *RIOConn) Rebind() error {
 	return nil
 }
 
-func (u *RIOConn) ReloadConfig(*config.C) {}
+func (u *RIOConn) ReloadConfig(*config.C, *config.Reload) {}
 
 func (u *RIOConn) Close() error {
 	if !u.isOpen.CompareAndSwap(true, false) {
