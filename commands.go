@@ -13,7 +13,6 @@ import (
 
 	"github.com/slackhq/nebula/commands"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/logging"
 )
 
@@ -24,6 +23,16 @@ type listHostMapFlags struct {
 	Json    bool
 	Pretty  bool
 	ByIndex bool
+}
+
+// listHostMapFlagSet is the flag set list-hostmap and list-pending-hostmap share.
+func listHostMapFlagSet() (*flag.FlagSet, any) {
+	fl := flag.NewFlagSet("", flag.ContinueOnError)
+	s := listHostMapFlags{}
+	fl.BoolVar(&s.Json, "json", false, "outputs as json with more information")
+	fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
+	fl.BoolVar(&s.ByIndex, "by-index", false, "gets all hosts in the hostmap from the index table")
+	return fl, &s
 }
 
 type printCertFlags struct {
@@ -57,14 +66,7 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 	reg.Register(&commands.Command{
 		Name:             commands.ListHostmap,
 		ShortDescription: "List all known previously connected hosts",
-		Flags: func() (*flag.FlagSet, any) {
-			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := listHostMapFlags{}
-			fl.BoolVar(&s.Json, "json", false, "outputs as json with more information")
-			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
-			fl.BoolVar(&s.ByIndex, "by-index", false, "gets all hosts in the hostmap from the index table")
-			return fl, &s
-		},
+		Flags:            listHostMapFlagSet,
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			return listHostMapCommand(f.hostMap, fs, w)
 		},
@@ -73,14 +75,7 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 	reg.Register(&commands.Command{
 		Name:             commands.ListPendingHostmap,
 		ShortDescription: "List all handshaking hosts",
-		Flags: func() (*flag.FlagSet, any) {
-			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := listHostMapFlags{}
-			fl.BoolVar(&s.Json, "json", false, "outputs as json with more information")
-			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
-			fl.BoolVar(&s.ByIndex, "by-index", false, "gets all hosts in the hostmap from the index table")
-			return fl, &s
-		},
+		Flags:            listHostMapFlagSet,
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
 			return listHostMapCommand(f.handshakeManager, fs, w)
 		},
@@ -337,22 +332,30 @@ func listLighthouseAddrmapCommand(lightHouse *LightHouse, a any, w commands.Stri
 	return nil
 }
 
-func versionCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
-	return w.WriteLine(fmt.Sprintf("%s", ifce.version))
-}
-
-func queryLighthouseCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
+// parseVpnAddr parses the vpn address a command takes as its first operand, failing to w
+// when there is none or it does not parse. noun is how the command's messages name it,
+// "vpn address" or "vpn addr", which the output golden pins per command.
+func parseVpnAddr(a []string, noun string, w commands.StringWriter) (netip.Addr, error) {
 	if len(a) == 0 {
-		return commands.Fail(w, "No vpn address was provided")
+		return netip.Addr{}, commands.Fail(w, "No vpn address was provided")
 	}
 
 	vpnAddr, err := netip.ParseAddr(a[0])
 	if err != nil {
-		return commands.Fail(w, fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
+		return netip.Addr{}, commands.Fail(w, fmt.Sprintf("The provided %s could not be parsed: %s", noun, a[0]))
 	}
 
-	if !vpnAddr.IsValid() {
-		return commands.Fail(w, fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
+	return vpnAddr, nil
+}
+
+func versionCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
+	return w.WriteLine(ifce.version)
+}
+
+func queryLighthouseCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
+	vpnAddr, err := parseVpnAddr(a, "vpn address", w)
+	if err != nil {
+		return err
 	}
 
 	var cm *CacheMap
@@ -369,17 +372,9 @@ func closeTunnelCommand(ifce *Interface, fs any, a []string, w commands.StringWr
 		return fmt.Errorf("internal error: expected *closeTunnelFlags but was %T", fs)
 	}
 
-	if len(a) == 0 {
-		return commands.Fail(w, "No vpn address was provided")
-	}
-
-	vpnAddr, err := netip.ParseAddr(a[0])
+	vpnAddr, err := parseVpnAddr(a, "vpn address", w)
 	if err != nil {
-		return commands.Fail(w, fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
-	}
-
-	if !vpnAddr.IsValid() {
-		return commands.Fail(w, fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
+		return err
 	}
 
 	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
@@ -388,15 +383,7 @@ func closeTunnelCommand(ifce *Interface, fs any, a []string, w commands.StringWr
 	}
 
 	if !flags.LocalOnly {
-		ifce.send(
-			header.CloseTunnel,
-			0,
-			hostInfo.ConnectionState,
-			hostInfo,
-			[]byte{},
-			make([]byte, 12, 12),
-			make([]byte, mtu),
-		)
+		ifce.sendCloseTunnel(hostInfo)
 	}
 
 	ifce.closeTunnel(hostInfo)
@@ -409,27 +396,19 @@ func createTunnelCommand(ifce *Interface, fs any, a []string, w commands.StringW
 		return fmt.Errorf("internal error: expected *createTunnelFlags but was %T", fs)
 	}
 
-	if len(a) == 0 {
-		return commands.Fail(w, "No vpn address was provided")
-	}
-
-	vpnAddr, err := netip.ParseAddr(a[0])
+	vpnAddr, err := parseVpnAddr(a, "vpn address", w)
 	if err != nil {
-		return commands.Fail(w, fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
-	}
-
-	if !vpnAddr.IsValid() {
-		return commands.Fail(w, fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
+		return err
 	}
 
 	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
 	if hostInfo != nil {
-		return commands.Fail(w, fmt.Sprintf("Tunnel already exists"))
+		return commands.Fail(w, "Tunnel already exists")
 	}
 
 	hostInfo = ifce.handshakeManager.QueryVpnAddr(vpnAddr)
 	if hostInfo != nil {
-		return commands.Fail(w, fmt.Sprintf("Tunnel already handshaking"))
+		return commands.Fail(w, "Tunnel already handshaking")
 	}
 
 	var addr netip.AddrPort
@@ -458,8 +437,9 @@ func changeRemoteCommand(ifce *Interface, fs any, a []string, w commands.StringW
 		return fmt.Errorf("internal error: expected *changeRemoteFlags but was %T", fs)
 	}
 
-	if len(a) == 0 {
-		return commands.Fail(w, "No vpn address was provided")
+	vpnAddr, err := parseVpnAddr(a, "vpn address", w)
+	if err != nil {
+		return err
 	}
 
 	if flags.Address == "" {
@@ -469,15 +449,6 @@ func changeRemoteCommand(ifce *Interface, fs any, a []string, w commands.StringW
 	addr, err := netip.ParseAddrPort(flags.Address)
 	if err != nil {
 		return commands.Fail(w, "Address could not be parsed")
-	}
-
-	vpnAddr, err := netip.ParseAddr(a[0])
-	if err != nil {
-		return commands.Fail(w, fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
-	}
-
-	if !vpnAddr.IsValid() {
-		return commands.Fail(w, fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
 	}
 
 	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
@@ -538,13 +509,9 @@ func printCertCommand(ifce *Interface, fs any, a []string, w commands.StringWrit
 
 	cert := ifce.pki.getCertState().GetDefaultCertificate()
 	if len(a) > 0 {
-		vpnAddr, err := netip.ParseAddr(a[0])
+		vpnAddr, err := parseVpnAddr(a, "vpn addr", w)
 		if err != nil {
-			return commands.Fail(w, fmt.Sprintf("The provided vpn addr could not be parsed: %s", a[0]))
-		}
-
-		if !vpnAddr.IsValid() {
-			return commands.Fail(w, fmt.Sprintf("The provided vpn addr could not be parsed: %s", a[0]))
+			return err
 		}
 
 		hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
@@ -590,10 +557,9 @@ func printRelaysCommand(ifce *Interface, fs any, a []string, w commands.StringWr
 		return fmt.Errorf("internal error: expected *printTunnelFlags but was %T", fs)
 	}
 
-	relays := map[uint32]*HostInfo{}
-	ifce.hostMap.Lock()
-	maps.Copy(relays, ifce.hostMap.Relays)
-	ifce.hostMap.Unlock()
+	ifce.hostMap.RLock()
+	relays := maps.Clone(ifce.hostMap.Relays)
+	ifce.hostMap.RUnlock()
 
 	type RelayFor struct {
 		Error          string `json:",omitempty"`
@@ -671,11 +637,7 @@ func printRelaysCommand(ifce *Interface, fs any, a []string, w commands.StringWr
 			ro.RelayForAddrs = append(ro.RelayForAddrs, rf)
 		}
 	}
-	err := enc.Encode(co)
-	if err != nil {
-		return err
-	}
-	return nil
+	return enc.Encode(co)
 }
 
 func printTunnelCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
@@ -684,17 +646,9 @@ func printTunnelCommand(ifce *Interface, fs any, a []string, w commands.StringWr
 		return fmt.Errorf("internal error: expected *printTunnelFlags but was %T", fs)
 	}
 
-	if len(a) == 0 {
-		return commands.Fail(w, "No vpn address was provided")
-	}
-
-	vpnAddr, err := netip.ParseAddr(a[0])
+	vpnAddr, err := parseVpnAddr(a, "vpn addr", w)
 	if err != nil {
-		return commands.Fail(w, fmt.Sprintf("The provided vpn addr could not be parsed: %s", a[0]))
-	}
-
-	if !vpnAddr.IsValid() {
-		return commands.Fail(w, fmt.Sprintf("The provided vpn addr could not be parsed: %s", a[0]))
+		return err
 	}
 
 	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
@@ -711,6 +665,10 @@ func printTunnelCommand(ifce *Interface, fs any, a []string, w commands.StringWr
 }
 
 func deviceInfoCommand(ifce *Interface, fs any, w commands.StringWriter) error {
+	flags, ok := fs.(*deviceInfoFlags)
+	if !ok {
+		return fmt.Errorf("internal error: expected flags to be deviceInfoFlags but was %+v", fs)
+	}
 
 	data := struct {
 		Name string         `json:"name"`
@@ -721,11 +679,6 @@ func deviceInfoCommand(ifce *Interface, fs any, w commands.StringWriter) error {
 	}
 
 	copy(data.Cidr, ifce.inside.Networks())
-
-	flags, ok := fs.(*deviceInfoFlags)
-	if !ok {
-		return fmt.Errorf("internal error: expected flags to be deviceInfoFlags but was %+v", fs)
-	}
 
 	if flags.Json || flags.Pretty {
 		js := json.NewEncoder(w.GetWriter())
