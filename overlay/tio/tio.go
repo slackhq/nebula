@@ -75,6 +75,15 @@ type GSOInfo struct {
 // superpacket that needs segmentation before its bytes can be encrypted and sent on the wire.
 func (g GSOInfo) IsSuperpacket() bool { return g.Size > 0 }
 
+// SegmentCount reports how many segments SegmentSuperpacket will cut p into, without touching its bytes.
+func (p Packet) SegmentCount() int {
+	if !p.GSO.IsSuperpacket() {
+		return 1
+	}
+	n := (len(p.Bytes) - int(p.GSO.HdrLen) + int(p.GSO.Size) - 1) / int(p.GSO.Size)
+	return max(n, 1)
+}
+
 // Clone returns a Packet whose Bytes is a freshly allocated copy of p.Bytes,
 // safe to retain past the next Read or Close on the originating Queue.
 // GSO metadata is copied verbatim.

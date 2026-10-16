@@ -183,15 +183,24 @@ func (u *TesterConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, err
 }
 
 func (u *TesterConn) ListenOut(r EncReader, flush func()) error {
+	// The batcher borrows plaintext decrypted in place inside p.Data
+	// until Flush, so the packet must stay alive across flush()
+	return u.listenOut(r, func(p *Packet) { flush() })
+}
+
+// ListenOutHandoff hands each packet's buffer over, the replacement goes back to the pool.
+func (u *TesterConn) ListenOutHandoff(r EncReader, handoff func(bufs [][]byte) [][]byte) error {
+	return u.listenOut(r, func(p *Packet) { p.Data = handoff([][]byte{p.Data})[0] })
+}
+
+func (u *TesterConn) listenOut(r EncReader, finish func(*Packet)) error {
 	for {
 		select {
 		case <-u.done:
 			return os.ErrClosed
 		case p := <-u.RxPackets:
 			r(p.From, p.Data[:len(p.Data):len(p.Data)])
-			// The batcher borrows plaintext decrypted in place inside p.Data
-			// until Flush, so the packet must stay alive across flush()
-			flush()
+			finish(p)
 			p.Release()
 		}
 	}

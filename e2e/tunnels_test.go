@@ -5,9 +5,11 @@ package e2e
 import (
 	"fmt"
 	"net/netip"
+	"runtime"
 	"testing"
 	"time"
 
+	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/e2e/router"
@@ -569,4 +571,31 @@ func TestCloseTunnelAuthenticated(t *testing.T) {
 
 	myControl.Stop()
 	theirControl.Stop()
+}
+
+// TestStagedTunnel completes a handshake and traffic both ways with staged receive. The test tun cannot hand off
+// batches, so transmit stays inline; every received packet, handshakes included, uses the receive pipeline on Linux.
+// Other platforms must do the same over the inline fallback.
+func TestStagedTunnel(t *testing.T) {
+	t.Parallel()
+	received := metrics.GetOrRegisterCounter("flow.rx.inline", nil)
+	before := received.Count()
+	staged := m{"tun": m{"staged": m{"workers": 2}}}
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+	myControl, myVpnIpNet, myUdpAddr, _ := newSimpleServer(cert.Version1, ca, caKey, "me", "10.128.0.1/24", staged)
+	theirControl, theirVpnIpNet, theirUdpAddr, _ := newSimpleServer(cert.Version1, ca, caKey, "them", "10.128.0.2/24", staged)
+	myControl.InjectLightHouseAddr(theirVpnIpNet[0].Addr(), theirUdpAddr)
+	theirControl.InjectLightHouseAddr(myVpnIpNet[0].Addr(), myUdpAddr)
+	myControl.Start()
+	theirControl.Start()
+	r := router.NewR(t, myControl, theirControl)
+	defer r.RenderFlow()
+	assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
+	myControl.Stop()
+	theirControl.Stop()
+	if runtime.GOOS != "linux" {
+		assert.Zero(t, received.Count()-before)
+		return
+	}
+	assert.GreaterOrEqual(t, received.Count()-before, int64(2))
 }

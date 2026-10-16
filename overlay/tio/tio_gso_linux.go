@@ -219,6 +219,21 @@ func (r *Offload) Read() ([]Packet, error) {
 	return r.pending, nil
 }
 
+// SwapRxBuf installs buf as the receive buffer for the following Reads and returns the one backing the packets
+// of the most recent Read, so the caller can keep them past the next Read. A nil buf allocates a replacement of
+// the required size. Single-reader only, like Read.
+func (r *Offload) SwapRxBuf(buf []byte) []byte {
+	if buf == nil {
+		buf = make([]byte, tunRxBufCap)
+	}
+	if len(buf) < tunRxBufCap {
+		panic(fmt.Sprintf("tio: SwapRxBuf buffer is %d bytes, need %d", len(buf), tunRxBufCap))
+	}
+	old := r.rxBuf
+	r.rxBuf = buf
+	return old
+}
+
 // logDroppedRead reports a tun packet dropped for a bad/unsupported virtio
 // header. Debug-gated so the happy path never pays for attribute assembly.
 func (r *Offload) logDroppedRead(err error) {

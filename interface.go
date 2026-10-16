@@ -57,14 +57,19 @@ type InterfaceConfig struct {
 
 	// CpuAffinity, when non-empty, names the CPUs each TUN reader goroutine
 	// should pin to. Queue i pins to CpuAffinity[i % len(CpuAffinity)] —
-	// shorter lists than `routines` cycle. Empty list keeps the default
-	// pin-to-(i % NumCPU) behavior. Only consulted when PinThreads is true.
+	// shorter lists than `routines` cycle. Staged sender i uses entry i+1,
+	// unless that is its reader's CPU. Empty uses the automatic order. Only
+	// consulted when PinThreads is true.
 	CpuAffinity []int
+	// defaultCpuAffinity is the automatic pin order for readers, kept apart
+	// from CpuAffinity because staged senders are only pinned to an explicit list.
+	defaultCpuAffinity []int
 	// PinThreads controls whether each TUN reader OS thread is pinned to a
 	// single CPU (via tun.pin_threads, default true). Pinning keeps each
 	// goroutine's sendmmsg on one XPS-selected NIC TX ring so per-flow
 	// packets stay ordered on the wire.
 	PinThreads bool
+	staged     stagedConfig
 
 	l *slog.Logger
 }
@@ -94,11 +99,13 @@ type Interface struct {
 	// should pin to. Queue i pins to cpuAffinity[i % len(cpuAffinity)].
 	// Empty falls back to the default pin-to-(allowed CPU) behavior.
 	// Only consulted when pinThreads is true.
-	cpuAffinity []int
+	cpuAffinity        []int
+	defaultCpuAffinity []int
 	// pinThreads controls whether listenIn pins each TUN reader OS thread to
 	// a CPU at all (tun.pin_threads, default true). When false, threads are
 	// left free to migrate as on stock nebula.
 	pinThreads   bool
+	staged       stagedConfig
 	relayManager *relayManager
 
 	tryPromoteEvery atomic.Uint32
@@ -247,7 +254,9 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		connectionManager:     c.connectionManager,
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
 		cpuAffinity:           c.CpuAffinity,
+		defaultCpuAffinity:    c.defaultCpuAffinity,
 		pinThreads:            c.PinThreads,
+		staged:                c.staged,
 		udpTxErrLimiter:       udpTxErrLimiter,
 		udpRelayTxErrLimiter:  udpRelayTxErrLimiter,
 		txOversizeLimiter:     txOversizeLimiter,
@@ -413,14 +422,18 @@ func (f *Interface) listenOut(i int) {
 		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, payload, rxc)
 	}
 
-	flusher := func() {
-		if err := f.batchers[i].Flush(); err != nil {
-			f.l.Error("Failed to flush tun coalescer", "error", err)
-		}
-		clear(rxc.hostmapCache)
-	}
+	flusher := func() { f.flushOutside(rxc) }
 
-	err := li.ListenOut(listener, flusher)
+	var err error
+	if hc, ok := li.(handoffConn); ok && f.staged.rx {
+		// Every stage on its own goroutine, see flow_rx.go. rxc becomes the ordered writer's context.
+		err = newStagedRx(f, i, rxc).listen(hc)
+	} else {
+		if f.staged.rx {
+			f.l.Info("udp conn cannot hand off receive batches, receive stays inline", "reader", i)
+		}
+		err = li.ListenOut(listener, flusher)
+	}
 
 	// An error after teardown began is shutdown noise, the closed flag covers resources
 	// Close releases itself and the cancelled ctx covers ones torn down by their owners
@@ -433,32 +446,30 @@ func (f *Interface) listenOut(i int) {
 	f.l.Debug("underlay reader is done", "reader", i)
 }
 
-func (f *Interface) pinThisThread(i int) {
-	var cpu int
+// threadCPU is the CPU tun reader i pins to.
+func (f *Interface) threadCPU(i int) int {
 	if n := len(f.cpuAffinity); n > 0 {
 		// Explicit tun.cpu_affinity list wins; parseCpuAffinity already
 		// validated the entries against the allowed CPU set.
-		cpu = f.cpuAffinity[i%n]
+		return f.cpuAffinity[i%n]
+	} else if n := len(f.defaultCpuAffinity); n > 0 {
+		return f.defaultCpuAffinity[i%n]
 	} else if allowed, err := util.AllowedCPUs(); err == nil && len(allowed) > 0 {
 		// Default: spread queues across the CPUs we're actually allowed to
 		// run on. Under a cpuset/taskset mask these aren't 0..NumCPU-1, so
 		// i % NumCPU would pick unrunnable IDs and every pin would fail.
-		cpu = allowed[i%len(allowed)]
-	} else {
-		cpu = i % runtime.NumCPU()
+		return allowed[i%len(allowed)]
 	}
+	return i % runtime.NumCPU()
+}
+
+func (f *Interface) pinThreadToCPU(i, cpu int) {
 	if err := util.PinThreadToCPU(cpu); err != nil {
-		f.l.Warn("failed to pin tun reader to CPU", "queue", i, "cpu", cpu, "err", err)
+		f.l.Warn("failed to pin tun processing thread to CPU", "queue", i, "cpu", cpu, "err", err)
 	}
 }
 
 func (f *Interface) listenIn(queue tio.Queue, i int) {
-	// Pinning this thread (and goroutine) to a single CPU keeps every sendmmsg from this goroutine going through the
-	// same TX ring on the nic, so the wire sees per-flow order. Skip entirely when tun.pin_threads is false.
-	if f.pinThreads {
-		f.pinThisThread(i)
-	}
-
 	rejectBuf := make([]byte, mtu)
 	arenaSize := batch.SendBatchCap * (udp.MTU + 32)
 	sb := batch.NewSendBatch(f.writers[i], batch.SendBatchCap, arenaSize)
@@ -466,6 +477,26 @@ func (f *Interface) listenIn(queue tio.Queue, i int) {
 	nb := make([]byte, 12, 12)
 
 	conntrackCache := firewall.NewConntrackCacheTicker(f.ctx, f.l, f.conntrackCacheTimeout)
+
+	if sq, ok := queue.(handoffQueue); ok && f.staged.tx {
+		// Every stage on its own goroutine, see flow_tx.go
+		err := newStagedTx(f, sq, i).run(fwPacket, rejectBuf, conntrackCache)
+		if !f.closed.Load() && f.ctx.Err() == nil {
+			f.l.Error("Error while reading outbound packet, closing", "error", err, "reader", i)
+			f.onFatal(err)
+		}
+		f.l.Debug("overlay reader is done", "reader", i)
+		return
+	}
+	if f.staged.tx {
+		f.l.Info("tun queue cannot hand off read batches, transmit stays inline", "reader", i)
+	}
+
+	// Pinning this thread (and goroutine) to a single CPU keeps every sendmmsg from this goroutine going through the
+	// same TX ring on the nic, so the wire sees per-flow order. Skip entirely when tun.pin_threads is false.
+	if f.pinThreads {
+		f.pinThreadToCPU(i, f.threadCPU(i))
+	}
 
 	for {
 		pkts, err := queue.Read()

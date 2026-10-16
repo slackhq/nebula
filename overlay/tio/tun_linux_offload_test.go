@@ -911,6 +911,25 @@ func TestOffloadWriteZeroLength(t *testing.T) {
 	}
 }
 
+// TestOffloadSwapRxBuf: SwapRxBuf hands over the buffer the last Read filled and reads into the one it is given.
+func TestOffloadSwapRxBuf(t *testing.T) {
+	o := &Offload{rxBuf: make([]byte, tunRxBufCap)}
+	read := o.rxBuf
+	owned := o.SwapRxBuf(nil)
+	if &owned[0] != &read[0] || len(o.rxBuf) != tunRxBufCap || &o.rxBuf[0] == &read[0] {
+		t.Fatal("SwapRxBuf(nil) must hand over the last read buffer and allocate a new one")
+	}
+	if back := o.SwapRxBuf(owned); &back[0] == &owned[0] || &o.rxBuf[0] != &owned[0] {
+		t.Fatal("SwapRxBuf must install the buffer it is given")
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("SwapRxBuf must reject a short buffer")
+		}
+	}()
+	o.SwapRxBuf(make([]byte, 10))
+}
+
 // TestWriteGSOSuperpacketGeometry decodes the vnet header the kernel would see for a multi-segment write:
 // the GSO type must match the proto and IP version
 // gso_size must be the per-segment size (the kernel rejects a superpacket with gso_size == 0),
