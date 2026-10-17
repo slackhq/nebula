@@ -537,11 +537,12 @@ func (f *Interface) reloadFirewall(c *config.C, r *config.Reload) {
 		curCert = cs.getCertificate(cert.Version1)
 	}
 
-	// The firewall builds its routableNetworks set from the certificate's UnsafeNetworks at construction.
-	// Check to see if that set has changed, and if so, rebuild the firewall.
-	certUnsafeChanged := curCert != nil && !slices.Equal(curCert.UnsafeNetworks(), f.firewall.unsafeNetworks)
-
-	if !c.HasChanged("firewall") && !certUnsafeChanged {
+	// Compare with what the running firewall was built from, not the last config, so a firewall that failed to build
+	// is tried again. The cert is the one this reload brought, PKI registers its reload callback before this one
+	src := c.Render("firewall")
+	if src != "" && src == f.firewall.source && curCert != nil &&
+		slices.Equal(curCert.Networks(), f.firewall.assignedNetworks) &&
+		slices.Equal(curCert.UnsafeNetworks(), f.firewall.unsafeNetworks) {
 		f.l.Debug("No firewall config change detected")
 		return
 	}

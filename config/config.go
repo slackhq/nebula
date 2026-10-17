@@ -86,6 +86,21 @@ func (c *C) InitialLoad() bool {
 	return c.oldSettings == nil
 }
 
+// Render returns keys and their values as yaml, for a subsystem to remember what it applied. Empty means they couldn't
+// be rendered and should never match.
+func (c *C) Render(keys ...string) string {
+	m := make(map[string]any, len(keys))
+	for _, k := range keys {
+		m[k] = c.Get(k)
+	}
+	b, err := yaml.Marshal(m)
+	if err != nil {
+		c.l.Debug("Failed to render config", "keys", keys, "error", err)
+		return ""
+	}
+	return string(b)
+}
+
 // HasChanged checks if the underlying structure of the provided key has changed after a config reload. The value of
 // k in both the old and new settings will be serialized, the result of the string comparison is returned.
 // If k is an empty string the entire config is tested.

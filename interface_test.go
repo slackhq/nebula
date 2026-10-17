@@ -135,8 +135,63 @@ func TestReloadFirewall_BadRulesFailTheReload(t *testing.T) {
 	f := &Interface{pki: pki, firewall: fw, l: l}
 	cfg.RegisterReloadCallback(f.reloadFirewall)
 
-	res := cfg.ReloadConfigString(rules("nope"))
+	// The running firewall still isn't built from what the config asks for, so the same reload fails again
+	for range 2 {
+		res := cfg.ReloadConfigString(rules("nope"))
+		require.NoError(t, res.Err)
+		assert.True(t, res.Failed)
+		assert.Same(t, fw, f.firewall)
+	}
+
+	res := cfg.ReloadConfigString(rules("tcp"))
 	require.NoError(t, res.Err)
-	assert.True(t, res.Failed)
-	assert.Same(t, fw, f.firewall)
+	assert.False(t, res.Failed)
+	assert.NotSame(t, fw, f.firewall)
+}
+
+// Every input the firewall is built from rebuilds it when it changes, and nothing else does
+func TestReloadFirewall_RebuildsOnAnyInput(t *testing.T) {
+	l := test.NewLogger()
+	networks := []netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")}
+	base := "firewall:\n  inbound:\n    - port: any\n      proto: any\n      host: any\n"
+	setup := func() (*config.C, *Interface, *PKI) {
+		pki := &PKI{}
+		pki.cs.Store(&CertState{v2Cert: &dummyCert{version: cert.Version2, networks: networks}, initiatingVersion: cert.Version2})
+		cfg := config.NewC(l)
+		require.NoError(t, cfg.LoadString(base))
+		fw, err := NewFirewallFromConfig(l, pki.getCertState(), cfg)
+		require.NoError(t, err)
+		f := &Interface{pki: pki, firewall: fw, l: l}
+		cfg.RegisterReloadCallback(f.reloadFirewall)
+		return cfg, f, pki
+	}
+	setCert := func(pki *PKI, networks, unsafe []netip.Prefix) {
+		pki.cs.Store(&CertState{v2Cert: &dummyCert{version: cert.Version2, networks: networks, unsafeNetworks: unsafe}, initiatingVersion: cert.Version2})
+	}
+
+	cases := map[string]struct {
+		cfg  string
+		cert func(*PKI)
+		want bool
+	}{
+		"nothing":         {base + "punchy:\n  punch: true\n", nil, false},
+		"rules":           {base + "  outbound:\n    - port: any\n      proto: any\n      host: any\n", nil, true},
+		"inbound_action":  {base + "  inbound_action: reject\n", nil, true},
+		"conntrack":       {base + "  conntrack:\n    tcp_timeout: 1m\n", nil, true},
+		"networks":        {base, func(p *PKI) { setCert(p, []netip.Prefix{netip.MustParsePrefix("10.0.0.2/24")}, nil) }, true},
+		"unsafe_networks": {base, func(p *PKI) { setCert(p, networks, []netip.Prefix{netip.MustParsePrefix("192.168.0.0/24")}) }, true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg, f, pki := setup()
+			old := f.firewall
+			if tc.cert != nil {
+				tc.cert(pki)
+			}
+			res := cfg.ReloadConfigString(tc.cfg)
+			require.NoError(t, res.Err)
+			assert.False(t, res.Failed)
+			assert.Equal(t, tc.want, f.firewall != old)
+		})
+	}
 }
