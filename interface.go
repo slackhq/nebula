@@ -384,6 +384,8 @@ type rxContext struct {
 	hostmapCache map[uint32]*HostInfo
 	lhh          *LightHouseHandler
 	ctCache      *firewall.ConntrackCacheTicker
+	relayBatch   *batch.SendBatch
+	relayRemote  netip.AddrPort
 }
 
 func newRxContext(f *Interface, q int) *rxContext {
@@ -414,6 +416,7 @@ func (f *Interface) listenOut(i int) {
 	}
 
 	flusher := func() {
+		f.flushRelayBatch(rxc)
 		if err := f.batchers[i].Flush(); err != nil {
 			f.l.Error("Failed to flush tun coalescer", "error", err)
 		}

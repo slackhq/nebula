@@ -25,7 +25,7 @@ var ErrOutOfWindow = errors.New("out of window packet")
 
 // readOutsidePackets processes one received underlay packet.
 // Message payloads are decrypted IN PLACE, so packet must stay untouched
-// by the caller until the batcher for queue q has been flushed
+// by the caller until the TUN and relay batches for queue q have been flushed.
 func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxContext) {
 	h := rxc.h
 	err := h.Parse(packet)
@@ -77,6 +77,12 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxCont
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
 	}
 
+	// Earlier forwards must leave before this packet can generate a response.
+	isMessageRelay := h.Type == header.Message && h.Subtype == header.MessageRelay
+	if !isMessageRelay {
+		f.flushRelayBatch(rxc)
+	}
+
 	// Unencrypted packets
 	switch h.Type {
 	case header.Handshake:
@@ -87,9 +93,6 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxCont
 		f.handleRecvError(via.UdpAddr, h)
 		return
 	}
-
-	// Relay packets are special
-	isMessageRelay := (h.Type == header.Message && h.Subtype == header.MessageRelay)
 
 	var hostinfo *HostInfo
 	if isMessageRelay {
@@ -102,6 +105,8 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxCont
 	// recvError if necessary
 	if hostinfo == nil || hostinfo.ConnectionState == nil {
 		if !via.IsRelayed {
+			// An unknown relay index can also produce a response.
+			f.flushRelayBatch(rxc)
 			f.maybeSendRecvError(via.UdpAddr, h.RemoteIndex)
 		}
 		return
@@ -233,8 +238,10 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 				// Forward this packet through the relay tunnel, rebuilding it in place.
 				// Encode overwrites the old outer header, and the new AEAD tag lands where the old one was
 				fwdBuf := packet[:0]
-				//todo it would potentially be nice to batch these
-				f.SendVia(targetHI, targetRelay, signedPayload, rxc.nb, fwdBuf, true, rxc.q)
+				out, err := f.prepareSendVia(targetHI, targetRelay, signedPayload, rxc.nb, fwdBuf, true)
+				if err == nil {
+					f.queueRelayPacket(out, targetHI.GetRemote(), rxc)
+				}
 			case TerminalType:
 				hostinfo.logger(f.l).Error("Unexpected Relay Type of Terminal")
 				return
@@ -256,6 +263,27 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(f.l).Debug("Unexpected relay type", "from", via, "relayType", relay.Type)
 		}
+	}
+}
+
+// queueRelayPacket borrows a receive buffer until the batch is flushed. Destination changes and the send batch
+// limit end a run, preserving arrival order while allowing WriteBatch to use UDP segmentation offload.
+func (f *Interface) queueRelayPacket(packet []byte, remote netip.AddrPort, rxc *rxContext) {
+	if rxc.relayBatch == nil {
+		rxc.relayBatch = batch.NewSendBatch(f.writers[rxc.q], batch.SendBatchCap, 0)
+	} else if rxc.relayRemote != remote {
+		f.flushRelayBatch(rxc)
+	}
+	rxc.relayRemote = remote
+	rxc.relayBatch.Commit(packet, remote)
+	if rxc.relayBatch.Len() >= batch.SendBatchCap {
+		f.flushRelayBatch(rxc)
+	}
+}
+
+func (f *Interface) flushRelayBatch(rxc *rxContext) {
+	if rxc.relayBatch != nil {
+		f.flushSendBatch(rxc.relayBatch, rxc.q)
 	}
 }
 
