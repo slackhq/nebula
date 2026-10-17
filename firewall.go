@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gaissmai/bart"
@@ -28,14 +29,21 @@ type FirewallInterface interface {
 	AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, cidr, localCidr string, caName string, caSha string) error
 }
 
+// conn is a conntrack entry. Only expires changes after it is stored, a rules version change
+// stores a replacement entry instead.
 type conn struct {
-	Expires time.Time // Time when this conntrack entry will expire
+	expires atomic.Uint32 // conntrack clock second when this entry expires, see FirewallConntrack.now
 
 	// record why the original connection passed the firewall, so we can re-validate
-	// after ruleset changes. Note, rulesVersion is a uint16 so that these two
-	// fields pack for free after the uint32 above
+	// after ruleset changes
 	incoming     bool
 	rulesVersion uint16
+}
+
+func newConn(expires uint32, incoming bool, rulesVersion uint16) *conn {
+	c := &conn{incoming: incoming, rulesVersion: rulesVersion}
+	c.expires.Store(expires)
+	return c
 }
 
 // TODO: need conntrack max tracked connections handling
@@ -79,11 +87,69 @@ type firewallMetrics struct {
 	droppedNoRule     metrics.Counter
 }
 
+// FirewallConntrack is safe for concurrent use by every routine without a lock.
 type FirewallConntrack struct {
-	sync.Mutex
+	conns sync.Map      // firewall.Packet -> *conn
+	count atomic.Int64  // entries in conns, which sync.Map can't tell us
+	now   atomic.Uint32 // the conntrack clock: whole seconds since epoch, kept current by Run
+	epoch time.Time
+}
 
-	Conns      map[firewall.Packet]*conn
-	TimerWheel *TimerWheel[firewall.Packet]
+func newFirewallConntrack() *FirewallConntrack {
+	return &FirewallConntrack{epoch: time.Now()}
+}
+
+// Run advances the conntrack clock every second and sweeps out expired entries every minute,
+// until ctx is done. Reading a shared clock is much cheaper than asking the OS on every packet.
+func (ct *FirewallConntrack) Run(ctx context.Context) {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	var nextSweep uint32
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			// Measured from epoch rather than counted, so a late tick can't slow the clock down
+			now := uint32(time.Since(ct.epoch) / time.Second)
+			ct.now.Store(now)
+			if now >= nextSweep {
+				ct.sweep(now)
+				nextSweep = now + 60
+			}
+		}
+	}
+}
+
+// sweep deletes entries that expired at or before now.
+func (ct *FirewallConntrack) sweep(now uint32) {
+	ct.conns.Range(func(k, v any) bool {
+		if v.(*conn).expires.Load() <= now {
+			ct.delete(k.(firewall.Packet), v.(*conn))
+		}
+		return true
+	})
+}
+
+func (ct *FirewallConntrack) store(fp firewall.Packet, c *conn) {
+	if _, replaced := ct.conns.Swap(fp, c); !replaced {
+		ct.count.Add(1)
+	}
+}
+
+// delete removes fp's entry if it is still c, so a newer entry stored by another routine survives
+func (ct *FirewallConntrack) delete(fp firewall.Packet, c *conn) {
+	if ct.conns.CompareAndDelete(fp, c) {
+		ct.count.Add(-1)
+	}
+}
+
+// clear deletes every entry
+func (ct *FirewallConntrack) clear() {
+	ct.conns.Range(func(k, v any) bool {
+		ct.delete(k.(firewall.Packet), v.(*conn))
+		return true
+	})
 }
 
 // FirewallTable is the entry point for a rule, the evaluation order is:
@@ -132,26 +198,10 @@ type firewallLocalCIDR struct {
 	LocalCIDR *bart.Lite
 }
 
-// NewFirewall creates a new Firewall object. A TimerWheel is created for you from the provided timeouts.
+// NewFirewall creates a new Firewall object.
 // The certificate provided should be the highest version loaded in memory.
 func NewFirewall(l *slog.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.Duration, c cert.Certificate) *Firewall {
 	//TODO: error on 0 duration
-	var tmin, tmax time.Duration
-
-	if tcpTimeout < UDPTimeout {
-		tmin = tcpTimeout
-		tmax = UDPTimeout
-	} else {
-		tmin = UDPTimeout
-		tmax = tcpTimeout
-	}
-
-	if defaultTimeout < tmin {
-		tmin = defaultTimeout
-	} else if defaultTimeout > tmax {
-		tmax = defaultTimeout
-	}
-
 	routableNetworks := new(bart.Lite)
 	var assignedNetworks []netip.Prefix
 	for _, network := range c.Networks() {
@@ -166,10 +216,7 @@ func NewFirewall(l *slog.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.Dur
 	}
 
 	return &Firewall{
-		Conntrack: &FirewallConntrack{
-			Conns:      make(map[firewall.Packet]*conn),
-			TimerWheel: NewTimerWheel[firewall.Packet](tmin, tmax),
-		},
+		Conntrack:        newFirewallConntrack(),
 		InRules:          newFirewallTable(),
 		OutRules:         newFirewallTable(),
 		TCPTimeout:       tcpTimeout,
@@ -423,7 +470,7 @@ var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 
 // Drop returns an error if the packet should be dropped, explaining why. It
 // returns nil if the packet should not be dropped.
-func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) error {
+func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *cert.CAPool) error {
 	// Make sure remote address matches nebula certificate, and determine how to treat it
 	if h.networks == nil {
 		// Simple case: Certificate has one address and no unsafe networks
@@ -458,7 +505,7 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 	}
 
 	// Check if we spoke to this tuple, if we did then allow this packet
-	if f.inConns(fp, h, caPool, localCache) {
+	if f.inConns(fp, h, caPool) {
 		return nil
 	}
 
@@ -494,36 +541,19 @@ func (f *Firewall) Destroy() {
 }
 
 func (f *Firewall) EmitStats() {
-	conntrack := f.Conntrack
-	conntrack.Lock()
-	conntrackCount := len(conntrack.Conns)
-	conntrack.Unlock()
-	metrics.GetOrRegisterGauge("firewall.conntrack.count", nil).Update(int64(conntrackCount))
+	metrics.GetOrRegisterGauge("firewall.conntrack.count", nil).Update(f.Conntrack.count.Load())
 	metrics.GetOrRegisterGauge("firewall.rules.version", nil).Update(int64(f.rulesVersion))
 	metrics.GetOrRegisterGauge("firewall.rules.hash", nil).Update(int64(f.GetRuleHashFNV()))
 }
 
-func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) bool {
-	if localCache != nil {
-		if _, ok := localCache[fp]; ok {
-			return true
-		}
-	}
+func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool) bool {
 	conntrack := f.Conntrack
-	conntrack.Lock()
-
-	// Purge every time we test
-	ep, has := conntrack.TimerWheel.Purge()
-	if has {
-		f.evict(ep)
-	}
-
-	c, ok := conntrack.Conns[fp]
-
+	v, ok := conntrack.conns.Load(fp)
 	if !ok {
-		conntrack.Unlock()
 		return false
 	}
+	c := v.(*conn)
+	expires := conntrack.now.Load() + f.timeout(fp.Protocol)
 
 	if c.rulesVersion != f.rulesVersion {
 		// This conntrack entry was for an older rule set, validate
@@ -543,8 +573,7 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 					"oldRulesVersion", c.rulesVersion,
 				)
 			}
-			delete(conntrack.Conns, fp)
-			conntrack.Unlock()
+			conntrack.delete(fp, c)
 			return false
 		}
 
@@ -557,77 +586,35 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 			)
 		}
 
-		c.rulesVersion = f.rulesVersion
+		conntrack.store(fp, newConn(expires, c.incoming, f.rulesVersion))
+		return true
 	}
 
-	switch fp.Protocol {
-	case iputil.IPProtocolTCP:
-		c.Expires = time.Now().Add(f.TCPTimeout)
-	case iputil.IPProtocolUDP:
-		c.Expires = time.Now().Add(f.UDPTimeout)
-	default:
-		c.Expires = time.Now().Add(f.DefaultTimeout)
-	}
-
-	conntrack.Unlock()
-
-	if localCache != nil {
-		localCache[fp] = struct{}{}
+	// Most packets land in the same second as the one before, skip writing an unchanged expiry
+	if c.expires.Load() != expires {
+		c.expires.Store(expires)
 	}
 
 	return true
 }
 
 func (f *Firewall) addConn(fp firewall.Packet, incoming bool) {
-	var timeout time.Duration
-	c := &conn{}
-
-	switch fp.Protocol {
-	case iputil.IPProtocolTCP:
-		timeout = f.TCPTimeout
-	case iputil.IPProtocolUDP:
-		timeout = f.UDPTimeout
-	default:
-		timeout = f.DefaultTimeout
-	}
-
-	conntrack := f.Conntrack
-	conntrack.Lock()
-	if _, ok := conntrack.Conns[fp]; !ok {
-		conntrack.TimerWheel.Advance(time.Now())
-		conntrack.TimerWheel.Add(fp, timeout)
-	}
-
 	// Record which rulesVersion allowed this connection, so we can retest after
 	// firewall reload
-	c.incoming = incoming
-	c.rulesVersion = f.rulesVersion
-	c.Expires = time.Now().Add(timeout)
-	conntrack.Conns[fp] = c
-	conntrack.Unlock()
+	conntrack := f.Conntrack
+	conntrack.store(fp, newConn(conntrack.now.Load()+f.timeout(fp.Protocol), incoming, f.rulesVersion))
 }
 
-// Evict checks if a conntrack entry has expired, if so it is removed, if not it is re-added to the wheel
-// Caller must own the connMutex lock!
-func (f *Firewall) evict(p firewall.Packet) {
-	// Are we still tracking this conn?
-	conntrack := f.Conntrack
-	t, ok := conntrack.Conns[p]
-	if !ok {
-		return
+// timeout returns how many seconds a conntrack entry for proto lives past its last packet
+func (f *Firewall) timeout(proto uint8) uint32 {
+	switch proto {
+	case iputil.IPProtocolTCP:
+		return uint32(f.TCPTimeout / time.Second)
+	case iputil.IPProtocolUDP:
+		return uint32(f.UDPTimeout / time.Second)
+	default:
+		return uint32(f.DefaultTimeout / time.Second)
 	}
-
-	newT := t.Expires.Sub(time.Now())
-
-	// Timeout is in the future, re-add the timer
-	if newT > 0 {
-		conntrack.TimerWheel.Advance(time.Now())
-		conntrack.TimerWheel.Add(p, newT)
-		return
-	}
-
-	// This conn is done
-	delete(conntrack.Conns, p)
 }
 
 func (ft *FirewallTable) match(p firewall.Packet, incoming bool, c *cert.CachedCertificate, caPool *cert.CAPool) bool {

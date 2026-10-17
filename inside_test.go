@@ -50,7 +50,7 @@ func newSelfForwardInterface(myAddrs ...netip.Addr) (*Interface, *capturingTun) 
 }
 
 func consumeInside(f *Interface, packet []byte) {
-	f.consumeInsidePacket(tio.Packet{Bytes: packet}, &firewall.ParsedPacket{}, make([]byte, 12), nil, make([]byte, mtu), 0, nil)
+	f.consumeInsidePacket(tio.Packet{Bytes: packet}, &firewall.ParsedPacket{}, make([]byte, 12), nil, make([]byte, mtu), 0)
 }
 
 // l4Proto describes one upper-layer header for these tests: its IP next-header

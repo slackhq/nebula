@@ -26,6 +26,10 @@ type Packet struct {
 	RemotePort uint16
 	Protocol   uint8
 	Fragment   bool
+
+	// pad fills what would otherwise be compiler padding. A Packet with no padding hashes as one
+	// block of memory, which makes it a much faster map key. Always zero.
+	pad [2]byte
 }
 
 func (fp *Packet) Copy() *Packet {

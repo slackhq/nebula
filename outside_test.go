@@ -6,12 +6,16 @@ import (
 	"net"
 	"net/netip"
 	"testing"
+	"time"
 
+	"github.com/gaissmai/bart"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/iputil"
 
 	"github.com/slackhq/nebula/firewall"
+	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/ipv4"
@@ -840,4 +844,50 @@ func Test_newPacket_parsedFields(t *testing.T) {
 	require.NoError(t, newPacket(f6n, true, p))
 	assert.True(t, p.Fragment)
 	assert.True(t, p.FragAny)
+}
+
+func TestInterface_allowInbound(t *testing.T) {
+	l := test.NewLoggerWithOutput(&bytes.Buffer{})
+	myNetworks := new(bart.Lite)
+	myNetworks.Insert(netip.MustParsePrefix("192.0.2.1/24"))
+	me := &dummyCert{name: "me", networks: []netip.Prefix{netip.MustParsePrefix("192.0.2.1/24")}}
+	peer := &cert.CachedCertificate{Certificate: &dummyCert{name: "peer", networks: []netip.Prefix{netip.MustParsePrefix("192.0.2.2/24")}}}
+	h := &HostInfo{ConnectionState: &ConnectionState{peerCert: peer}, vpnAddrs: []netip.Addr{netip.MustParseAddr("192.0.2.2")}}
+	h.buildNetworks(myNetworks, peer.Certificate)
+
+	allowAll := NewFirewall(l, time.Minute, time.Minute, time.Minute, me)
+	require.NoError(t, allowAll.AddRule(true, firewall.ProtoAny, 0, 0, []string{"any"}, "", "", "", "", ""))
+	allowNone := NewFirewall(l, time.Minute, time.Minute, time.Minute, me)
+
+	f := &Interface{firewall: allowAll, pki: &PKI{}, l: l}
+	rxc := &rxContext{fwPacket: &firewall.ParsedPacket{}, hostmapCache: map[uint32]*HostInfo{}}
+	flow := firewall.Packet{
+		LocalAddr:  netip.MustParseAddr("192.0.2.1"),
+		RemoteAddr: netip.MustParseAddr("192.0.2.2"),
+		LocalPort:  443,
+		RemotePort: 55000,
+		Protocol:   iputil.IPProtocolUDP,
+	}
+	rxc.fwPacket.Packet = flow
+	require.NoError(t, f.allowInbound(h, rxc))
+
+	// With a firewall that allows nothing, the rest of the flow's run in this batch still passes
+	f.firewall = allowNone
+	require.NoError(t, f.allowInbound(h, rxc))
+
+	// A different flow is checked
+	other := flow
+	other.RemotePort++
+	rxc.fwPacket.Packet = other
+	require.ErrorIs(t, f.allowInbound(h, rxc), ErrNoMatchingRule)
+
+	// So is the same flow from a different host
+	rxc.fwPacket.Packet = flow
+	h2 := &HostInfo{ConnectionState: h.ConnectionState, vpnAddrs: h.vpnAddrs}
+	h2.buildNetworks(myNetworks, peer.Certificate)
+	require.ErrorIs(t, f.allowInbound(h2, rxc), ErrNoMatchingRule)
+
+	// And the same flow in the next batch
+	rxc.endBatch()
+	require.ErrorIs(t, f.allowInbound(h, rxc), ErrNoMatchingRule)
 }
