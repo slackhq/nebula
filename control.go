@@ -203,7 +203,8 @@ func (c *Control) RebindUDPServer() {
 	}
 
 	// A failure here means we are likely still pinned to the interface we came up on, so the rest of this is
-	// unlikely to help. Say so instead of silently carrying on as if we rebound.
+	// unlikely to help. Say so instead of silently carrying on as if we rebound. Only the first writer is rebound;
+	// darwin's Rebind clears every listen routine's listener.
 	if err := c.f.outside.Rebind(); err != nil {
 		c.l.Error("Failed to rebind udp socket", "error", err)
 	}
