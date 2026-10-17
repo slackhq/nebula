@@ -15,11 +15,16 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/logging"
 	"github.com/slackhq/nebula/sshd"
 )
+
+// metricSshEncodeErrors counts ssh command output encode/marshal failures.
+// Callers log+meter at the swallow site; the dispatcher discards returns.
+var metricSshEncodeErrors = metrics.GetOrRegisterCounter("ssh.encode.errors", nil)
 
 type sshListHostMapFlags struct {
 	Json    bool
@@ -241,7 +246,7 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 			return fl, &s
 		},
 		Callback: func(fs any, a []string, w sshd.StringWriter) error {
-			return sshListHostMap(f.hostMap, fs, w)
+			return sshListHostMap(l, f.hostMap, fs, w)
 		},
 	})
 
@@ -257,7 +262,7 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 			return fl, &s
 		},
 		Callback: func(fs any, a []string, w sshd.StringWriter) error {
-			return sshListHostMap(f.handshakeManager, fs, w)
+			return sshListHostMap(l, f.handshakeManager, fs, w)
 		},
 	})
 
@@ -272,7 +277,7 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 			return fl, &s
 		},
 		Callback: func(fs any, a []string, w sshd.StringWriter) error {
-			return sshListLighthouseMap(f.lightHouse, fs, w)
+			return sshListLighthouseMap(l, f.lightHouse, fs, w)
 		},
 	})
 
@@ -335,7 +340,7 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 			return fl, &s
 		},
 		Callback: func(fs any, a []string, w sshd.StringWriter) error {
-			return sshPrintCert(f, fs, a, w)
+			return sshPrintCert(l, f, fs, a, w)
 		},
 	})
 
@@ -420,7 +425,7 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 	})
 }
 
-func sshListHostMap(hl controlHostLister, a any, w sshd.StringWriter) error {
+func sshListHostMap(l *slog.Logger, hl controlHostLister, a any, w sshd.StringWriter) error {
 	fs, ok := a.(*sshListHostMapFlags)
 	if !ok {
 		return nil
@@ -445,6 +450,8 @@ func sshListHostMap(hl controlHostLister, a any, w sshd.StringWriter) error {
 
 		err := js.Encode(hm)
 		if err != nil {
+			metricSshEncodeErrors.Inc(1)
+			l.Warn("ssh: failed to encode host-map output", "error", err)
 			return nil
 		}
 
@@ -460,7 +467,7 @@ func sshListHostMap(hl controlHostLister, a any, w sshd.StringWriter) error {
 	return nil
 }
 
-func sshListLighthouseMap(lightHouse *LightHouse, a any, w sshd.StringWriter) error {
+func sshListLighthouseMap(l *slog.Logger, lightHouse *LightHouse, a any, w sshd.StringWriter) error {
 	fs, ok := a.(*sshListHostMapFlags)
 	if !ok {
 		return nil
@@ -495,6 +502,8 @@ func sshListLighthouseMap(lightHouse *LightHouse, a any, w sshd.StringWriter) er
 
 		err := js.Encode(addrMap)
 		if err != nil {
+			metricSshEncodeErrors.Inc(1)
+			l.Warn("ssh: failed to encode lighthouse-map output", "error", err)
 			return nil
 		}
 
@@ -707,7 +716,7 @@ func sshLogFormat(l *slog.Logger, fs any, a []string, w sshd.StringWriter) error
 	return w.WriteLine(fmt.Sprintf("Log format is: %s", ctrl.GetFormat()))
 }
 
-func sshPrintCert(ifce *Interface, fs any, a []string, w sshd.StringWriter) error {
+func sshPrintCert(l *slog.Logger, ifce *Interface, fs any, a []string, w sshd.StringWriter) error {
 	args, ok := fs.(*sshPrintCertFlags)
 	if !ok {
 		return nil
@@ -735,16 +744,19 @@ func sshPrintCert(ifce *Interface, fs any, a []string, w sshd.StringWriter) erro
 	if args.Json || args.Pretty {
 		b, err := cert.MarshalJSON()
 		if err != nil {
+			metricSshEncodeErrors.Inc(1)
+			l.Warn("ssh: failed to marshal print-cert json", "error", err)
 			return nil
 		}
 
 		if args.Pretty {
 			buf := new(bytes.Buffer)
-			err := json.Indent(buf, b, "", "    ")
-			b = buf.Bytes()
-			if err != nil {
+			if err := json.Indent(buf, b, "", "    "); err != nil {
+				metricSshEncodeErrors.Inc(1)
+				l.Warn("ssh: failed to indent print-cert json", "error", err)
 				return nil
 			}
+			b = buf.Bytes()
 		}
 
 		return w.WriteBytes(b)
@@ -753,6 +765,8 @@ func sshPrintCert(ifce *Interface, fs any, a []string, w sshd.StringWriter) erro
 	if args.Raw {
 		b, err := cert.MarshalPEM()
 		if err != nil {
+			metricSshEncodeErrors.Inc(1)
+			l.Warn("ssh: failed to marshal print-cert pem", "error", err)
 			return nil
 		}
 
