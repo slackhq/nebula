@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -400,6 +401,99 @@ func TestDnsServer_QueryCert_returnsOwnCert(t *testing.T) {
 
 	other := netip.MustParseAddr("10.0.0.99")
 	assert.Empty(t, ds.QueryCert(other.String()+"."), "unknown peer IP should return nothing")
+}
+
+func TestDnsServer_parseQuery_TXTCarriesCertJSON(t *testing.T) {
+	ds, _ := newTestDnsServer(t)
+	myV4 := netip.MustParseAddr("10.0.0.1")
+	ds.pki = newTestPKI(t, `host "<one>"`, []netip.Addr{myV4})
+	want := ds.QueryCert(myV4.String() + ".")
+	require.Greater(t, len(want), 255)
+	require.Contains(t, want, `\`)
+
+	m := &dns.Msg{}
+	m.SetQuestion(myV4.String()+".", dns.TypeTXT)
+	ds.parseQuery(m, stubDNSWriter{})
+	require.Len(t, m.Answer, 1)
+
+	got := strings.Join(txtWireStrings(t, m.Answer[0]), "")
+	assert.Equal(t, want, got)
+}
+
+func TestTxtStrings(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{
+			name: "short string stays one character-string",
+			in:   `{"name":"host"}`,
+			want: []string{`{"name":"host"}`},
+		},
+		{
+			name: "exactly 255 bytes is one character-string",
+			in:   strings.Repeat("a", 255),
+			want: []string{strings.Repeat("a", 255)},
+		},
+		{
+			name: "256 bytes splits after 255",
+			in:   strings.Repeat("a", 256),
+			want: []string{strings.Repeat("a", 255), "a"},
+		},
+		{
+			name: "exactly 510 bytes is two full character-strings in order",
+			in:   strings.Repeat("a", 255) + strings.Repeat("b", 255),
+			want: []string{strings.Repeat("a", 255), strings.Repeat("b", 255)},
+		},
+		{
+			name: "backslash as the 255th byte stays with its character-string",
+			in:   strings.Repeat("a", 254) + `\` + "b",
+			want: []string{strings.Repeat("a", 254) + `\`, "b"},
+		},
+		{
+			name: "backslash opening the second character-string",
+			in:   strings.Repeat("a", 255) + `\` + "u003c",
+			want: []string{strings.Repeat("a", 255), `\` + "u003c"},
+		},
+		{
+			name: "backslash before digits is not read as a \\DDD escape",
+			in:   `a\065b`,
+			want: []string{`a\065b`},
+		},
+		{
+			name: "only backslashes still fill 255 bytes per character-string",
+			in:   strings.Repeat(`\`, 300),
+			want: []string{strings.Repeat(`\`, 255), strings.Repeat(`\`, 45)},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := &dns.TXT{
+				Hdr: dns.RR_Header{Name: "10.0.0.1.", Rrtype: dns.TypeTXT, Class: dns.ClassINET},
+				Txt: txtStrings(tc.in),
+			}
+			assert.Equal(t, tc.want, txtWireStrings(t, rr), "input %q", tc.in)
+		})
+	}
+}
+
+func txtWireStrings(t *testing.T, rr dns.RR) []string {
+	t.Helper()
+	buf := make([]byte, 4096)
+	end, err := dns.PackRR(rr, buf, 0, nil, false)
+	require.NoError(t, err)
+	rdata := buf[end-int(rr.Header().Rdlength) : end]
+
+	var out []string
+	for len(rdata) > 0 {
+		n := int(rdata[0])
+		require.LessOrEqual(t, 1+n, len(rdata), "character-string length runs past the rdata")
+		out = append(out, string(rdata[1:1+n]))
+		rdata = rdata[1+n:]
+	}
+	return out
 }
 
 func TestDnsServer_reload_disable_stopsRunningServer(t *testing.T) {
