@@ -478,8 +478,8 @@ func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, messageCounte
 	if err != nil {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(f.l).Debug("Error while validating inbound packet", "error", err, "packet", out)
-			return
 		}
+		return
 	}
 
 	dropReason := f.firewall.Drop(rxc.fwPacket.Packet, true, hostinfo, f.pki.GetCAPool(), rxc.ctCache.Get())
