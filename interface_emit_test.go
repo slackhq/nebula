@@ -39,7 +39,7 @@ func Test_statsEmitter_setsGauges(t *testing.T) {
 		hostMap:          hostMap,
 		inside:           &overlaytest.NoopTun{},
 		outside:          &udp.NoopConn{},
-		firewall:         &Firewall{Conntrack: &FirewallConntrack{Conns: map[firewall.Packet]*conn{}}},
+		firewall:         &Firewall{Conntrack: &FirewallConntrack{Conns: map[firewall.ConntrackKey]*conn{}}},
 		lightHouse:       lh,
 		pki:              &PKI{},
 		handshakeManager: NewHandshakeManager(l, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),

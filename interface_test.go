@@ -4,8 +4,11 @@ import (
 	"net/netip"
 	"testing"
 
+	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/overlaytest"
+	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -139,4 +142,43 @@ func TestReloadFirewall_BadRulesFailTheReload(t *testing.T) {
 	require.NoError(t, res.Err)
 	assert.True(t, res.Failed)
 	assert.Same(t, fw, f.firewall)
+}
+
+// routesTun is a NoopTun with a route table
+type routesTun struct {
+	overlaytest.NoopTun
+	routes *bart.Table[routing.Gateways]
+}
+
+func (t routesTun) RoutesFor(ip netip.Addr) routing.Gateways {
+	r, _ := t.routes.Lookup(ip)
+	return r
+}
+
+func TestInterface_SiblingPeers(t *testing.T) {
+	addr := netip.MustParseAddr
+	routes := new(bart.Table[routing.Gateways])
+	// a and b carry 198.51.100.0/24, the route names b by its v6 address
+	routes.Insert(netip.MustParsePrefix("198.51.100.0/24"), routing.Gateways{
+		routing.NewGateway(addr("192.0.2.2"), 1),
+		routing.NewGateway(addr("fd00::3"), 1),
+		routing.NewGateway(addr("192.0.2.5"), 1), // no tunnel to this one
+	})
+	routes.Insert(netip.MustParsePrefix("203.0.113.0/24"), routing.Gateways{routing.NewGateway(addr("192.0.2.2"), 1)})
+
+	hm := newHostMap(test.NewLogger())
+	a := &HostInfo{vpnAddrs: []netip.Addr{addr("192.0.2.2"), addr("fd00::2")}, localIndexId: 1}
+	b := &HostInfo{vpnAddrs: []netip.Addr{addr("192.0.2.3"), addr("fd00::3")}, localIndexId: 2}
+	c := &HostInfo{vpnAddrs: []netip.Addr{addr("192.0.2.4")}, localIndexId: 3}
+	for _, h := range []*HostInfo{a, b, c} {
+		hm.unlockedAddHostInfo(h, &Interface{})
+	}
+	f := &Interface{inside: routesTun{routes: routes}, hostMap: hm}
+
+	// Siblings come back as their first vpn address, the one conntrack keys on, whichever address the route names
+	assert.Equal(t, []netip.Addr{addr("192.0.2.3")}, f.siblingPeers(addr("198.51.100.5"), a, nil))
+	assert.Equal(t, []netip.Addr{addr("192.0.2.2")}, f.siblingPeers(addr("198.51.100.5"), b, nil))
+	assert.Empty(t, f.siblingPeers(addr("198.51.100.5"), c, nil), "not one of our gateways for the network")
+	assert.Empty(t, f.siblingPeers(addr("203.0.113.5"), a, nil), "a single gateway route has no siblings")
+	assert.Empty(t, f.siblingPeers(addr("192.0.2.3"), a, nil), "no route")
 }

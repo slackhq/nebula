@@ -26,6 +26,10 @@ type Packet struct {
 	RemotePort uint16
 	Protocol   uint8
 	Fragment   bool
+
+	// pad fills what would otherwise be trailing padding so maps hash and compare a ConntrackKey as one
+	// block of memory instead of field by field. It must always be zero.
+	pad [2]byte
 }
 
 func (fp *Packet) Copy() *Packet {
