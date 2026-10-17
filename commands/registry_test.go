@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"strings"
 	"testing"
@@ -45,17 +46,40 @@ func TestFlagUsageGoesToTheWriter(t *testing.T) {
 	})
 
 	merged := &bytes.Buffer{}
-	require.Error(t, r.DispatchArgs([]string{"emit", "-nope"}, "", NewStringWriter(merged)))
+	require.Error(t, r.DispatchArgs([]string{"emit", "-nope"}, NewStringWriter(merged)))
 	assert.Contains(t, merged.String(), "flag provided but not defined")
 }
 
-// TestDispatchDropsUnparseableLine pins sshd's behaviour for a line shlex rejects: no
-// answer at all. An operator with an unbalanced quote gets silence, as they always have.
-func TestDispatchDropsUnparseableLine(t *testing.T) {
+// TestDispatchReportsUnparseableLine: a line shlex rejects, an unbalanced quote, is a
+// failure the user is told about.
+func TestDispatchReportsUnparseableLine(t *testing.T) {
 	out := &bytes.Buffer{}
-	testRegistry().Dispatch(`served "unterminated`, NewStringWriter(out))
-	assert.Empty(t, out.String())
+	err := testRegistry().Dispatch(`served "unterminated`, NewStringWriter(out))
+
+	var f *Failure
+	require.ErrorAs(t, err, &f)
+	assert.Equal(t, f.Msg+"\n", out.String())
+	assert.Contains(t, out.String(), "could not parse the command line: ")
 }
+
+// TestFailTellsTheUserAndTheSurface: Fail writes the message and returns it as a Failure;
+// when the write fails, the user heard nothing, so the write error is what comes back.
+func TestFailTellsTheUserAndTheSurface(t *testing.T) {
+	out := &bytes.Buffer{}
+	err := Fail(NewStringWriter(out), "no such tunnel")
+	var f *Failure
+	require.ErrorAs(t, err, &f)
+	assert.Equal(t, "no such tunnel", f.Msg)
+	assert.Equal(t, "no such tunnel\n", out.String())
+
+	err = Fail(NewStringWriter(failingWriter{}), "no such tunnel")
+	require.EqualError(t, err, "gone")
+	assert.NotErrorAs(t, err, &f)
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("gone") }
 
 // TestAllSortsByName: registration order does not matter.
 func TestAllSortsByName(t *testing.T) {
@@ -72,8 +96,8 @@ func TestAllSortsByName(t *testing.T) {
 }
 
 // TestHelpFlagAgreesWithHelpCommand pins that -h answers through the registered help
-// command. On a clone, help is bound to the source, so a command registered only on the
-// clone is known to neither -h nor `help <name>`, and the two never disagree.
+// command, and that help on a clone describes the clone: a command registered only there
+// is known to both -h and `help <name>`, and one withheld from it is known to neither.
 func TestHelpFlagAgreesWithHelpCommand(t *testing.T) {
 	r := testRegistry()
 	c := r.Clone()
@@ -88,10 +112,65 @@ func TestHelpFlagAgreesWithHelpCommand(t *testing.T) {
 	cmd := &bytes.Buffer{}
 	c.Dispatch("help logout", NewStringWriter(cmd))
 	assert.Equal(t, cmd.String(), flag.String())
-	assert.Equal(t, "Command not available logout\n", flag.String())
+	assert.Equal(t, "logout - ends the session\n", flag.String())
+
+	// The source never learns of it.
+	src := &bytes.Buffer{}
+	r.Dispatch("help logout", NewStringWriter(src))
+	assert.Equal(t, "Command not available logout\n", src.String())
 
 	// And a command both hold is described either way.
 	flag.Reset()
 	c.Dispatch("served -h", NewStringWriter(flag))
 	assert.Equal(t, "served - a command this surface serves\n", flag.String())
+}
+
+// TestCloneHelpListsTheClone: the command list help prints is the clone's, so a clone
+// that withholds a command does not name it, and the source still does.
+func TestCloneHelpListsTheClone(t *testing.T) {
+	r := testRegistry()
+	c := New()
+	c.Register(r.Get("served"))
+	c = c.Clone()
+
+	out := &bytes.Buffer{}
+	c.Dispatch("help", NewStringWriter(out))
+	assert.Equal(t, "Available commands:\n"+
+		"help - prints available commands or help <command> for specific usage info\n"+
+		"served - a command this surface serves\n\n", out.String())
+
+	out.Reset()
+	c.Dispatch("help withheld", NewStringWriter(out))
+	assert.Equal(t, "Command not available withheld\n", out.String())
+
+	out.Reset()
+	r.Dispatch("help withheld", NewStringWriter(out))
+	assert.Equal(t, "withheld - a command this surface withholds\n", out.String())
+}
+
+// TestDispatchReturnsTheCommandsError: what the callback returns reaches the caller, so
+// a surface can log it.
+func TestDispatchReturnsTheCommandsError(t *testing.T) {
+	r := New()
+	r.Register(&Command{
+		Name: "fails",
+		Callback: func(fs any, a []string, w StringWriter) error {
+			return errors.New("boom")
+		},
+	})
+
+	out := &bytes.Buffer{}
+	require.EqualError(t, r.Dispatch("fails", NewStringWriter(out)), "boom")
+	assert.Empty(t, out.String(), "a command's own error is not shown; the command speaks for itself")
+}
+
+// TestUnknownCommandNamesTheWord: only the first word is looked up, so only it is
+// reported, followed by the command list, and the line is a failure to the surface.
+func TestUnknownCommandNamesTheWord(t *testing.T) {
+	out := &bytes.Buffer{}
+	err := testRegistry().Dispatch(`nope "with args"`, NewStringWriter(out))
+	var f *Failure
+	require.ErrorAs(t, err, &f)
+	assert.Equal(t, "did not understand: nope", f.Msg)
+	assert.True(t, strings.HasPrefix(out.String(), "did not understand: nope\nAvailable commands:\n"), out.String())
 }

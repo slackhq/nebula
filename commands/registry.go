@@ -38,7 +38,8 @@ func (r *Registry) registerHelp() {
 	})
 }
 
-// Register adds a command that can be run by a user.
+// Register adds a command that can be run by a user. A command registered under a name
+// already held replaces it; see Clone for what that means for Help.
 func (r *Registry) Register(c *Command) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -77,29 +78,32 @@ func (r *Registry) All() []*Command {
 	return cmds
 }
 
-// Clone returns a copy holding the same commands.
+// Clone returns a copy holding the same commands, with help bound to the copy: a
+// command registered on the clone alone is listed and described there, and one the
+// clone withholds is not. That rebinding replaces whatever was registered under Help on
+// the source, built-in or not.
 func (r *Registry) Clone() *Registry {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return &Registry{commands: maps.Clone(r.commands)}
+	c := &Registry{commands: maps.Clone(r.commands)}
+	r.mu.RUnlock()
+	c.registerHelp()
+	return c
 }
 
-// Dispatch parses a command line and runs it, reporting problems to w.
-func (r *Registry) Dispatch(line string, w StringWriter) {
-	// A line shlex cannot split, an unbalanced quote, gets no answer. sshd was silent
-	// here too; this is a relocation, so it stays silent.
+// Dispatch parses a command line and runs it, reporting problems to w. The error is for
+// the caller to log, not to show; see CommandCallback.
+func (r *Registry) Dispatch(line string, w StringWriter) error {
+	// A line shlex cannot split, an unbalanced quote.
 	args, err := shlex.Split(line, true)
 	if err != nil {
-		return
+		return Fail(w, "could not parse the command line: "+err.Error())
 	}
 
-	_ = r.DispatchArgs(args, line, w)
+	return r.DispatchArgs(args, w)
 }
 
-// DispatchArgs runs an already tokenized command line. orig is what the user typed,
-// used only for the "did not understand" message; callers that have no raw line may
-// pass "" and the joined args are used instead.
-func (r *Registry) DispatchArgs(args []string, orig string, w StringWriter) error {
+// DispatchArgs runs an already tokenized command line. The error is as for Dispatch.
+func (r *Registry) DispatchArgs(args []string, w StringWriter) error {
 	if len(args) == 0 {
 		r.dumpCommands(w)
 		return nil
@@ -107,16 +111,14 @@ func (r *Registry) DispatchArgs(args []string, orig string, w StringWriter) erro
 
 	c := r.Get(Name(args[0]))
 	if c == nil {
-		if orig == "" {
-			orig = strings.Join(args, " ")
-		}
-
-		if err := w.WriteLine(fmt.Sprintf("did not understand: %s", orig)); err != nil {
+		// Only the first word was looked up, so only it is named.
+		msg := fmt.Sprintf("did not understand: %s", args[0])
+		if err := w.WriteLine(msg); err != nil {
 			return err
 		}
 
 		r.dumpCommands(w)
-		return nil
+		return &Failure{Msg: msg}
 	}
 
 	if checkHelpArgs(args) {
@@ -154,7 +156,7 @@ func (r *Registry) help(a []string, w StringWriter) error {
 	// We are printing a specific commands help text
 	cmd := r.Get(Name(a[0]))
 	if cmd == nil {
-		return w.WriteLine("Command not available " + a[0])
+		return Fail(w, "Command not available "+a[0])
 	}
 
 	if err := w.WriteLine(fmt.Sprintf("%s - %s", cmd.Name, cmd.ShortDescription)); err != nil {
