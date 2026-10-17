@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/commands"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/overlay"
 )
@@ -47,6 +48,7 @@ type Control struct {
 
 	f                      *Interface
 	l                      *slog.Logger
+	commands               *commands.Registry
 	ctx                    context.Context
 	cancel                 context.CancelFunc
 	sshStart               func()
@@ -370,6 +372,10 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 		shutdown(h)
 	}
 	return
+}
+
+func (c *Control) Commands() *commands.Registry {
+	return c.commands
 }
 
 func (c *Control) Device() overlay.Device {

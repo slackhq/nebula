@@ -10,7 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/armon/go-radix"
+	"github.com/slackhq/nebula/commands"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -29,10 +29,9 @@ type SSHServer struct {
 	trustedKeys map[string]map[string]bool
 	trustedCAs  []ssh.PublicKey
 
-	// List of available commands
-	helpCommand *Command
-	commands    *radix.Tree
-	listener    atomic.Pointer[net.Listener]
+	// Available commands.
+	commands *commands.Registry
+	listener atomic.Pointer[net.Listener]
 
 	// runs counts the Runs that are listening. A reload's Run can start before the one it replaced has returned
 	runs atomic.Int32
@@ -44,14 +43,14 @@ type SSHServer struct {
 	ctx context.Context
 }
 
-// NewSSHServer creates a new ssh server rigged with default commands and prepares to listen.
-// The ssh server's context is parented off the supplied ctx so cancelling it
-// (e.g. on Control.Stop) tears down active sessions and closes the listener.
-func NewSSHServer(ctx context.Context, l *slog.Logger) (*SSHServer, error) {
+// NewSSHServer creates a new ssh server serving the supplied command registry and
+// prepares to listen. The ssh server's context is parented off the supplied ctx so
+// cancelling it (e.g. on Control.Stop) tears down active sessions and closes the listener.
+func NewSSHServer(ctx context.Context, l *slog.Logger, reg *commands.Registry) (*SSHServer, error) {
 	s := &SSHServer{
 		trustedKeys: make(map[string]map[string]bool),
 		l:           l,
-		commands:    radix.New(),
+		commands:    reg,
 		ctx:         ctx,
 	}
 
@@ -96,14 +95,6 @@ func NewSSHServer(ctx context.Context, l *slog.Logger) (*SSHServer, error) {
 
 	s.authenticate = cc.Authenticate
 	s.config.Store(s.newConfig())
-
-	s.RegisterCommand(&Command{
-		Name:             "help",
-		ShortDescription: "prints available commands or help <command> for specific usage info",
-		Callback: func(a any, args []string, w StringWriter) error {
-			return helpCallback(s.commands, args, w)
-		},
-	})
 
 	return s, nil
 }
@@ -187,11 +178,6 @@ func (s *SSHServer) AddAuthorizedKey(user, pubKey string) error {
 		"sshUser", user,
 	)
 	return nil
-}
-
-// RegisterCommand adds a command that can be run by a user, by default only `help` is available
-func (s *SSHServer) RegisterCommand(c *Command) {
-	s.commands.Insert(c.Name, c)
 }
 
 // Run begins listening and accepting connections. Each invocation derives a fresh per-Run context

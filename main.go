@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/slackhq/nebula/commands"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/cpupick"
 	"github.com/slackhq/nebula/noiseutil"
@@ -71,7 +72,11 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	}
 	l.Info("Firewall started", "firewallHashes", fw.GetRuleHashes())
 
-	ssh, err := sshd.NewSSHServer(ctx, l.With("subsystem", "sshd"))
+	// The command registry is shared by every surface that exposes these commands, so a
+	// command cannot reach one of them without reaching the others.
+	cmdRegistry := commands.New()
+
+	ssh, err := sshd.NewSSHServer(ctx, l.With("subsystem", "sshd"), cmdRegistry)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Error while creating SSH server", err)
 	}
@@ -343,13 +348,14 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		return nil, nil
 	}
 
-	attachCommands(l, c, ssh, ifce)
+	attachCommands(l, c, cmdRegistry, ifce)
 
 	networkChanges := udp.NewNetworkChangeMonitor(ctx, l, c)
 
 	return &Control{
 		state:                  StateReady,
 		f:                      ifce,
+		commands:               cmdRegistry,
 		l:                      l,
 		ctx:                    ctx,
 		cancel:                 cancel,

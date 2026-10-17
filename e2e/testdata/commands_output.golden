@@ -1,0 +1,543 @@
+$ version
+e2e-test
+
+$ version -json
+e2e-test
+
+$ version -pretty
+e2e-test
+
+$ device-info
+name= cidr=[10.222.0.1/24]
+
+$ device-info -json
+{"name":"","cidr":["10.222.0.1/24"]}
+
+$ device-info -pretty
+{
+    "name": "",
+    "cidr": [
+        "10.222.0.1/24"
+    ]
+}
+
+$ list-hostmap
+
+$ list-hostmap -json
+[]
+
+$ list-hostmap -pretty
+[]
+
+$ list-hostmap -by-index
+
+$ list-hostmap -json -by-index
+[]
+
+$ list-hostmap -pretty -by-index
+[]
+
+$ list-pending-hostmap
+[10.222.0.9]: []
+
+$ list-pending-hostmap -json
+[{"vpnAddrs":["10.222.0.9"],"localIndex":<n>,"remoteIndex":<n>,"remoteAddrs":[],"cert":null,"messageCounter":<n>,"currentRemote":"","currentRelaysToMe":[],"currentRelaysThroughMe":[]}]
+
+$ list-pending-hostmap -pretty
+[
+    {
+        "vpnAddrs": [
+            "10.222.0.9"
+        ],
+        "localIndex": <n>,
+        "remoteIndex": <n>,
+        "remoteAddrs": [],
+        "cert": null,
+        "messageCounter": <n>,
+        "currentRemote": "",
+        "currentRelaysToMe": [],
+        "currentRelaysThroughMe": []
+    }
+]
+
+$ list-pending-hostmap -by-index
+
+$ list-pending-hostmap -json -by-index
+[]
+
+$ list-pending-hostmap -pretty -by-index
+[]
+
+$ list-lighthouse-addrmap
+10.222.0.9: {}
+
+$ list-lighthouse-addrmap -json
+[{"vpnAddr":"10.222.0.9","addrs":{}}]
+
+$ list-lighthouse-addrmap -pretty
+[
+    {
+        "vpnAddr": "10.222.0.9",
+        "addrs": {}
+    }
+]
+
+$ print-cert
+{
+	"details": {
+		"curve": "CURVE25519",
+		"groups": [],
+		"isCa": false,
+		"issuer": "<hex>",
+		"name": "output-golden",
+		"networks": [
+			"10.222.0.1/24"
+		],
+		"notAfter": "<time>",
+		"notBefore": "<time>",
+		"publicKey": "<hex>",
+		"unsafeNetworks": []
+	},
+	"fingerprint": "<hex>",
+	"signature": "<hex>",
+	"version": 1
+}
+
+$ print-cert -json
+{"details":{"curve":"CURVE25519","groups":[],"isCa":false,"issuer":"<hex>","name":"output-golden","networks":["10.222.0.1/24"],"notAfter":"<time>","notBefore":"<time>","publicKey":"<hex>","unsafeNetworks":[]},"fingerprint":"<hex>","signature":"<hex>","version":1}\ No newline at end of output
+
+$ print-cert -pretty
+{
+    "details": {
+        "curve": "CURVE25519",
+        "groups": [],
+        "isCa": false,
+        "issuer": "<hex>",
+        "name": "output-golden",
+        "networks": [
+            "10.222.0.1/24"
+        ],
+        "notAfter": "<time>",
+        "notBefore": "<time>",
+        "publicKey": "<hex>",
+        "unsafeNetworks": []
+    },
+    "fingerprint": "<hex>",
+    "signature": "<hex>",
+    "version": 1
+}\ No newline at end of output
+
+$ print-cert -raw
+-----BEGIN NEBULA CERTIFICATE-----
+<pem>
+-----END NEBULA CERTIFICATE-----
+
+$ print-cert -json -raw
+{"details":{"curve":"CURVE25519","groups":[],"isCa":false,"issuer":"<hex>","name":"output-golden","networks":["10.222.0.1/24"],"notAfter":"<time>","notBefore":"<time>","publicKey":"<hex>","unsafeNetworks":[]},"fingerprint":"<hex>","signature":"<hex>","version":1}\ No newline at end of output
+
+$ print-cert -pretty -raw
+{
+    "details": {
+        "curve": "CURVE25519",
+        "groups": [],
+        "isCa": false,
+        "issuer": "<hex>",
+        "name": "output-golden",
+        "networks": [
+            "10.222.0.1/24"
+        ],
+        "notAfter": "<time>",
+        "notBefore": "<time>",
+        "publicKey": "<hex>",
+        "unsafeNetworks": []
+    },
+    "fingerprint": "<hex>",
+    "signature": "<hex>",
+    "version": 1
+}\ No newline at end of output
+
+$ print-cert 10.222.0.9
+Could not find tunnel for vpn addr: 10.222.0.9
+
+$ print-cert -json 10.222.0.9
+Could not find tunnel for vpn addr: 10.222.0.9
+
+$ print-cert -pretty 10.222.0.9
+Could not find tunnel for vpn addr: 10.222.0.9
+
+$ print-cert 10.222.0.250
+Could not find tunnel for vpn addr: 10.222.0.250
+
+$ print-cert -json 10.222.0.250
+Could not find tunnel for vpn addr: 10.222.0.250
+
+$ print-cert -pretty 10.222.0.250
+Could not find tunnel for vpn addr: 10.222.0.250
+
+$ print-cert not-an-address
+The provided vpn addr could not be parsed: not-an-address
+
+$ print-cert -json not-an-address
+The provided vpn addr could not be parsed: not-an-address
+
+$ print-cert -pretty not-an-address
+The provided vpn addr could not be parsed: not-an-address
+
+$ print-tunnel
+No vpn address was provided
+
+$ print-tunnel -json
+flag provided but not defined: -json
+Usage:
+  -pretty
+    	pretty prints json
+
+$ print-tunnel -pretty
+No vpn address was provided
+
+$ print-tunnel 10.222.0.9
+Could not find tunnel for vpn addr: 10.222.0.9
+
+$ print-tunnel -json 10.222.0.9
+flag provided but not defined: -json
+Usage:
+  -pretty
+    	pretty prints json
+
+$ print-tunnel -pretty 10.222.0.9
+Could not find tunnel for vpn addr: 10.222.0.9
+
+$ print-tunnel 10.222.0.250
+Could not find tunnel for vpn addr: 10.222.0.250
+
+$ print-tunnel -json 10.222.0.250
+flag provided but not defined: -json
+Usage:
+  -pretty
+    	pretty prints json
+
+$ print-tunnel -pretty 10.222.0.250
+Could not find tunnel for vpn addr: 10.222.0.250
+
+$ print-relays
+{"Relays":null}
+
+$ print-relays -json
+flag provided but not defined: -json
+Usage:
+  -pretty
+    	pretty prints json
+
+$ print-relays -pretty
+{
+    "Relays": null
+}
+
+$ query-lighthouse
+No vpn address was provided
+
+$ query-lighthouse -json
+The provided vpn address could not be parsed: -json
+
+$ query-lighthouse -pretty
+The provided vpn address could not be parsed: -pretty
+
+$ query-lighthouse 10.222.0.9
+{}
+
+$ query-lighthouse -json 10.222.0.9
+The provided vpn address could not be parsed: -json
+
+$ query-lighthouse -pretty 10.222.0.9
+The provided vpn address could not be parsed: -pretty
+
+$ query-lighthouse not-an-address
+The provided vpn address could not be parsed: not-an-address
+
+$ query-lighthouse -json not-an-address
+The provided vpn address could not be parsed: -json
+
+$ query-lighthouse -pretty not-an-address
+The provided vpn address could not be parsed: -pretty
+
+$ log-level
+Log level is not reconfigurable on this logger
+
+$ log-level -json
+Log level is not reconfigurable on this logger
+
+$ log-level -pretty
+Log level is not reconfigurable on this logger
+
+$ log-level debug
+Log level is not reconfigurable on this logger
+
+$ log-level -json debug
+Log level is not reconfigurable on this logger
+
+$ log-level -pretty debug
+Log level is not reconfigurable on this logger
+
+$ log-level bogus
+Log level is not reconfigurable on this logger
+
+$ log-level -json bogus
+Log level is not reconfigurable on this logger
+
+$ log-level -pretty bogus
+Log level is not reconfigurable on this logger
+
+$ log-level info
+Log level is not reconfigurable on this logger
+
+$ log-level -json info
+Log level is not reconfigurable on this logger
+
+$ log-level -pretty info
+Log level is not reconfigurable on this logger
+
+$ log-format
+Log format is not reconfigurable on this logger
+
+$ log-format -json
+Log format is not reconfigurable on this logger
+
+$ log-format -pretty
+Log format is not reconfigurable on this logger
+
+$ log-format json
+Log format is not reconfigurable on this logger
+
+$ log-format -json json
+Log format is not reconfigurable on this logger
+
+$ log-format -pretty json
+Log format is not reconfigurable on this logger
+
+$ log-format text
+Log format is not reconfigurable on this logger
+
+$ log-format -json text
+Log format is not reconfigurable on this logger
+
+$ log-format -pretty text
+Log format is not reconfigurable on this logger
+
+$ change-remote
+No vpn address was provided
+
+$ change-remote -json
+flag provided but not defined: -json
+Usage:
+  -address string
+    	The new remote address, ip:port
+
+$ change-remote -pretty
+flag provided but not defined: -pretty
+Usage:
+  -address string
+    	The new remote address, ip:port
+
+$ change-remote 10.222.0.9
+No address was provided
+
+$ change-remote -json 10.222.0.9
+flag provided but not defined: -json
+Usage:
+  -address string
+    	The new remote address, ip:port
+
+$ change-remote -pretty 10.222.0.9
+flag provided but not defined: -pretty
+Usage:
+  -address string
+    	The new remote address, ip:port
+
+$ change-remote -address 10.94.0.10:4242 10.222.0.9
+Could not find tunnel for vpn address: 10.222.0.9
+
+$ change-remote -json -address 10.94.0.10:4242 10.222.0.9
+flag provided but not defined: -json
+Usage:
+  -address string
+    	The new remote address, ip:port
+
+$ change-remote -pretty -address 10.94.0.10:4242 10.222.0.9
+flag provided but not defined: -pretty
+Usage:
+  -address string
+    	The new remote address, ip:port
+
+$ change-remote -address 10.94.0.10:4242 10.222.0.250
+Could not find tunnel for vpn address: 10.222.0.250
+
+$ change-remote -json -address 10.94.0.10:4242 10.222.0.250
+flag provided but not defined: -json
+Usage:
+  -address string
+    	The new remote address, ip:port
+
+$ change-remote -pretty -address 10.94.0.10:4242 10.222.0.250
+flag provided but not defined: -pretty
+Usage:
+  -address string
+    	The new remote address, ip:port
+
+$ create-tunnel
+No vpn address was provided
+
+$ create-tunnel -json
+flag provided but not defined: -json
+Usage:
+  -address string
+    	Optionally provide a real remote address, ip:port 
+
+$ create-tunnel -pretty
+flag provided but not defined: -pretty
+Usage:
+  -address string
+    	Optionally provide a real remote address, ip:port 
+
+$ create-tunnel 10.222.0.9
+Tunnel already handshaking
+
+$ create-tunnel -json 10.222.0.9
+flag provided but not defined: -json
+Usage:
+  -address string
+    	Optionally provide a real remote address, ip:port 
+
+$ create-tunnel -pretty 10.222.0.9
+flag provided but not defined: -pretty
+Usage:
+  -address string
+    	Optionally provide a real remote address, ip:port 
+
+$ create-tunnel -address 10.94.0.10:4242 10.222.0.10
+Created
+
+$ create-tunnel -json -address 10.94.0.10:4242 10.222.0.10
+flag provided but not defined: -json
+Usage:
+  -address string
+    	Optionally provide a real remote address, ip:port 
+
+$ create-tunnel -pretty -address 10.94.0.10:4242 10.222.0.10
+flag provided but not defined: -pretty
+Usage:
+  -address string
+    	Optionally provide a real remote address, ip:port 
+
+$ create-tunnel not-an-address
+The provided vpn address could not be parsed: not-an-address
+
+$ create-tunnel -json not-an-address
+flag provided but not defined: -json
+Usage:
+  -address string
+    	Optionally provide a real remote address, ip:port 
+
+$ create-tunnel -pretty not-an-address
+flag provided but not defined: -pretty
+Usage:
+  -address string
+    	Optionally provide a real remote address, ip:port 
+
+$ close-tunnel
+No vpn address was provided
+
+$ close-tunnel -json
+flag provided but not defined: -json
+Usage:
+  -local-only
+    	Disables notifying the remote that the tunnel is shutting down
+
+$ close-tunnel -pretty
+flag provided but not defined: -pretty
+Usage:
+  -local-only
+    	Disables notifying the remote that the tunnel is shutting down
+
+$ close-tunnel 10.222.0.250
+Could not find tunnel for vpn address: 10.222.0.250
+
+$ close-tunnel -json 10.222.0.250
+flag provided but not defined: -json
+Usage:
+  -local-only
+    	Disables notifying the remote that the tunnel is shutting down
+
+$ close-tunnel -pretty 10.222.0.250
+flag provided but not defined: -pretty
+Usage:
+  -local-only
+    	Disables notifying the remote that the tunnel is shutting down
+
+$ close-tunnel not-an-address
+The provided vpn address could not be parsed: not-an-address
+
+$ close-tunnel -json not-an-address
+flag provided but not defined: -json
+Usage:
+  -local-only
+    	Disables notifying the remote that the tunnel is shutting down
+
+$ close-tunnel -pretty not-an-address
+flag provided but not defined: -pretty
+Usage:
+  -local-only
+    	Disables notifying the remote that the tunnel is shutting down
+
+$ help
+Available commands:
+change-remote - Changes the remote address used in the tunnel for the provided vpn addr
+close-tunnel - Closes a tunnel for the provided vpn addr
+create-tunnel - Creates a tunnel for the provided vpn address
+device-info - Prints information about the network device.
+help - prints available commands or help <command> for specific usage info
+list-hostmap - List all known previously connected hosts
+list-lighthouse-addrmap - List all lighthouse map entries
+list-pending-hostmap - List all handshaking hosts
+log-format - Gets or sets the current log format
+log-level - Gets or sets the current log level
+print-cert - Prints the current certificate being used or the certificate for the provided vpn addr
+print-relays - Prints json details about all relay info
+print-tunnel - Prints json details about a tunnel for the provided vpn addr
+query-lighthouse - Query the lighthouses for the provided vpn address
+reload - Reloads configuration from disk, same as sending HUP to the process
+version - Prints the currently running version of nebula
+
+
+$ help -json
+Command not available -json
+
+$ help -pretty
+Command not available -pretty
+
+$ help print-cert
+print-cert - Prints the current certificate being used or the certificate for the provided vpn addr
+  -json
+    	outputs as json
+  -pretty
+    	pretty prints json, assumes -json
+  -raw
+    	raw prints the PEM encoded certificate, not compatible with -json or -pretty
+
+$ help -json print-cert
+Command not available -json
+
+$ help -pretty print-cert
+Command not available -pretty
+
+$ reload
+Reloading config
+Config reload failed, the new config did not load: no config files found at 
+
+$ reload -json
+Reloading config
+Config reload failed, the new config did not load: no config files found at 
+
+$ reload -pretty
+Reloading config
+Config reload failed, the new config did not load: no config files found at 
+

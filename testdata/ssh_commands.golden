@@ -1,0 +1,94 @@
+change-remote
+  short: Changes the remote address used in the tunnel for the provided vpn addr
+  help: 
+  flags:
+  -address string
+    	The new remote address, ip:port
+close-tunnel
+  short: Closes a tunnel for the provided vpn addr
+  help: 
+  flags:
+  -local-only
+    	Disables notifying the remote that the tunnel is shutting down
+create-tunnel
+  short: Creates a tunnel for the provided vpn address
+  help: The lighthouses will be queried for real addresses but you can provide one as well.
+  flags:
+  -address string
+    	Optionally provide a real remote address, ip:port 
+device-info
+  short: Prints information about the network device.
+  help: 
+  flags:
+  -json
+    	outputs as json with more information
+  -pretty
+    	pretty prints json, assumes -json
+help
+  short: prints available commands or help <command> for specific usage info
+  help: 
+list-hostmap
+  short: List all known previously connected hosts
+  help: 
+  flags:
+  -by-index
+    	gets all hosts in the hostmap from the index table
+  -json
+    	outputs as json with more information
+  -pretty
+    	pretty prints json, assumes -json
+list-lighthouse-addrmap
+  short: List all lighthouse map entries
+  help: 
+  flags:
+  -json
+    	outputs as json with more information
+  -pretty
+    	pretty prints json, assumes -json
+list-pending-hostmap
+  short: List all handshaking hosts
+  help: 
+  flags:
+  -by-index
+    	gets all hosts in the hostmap from the index table
+  -json
+    	outputs as json with more information
+  -pretty
+    	pretty prints json, assumes -json
+log-format
+  short: Gets or sets the current log format
+  help: 
+log-level
+  short: Gets or sets the current log level
+  help: 
+print-cert
+  short: Prints the current certificate being used or the certificate for the provided vpn addr
+  help: 
+  flags:
+  -json
+    	outputs as json
+  -pretty
+    	pretty prints json, assumes -json
+  -raw
+    	raw prints the PEM encoded certificate, not compatible with -json or -pretty
+print-relays
+  short: Prints json details about all relay info
+  help: 
+  flags:
+  -pretty
+    	pretty prints json
+print-tunnel
+  short: Prints json details about a tunnel for the provided vpn addr
+  help: 
+  flags:
+  -pretty
+    	pretty prints json
+query-lighthouse
+  short: Query the lighthouses for the provided vpn address
+  help: This command is asynchronous. Only currently known udp addresses will be printed.
+reload
+  short: Reloads configuration from disk, same as sending HUP to the process
+  help: 
+version
+  short: Prints the currently running version of nebula
+  help: 
