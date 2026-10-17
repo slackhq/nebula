@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
@@ -21,9 +22,11 @@ import (
 type StdConn struct {
 	sysFd  int
 	closed atomic.Bool
-	isV4   bool
-	l      *slog.Logger
-	batch  int
+	// Held by ListenOut while it runs so Close cannot free the fd under a reader in a callback.
+	reading sync.RWMutex
+	isV4    bool
+	l       *slog.Logger
+	batch   int
 
 	// bw owns the sendmmsg/UDP-GSO transmit path: the per-queue write
 	// scratch and the GSO capability state probed at socket creation. See
@@ -246,6 +249,12 @@ func getFrom(names [][]byte, i int, isV4 bool) netip.AddrPort {
 }
 
 func (u *StdConn) ListenOut(r EncReader, flush func()) error {
+	u.reading.RLock()
+	defer u.reading.RUnlock()
+	if u.closed.Load() {
+		return net.ErrClosed
+	}
+
 	bufSize := MTU
 	cmsgSpace := 0
 	if u.groSupported {
@@ -452,6 +461,9 @@ func (u *StdConn) Close() error {
 	// returns ENOTCONN but still wakes it, so ignore the error.
 	// The reader then sees closed and stops touching the fd, making the Close below safe.
 	_ = unix.Shutdown(u.sysFd, unix.SHUT_RDWR)
+	// Wait for the reader to leave ListenOut, its next read must not hit a reused fd number.
+	u.reading.Lock()
+	defer u.reading.Unlock()
 	return unix.Close(u.sysFd)
 }
 
