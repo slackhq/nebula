@@ -1,12 +1,16 @@
 package nebula
 
 import (
+	"log/slog"
 	"net/netip"
 	"testing"
 	"time"
 
+	"github.com/flynn/noise"
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/cert"
+	ct "github.com/slackhq/nebula/cert_test"
+	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
@@ -233,6 +237,56 @@ func TestHandleIncomingDispatch(t *testing.T) {
 		hm.HandleIncoming(via, pkt, h)
 		assert.Empty(t, hm.indexes, "orphan stage-2 must not create state")
 	})
+}
+
+func TestBeginHandshakeBlocklistedCertLogLevel(t *testing.T) {
+	ca, _, caKey, _ := ct.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	pool := ct.NewTestCAPool(ca)
+
+	newCredential := func(name, network string) (cert.Certificate, *handshake.Credential) {
+		c, _, rawKey, _ := ct.NewTestCert(cert.Version2, cert.Curve_CURVE25519, ca, caKey,
+			name, ca.NotBefore(), ca.NotAfter(), []netip.Prefix{netip.MustParsePrefix(network)}, nil, nil)
+		privateKey, _, _, err := cert.UnmarshalPrivateKeyFromPEM(rawKey)
+		require.NoError(t, err)
+		certBytes, err := c.MarshalForHandshakes()
+		require.NoError(t, err)
+		cipherSuite := noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
+		return c, handshake.NewCredential(c, certBytes, privateKey, cipherSuite)
+	}
+
+	initiatorCert, initiatorCredential := newCredential("initiator", "10.0.0.1/24")
+	_, responderCredential := newCredential("responder", "10.0.0.2/24")
+	fingerprint, err := initiatorCert.Fingerprint()
+	require.NoError(t, err)
+	pool.BlocklistFingerprint(fingerprint)
+
+	initiator, err := handshake.NewMachine(cert.Version2,
+		func(cert.Version) *handshake.Credential { return initiatorCredential },
+		func(c cert.Certificate) (*cert.CachedCertificate, error) {
+			return pool.VerifyCertificate(time.Now(), c)
+		},
+		func() (uint32, error) { return 1, nil }, true, header.HandshakeIXPSK0)
+	require.NoError(t, err)
+	packet, err := initiator.Initiate(nil)
+	require.NoError(t, err)
+
+	handler := &capturingHandler{}
+	logger := slog.New(handler)
+	pki := &PKI{}
+	pki.cs.Store(&CertState{initiatingVersion: cert.Version2, v2Credential: responderCredential})
+	pki.caPool.Store(pool)
+	hm := &HandshakeManager{f: &Interface{pki: pki, l: logger}}
+	via := ViaSender{UdpAddr: netip.MustParseAddrPort("198.51.100.7:4242")}
+
+	hm.beginHandshake(via, packet, nil)
+	entry := findEntry(t, handler.entries, "Failed to process handshake packet")
+	assert.Equal(t, slog.LevelDebug, entry.Level)
+	require.ErrorIs(t, entry.Attrs["error"].(error), cert.ErrBlockListed)
+
+	handler.entries = nil
+	hm.beginHandshake(via, nil, nil)
+	entry = findEntry(t, handler.entries, "Failed to process handshake packet")
+	assert.Equal(t, slog.LevelError, entry.Level)
 }
 
 // Test_PendingHandshakeHasRemotes covers create-tunnel -address: a pending hostinfo must already

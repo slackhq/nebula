@@ -717,7 +717,11 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 
 	response, result, err := machine.ProcessPacket(nil, packet)
 	if err != nil {
-		f.l.Error("Failed to process handshake packet", "from", via, "error", err)
+		level := slog.LevelError
+		if errors.Is(err, cert.ErrBlockListed) {
+			level = slog.LevelDebug
+		}
+		f.l.Log(context.Background(), level, "Failed to process handshake packet", "from", via, "error", err)
 		return
 	}
 
