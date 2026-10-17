@@ -8,6 +8,7 @@ import (
 
 	"github.com/flynn/noise"
 	"github.com/gaissmai/bart"
+	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
 	ct "github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/handshake"
@@ -239,7 +240,7 @@ func TestHandleIncomingDispatch(t *testing.T) {
 	})
 }
 
-func TestBeginHandshakeBlocklistedCertLogLevel(t *testing.T) {
+func TestBlocklistedHandshakeLogLevelAndCounter(t *testing.T) {
 	ca, _, caKey, _ := ct.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
 	pool := ct.NewTestCAPool(ca)
 
@@ -255,7 +256,7 @@ func TestBeginHandshakeBlocklistedCertLogLevel(t *testing.T) {
 	}
 
 	initiatorCert, initiatorCredential := newCredential("initiator", "10.0.0.1/24")
-	_, responderCredential := newCredential("responder", "10.0.0.2/24")
+	responderCert, responderCredential := newCredential("responder", "10.0.0.2/24")
 	fingerprint, err := initiatorCert.Fingerprint()
 	require.NoError(t, err)
 	pool.BlocklistFingerprint(fingerprint)
@@ -275,18 +276,51 @@ func TestBeginHandshakeBlocklistedCertLogLevel(t *testing.T) {
 	pki := &PKI{}
 	pki.cs.Store(&CertState{initiatingVersion: cert.Version2, v2Credential: responderCredential})
 	pki.caPool.Store(pool)
-	hm := &HandshakeManager{f: &Interface{pki: pki, l: logger}}
+	hm := NewHandshakeManager(logger, nil, nil, nil, defaultHandshakeConfig)
+	hm.metricRejectedBlocklisted = metrics.NewCounter()
+	hm.f = &Interface{pki: pki, l: logger}
 	via := ViaSender{UdpAddr: netip.MustParseAddrPort("198.51.100.7:4242")}
 
 	hm.beginHandshake(via, packet, nil)
 	entry := findEntry(t, handler.entries, "Failed to process handshake packet")
 	assert.Equal(t, slog.LevelDebug, entry.Level)
 	require.ErrorIs(t, entry.Attrs["error"].(error), cert.ErrBlockListed)
+	assert.Equal(t, int64(1), hm.metricRejectedBlocklisted.Count())
 
 	handler.entries = nil
 	hm.beginHandshake(via, nil, nil)
 	entry = findEntry(t, handler.entries, "Failed to process handshake packet")
 	assert.Equal(t, slog.LevelError, entry.Level)
+	assert.Equal(t, int64(1), hm.metricRejectedBlocklisted.Count())
+
+	// The initiator sees the same rejection in continueHandshake, after a
+	// responder has accepted its first packet and sent a valid reply.
+	cleanPool := ct.NewTestCAPool(ca)
+	responder, err := handshake.NewMachine(cert.Version2,
+		func(cert.Version) *handshake.Credential { return responderCredential },
+		func(c cert.Certificate) (*cert.CachedCertificate, error) {
+			return cleanPool.VerifyCertificate(time.Now(), c)
+		},
+		func() (uint32, error) { return 2, nil }, false, header.HandshakeIXPSK0)
+	require.NoError(t, err)
+	response, _, err := responder.ProcessPacket(nil, packet)
+	require.NoError(t, err)
+
+	responderFingerprint, err := responderCert.Fingerprint()
+	require.NoError(t, err)
+	pool.BlocklistFingerprint(responderFingerprint)
+
+	initiatingHM := NewHandshakeManager(logger, nil, nil, nil, defaultHandshakeConfig)
+	initiatingHM.metricRejectedBlocklisted = metrics.NewCounter()
+	initiatingHM.f = &Interface{l: logger}
+	hh := &HandshakeHostInfo{
+		machine:  initiator,
+		hostinfo: &HostInfo{localIndexId: 1, vpnAddrs: []netip.Addr{netip.MustParseAddr("10.0.0.2")}},
+	}
+	initiatingHM.indexes[1] = hh
+	via.IsRelayed = true // skip the remote allow list before certificate validation
+	initiatingHM.continueHandshake(via, hh, response)
+	assert.Equal(t, int64(1), initiatingHM.metricRejectedBlocklisted.Count())
 }
 
 // Test_PendingHandshakeHasRemotes covers create-tunnel -address: a pending hostinfo must already
