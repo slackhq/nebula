@@ -110,10 +110,10 @@ func (r *txReserver) tryBudget() bool {
 // reader first flushes its own oldest batch, flushes need no credit; with none, another reader holds all outstanding
 // work and can flush it independently. So there is no circular wait, even with relay tunnels acquired in opposite
 // orders. The sleep is only for readers with no local work, not the uncontended hot path. Acquisition is
-// all-or-nothing per read, so pressure on one tunnel also delays packets for idle tunnels in the read; splitting
-// would need separate slot ownership and coupled inner/relay reservations. Reader fairness is not guaranteed.
-func (p *stagedTx) waitBudget() bool {
-	if p.tryBudget() {
+// all-or-nothing within each direct or relay batch, so pressure on one tunnel also delays packets for idle tunnels
+// in that batch. Reader fairness is not guaranteed.
+func (p *stagedTx) waitBudget(r *txReserver) bool {
+	if r.tryBudget() {
 		return true
 	}
 	for {
@@ -123,7 +123,7 @@ func (p *stagedTx) waitBudget() bool {
 		if !p.flushOldest() {
 			time.Sleep(50 * time.Microsecond)
 		}
-		if p.tryBudget() {
+		if r.tryBudget() {
 			return true
 		}
 	}
@@ -141,7 +141,7 @@ func (s *txSlot) releaseBudget() {
 // the pipeline, then segments and sends them synchronously with credit for each segment, never exceeding the cap and
 // never filtering or running connection manager side effects twice. This deliberately slow path avoids a lone-batch
 // exception to the shared invariant.
-func (p *stagedTx) sendLarge(items []txItem) {
+func (p *stagedTx) sendLarge(r *txReserver, items []txItem) {
 	for p.flushOldest() {
 	}
 	for _, it := range items {
@@ -151,20 +151,20 @@ func (p *stagedTx) sendLarge(items []txItem) {
 			}
 			part := it
 			part.pkt, part.segs = tio.Packet{Bytes: seg}, 1
-			p.tunnels = p.tunnels[:0]
-			part.counter = p.need(part.hostinfo, part.ci, 1)
+			r.tunnels = r.tunnels[:0]
+			part.counter = r.need(part.hostinfo, part.ci, 1)
 			if part.relayHI != nil {
-				part.relayCounter = p.need(part.relayHI, part.relayHI.ConnectionState, 1)
+				part.relayCounter = r.need(part.relayHI, part.relayHI.ConnectionState, 1)
 			}
-			if !p.waitBudget() {
+			if !p.waitBudget(r) {
 				return nil
 			}
 			one := [1]txItem{part}
-			if reserved := p.reserve(one[:]); len(reserved) != 0 {
+			if reserved := r.reserve(one[:]); len(reserved) != 0 {
 				p.f.encryptTxItem(&reserved[0], p.nb, p.sb)
 				p.f.flushSendBatch(p.sb, p.q)
 			}
-			for _, t := range p.tunnels {
+			for _, t := range r.tunnels {
 				t.ci.txBudget.release(t.n, false)
 			}
 			return nil

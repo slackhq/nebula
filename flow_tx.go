@@ -134,6 +134,8 @@ type txReserver struct {
 	f       *Interface
 	tunnels []txTunnel
 	owner   uint64
+	// The staged reader separates relay data before reserving direct work. A nil pointer collects both paths.
+	inlineRelays *[]txItem
 }
 
 // collect runs the filter over pkts and appends the sendable ones to items, tallying each tunnel's counter needs.
@@ -150,13 +152,17 @@ func (r *txReserver) collect(items []txItem, pkts []tio.Packet, fwPacket *firewa
 			continue
 		}
 		it.segs = uint64(pkt.SegmentCount())
-		it.counter = r.need(it.hostinfo, it.ci, it.segs)
 		if it.relayHI != nil {
 			// The relay bookkeeping inline sends do per segment in prepareSendVia, once per item
 			f.connectionManager.OutNoRebind(it.relayHI)
 			f.connectionManager.RelayUsed(it.relay.LocalIndex)
+			if r.inlineRelays != nil {
+				*r.inlineRelays = append(*r.inlineRelays, it)
+				continue
+			}
 			it.relayCounter = r.need(it.relayHI, it.relayHI.ConnectionState, it.segs)
 		}
+		it.counter = r.need(it.hostinfo, it.ci, it.segs)
 		items = append(items, it)
 	}
 	return items
@@ -257,11 +263,15 @@ func (s *txSlot) run(nb []byte) {
 // reader goroutine.
 type stagedTx struct {
 	txReserver
-	q         int
-	cpu       int // reader CPU, inline sends stay here
-	senderCPU int // -1 leaves the sender within its inherited affinity
-	queue     handoffQueue
-	pool      *flowPool
+	// Relay data always leaves on the reader, including small and oversized reads. Its independent reservation
+	// scratch keeps mixed reads from changing the direct pipeline's counters, gate or sender placement.
+	relayReserver txReserver
+	relaySlot     txSlot
+	q             int
+	cpu           int // reader CPU, inline sends stay here
+	senderCPU     int // -1 leaves the sender within its inherited affinity
+	queue         handoffQueue
+	pool          *flowPool
 	// sb and nb are the reader's own, for the sends it does itself
 	sb *batch.SendBatch
 	nb []byte
@@ -302,6 +312,10 @@ func newStagedTx(f *Interface, queue handoffQueue, q int) *stagedTx {
 		gateInline:         f.staged.inlineBelow > 0,
 		metricGateSwitches: metrics.GetOrRegisterCounter("flow.tx.gate_switches", nil),
 	}
+	// Inline relay sends can share a tunnel with older direct work on this routine. They are not the ordered
+	// sender's sole owner, so they must not recycle credit around a stalled direct reservation.
+	p.relayReserver = txReserver{f: f, tunnels: make([]txTunnel, 0, 4)}
+	p.inlineRelays = &p.relaySlot.items
 	if f.pinThreads {
 		p.cpu = f.threadCPU(q)
 		// Only an explicit list pins the sender, and never onto its reader's CPU, where the two would serialise.
@@ -361,6 +375,9 @@ func (p *stagedTx) handle(pkts []tio.Packet, fwPacket *firewall.ParsedPacket, re
 	slot := p.free[len(p.free)-1]
 	p.free = p.free[:len(p.free)-1]
 	items := p.collect(slot.items[:0], pkts, fwPacket, rejectBuf, p.q, localCache)
+	if len(p.relaySlot.items) != 0 {
+		p.sendRelays()
+	}
 	if len(items) == 0 {
 		slot.items = items
 		p.free = append(p.free, slot)
@@ -369,12 +386,12 @@ func (p *stagedTx) handle(pkts []tio.Packet, fwPacket *firewall.ParsedPacket, re
 
 	if p.oversized() {
 		p.metricInline.Inc(1)
-		p.sendLarge(items)
+		p.sendLarge(&p.txReserver, items)
 		slot.items = items[:0]
 		p.free = append(p.free, slot)
 		return
 	}
-	if !p.waitBudget() {
+	if !p.waitBudget(&p.txReserver) {
 		clear(items)
 		slot.items = items[:0]
 		p.free = append(p.free, slot)
@@ -406,12 +423,40 @@ func (p *stagedTx) handle(pkts []tio.Packet, fwPacket *firewall.ParsedPacket, re
 	p.pool.jobs <- slot
 }
 
+// sendRelays keeps relay data on one send path for the lifetime of this routine. The gate's software drain only
+// waits for socket submission; switching CPUs can still overtake packets on another NIC queue. Direct data retains
+// the existing gate and sender placement. Relay credit is still shared with all other users of both tunnels.
+func (p *stagedTx) sendRelays() {
+	r, slot := &p.relayReserver, &p.relaySlot
+	r.tunnels = r.tunnels[:0]
+	for i := range slot.items {
+		it := &slot.items[i]
+		it.counter = r.need(it.hostinfo, it.ci, it.segs)
+		it.relayCounter = r.need(it.relayHI, it.relayHI.ConnectionState, it.segs)
+	}
+	if r.oversized() {
+		p.metricInline.Inc(1)
+		p.sendLarge(r, slot.items)
+		slot.items = slot.items[:0]
+		return
+	}
+	if !p.waitBudget(r) {
+		clear(slot.items)
+		slot.items = slot.items[:0]
+		return
+	}
+	slot.reservations = append(slot.reservations[:0], r.tunnels...)
+	slot.items = r.reserve(slot.items)
+	p.inline(slot)
+}
+
 // gate reports whether a read goes inline. Each routine holds one
 // transmit mode, inline on the reader or fanout to the workers and the sender, until gateHold reads in a row want the
 // other one, the last of which goes the new way. Choosing per read let small inline sends leave from the reader's CPU
 // between staged ones leaving from the sender's, and the receiver's TCP saw them reordered. Going inline the reader
-// first waits until everything in flight is on the wire and the sender is idle, so no inline send overtakes a staged
-// one. Going to fanout nothing is in flight: inline sends finish before the reader moves on.
+// first waits until everything in flight has been submitted to the socket and the sender is idle. This does not
+// drain independent NIC queues; relay data therefore always uses the reader. Going to fanout nothing is in flight:
+// inline sends finish before the reader moves on.
 func (p *stagedTx) gate(small bool) bool {
 	if small == p.gateInline {
 		p.gateStreak = 0

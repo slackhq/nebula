@@ -18,6 +18,8 @@ import (
 // times 64 KiB with GRO, and the count keeps up to 384 entries in flight in four to six slots: six and 24 MiB at
 // listen.batch=64.
 // tun.staged.tx_slots and rx_slots override the counts. Small-MSS TX arenas can grow.
+// Relay data stays on the tun reader, regardless of the TX gate, so it never switches between reader and sender
+// NIC queues. Direct data keeps its adaptive placement; relay and direct batches both share tunnel counter credit.
 //
 // Metrics are registered only for active pipelines. flow.{tx,rx}.batches counts reads handed to the ordered stage and
 // flow.{tx,rx}.inline those the reader handled itself (TX inline also counts oversized reads); their rates show

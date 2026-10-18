@@ -226,12 +226,14 @@ func (q *affinityQueue) Read() ([]tio.Packet, error) {
 type affinityConn struct {
 	flowCaptureConn
 	masks []unix.CPUSet
+	sizes []int
 }
 
 func (c *affinityConn) WriteBatch(p [][]byte, addrs []netip.AddrPort) (int, error) {
 	mask := threadMask()
 	c.mu.Lock()
 	c.masks = append(c.masks, mask)
+	c.sizes = append(c.sizes, len(p))
 	c.mu.Unlock()
 	return c.flowCaptureConn.WriteBatch(p, addrs)
 }
