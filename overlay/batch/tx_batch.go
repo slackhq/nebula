@@ -43,6 +43,14 @@ func (b *SendBatch) Commit(pkt []byte, dst netip.AddrPort) {
 	b.dsts = append(b.dsts, dst)
 }
 
+// Reset drops every queued packet without sending it.
+func (b *SendBatch) Reset() {
+	clear(b.bufs)
+	b.bufs = b.bufs[:0]
+	b.dsts = b.dsts[:0]
+	b.arena.Reset()
+}
+
 // Flush writes every queued packet and reports how many actually went out. A short count means some destinations
 // were undeliverable; the batch is drained either way.
 func (b *SendBatch) Flush() (int, error) {
@@ -51,9 +59,6 @@ func (b *SendBatch) Flush() (int, error) {
 	if len(b.bufs) > 0 {
 		written, err = b.out.WriteBatch(b.bufs, b.dsts)
 	}
-	clear(b.bufs)
-	b.bufs = b.bufs[:0]
-	b.dsts = b.dsts[:0]
-	b.arena.Reset()
+	b.Reset()
 	return written, err
 }

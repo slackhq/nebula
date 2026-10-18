@@ -5,12 +5,14 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/slackhq/nebula/cert"
 	cert_test "github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
@@ -122,4 +124,71 @@ firewall:
 	ctrl, err := Main(c, true, "config-test", l, nil)
 	require.NoError(t, err)
 	require.Nil(t, ctrl, "a config test hands back nothing to stop, so it must stop itself")
+}
+
+func TestParseStagedConfig(t *testing.T) {
+	l := test.NewLogger()
+	staged := func(workers any) stagedConfig {
+		c := config.NewC(l)
+		if workers != nil {
+			c.Settings["tun"] = map[string]any{"staged": map[string]any{"workers": workers}}
+		}
+		return parseStagedConfig(c, l)
+	}
+	for _, workers := range []any{nil, -1, 0} {
+		require.Equal(t, stagedConfig{}, staged(workers))
+	}
+	if runtime.GOOS != "linux" {
+		require.Equal(t, stagedConfig{}, staged(2))
+		return
+	}
+	want := stagedConfig{workers: 2, tx: !noiseutil.EncryptLockNeeded, rx: true, inlineBelow: 256, gateHold: stagedGateHold,
+		txSlots: 8, rxSlots: 6}
+	require.Equal(t, want, staged(2))
+
+	c := config.NewC(l)
+	c.Settings["listen"] = map[string]any{"batch": 128}
+	c.Settings["tun"] = map[string]any{"staged": map[string]any{"workers": 2, "tx_slots": 3, "rx_slots": 1}}
+	got := parseStagedConfig(c, l)
+	require.Equal(t, []int{3, 2}, []int{got.txSlots, got.rxSlots}, "overrides apply, down to the minimum")
+
+	c = config.NewC(l)
+	c.Settings["tun"] = map[string]any{"staged": map[string]any{"workers": 2, "tx": false, "inline_below": 0}}
+	got = parseStagedConfig(c, l)
+	require.False(t, got.tx, "tx: false keeps transmit inline")
+	require.True(t, got.rx)
+	require.Zero(t, got.inlineBelow, "inline_below: 0 hands every batch off")
+
+	c = config.NewC(l)
+	c.Settings["tun"] = map[string]any{"staged": map[string]any{"workers": 2, "inline_below": 32}}
+	require.Equal(t, 32, parseStagedConfig(c, l).inlineBelow)
+	c.Settings["tun"] = map[string]any{"staged": map[string]any{"workers": 2, "inline_below": -1}}
+	require.Zero(t, parseStagedConfig(c, l).inlineBelow, "a negative threshold is 0")
+
+	for _, tt := range []struct {
+		hold any
+		want int
+	}{{nil, stagedGateHold}, {8, 8}, {0, 1}, {-3, 1}} {
+		c = config.NewC(l)
+		settings := map[string]any{"workers": 2}
+		if tt.hold != nil {
+			settings["gate_hold"] = tt.hold
+		}
+		c.Settings["tun"] = map[string]any{"staged": settings}
+		require.Equal(t, tt.want, parseStagedConfig(c, l).gateHold, "gate_hold %v", tt.hold)
+	}
+}
+
+func TestStagedSlots(t *testing.T) {
+	for _, tt := range []struct{ workers, batch, tx, rx int }{
+		{workers: 2, batch: 64, tx: 8, rx: 6},
+		{workers: 12, batch: 64, tx: 14, rx: 6},
+		{workers: 2, batch: 96, tx: 8, rx: 4},
+		{workers: 2, batch: 512, tx: 8, rx: 4},
+		{workers: 2, batch: 32, tx: 8, rx: 6},
+		{workers: 2, batch: 1, tx: 8, rx: 6},
+	} {
+		tx, rx := stagedSlots(tt.workers, tt.batch, 0, 0)
+		require.Equal(t, []int{tt.tx, tt.rx}, []int{tx, rx}, "workers %d batch %d", tt.workers, tt.batch)
+	}
 }

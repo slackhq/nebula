@@ -275,9 +275,42 @@ tun:
   # the use_offloads setting controls if Nebula will attempt to enable GSO and GRO for the tun device. Linux only, not reloadable.
   #use_offloads: false
 
+  # Linux only. staged.workers enables staged packet processing: each routine hands its batches to this many crypto
+  # workers per direction, then sends or writes them in order. 0, the default, keeps processing inline. Not reloadable.
+  # Transmit needs use_offloads; BoringCrypto and FIPS builds keep it inline because AES-GCM there needs ordered nonces.
+  # Receive needs a listener that can hand off its batches, which Linux has.
+  # IMPORTANT: staged senders require peers with at least the 8192-entry replay window of this release. Released
+  # v1.11.x peers use 1024 and are incompatible. The window is not negotiated.
+  # Staged reservations may use half the window, the other half absorbs inline and control traffic, relay forwarding
+  # and network reordering; unlimited forwarding or delay can still exceed it. Waiting for credit on a busy tunnel
+  # also delays the other tunnels of the same read, and readers are not guaranteed fairness.
+  # Small batches, below inline_below TX segments or RX packets (default 256), can skip the workers. On transmit each
+  # routine holds one mode, inline on the reader or fanout to the workers and the ordered sender, and switches only
+  # after gate_hold (default 64) reads in a row want the other one. Before going inline it waits for every batch in
+  # flight to be submitted to the socket; flow.tx.gate_switches counts the switches. This does not drain NIC queues.
+  # Relay data always stays on the reader, so gate switches and oversized reads cannot move it between NIC queues.
+  # Direct data retains the adaptive gate and independent sender placement.
+  # On receive a listener with nothing in flight writes a small batch itself. With multiple routines, inline sends
+  # still take tunnel reservation credit. 0 hands direct TX and all RX batches to the workers and ordered stages;
+  # relayed TX and reads too large for a tunnel's whole credit are still sent by the reader.
+  # tx: false keeps transmit inline and stages only receive.
+  # tx_slots and rx_slots bound the batches each routine has in flight per direction, minimum 2. A TX slot holds one
+  # tun read and its ciphertext, about 1.1 MiB; the default is 8, or workers + 2 if more. An RX slot holds one
+  # recvmmsg batch, listen.batch * 64 KiB with udp_offloads or * 9 KiB without; the default keeps up to 384 receive
+  # entries in flight in 4 to 6 slots: 6 slots or 24 MiB at the default listen.batch of 64. Lower them to save memory.
+  #staged:
+  #  workers: 0
+  #  tx: true
+  #  inline_below: 256
+  #  gate_hold: 64
+  #  tx_slots: 8
+  #  rx_slots: 6
+
   # Linux only. pin_threads pins each tun reader/encrypt OS thread to a single CPU. This keeps every goroutine's
   # batched sends flowing through one XPS-selected NIC TX ring, so packets within a flow stay ordered on the wire
   # instead of being sprayed across multiple TX rings and reordered. Not reloadable. Coerced to false if routines <= 1.
+  # Staged senders are only pinned with an explicit cpu_affinity, see below; otherwise the scheduler places them.
+  # Small batches a reader sends itself can use a different TX ring than its sender.
   #pin_threads: true
 
   # pin_threads_key helps the CPU-auto-selector shuffle which CPUs are chosen for pinning.
@@ -287,7 +320,9 @@ tun:
 
   # Linux only. cpu_affinity overrides which CPUs the tun reader threads pin to: a list of CPU IDs, one per routine
   # (see the top-level `routines` setting). Lists shorter than `routines` are modulo-cycled across the queues; extra
-  # entries are ignored. IDs must be within the process's allowed CPU set, so this respects taskset / cgroup cpusets;
+  # entries are ignored. Staged sender i pins to entry i+1, modulo-cycled the same way, unless that is its reader's
+  # CPU, as with a one-entry list: a sender never shares its reader's CPU and stays unpinned instead.
+  # IDs must be within the process's allowed CPU set, so this respects taskset / cgroup cpusets;
   # a non-integer or not-allowed entry disables the override, leaving the default pin selection described below.
   # Only meaningful while pin_threads is true. Not reloadable.
   # When unset (or rejected), the default spread prefers performance cores on heterogeneous CPUs (ARM big.LITTLE,

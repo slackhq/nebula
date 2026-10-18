@@ -14,6 +14,9 @@ import (
 )
 
 const (
+	// ReplayWindow is the build-time receive window and the assumed peer window
+	// for TX reservation credit. Use a power of two; peers must match or have a
+	// larger receive window. The bitmap costs ReplayWindow/8 bytes per tunnel.
 	ReplayWindow = 8192
 
 	// RehandshakeAfterMessages rolls keys inside the AES-GCM data-volume margin (~2^-36 advantage at 64KB frames).
@@ -41,6 +44,7 @@ type ConnectionState struct {
 	peerCert       *cert.CachedCertificate
 	initiator      bool
 	messageCounter atomic.Uint64
+	txBudget       txBudget
 	window         *Bits
 	decryptLock    sync.Mutex
 	writeLock      sync.Mutex
@@ -104,7 +108,7 @@ func (cs *ConnectionState) Decrypt(l *slog.Logger, messageCounter uint64, packet
 		return nil, ErrAlreadySeen
 	}
 
-	out, err := cs.dKey.DecryptDanger(packet[header.Len:header.Len], packet[:header.Len], packet[header.Len:], messageCounter, nb)
+	out, err := cs.decryptPacket(messageCounter, packet, nb)
 	if err != nil {
 		return nil, err
 	}
@@ -116,6 +120,11 @@ func (cs *ConnectionState) Decrypt(l *slog.Logger, messageCounter uint64, packet
 		return nil, ErrAlreadySeen
 	}
 	return out, nil
+}
+
+// decryptPacket authenticates and decrypts packet in place, leaving the replay window to the caller.
+func (cs *ConnectionState) decryptPacket(messageCounter uint64, packet, nb []byte) ([]byte, error) {
+	return cs.dKey.DecryptDanger(packet[header.Len:header.Len], packet[:header.Len], packet[header.Len:], messageCounter, nb)
 }
 
 func (cs *ConnectionState) VerifyRelay(l *slog.Logger, messageCounter uint64, packet []byte, nb []byte) error {
