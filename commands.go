@@ -495,7 +495,12 @@ func runPrintCert(ifce *Interface, args *printCertFlags, a []string) (commands.R
 		if !ok {
 			return res, nil
 		}
-		c = hostInfo.GetCert().Certificate
+		// A tunnel still handshaking, or one being torn down, has no certificate.
+		cc := hostInfo.GetCert()
+		if cc == nil {
+			return commands.Failed("Could not find tunnel for vpn addr: %v", a[0]), nil
+		}
+		c = cc.Certificate
 	}
 
 	if args.Raw {
