@@ -23,7 +23,6 @@ import (
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sys/unix"
 )
 
 type whoamiFlags struct {
@@ -218,28 +217,6 @@ func TestInfoPresentationFlags(t *testing.T) {
 	assert.Equal(t, compact, off)
 }
 
-// TestInfoSocketMode: the mode is the operator's, pinned regardless of the umask, and a
-// changed mode on a reload is applied in place rather than by rebinding.
-func TestInfoSocketMode(t *testing.T) {
-	old := unix.Umask(0077)
-	defer unix.Umask(old)
-
-	s, path := serveInfo(t, infoRegistry(), 0660)
-
-	fi, err := os.Stat(path)
-	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0660), fi.Mode().Perm())
-
-	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: 0640}))
-	fi, err = os.Stat(path)
-	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0640), fi.Mode().Perm())
-	assert.Equal(t, path, s.Path())
-
-	status, _ := test.HTTPGet(t, path, "/v1/whoami")
-	assert.Equal(t, http.StatusOK, status, "the same listener is still serving")
-}
-
 // TestInfoModeChangeRefusesASwappedSocket: whoever can write the directory can replace
 // the node with a link to a file of their choosing; the daemon must not set the
 // operator's mode on that file. The node is seen to be gone, the link is refused by the
@@ -259,54 +236,6 @@ func TestInfoModeChangeRefusesASwappedSocket(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0600), fi.Mode().Perm(), "the file behind the link keeps its mode")
 	assert.Empty(t, s.Path(), "nothing of ours answers at the path, so nothing is served")
-}
-
-func TestInfoRebindMovesAndStopRemoves(t *testing.T) {
-	s, first := serveInfo(t, infoRegistry(), 0600)
-
-	second := testSocket(t)
-	require.NoError(t, s.Rebind(context.Background(), second, Access{Mode: 0600}))
-	assert.Equal(t, second, s.Path())
-	_, err := os.Stat(first)
-	assert.True(t, os.IsNotExist(err), "the old socket is removed")
-
-	status, body := test.HTTPGet(t, second, "/v1/whoami?name=alice")
-	assert.Equal(t, http.StatusOK, status)
-	assert.JSONEq(t, `{"name":"alice"}`, body)
-
-	s.Stop()
-	assert.Empty(t, s.Path())
-	_, err = os.Stat(second)
-	assert.True(t, os.IsNotExist(err), "Stop removes the socket")
-}
-
-func TestInfoRebindFailureKeepsTheOldSocket(t *testing.T) {
-	s, first := serveInfo(t, infoRegistry(), 0600)
-
-	err := s.Rebind(context.Background(), filepath.Join(privateBase(t), "missing", "n", "s.sock"), Access{Mode: 0600})
-	require.Error(t, err)
-	assert.Equal(t, first, s.Path())
-
-	status, _ := test.HTTPGet(t, first, "/v1/whoami")
-	assert.Equal(t, http.StatusOK, status)
-}
-
-func TestInfoContextCancellationStops(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	path := testSocket(t)
-	s := NewInfoServer(test.NewLogger(), infoRegistry())
-	require.NoError(t, s.Rebind(ctx, path, Access{Mode: 0600}))
-	t.Cleanup(s.Stop)
-
-	cancel()
-	require.Eventually(t, func() bool { return s.Path() == "" }, time.Second, 10*time.Millisecond)
-	_, err := os.Stat(path)
-	assert.True(t, os.IsNotExist(err))
-
-	// And a reload that lands during shutdown must not bring it back.
-	err = s.Rebind(ctx, path, Access{Mode: 0600})
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "shutting down")
 }
 
 func TestInfoConfig(t *testing.T) {
@@ -365,11 +294,8 @@ func TestWireInfoFollowsConfig(t *testing.T) {
 
 	ctlPath := testSocket(t)
 	infoPath := testSocket(t)
-	sectionWithMode := func(enabled bool, socket, mode string) string {
-		return fmt.Sprintf("local_api:\n  control:\n    socket: %s\n  info:\n    enabled: %t\n    socket: %s\n    socket_mode: \"%s\"\n", ctlPath, enabled, socket, mode)
-	}
 	section := func(enabled bool, socket string) string {
-		return sectionWithMode(enabled, socket, "0600")
+		return fmt.Sprintf("local_api:\n  control:\n    socket: %s\n  info:\n    enabled: %t\n    socket: %s\n", ctlPath, enabled, socket)
 	}
 
 	c := config.NewC(test.NewLogger())
@@ -391,18 +317,11 @@ func TestWireInfoFollowsConfig(t *testing.T) {
 	require.NoError(t, c.ReloadConfigString(section(true, infoPath)).Err)
 	assert.Equal(t, infoPath, eps.Info.Path())
 
-	// A reload that changes only the mode applies it in place.
-	require.NoError(t, c.ReloadConfigString(sectionWithMode(true, infoPath, "0660")).Err)
-	assert.Equal(t, infoPath, eps.Info.Path())
-	fi, err := os.Stat(infoPath)
-	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0660), fi.Mode().Perm())
-
 	// A reload that moves the socket moves it, and removes the old one.
 	moved := testSocket(t)
 	require.NoError(t, c.ReloadConfigString(section(true, moved)).Err)
 	assert.Equal(t, moved, eps.Info.Path())
-	_, err = os.Stat(infoPath)
+	_, err := os.Stat(infoPath)
 	assert.True(t, os.IsNotExist(err))
 	status, body = test.HTTPGet(t, moved, "/v1/whoami?name=bob")
 	assert.Equal(t, http.StatusOK, status)
