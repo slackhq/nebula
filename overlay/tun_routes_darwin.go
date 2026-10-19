@@ -21,7 +21,8 @@ import (
 
 // Darwin has no route metrics, the routing table holds one unscoped route per prefix. When another interface already
 // routes an unsafe_route's prefix, like the lan we started on, theirs stays and ours is added once theirs is removed.
-// Our own route removed by someone else, with nothing in its place, was removed on purpose and stays gone until a reload.
+// Our own route removed by someone else, with nothing in its place, was removed on purpose and stays gone until a reload
+// or until another interface takes the prefix, after which ours follows theirs like any other.
 
 const (
 	// routeRetryDelay is how long the system routing table must be quiet before we judge who holds a prefix. configd
@@ -45,7 +46,8 @@ const (
 	routeInstalled
 	// routeYielded is another interface holding the prefix, ours is added once it lets go
 	routeYielded
-	// routeRemoved is our route deleted by someone else with nothing in its place, it is left alone until a reload
+	// routeRemoved is our route deleted by someone else with nothing in its place, it is left alone until a reload or
+	// another interface takes the prefix
 	routeRemoved
 	// routeFailed is adding our route failing for some other reason, it is retried
 	routeFailed
@@ -214,10 +216,6 @@ func (t *tun) reconcileRoutes() {
 	for _, r := range installRoutes(*t.Routes.Load()) {
 		p := r.Cidr.Masked()
 		prev := t.routeStates[p]
-		if prev.kind == routeRemoved {
-			states[p] = prev
-			continue
-		}
 
 		holder := routeInterfaceIn(msgs, p)
 		switch {
@@ -225,14 +223,18 @@ func (t *tun) reconcileRoutes() {
 			states[p] = routeState{kind: routeInstalled}
 
 		case holder != 0:
+			// Another interface taking a prefix we left alone puts ours back in line behind theirs
 			if prev.kind != routeYielded || prev.holder != holder {
 				t.l.Info("unsafe_route is routed through another interface, it will be added back when that route is removed", "route", r.Cidr, "interface", interfaceName(holder))
 			}
 			states[p] = routeState{kind: routeYielded, holder: holder}
 
 		case prev.kind == routeInstalled:
-			t.l.Warn("unsafe_route was removed outside nebula, leaving it until reload", "route", r.Cidr)
+			t.l.Warn("unsafe_route was removed outside nebula, leaving it until a reload or another interface takes its destination", "route", r.Cidr)
 			states[p] = routeState{kind: routeRemoved}
+
+		case prev.kind == routeRemoved:
+			states[p] = prev
 
 		default:
 			err := addRoute(p, linkAddr)

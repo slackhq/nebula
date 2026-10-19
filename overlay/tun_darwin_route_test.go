@@ -207,6 +207,13 @@ func routeVia(t *testing.T, cidr string) int {
 	return routeInterfaceIn(msgs, netip.MustParsePrefix(cidr))
 }
 
+// routeStateOf is what tn made of cidr when it last looked
+func routeStateOf(tn *tun, cidr string) routeState {
+	tn.routesMu.Lock()
+	defer tn.routesMu.Unlock()
+	return tn.routeStates[netip.MustParsePrefix(cidr)]
+}
+
 func routeArgs(action, cidr string, extra ...string) []string {
 	args := []string{"-q", "-n", action}
 	if netip.MustParsePrefix(cidr).Addr().Is6() {
@@ -295,6 +302,44 @@ func TestTunLeavesRouteDeletedByHand(t *testing.T) {
 	require.NoError(t, res.Err)
 	assert.False(t, res.Failed)
 	assert.Equal(t, ours, routeVia(t, cidr))
+}
+
+// configd deleting ours and adding the lan's more than routeRetryDelay apart, or a sweep landing in between, looks like
+// a hand delete. Seeing the lan hold the prefix puts ours back in line, it goes back once theirs is removed
+func TestTunYieldsAfterLeavingARouteDeletedByHand(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cidr    string
+		sweep   time.Duration
+		misfile func(t *testing.T, tn *tun, cidr string)
+	}{
+		// The table went quiet with nothing in its place
+		"settled": {"10.251.6.0/24", 2 * routeRetryDelay, func(t *testing.T, tn *tun, cidr string) {
+			require.Eventually(t, func() bool { return routeStateOf(tn, cidr).kind == routeRemoved }, 5*time.Second, 50*time.Millisecond)
+		}},
+		// The sweep that caps a table that never settles
+		"swept": {"10.251.7.0/24", 200 * time.Millisecond, func(t *testing.T, tn *tun, cidr string) {
+			tn.reconcileRoutes()
+			require.Equal(t, routeRemoved, routeStateOf(tn, cidr).kind)
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tn, _, _ := newRouteTestTun(t, tc.sweep, tc.cidr)
+			ours := tn.linkAddr.Load().Index
+			require.Equal(t, ours, routeVia(t, tc.cidr))
+
+			routeCmd(t, "delete", tc.cidr)
+			tc.misfile(t, tn, tc.cidr)
+
+			lo0 := routeThroughLo0(t, tc.cidr)
+			require.Eventually(t, func() bool {
+				s := routeStateOf(tn, tc.cidr)
+				return s.kind == routeYielded && s.holder == lo0
+			}, 5*time.Second, 50*time.Millisecond)
+
+			routeCmd(t, "delete", tc.cidr)
+			assert.Eventually(t, func() bool { return routeVia(t, tc.cidr) == ours }, 5*time.Second, 50*time.Millisecond)
+		})
+	}
 }
 
 // Detaching an interface deletes its routes without a routing socket message for each, like unplugging the dock whose
