@@ -35,11 +35,6 @@ const (
 )
 
 const (
-	// defaultInfoMode is the socket's mode when the config names neither a mode nor a
-	// group: the daemon's user alone, so that enabling the API does not open it to
-	// anyone until the operator says who. Naming a group makes it groupSocketMode.
-	defaultInfoMode os.FileMode = 0600
-
 	// infoMaxConns bounds the connections held open at once. Beyond it the kernel
 	// queues, which is what an HTTP client expects of a busy server; the control socket
 	// refuses instead because its clients are people at a prompt.
@@ -411,8 +406,10 @@ func infoConfigFrom(c *config.C) (infoConfig, error) {
 	if err != nil {
 		return cfg, err
 	}
-	def := defaultInfoMode
-	if group != nil {
+	// With neither a mode nor a group named, the daemon's user alone, so that enabling
+	// the API does not open it to anyone until the operator says who.
+	def := ownerOnlyMode
+	if group.ID != "" {
 		def = groupSocketMode
 	}
 
@@ -420,7 +417,7 @@ func infoConfigFrom(c *config.C) (infoConfig, error) {
 	if err != nil {
 		return cfg, fmt.Errorf("%s: %w", InfoModeKey, err)
 	}
-	if group != nil && mode&0070 == 0 {
+	if group.ID != "" && mode&0070 == 0 {
 		return cfg, fmt.Errorf("%s %s gives group %s no access to the socket; use \"%04o\" or leave the mode unset", InfoModeKey, modeString(mode), group.Name, mode|0060)
 	}
 	cfg.Access = Access{Mode: mode, Group: group}
