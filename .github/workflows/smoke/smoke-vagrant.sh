@@ -60,7 +60,19 @@ CONTAINER="nebula:${NAME:-smoke}"
 docker run --name lighthouse1 --rm "$CONTAINER" -config lighthouse1.yml -test
 docker run --name host2 --rm -v "$PWD/build/host2.yml:/nebula/host2.yml:ro" "$CONTAINER" -config host2.yml -test
 
-vagrant up
+# Guests sometimes never get a DHCP lease (netbsd under nested KVM) or hang
+# booting (virtualbox). vagrant-libvirt waits 15 minutes before giving up, so
+# cap each boot and retry from a fresh domain instead.
+up=0
+for _ in 1 2 3; do
+    if timeout 5m vagrant up; then
+        up=1
+        break
+    fi
+    vagrant destroy -f
+done
+[ "$up" = 1 ] || exit 1
+
 vagrant ssh -c "cd /nebula && /nebula/$1-nebula -config host3.yml -test" -- -T
 
 docker run --name lighthouse1 --network "$NETWORK" --ip "$LIGHTHOUSE_IP" --device /dev/net/tun:/dev/net/tun --cap-add NET_ADMIN --rm "$CONTAINER" -config lighthouse1.yml 2>&1 | tee logs/lighthouse1 | sed -u 's/^/  [lighthouse1]  /' &
