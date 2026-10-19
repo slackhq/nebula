@@ -42,7 +42,7 @@ jobs:
 
     - name: install vagrant and libvirt
       run: |
-        sudo apt-get update && sudo apt-get install -y vagrant libvirt-daemon-system libvirt-dev
+        sudo apt-get update && sudo apt-get install -y vagrant libvirt-daemon-system libvirt-clients libvirt-dev
         sudo chmod 666 /dev/kvm
         sudo usermod -aG libvirt $(whoami)
         sudo chmod 666 /var/run/libvirt/libvirt-sock
@@ -50,6 +50,12 @@ jobs:
 
     - name: ${{ matrix.target }}
       run: make smoke-vagrant/${{ matrix.target }}
+
+    - uses: actions/upload-artifact@v4
+      if: failure()
+      with:
+        name: smoke-${{ matrix.target }}-logs
+        path: .github/workflows/smoke/logs
 
     timeout-minutes: 30
 

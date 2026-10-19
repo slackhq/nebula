@@ -63,12 +63,19 @@ docker run --name host2 --rm -v "$PWD/build/host2.yml:/nebula/host2.yml:ro" "$CO
 # Guests sometimes never get a DHCP lease (netbsd under nested KVM) or hang
 # booting (virtualbox). vagrant-libvirt waits 15 minutes before giving up, so
 # cap each boot and retry from a fresh domain instead.
+# While waiting, keep a fresh VGA screenshot of the guest so a stuck boot
+# leaves its console on disk after vagrant tears the domain down.
 up=0
-for _ in 1 2 3; do
-    if timeout 5m vagrant up; then
-        up=1
-        break
+for attempt in 1 2 3; do
+    if command -v virsh >/dev/null; then
+        (while sleep 20; do
+            virsh -c qemu:///system screenshot "vagrant-$1_default" "logs/console-$attempt.ppm" >/dev/null 2>&1
+        done) &
+        shots=$!
     fi
+    timeout 5m vagrant up && up=1
+    [ "${shots:-}" ] && kill "$shots"
+    [ "$up" = 1 ] && break
     vagrant destroy -f
 done
 [ "$up" = 1 ] || exit 1
