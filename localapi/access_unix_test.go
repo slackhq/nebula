@@ -159,7 +159,6 @@ func TestInfoAccessFromConfig(t *testing.T) {
 	cfg, err := load(section("    group: " + name + "\n"))
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0660), cfg.Access.Mode)
-	require.NotNil(t, cfg.Access.Group)
 	assert.Equal(t, gid, cfg.Access.Group.ID)
 
 	cfg, err = load(section("    group: " + name + "\n    socket_mode: \"0664\"\n"))
@@ -172,8 +171,7 @@ func TestInfoAccessFromConfig(t *testing.T) {
 
 	cfg, err = load(section(""))
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0600), cfg.Access.Mode)
-	assert.Nil(t, cfg.Access.Group)
+	assert.Equal(t, ownerOnly(), cfg.Access)
 }
 
 // TestRemovingTheGroupHandsTheSocketBack: a reload that drops the group key leaves the

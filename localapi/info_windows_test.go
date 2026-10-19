@@ -24,7 +24,7 @@ import (
 func TestInfoIsServedOnAPipe(t *testing.T) {
 	users, err := windows.CreateWellKnownSid(windows.WinBuiltinUsersSid)
 	require.NoError(t, err)
-	group := &Group{Name: "Users", ID: users.String()}
+	group := Group{Name: "Users", ID: users.String()}
 
 	s := NewInfoServer(test.NewLogger(), commands.New())
 	path := pipePrefix + "nebula-info-test"
