@@ -64,9 +64,6 @@ var (
 	infoReadTimeout       = 15 * time.Second
 )
 
-// errInfoUnsupported is returned by Rebind on a platform without a socket mode to open.
-var errInfoUnsupported = errors.New("the info API is not available on this platform")
-
 // servedOnInfo decides what the info API will run: the commands that report identity
 // and nothing else, which the commands declare about themselves. Filter adds help to
 // the result, so a client can ask what is served; help on a filtered registry describes
@@ -122,10 +119,6 @@ func NewInfoServer(l *slog.Logger, reg *commands.Registry) *InfoServer {
 func (s *InfoServer) Rebind(ctx context.Context, path string, acc Access) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	if !infoSupported {
-		return errInfoUnsupported
-	}
 
 	return s.rebindLocked(ctx, path, acc, func(ln net.Listener) io.Closer {
 		srv := &http.Server{
