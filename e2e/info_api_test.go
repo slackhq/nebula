@@ -27,7 +27,7 @@ import (
 // established with.
 func TestIdentityOverTheInfoAPI(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("the info API is not served on windows")
+		t.Skip("the test's HTTP helpers dial unix sockets; on windows the info API is a named pipe")
 	}
 
 	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})

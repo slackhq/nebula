@@ -33,11 +33,10 @@ const network = "pipe"
 // exists so a Server is built the same way on every platform.
 var currentUID = func() uint32 { return 0 }
 
-// infoSupported is false here. A pipe has no mode to open to other accounts, and the
-// security descriptor listen builds admits the daemon's account alone, which is the
-// opposite of what the info API is for. Serving it on windows means designing which
-// accounts a pipe admits, and that has not been done.
-const infoSupported = false
+// infoSupported is true here: the pipe's security descriptor is what a mode is on unix,
+// and the group an operator names in the config is the way to open it to other
+// accounts, as it is for the control pipe. The mode itself means nothing to a pipe.
+const infoSupported = true
 
 // listen creates the named pipe at path with a security descriptor that admits the user
 // nebula runs as, SYSTEM and Administrators, and the group acc names, if any, for

@@ -255,7 +255,7 @@ punchy:
     #group: nebula
 
   # The info socket is not made available by default. If you enable it, it makes some
-  # internal state available over HTTP. It's not available on Windows.
+  # internal state available over HTTP.
   #
   # The currently supported HTTP requests are:
   #   GET /v1/identity?address=<vpn addr>[:port]  the host owning the address; the port
@@ -269,10 +269,16 @@ punchy:
   #
   #info:
     #enabled: false
-    # The absolute path to listen on.
+    # The absolute path to listen on, or a full pipe name on Windows.
     #socket: /var/run/nebula/info.sock
-    # Octal mode for the socket, as a quoted string. Defaults to "0600".
-    #socket_mode: "0600"
+    # A group (or account/group/SID on Windows) that should be allowed to access the
+    # socket. On Windows the group may read and write the pipe but not create an
+    # instance of it, so a client in the group must open the pipe asking for read and
+    # write data rather than generic read and write.
+    #group: nebula-info
+    # Octal mode for the socket, as a quoted string. Defaults to "0600" unless a
+    # group is set, in which case it defaults to "0660".
+    #socket_mode: "0660"
 
 # EXPERIMENTAL: relay support for networks that can't establish direct connections.
 relay:

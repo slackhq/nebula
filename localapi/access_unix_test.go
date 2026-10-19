@@ -4,6 +4,7 @@ package localapi
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"os/user"
 	"strconv"
@@ -140,6 +141,66 @@ func TestControlSocketWithAGroupTrustsTheKernel(t *testing.T) {
 	require.NoError(t, s.Rebind(context.Background(), path, ownerOnly()))
 	_, err = (&Client{Path: path}).Describe()
 	require.ErrorContains(t, err, "not permitted")
+}
+
+// TestInfoAccessFromConfig: a group with no mode is 0660; a mode that gives the group
+// nothing is refused, with the mode that would; an explicit mode with group bits is
+// kept as given.
+func TestInfoAccessFromConfig(t *testing.T) {
+	name, gid := ownGroup(t)
+	load := func(body string) (infoConfig, error) {
+		c := config.NewC(test.NewLogger())
+		require.NoError(t, c.LoadString(body))
+		return infoConfigFrom(c)
+	}
+	section := func(extra string) string {
+		return "local_api:\n  info:\n    enabled: true\n    socket: /run/nebula/info.sock\n" + extra
+	}
+
+	cfg, err := load(section("    group: " + name + "\n"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0660), cfg.Access.Mode)
+	require.NotNil(t, cfg.Access.Group)
+	assert.Equal(t, gid, cfg.Access.Group.ID)
+
+	cfg, err = load(section("    group: " + name + "\n    socket_mode: \"0664\"\n"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0664), cfg.Access.Mode)
+
+	_, err = load(section("    group: " + name + "\n    socket_mode: \"0600\"\n"))
+	require.ErrorContains(t, err, "gives group "+name+" no access")
+	require.ErrorContains(t, err, `"0660"`)
+
+	cfg, err = load(section(""))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), cfg.Access.Mode)
+	assert.Nil(t, cfg.Access.Group)
+}
+
+// TestSocketIsHandedToTheGroup: the socket is created with the group's gid and the
+// mode, and a changed group or mode on a reload is applied to the socket in place.
+func TestSocketIsHandedToTheGroup(t *testing.T) {
+	name, gid := ownGroup(t)
+	group := &Group{Name: name, ID: gid}
+	want, err := strconv.ParseUint(gid, 10, 32)
+	require.NoError(t, err)
+
+	s, path := serveInfo(t, infoRegistry(), 0600)
+	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: 0660, Group: group}))
+	fi, err := os.Lstat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0660), fi.Mode().Perm())
+	assert.Equal(t, uint32(want), socketGroup(t, path))
+
+	status, _ := test.HTTPGet(t, path, "/v1/whoami")
+	assert.Equal(t, http.StatusOK, status, "the same listener is still serving")
+
+	// The mode is the operator's to widen further.
+	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: 0664, Group: group}))
+	fi, err = os.Lstat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0664), fi.Mode().Perm())
+	assert.Equal(t, path, s.Path())
 }
 
 // TestRemovingTheGroupHandsTheSocketBack: a reload that drops the group key leaves the
