@@ -43,10 +43,6 @@ func withPeerFD(conn net.Conn, f func(fd int) error) error {
 // in for root, or for a stranger, without owning a second account on the host.
 var currentUID = func() uint32 { return uint32(os.Geteuid()) }
 
-// infoSupported reports that the info API can be served here: a unix socket takes the
-// mode an operator configures, which is the whole of its access control.
-const infoSupported = true
-
 // listen binds the socket at path with the given access.
 //
 // Access control is the socket's own mode and group, which the node is created no

@@ -200,10 +200,6 @@ func reportRebind(l *slog.Logger, what, old, want string, err error, now string)
 func wireInfo(ctx context.Context, l *slog.Logger, c *config.C, reg *commands.Registry) *InfoServer {
 	srv := NewInfoServer(l, reg)
 
-	// Said once per process rather than on every reload: it is a platform limit, not
-	// something the next reload could fix.
-	saidUnsupported := false
-
 	reconcile := func(c *config.C) {
 		cfg, err := infoConfigFrom(c)
 		if err != nil {
@@ -215,14 +211,6 @@ func wireInfo(ctx context.Context, l *slog.Logger, c *config.C, reg *commands.Re
 			if srv.Path() != "" {
 				srv.Stop()
 				l.Info("Stopped the local info API, it is disabled in the reloaded config")
-			}
-			return
-		}
-
-		if !infoSupported {
-			if !saidUnsupported {
-				l.Warn("Local info API is enabled in the config but is not served on this platform yet", "key", InfoEnabledKey)
-				saidUnsupported = true
 			}
 			return
 		}
