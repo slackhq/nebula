@@ -4,7 +4,6 @@ package localapi
 
 import (
 	"context"
-	"net/http"
 	"os"
 	"os/user"
 	"strconv"
@@ -86,7 +85,7 @@ func TestControlAccessFromConfig(t *testing.T) {
 
 // TestControlSocketIsHandedToTheGroup: the socket is created with the group's gid and
 // 0660, whatever the umask, and a reload that takes the group away tightens the socket
-// in place, without moving it.
+// in place, without moving it. The endpoint is shared, so this covers the info API too.
 func TestControlSocketIsHandedToTheGroup(t *testing.T) {
 	old := unix.Umask(0077)
 	defer unix.Umask(old)
@@ -175,32 +174,6 @@ func TestInfoAccessFromConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0600), cfg.Access.Mode)
 	assert.Nil(t, cfg.Access.Group)
-}
-
-// TestSocketIsHandedToTheGroup: the socket is created with the group's gid and the
-// mode, and a changed group or mode on a reload is applied to the socket in place.
-func TestSocketIsHandedToTheGroup(t *testing.T) {
-	name, gid := ownGroup(t)
-	group := &Group{Name: name, ID: gid}
-	want, err := strconv.ParseUint(gid, 10, 32)
-	require.NoError(t, err)
-
-	s, path := serveInfo(t, infoRegistry(), 0600)
-	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: 0660, Group: group}))
-	fi, err := os.Lstat(path)
-	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0660), fi.Mode().Perm())
-	assert.Equal(t, uint32(want), socketGroup(t, path))
-
-	status, _ := test.HTTPGet(t, path, "/v1/whoami")
-	assert.Equal(t, http.StatusOK, status, "the same listener is still serving")
-
-	// The mode is the operator's to widen further.
-	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: 0664, Group: group}))
-	fi, err = os.Lstat(path)
-	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0664), fi.Mode().Perm())
-	assert.Equal(t, path, s.Path())
 }
 
 // TestRemovingTheGroupHandsTheSocketBack: a reload that drops the group key leaves the

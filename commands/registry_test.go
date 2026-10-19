@@ -87,19 +87,24 @@ func TestWithheldIsNotReportedAsUnknown(t *testing.T) {
 	assert.Contains(t, out.String(), "did not understand: no-such-command")
 }
 
-// TestResolveTypesTheWithheldRefusal: a surface with status codes tells a withheld
-// command from an unknown one by the error's type, never by asking the unfiltered
-// registry, which is the one thing a filtered surface must not consult.
-func TestResolveTypesTheWithheldRefusal(t *testing.T) {
+// TestResolveTellsUnknownFromWithheld: the two cases read differently to an operator,
+// and a surface with status codes tells them apart by the error's type, never by asking
+// the unfiltered registry, which is the one thing a filtered surface must not consult.
+func TestResolveTellsUnknownFromWithheld(t *testing.T) {
 	r := testRegistry().Filter(notWithheld, testReason)
 
-	_, err := r.Resolve("withheld")
+	c, err := r.Resolve("served")
+	require.NoError(t, err)
+	assert.Equal(t, Name("served"), c.Name)
+
+	_, err = r.Resolve("withheld")
 	var withheld *WithheldError
 	require.ErrorAs(t, err, &withheld)
-	assert.Contains(t, err.Error(), testReason)
+	require.ErrorContains(t, err, "withheld is not available on this surface")
+	require.ErrorContains(t, err, testReason)
 
 	_, err = r.Resolve("no-such-command")
-	require.Error(t, err)
+	require.ErrorContains(t, err, `unknown command "no-such-command"`)
 	assert.NotErrorAs(t, err, &withheld, "an unknown name is not a withheld one")
 }
 
