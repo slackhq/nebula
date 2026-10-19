@@ -48,6 +48,10 @@ jobs:
         sudo chmod 666 /var/run/libvirt/libvirt-sock
         vagrant plugin install vagrant-libvirt
 
+    # Guest boot hangs have only been seen on some runner hosts; record which.
+    - name: runner host info
+      run: lscpu | grep -E 'Model name|Hypervisor|Flags' | cut -c1-200; lsmod | grep -E '^kvm'; uname -r
+
     - name: ${{ matrix.target }}
       run: make smoke-vagrant/${{ matrix.target }}
 
