@@ -242,8 +242,9 @@ func wireInfo(ctx context.Context, l *slog.Logger, c *config.C, reg *commands.Re
 
 // errEndpointHeld is returned by listen when the endpoint's name is already held by
 // some other process, which nebula will not serve alongside: whoever holds it would be
-// answering nebula ctl. It is only raised on windows, where the default name can be
-// held by another administrator's process and an override outside the protected
-// namespace by any account's; on unix a path that is still being served is an earlier
-// nebula, which clearStale reports as in use.
-var errEndpointHeld = errors.New("the local control socket's name is held by another process")
+// answering the endpoint's clients. It is only raised on windows, where the default
+// name can be held by another administrator's process and an override outside the
+// protected namespace by any account's; on unix a path that is still being served is an
+// earlier nebula, which clearStale reports as in use. The log line that carries it names
+// the endpoint, so the sentence does not.
+var errEndpointHeld = errors.New("the pipe's name is held by another process")

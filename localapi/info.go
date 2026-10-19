@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"runtime"
 	"runtime/debug"
 	"slices"
 	"strconv"
@@ -31,12 +32,13 @@ const (
 	InfoEnabledKey = "local_api.info.enabled"
 	InfoSocketKey  = "local_api.info.socket"
 	InfoModeKey    = "local_api.info.socket_mode"
+	InfoGroupKey   = "local_api.info.group"
 )
 
 const (
-	// defaultInfoMode is the socket's mode when the config names none: the daemon's
-	// user alone, so that enabling the API does not open it to anyone until the operator
-	// says who.
+	// defaultInfoMode is the socket's mode when the config names neither a mode nor a
+	// group: the daemon's user alone, so that enabling the API does not open it to
+	// anyone until the operator says who. Naming a group makes it groupSocketMode.
 	defaultInfoMode os.FileMode = 0600
 
 	// infoMaxConns bounds the connections held open at once. Beyond it the kernel
@@ -394,7 +396,10 @@ type infoConfig struct {
 }
 
 // infoConfigFrom reads the info API section. A disabled section needs nothing else to be
-// right; an enabled one needs a socket path and, if it names a mode, one that parses.
+// right; an enabled one needs a socket path, a group that exists if it names one, and
+// a mode that parses if it names one. A group with no mode means groupSocketMode, and a
+// mode that gives a named group nothing is refused: it would be a group that cannot
+// connect, which is not what naming one asks for.
 func infoConfigFrom(c *config.C) (infoConfig, error) {
 	cfg := infoConfig{Enabled: c.GetBool(InfoEnabledKey, false)}
 	if !cfg.Enabled {
@@ -410,11 +415,26 @@ func infoConfigFrom(c *config.C) (infoConfig, error) {
 	}
 	cfg.Path = p
 
-	mode, err := parseSocketMode(c.Get(InfoModeKey))
+	group, err := groupFromConfig(c, InfoGroupKey)
+	if err != nil {
+		return cfg, err
+	}
+	def := defaultInfoMode
+	if group != nil {
+		def = groupSocketMode
+	}
+
+	mode, err := parseSocketMode(c.Get(InfoModeKey), def)
 	if err != nil {
 		return cfg, fmt.Errorf("%s: %w", InfoModeKey, err)
 	}
-	cfg.Access = Access{Mode: mode}
+	// On unix the mode is what admits the group, so one that shuts it out is a config
+	// error; on windows the group is an entry in the pipe's security descriptor and the
+	// mode means nothing to a pipe, so it is not held against the group there.
+	if runtime.GOOS != "windows" && group != nil && mode&0070 == 0 {
+		return cfg, fmt.Errorf("%s %s gives group %s no access to the socket; use \"%04o\" or leave the mode unset", InfoModeKey, modeString(mode), group.Name, mode|0060)
+	}
+	cfg.Access = Access{Mode: mode, Group: group}
 
 	return cfg, nil
 }
@@ -423,10 +443,10 @@ func infoConfigFrom(c *config.C) (infoConfig, error) {
 // integer, and which integer depends on the parser (octal 432 under YAML 1.1, decimal
 // 660 under 1.2), so a number is refused with the fix rather than quietly applied as
 // whichever mode its digits happen to spell in octal.
-func parseSocketMode(raw any) (os.FileMode, error) {
+func parseSocketMode(raw any, def os.FileMode) (os.FileMode, error) {
 	switch v := raw.(type) {
 	case nil:
-		return defaultInfoMode, nil
+		return def, nil
 	case string:
 		mode, err := strconv.ParseUint(v, 8, 32)
 		if err != nil || mode&^0777 != 0 {
