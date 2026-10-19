@@ -51,12 +51,8 @@ func (e *endpoint) Path() string {
 }
 
 // rebindLocked brings the endpoint up at path with acc, moves it there, or, when it is
-// already there, applies a changed access. It is the one place a socket is installed and
-// the one way an endpoint comes up, so Wire's first attempt and its reload callback are
-// the same call, and an endpoint already at path is left as it is: Wire registers the
-// callback before the first attempt, so a HUP that lands between the two has the
-// callback do the first bind, and the first attempt then finds the socket it was about
-// to create already up.
+// already there, applies a changed access; with nothing changed it does nothing, which
+// is what lets Wire's first attempt and its reload callback be the same call.
 //
 // The new socket is bound before the old one is given up: a bad path in a reloaded
 // config leaves the operator with the endpoint they already had rather than none. serve
