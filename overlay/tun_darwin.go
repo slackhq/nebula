@@ -48,7 +48,12 @@ type tun struct {
 	routeSweepEvery time.Duration
 	closed          bool
 
-	// lastRouteEvent is when the routing socket last reported something that may have freed a prefix, in unix nanos
+	// routeMovers is who last changed each unsafe_route prefix since the last reconcile, for its logs. It has its own
+	// lock so the route watcher never waits on a reconcile
+	routeMoversMu sync.Mutex
+	routeMovers   map[netip.Prefix]routeMover
+
+	// lastRouteEvent is when the routing socket last reported something that may have moved a prefix, in unix nanos
 	lastRouteEvent atomic.Int64
 }
 

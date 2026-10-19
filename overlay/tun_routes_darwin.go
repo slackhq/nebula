@@ -59,6 +59,34 @@ type routeState struct {
 	holder int
 }
 
+// routeMover is the process that last added, changed or deleted a route for an unsafe_route's prefix, for logs. Its name
+// is looked up as the message arrives, route(8) has exited by the time the table settles
+type routeMover struct {
+	pid  int32
+	name string
+}
+
+// logArgs appends m to a log line's args, when we know who it was
+func (m routeMover) logArgs(args ...any) []any {
+	if m.pid == 0 {
+		return args
+	}
+	args = append(args, "pid", m.pid)
+	if m.name != "" {
+		args = append(args, "process", m.name)
+	}
+	return args
+}
+
+// processName is the name of process pid, truncated to 16 bytes, or empty when it has already exited
+func processName(pid int32) string {
+	kp, err := unix.SysctlKinfoProc("kern.proc.pid", int(pid))
+	if err != nil || kp.Proc.P_pid != pid {
+		return ""
+	}
+	return unix.ByteSliceToString(kp.Proc.P_comm[:])
+}
+
 // installRoutes returns the routes we put in the system routing table, one per prefix
 func installRoutes(routes []Route) []Route {
 	seen := make(map[netip.Prefix]struct{}, len(routes))
@@ -206,6 +234,11 @@ func (t *tun) reconcileRoutes() {
 		return
 	}
 
+	t.routeMoversMu.Lock()
+	movers := t.routeMovers
+	t.routeMovers = nil
+	t.routeMoversMu.Unlock()
+
 	msgs, err := fetchRoutes()
 	if err != nil {
 		t.l.Error("Failed to read the system routing table", "error", err)
@@ -216,6 +249,7 @@ func (t *tun) reconcileRoutes() {
 	for _, r := range installRoutes(*t.Routes.Load()) {
 		p := r.Cidr.Masked()
 		prev := t.routeStates[p]
+		by := movers[p]
 
 		holder := routeInterfaceIn(msgs, p)
 		switch {
@@ -225,12 +259,12 @@ func (t *tun) reconcileRoutes() {
 		case holder != 0:
 			// Another interface taking a prefix we left alone puts ours back in line behind theirs
 			if prev.kind != routeYielded || prev.holder != holder {
-				t.l.Info("unsafe_route is routed through another interface, it will be added back when that route is removed", "route", r.Cidr, "interface", interfaceName(holder))
+				t.l.Info("unsafe_route is routed through another interface, it will be added back when that route is removed", by.logArgs("route", r.Cidr, "interface", interfaceName(holder))...)
 			}
 			states[p] = routeState{kind: routeYielded, holder: holder}
 
 		case prev.kind == routeInstalled:
-			t.l.Warn("unsafe_route was removed outside nebula, leaving it until a reload or another interface takes its destination", "route", r.Cidr)
+			t.l.Warn("unsafe_route was removed outside nebula, leaving it until a reload or another interface takes its destination", by.logArgs("route", r.Cidr)...)
 			states[p] = routeState{kind: routeRemoved}
 
 		case prev.kind == routeRemoved:
@@ -241,7 +275,7 @@ func (t *tun) reconcileRoutes() {
 			switch {
 			case err == nil:
 				if prev.kind == routeYielded {
-					t.l.Info("unsafe_route's destination is free again, added it", "route", r)
+					t.l.Info("unsafe_route's destination is free again, added it", by.logArgs("route", r)...)
 				} else {
 					t.l.Info("Added route", "route", r)
 				}
@@ -261,7 +295,7 @@ func (t *tun) reconcileRoutes() {
 }
 
 // startRouteWatch starts reconciling the unsafe_routes, every routeSweepEvery and, when watch isn't nil, once the
-// routing table settles after anything that may have freed a prefix
+// routing table settles after anything that may have moved a prefix
 func (t *tun) startRouteWatch(watch *os.File) {
 	t.routesMu.Lock()
 	defer t.routesMu.Unlock()
@@ -308,7 +342,7 @@ func openRouteSocket() (*os.File, error) {
 }
 
 // watchRoutes reconciles the unsafe_routes once the routing table has been quiet for routeRetryDelay after a message
-// that may have freed a prefix. A table that keeps changing is reconciled every routeSweepEvery regardless.
+// that may have moved a prefix. A table that keeps changing is reconciled every routeSweepEvery regardless.
 func (t *tun) watchRoutes(f *os.File) {
 	var reconciled atomic.Int64
 	settle := time.AfterFunc(time.Hour, func() {
@@ -319,6 +353,7 @@ func (t *tun) watchRoutes(f *os.File) {
 	defer settle.Stop()
 
 	var burst time.Time
+	self := int32(os.Getpid())
 	b := make([]byte, os.Getpagesize())
 	for {
 		n, err := f.Read(b)
@@ -329,8 +364,18 @@ func (t *tun) watchRoutes(f *os.File) {
 			return
 		}
 
-		if !routesMayBeFreed(b[:n], *t.Routes.Load()) {
+		moved, p, pid := routesMayHaveMoved(b[:n], *t.Routes.Load())
+		if !moved {
 			continue
+		}
+		// Our own are already in routeStates
+		if p.IsValid() && pid != self {
+			t.routeMoversMu.Lock()
+			if t.routeMovers == nil {
+				t.routeMovers = make(map[netip.Prefix]routeMover)
+			}
+			t.routeMovers[p] = routeMover{pid: pid, name: processName(pid)}
+			t.routeMoversMu.Unlock()
 		}
 
 		now := time.Now()
@@ -342,56 +387,59 @@ func (t *tun) watchRoutes(f *os.File) {
 	}
 }
 
-// routesMayBeFreed reports whether b, one routing socket message, may have freed a prefix one of routes installs. That's
-// a route for it removed, or an interface that lost an address or changed state, since detaching an interface deletes
-// its routes without a message of their own. The header is read directly, x/net/route skips the RTM_IFINFO the socket
-// sends, which has no interface address, and misreads the unpadded sockaddrs in messages the kernel makes itself.
-func routesMayBeFreed(b []byte, routes []Route) bool {
+// routesMayHaveMoved reports whether b, one routing socket message, may have freed a prefix one of routes installs or
+// handed it to another interface. That's a route for it added, changed or removed, or an interface that lost an address
+// or changed state, since detaching an interface deletes its routes without a message of their own. The header is read
+// directly, x/net/route skips the RTM_IFINFO the socket sends, which has no interface address, and misreads the
+// unpadded sockaddrs in messages the kernel makes itself. A request naming one of the prefixes also returns that prefix
+// and the pid of the process that made it.
+func routesMayHaveMoved(b []byte, routes []Route) (moved bool, p netip.Prefix, pid int32) {
 	if len(b) < 4 {
-		return false
+		return false, p, 0
 	}
 	switch int(b[3]) {
 	case unix.RTM_IFINFO, unix.RTM_DELADDR:
-		return true
-	case unix.RTM_DELETE:
+		return true, p, 0
+	case unix.RTM_ADD, unix.RTM_CHANGE, unix.RTM_DELETE:
 	default:
-		return false
+		return false, p, 0
 	}
 
 	if len(b) < unix.SizeofRtMsghdr {
-		return false
+		return false, p, 0
 	}
 	hdr := (*unix.RtMsghdr)(unsafe.Pointer(&b[0]))
 	// A failed request is reported too, and a scoped route never held the prefix
 	if hdr.Errno != 0 || hdr.Flags&unix.RTF_IFSCOPE != 0 {
-		return false
+		return false, p, 0
 	}
 
 	if hdr.Pid == 0 {
 		// The kernel's own, which x/net/route can't parse. Neighbors coming and going are host routes, anything else
 		// could be holding a prefix
-		return hdr.Flags&(unix.RTF_HOST|unix.RTF_LLINFO) == 0
+		return hdr.Flags&(unix.RTF_HOST|unix.RTF_LLINFO) == 0, p, 0
 	}
 
 	// Replies to a request carry the requester's padded sockaddrs
 	msgs, err := netroute.ParseRIB(unix.NET_RT_DUMP, b)
 	if err != nil || len(msgs) != 1 {
-		return false
+		return false, p, 0
 	}
 	m, ok := msgs[0].(*netroute.RouteMessage)
 	if !ok || len(m.Addrs) <= unix.RTAX_NETMASK {
-		return false
+		return false, p, 0
 	}
-	p, ok := routePrefix(m.Addrs[unix.RTAX_DST], m.Addrs[unix.RTAX_NETMASK])
+	p, ok = routePrefix(m.Addrs[unix.RTAX_DST], m.Addrs[unix.RTAX_NETMASK])
 	if !ok {
-		return false
+		return false, netip.Prefix{}, 0
 	}
+	p = p.Masked()
 	for _, r := range installRoutes(routes) {
 		if r.Cidr.Masked() == p {
-			return true
+			return true, p, hdr.Pid
 		}
 	}
-	return false
+	return false, netip.Prefix{}, 0
 }
 
 // interfaceName is the name of the interface with index i, for logs

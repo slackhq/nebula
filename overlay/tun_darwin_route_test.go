@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -117,7 +118,7 @@ const (
 	interfaceChanged = "7000050e000000004288000023000000060000060e000000dc05000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000073e5ce6a0000000000000000000001000000000000000000"
 )
 
-func TestRoutesMayBeFreed(t *testing.T) {
+func TestRoutesMayHaveMoved(t *testing.T) {
 	cidr := netip.MustParsePrefix("192.168.1.0/24")
 	via := routing.Gateways{routing.NewGateway(netip.MustParseAddr("10.250.0.2"), 1)}
 	routes := []Route{{Cidr: cidr, Via: via, Install: true}}
@@ -144,27 +145,73 @@ func TestRoutesMayBeFreed(t *testing.T) {
 		return b
 	}
 	lan, mask := [4]byte{192, 168, 1, 0}, [4]byte{255, 255, 255, 0}
+	routesMayHaveMoved := func(b []byte, routes []Route) bool {
+		moved, _, _ := routesMayHaveMoved(b, routes)
+		return moved
+	}
 
-	assert.True(t, routesMayBeFreed(request(unix.RTM_DELETE, unix.RTF_UP, lan, mask), routes))
-	assert.False(t, routesMayBeFreed(request(unix.RTM_ADD, unix.RTF_UP, lan, mask), routes))
-	assert.False(t, routesMayBeFreed(request(unix.RTM_DELETE, unix.RTF_UP|unix.RTF_IFSCOPE, lan, mask), routes), "a scoped route never held the prefix")
-	assert.False(t, routesMayBeFreed(request(unix.RTM_DELETE, unix.RTF_UP, lan, [4]byte{255, 255, 0, 0}), routes), "only an exact prefix counts")
-	assert.False(t, routesMayBeFreed(request(unix.RTM_DELETE, unix.RTF_UP, lan, mask), []Route{{Cidr: cidr, Install: true}}), "a route with no via is never installed")
-	assert.False(t, routesMayBeFreed(request(unix.RTM_DELETE, unix.RTF_UP, lan, mask), []Route{{Cidr: cidr, Via: via}}), "install: false")
+	assert.True(t, routesMayHaveMoved(request(unix.RTM_DELETE, unix.RTF_UP, lan, mask), routes))
+	assert.True(t, routesMayHaveMoved(request(unix.RTM_ADD, unix.RTF_UP, lan, mask), routes))
+	assert.True(t, routesMayHaveMoved(request(unix.RTM_CHANGE, unix.RTF_UP, lan, mask), routes))
+	assert.False(t, routesMayHaveMoved(request(unix.RTM_GET, unix.RTF_UP, lan, mask), routes))
+	assert.False(t, routesMayHaveMoved(request(unix.RTM_DELETE, unix.RTF_UP|unix.RTF_IFSCOPE, lan, mask), routes), "a scoped route never held the prefix")
+	assert.False(t, routesMayHaveMoved(request(unix.RTM_ADD, unix.RTF_UP|unix.RTF_IFSCOPE, lan, mask), routes), "configd adds a scoped copy for each interface")
+	assert.False(t, routesMayHaveMoved(request(unix.RTM_DELETE, unix.RTF_UP, lan, [4]byte{255, 255, 0, 0}), routes), "only an exact prefix counts")
+	assert.False(t, routesMayHaveMoved(request(unix.RTM_DELETE, unix.RTF_UP, lan, mask), []Route{{Cidr: cidr, Install: true}}), "a route with no via is never installed")
+	assert.False(t, routesMayHaveMoved(request(unix.RTM_DELETE, unix.RTF_UP, lan, mask), []Route{{Cidr: cidr, Via: via}}), "install: false")
 
 	failed := request(unix.RTM_DELETE, unix.RTF_UP, lan, mask)
 	binary.NativeEndian.PutUint32(failed[24:28], uint32(unix.ESRCH))
-	assert.False(t, routesMayBeFreed(failed, routes), "a failed request is echoed too")
+	assert.False(t, routesMayHaveMoved(failed, routes), "a failed request is echoed too")
 
 	_, err := netroute.ParseRIB(unix.NET_RT_DUMP, raw(kernelSubnetDelete))
 	require.Error(t, err, "if x/net/route learns to parse these, match their prefix instead")
-	assert.True(t, routesMayBeFreed(raw(kernelSubnetDelete), routes), "the kernel's own deletes could be any prefix")
+	assert.True(t, routesMayHaveMoved(raw(kernelSubnetDelete), routes), "the kernel's own deletes could be any prefix")
 	neighbor := raw(kernelSubnetDelete)
 	binary.NativeEndian.PutUint32(neighbor[8:12], unix.RTF_UP|unix.RTF_HOST|unix.RTF_LLINFO)
-	assert.False(t, routesMayBeFreed(neighbor, routes), "a neighbor expiring")
+	assert.False(t, routesMayHaveMoved(neighbor, routes), "a neighbor expiring")
 
-	assert.True(t, routesMayBeFreed(raw(addressRemoved), routes))
-	assert.True(t, routesMayBeFreed(raw(interfaceChanged), routes), "detaching an interface deletes its routes without a message for each")
+	assert.True(t, routesMayHaveMoved(raw(addressRemoved), routes))
+	assert.True(t, routesMayHaveMoved(raw(interfaceChanged), routes), "detaching an interface deletes its routes without a message for each")
+}
+
+// A request names its prefix and who made it, the kernel's own and interface changes name neither
+func TestRoutesMayHaveMovedSaysWho(t *testing.T) {
+	cidr := netip.MustParsePrefix("192.168.1.0/24")
+	routes := []Route{{Cidr: cidr, Via: routing.Gateways{routing.NewGateway(netip.MustParseAddr("10.250.0.2"), 1)}, Install: true}}
+	m := &netroute.RouteMessage{
+		Version: unix.RTM_VERSION,
+		Type:    unix.RTM_CHANGE,
+		Flags:   unix.RTF_UP,
+		ID:      1234,
+		Addrs: []netroute.Addr{
+			unix.RTAX_DST:     &netroute.Inet4Addr{IP: [4]byte{192, 168, 1, 0}},
+			unix.RTAX_GATEWAY: &netroute.LinkAddr{Index: 4},
+			unix.RTAX_NETMASK: &netroute.Inet4Addr{IP: [4]byte{255, 255, 255, 0}},
+		},
+	}
+	b, err := m.Marshal()
+	require.NoError(t, err)
+	moved, p, pid := routesMayHaveMoved(b, routes)
+	assert.True(t, moved)
+	assert.Equal(t, cidr, p)
+	assert.Equal(t, int32(1234), pid)
+
+	for name, s := range map[string]string{"kernel": kernelSubnetDelete, "ifinfo": interfaceChanged} {
+		b, err := hex.DecodeString(s)
+		require.NoError(t, err)
+		moved, p, pid := routesMayHaveMoved(b, routes)
+		assert.True(t, moved, name)
+		assert.False(t, p.IsValid(), name)
+		assert.Zero(t, pid, name)
+	}
+}
+
+func TestProcessName(t *testing.T) {
+	assert.Equal(t, "launchd", processName(1))
+	self := filepath.Base(os.Args[0])
+	assert.Equal(t, self[:min(len(self), 16)], processName(int32(os.Getpid())))
+	assert.Empty(t, processName(-1))
 }
 
 // newRouteTestTun is an activated tun for the root tests below with an unsafe_route for each of cidrs. sweep replaces
@@ -312,8 +359,8 @@ func TestTunYieldsAfterLeavingARouteDeletedByHand(t *testing.T) {
 		sweep   time.Duration
 		misfile func(t *testing.T, tn *tun, cidr string)
 	}{
-		// The table went quiet with nothing in its place
-		"settled": {"10.251.6.0/24", 2 * routeRetryDelay, func(t *testing.T, tn *tun, cidr string) {
+		// The table went quiet with nothing in its place. The minute sweep leaves noticing the lan's route to the watcher
+		"settled": {"10.251.6.0/24", 0, func(t *testing.T, tn *tun, cidr string) {
 			require.Eventually(t, func() bool { return routeStateOf(tn, cidr).kind == routeRemoved }, 5*time.Second, 50*time.Millisecond)
 		}},
 		// The sweep that caps a table that never settles
@@ -338,6 +385,31 @@ func TestTunYieldsAfterLeavingARouteDeletedByHand(t *testing.T) {
 
 			routeCmd(t, "delete", tc.cidr)
 			assert.Eventually(t, func() bool { return routeVia(t, tc.cidr) == ours }, 5*time.Second, 50*time.Millisecond)
+		})
+	}
+}
+
+// Changing our route to another interface hands it the prefix, ours goes back once theirs is removed rather than being
+// taken for a hand delete
+func TestTunYieldsToARouteChangedAway(t *testing.T) {
+	for _, cidr := range []string{"10.251.8.0/24", "2001:db8:258::/64"} {
+		t.Run(cidr, func(t *testing.T) {
+			tn, _, _ := newRouteTestTun(t, 0, cidr)
+			ours := tn.linkAddr.Load().Index
+			require.Equal(t, ours, routeVia(t, cidr))
+
+			cleanupRoute(t, cidr)
+			routeCmd(t, "change", cidr, "-interface", "lo0")
+			lo0, err := net.InterfaceByName("lo0")
+			require.NoError(t, err)
+			require.Equal(t, lo0.Index, routeVia(t, cidr))
+			require.Eventually(t, func() bool {
+				s := routeStateOf(tn, cidr)
+				return s.kind == routeYielded && s.holder == lo0.Index
+			}, 5*time.Second, 50*time.Millisecond)
+
+			routeCmd(t, "delete", cidr)
+			assert.Eventually(t, func() bool { return routeVia(t, cidr) == ours }, 5*time.Second, 50*time.Millisecond)
 		})
 	}
 }
