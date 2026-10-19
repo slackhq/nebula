@@ -58,6 +58,20 @@ func TestResolveSocketTrustsANamedConfig(t *testing.T) {
 	assert.Equal(t, nowhereSocket, p)
 }
 
+// TestResolveSocketSaysTheSocketIsDisabled: a config that turns the control socket off
+// is answered with that, not with a dial to a path nothing serves. -socket still wins.
+func TestResolveSocketSaysTheSocketIsDisabled(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "config.yml")
+	require.NoError(t, os.WriteFile(cfg, []byte("local_api:\n  control:\n    enabled: false\n"), 0600))
+
+	_, _, _, err := resolveSocket("", cfg)
+	require.ErrorContains(t, err, "the control socket is disabled in "+cfg+" by local_api.control.enabled")
+
+	p, _, _, err := resolveSocket("/explicit.sock", cfg)
+	require.NoError(t, err)
+	assert.Equal(t, "/explicit.sock", p)
+}
+
 // TestResolveSocketUsesTheDefaultWithoutAnOverride: a config that does not name the
 // socket means the default path, the same one the daemon serves with that config, and
 // no config at all means the default too, since that is where a daemon started without

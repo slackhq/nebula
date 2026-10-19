@@ -244,6 +244,8 @@ punchy:
   # `nebula ctl <command>`. It defaults to /var/run/nebula/ctl.sock on Linux, macOS and
   # the BSDs; on Windows it is a named pipe under \\.\pipe\ProtectedPrefix\Administrators.
   #control:
+    # Set to false to turn the control socket off. Reloadable.
+    #enabled: true
     # The absolute path where the control socket should live, or a full pipe name on
     # Windows. The last directory is created if missing, and must be owned by root or by
     # the user running nebula. It must not be writable by anyone else.

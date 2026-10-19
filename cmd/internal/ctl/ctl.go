@@ -418,6 +418,12 @@ func socketFromConfigFile(configPath string, named bool) (path, readConfig, over
 		return "", "", "", fmt.Errorf("nebula: could not read %s: %s", configPath, err)
 	}
 
+	// A daemon running this config serves no socket; dialing the path would only say
+	// that nothing is there.
+	if !localapi.ControlEnabled(c) {
+		return "", "", "", fmt.Errorf("nebula: the control socket is disabled in %s by %s", configPath, localapi.CtlEnabledKey)
+	}
+
 	// The same call the daemon makes, so the two agree on the path and on what makes a
 	// path unusable.
 	p, err := localapi.SocketPathFromConfig(c)

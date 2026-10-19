@@ -9,15 +9,14 @@ import (
 	"github.com/slackhq/nebula/config"
 )
 
-// Wire brings up the local control socket for a running nebula and keeps it pointed at
-// the configured path across reloads.
+// Wire brings up the local control socket for a running nebula, unless the config turns
+// it off, and keeps it following the config across reloads.
 //
 // Every entry point that runs nebula as a daemon calls this, so the endpoint behaves the
 // same whether nebula was started from a shell or by a service manager. It deliberately
-// does not live in nebula.Main: the endpoint is on by default with no key to disable it,
-// so an embedder inside an app sandbox would have no way to decline a socket it cannot
-// use. Wiring it at the daemon entry points means embedders get the command registry and
-// no listener.
+// does not live in nebula.Main: the endpoint is on by default, so an embedder inside an
+// app sandbox would have to know to turn off a socket it cannot use. Wiring it at the
+// daemon entry points means embedders get the command registry and no listener.
 //
 // Every failure below is a warning, bar one. Nebula is expected to keep forwarding
 // packets whether or not anyone can reach it; but a name that another process holds is
@@ -35,6 +34,9 @@ func Wire(ctx context.Context, l *slog.Logger, c *config.C, reg *commands.Regist
 	// the path is a no-op.
 	reconcile := followControlConfig(ctx, l, c, srv)
 	reconcile(c)
+	if !ControlEnabled(c) {
+		l.Info("Local control socket is disabled", "key", CtlEnabledKey)
+	}
 	return srv
 }
 
@@ -59,6 +61,14 @@ func Wire(ctx context.Context, l *slog.Logger, c *config.C, reg *commands.Regist
 // down and skip every callback queued behind this one.
 func followControlConfig(ctx context.Context, l *slog.Logger, c *config.C, srv *Server) func(*config.C) {
 	reconcile := func(c *config.C) {
+		if !ControlEnabled(c) {
+			if srv.Path() != "" {
+				srv.Stop()
+				l.Info("Stopped the local control socket, it is disabled in the reloaded config")
+			}
+			return
+		}
+
 		want, err := SocketPathFromConfig(c)
 		if err != nil {
 			if srv.Path() == "" {

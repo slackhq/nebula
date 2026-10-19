@@ -3,6 +3,18 @@ package localapi
 // DirName is the directory under /var/run that holds nebula's sockets by default.
 const DirName = "nebula"
 
+// CtlEnabledKey is the optional config key that turns the control socket off. It is on
+// unless the config says false, and reloadable: a reload that turns it off removes the
+// socket, and one that turns it back on brings it up again.
+const CtlEnabledKey = "local_api.control.enabled"
+
+// ControlEnabled reports whether a config leaves the control socket on. nebula ctl reads
+// it too, so a client pointed at a config that turned the socket off says so rather than
+// failing to dial.
+func ControlEnabled(c interface{ GetBool(string, bool) bool }) bool {
+	return c.GetBool(CtlEnabledKey, true)
+}
+
 // CtlSocketKey is the optional config key naming the control socket. Unset, the socket
 // is DefaultSocketPath, one fixed path that suits a daemon running as root, which is
 // what the tun device needs anyway. A daemon run as another user, or a second daemon on

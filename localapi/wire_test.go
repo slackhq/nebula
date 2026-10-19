@@ -142,3 +142,34 @@ func TestWireRecoversOnPlainReloadAfterBadBind(t *testing.T) {
 	assert.Empty(t, errText)
 	assert.Equal(t, "[still]", out)
 }
+
+// TestWireControlCanBeDisabled: local_api.control.enabled false serves no socket, and
+// the key follows reloads both ways.
+func TestWireControlCanBeDisabled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	path := testSocket(t)
+	section := func(enabled bool) string {
+		return fmt.Sprintf("local_api:\n  control:\n    enabled: %t\n    socket: %s\n", enabled, path)
+	}
+
+	c := config.NewC(test.NewLogger())
+	require.NoError(t, c.LoadString(section(false)))
+	srv := Wire(ctx, test.NewLogger(), c, basicRegistry())
+	t.Cleanup(srv.Stop)
+	assert.Empty(t, srv.Path())
+	_, err := os.Lstat(path)
+	assert.True(t, os.IsNotExist(err), "no socket is bound")
+
+	require.NoError(t, c.ReloadConfigString(section(true)).Err)
+	assert.Equal(t, path, srv.Path())
+	out, errText := run(t, path, "echo", "on")
+	assert.Empty(t, errText)
+	assert.Equal(t, "[on]", out)
+
+	require.NoError(t, c.ReloadConfigString(section(false)).Err)
+	assert.Empty(t, srv.Path())
+	_, err = os.Lstat(path)
+	assert.True(t, os.IsNotExist(err), "the socket is removed")
+}
