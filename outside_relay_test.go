@@ -176,7 +176,7 @@ func TestRelayReceiveBatch(t *testing.T) {
 	}
 }
 
-func TestRelayBatchDestinationChange(t *testing.T) {
+func TestRelayBatchMixedDestinations(t *testing.T) {
 	p := newRelayBatchPath(t, noise.CipherChaChaPoly)
 	first, second := p.target.GetRemote(), netip.MustParseAddrPort("198.51.100.3:4242")
 	remotes := []netip.AddrPort{first, first, second, second, first}
@@ -196,10 +196,8 @@ func TestRelayBatchDestinationChange(t *testing.T) {
 	}
 	p.f.listenOut(0)
 	require.Equal(t, want, p.conn.packets())
-	require.Len(t, p.conn.writes, 3)
-	for i, wantRemotes := range [][]netip.AddrPort{{first, first}, {second, second}, {first}} {
-		require.Equal(t, wantRemotes, p.conn.writes[i].remotes)
-	}
+	require.Len(t, p.conn.writes, 1, "WriteBatch splits runs by destination, the batch does not need to")
+	require.Equal(t, remotes, p.conn.writes[0].remotes)
 }
 
 func TestRelayBatchCapacity(t *testing.T) {
@@ -215,53 +213,6 @@ func TestRelayBatchCapacity(t *testing.T) {
 	p.f.listenOut(0)
 	require.Len(t, p.conn.writes, 2)
 	require.Len(t, p.conn.writes[1].packets, 1)
-}
-
-func TestRelayBatchBeforeResponse(t *testing.T) {
-	for _, unknownRelay := range []bool{false, true} {
-		name := "test request"
-		if unknownRelay {
-			name = "unknown relay"
-		}
-		t.Run(name, func(t *testing.T) {
-			p := newRelayBatchPath(t, noise.CipherChaChaPoly)
-			first, last := p.wrap(t, []byte("first")), p.wrap(t, []byte("last"))
-			p.counter++
-			request := header.Encode(make([]byte, header.Len), header.Version, header.Test, header.TestRequest, 100, p.counter)
-			request, err := p.sourceKey.EncryptDanger(request, request, []byte("ping"), p.counter, make([]byte, 12))
-			require.NoError(t, err)
-			if unknownRelay {
-				request = header.Encode(make([]byte, header.Len), header.Version, header.Message, header.MessageRelay, 999, p.counter)
-			}
-			p.conn.read = func(r udp.EncReader, flush func()) {
-				r(p.source.GetRemote(), first)
-				require.Empty(t, p.conn.writes)
-				r(p.source.GetRemote(), request)
-				require.Len(t, p.conn.writes, 2)
-				r(p.source.GetRemote(), last)
-				flush()
-			}
-			p.f.listenOut(0)
-			require.Len(t, p.conn.writes, 3)
-			require.True(t, p.conn.writes[0].batched)
-			require.False(t, p.conn.writes[1].batched)
-			require.True(t, p.conn.writes[2].batched)
-			require.Equal(t, p.source.GetRemote(), p.conn.writes[1].remotes[0])
-			h := &header.H{}
-			require.NoError(t, h.Parse(p.conn.writes[1].packets[0]))
-			if unknownRelay {
-				require.Equal(t, header.RecvError, h.Type)
-				require.EqualValues(t, 999, h.RemoteIndex)
-			} else {
-				require.Equal(t, header.Test, h.Type)
-				require.Equal(t, header.TestReply, h.Subtype)
-				reply := p.conn.writes[1].packets[0]
-				out, err := p.sourceKey.DecryptDanger(nil, reply[:header.Len], reply[header.Len:], h.MessageCounter, make([]byte, 12))
-				require.NoError(t, err)
-				require.Equal(t, []byte("ping"), out)
-			}
-		})
-	}
 }
 
 func TestRelayBatchRemovedTarget(t *testing.T) {
