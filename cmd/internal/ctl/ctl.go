@@ -1,6 +1,8 @@
 package ctl
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -184,16 +186,18 @@ func Run(args []string) int {
 // JSON request is answered in Result with the value itself, printed as it came, since a
 // value that happens to be a string is still JSON to the script reading it. Indentation
 // is the client's business: whitespace does not survive a JSON envelope, and the daemon
-// has no reason to care how its answer is laid out.
+// has no reason to care how its answer is laid out. The bytes are re-indented rather
+// than decoded and encoded again, which would sort the keys and round the numbers.
 func output(res *localapi.Response, format commands.Format) string {
 	switch format {
 	case commands.FormatJSON:
 		return string(res.Result)
 	case commands.FormatPrettyJSON:
-		if indented, ok := localapi.Pretty(res.Result); ok {
-			return indented
+		var buf bytes.Buffer
+		if err := json.Indent(&buf, res.Result, "", "    "); err != nil {
+			return string(res.Result)
 		}
-		return string(res.Result)
+		return buf.String()
 	default:
 		return string(res.Text)
 	}

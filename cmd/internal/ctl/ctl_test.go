@@ -191,9 +191,16 @@ func TestOutputRendersForTheFormatAsked(t *testing.T) {
 	assert.Equal(t, `"some string"`, output(str, commands.FormatJSON))
 	assert.Equal(t, `"some string"`, output(str, commands.FormatPrettyJSON))
 
-	obj := &localapi.Response{Result: json.RawMessage(`{"a":1}`)}
-	assert.Equal(t, `{"a":1}`, output(obj, commands.FormatJSON))
-	assert.Equal(t, "{\n    \"a\": 1\n}", output(obj, commands.FormatPrettyJSON))
+	// Keys stay in the order the daemon wrote them and a uint64 past 2^53 is not rounded,
+	// which decoding into `any` and encoding again would do.
+	obj := &localapi.Response{Result: json.RawMessage(`{"z":18446744073709551615,"a":{"y":[1,2],"b":true}}`)}
+	//nolint:testifylint // the layout is what is under test, which JSONEq would not see
+	assert.Equal(t, `{"z":18446744073709551615,"a":{"y":[1,2],"b":true}}`, output(obj, commands.FormatJSON))
+	//nolint:testifylint // as above
+	assert.Equal(t, "{\n    \"z\": 18446744073709551615,\n    \"a\": {\n        \"y\": [\n            1,\n            2\n        ],\n        \"b\": true\n    }\n}", output(obj, commands.FormatPrettyJSON))
+
+	bad := &localapi.Response{Result: json.RawMessage(`{"a":`)}
+	assert.Equal(t, `{"a":`, output(bad, commands.FormatPrettyJSON), "what cannot be indented is printed as it came")
 
 	none := &localapi.Response{}
 	assert.Empty(t, output(none, commands.FormatJSON))

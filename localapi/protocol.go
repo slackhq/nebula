@@ -75,7 +75,7 @@ type Response struct {
 	//
 	// Whitespace inside a JSON result is not preserved: an envelope normalises it, and
 	// in an API it carries no meaning anyway. Formatting a result for a human to read is
-	// the client's job, which is what Pretty is for.
+	// the client's job.
 	Result json.RawMessage `json:"result,omitempty"`
 
 	// Text is what a request for text produced: the command's own human rendering, the

@@ -1,7 +1,6 @@
 package localapi
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -161,26 +160,4 @@ func readResponse(conn net.Conn) (*Response, error) {
 	}
 
 	return res, nil
-}
-
-// Pretty renders a JSON Result indented for a human reader, reporting false when the
-// result is empty or is not JSON and there is nothing to indent. A value that is a JSON
-// string has nothing to indent either, and comes back as it is, quotes and all: the
-// caller asked for JSON and that is what the value is.
-//
-// The bytes are re-indented rather than decoded and re-encoded: decoding into `any`
-// sorts object keys and routes every number through float64, so the layout would
-// differ from what the daemon wrote and from the ssh -pretty path.
-func Pretty(raw json.RawMessage) (string, bool) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 {
-		return "", false
-	}
-
-	var buf bytes.Buffer
-	if err := json.Indent(&buf, trimmed, "", "    "); err != nil {
-		return "", false
-	}
-
-	return buf.String(), true
 }
