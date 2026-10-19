@@ -20,22 +20,22 @@ import (
 func TestResolveSocketReportsAnUnreadableConfig(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "typo.yml")
 
-	_, _, _, err := resolveSocket("", missing)
+	_, err := resolveSocket("", missing)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), missing)
 }
 
 // TestResolveSocketGuessedConfigNeedNotBeReadable: a config nobody named is a guess, and
-// one that cannot be read, a root daemon's config read by another user the socket
-// admits, means the default path rather than an error.
+// one that cannot be read, a root daemon's config read by a member of the socket's
+// group, means the default path rather than an error.
 func TestResolveSocketGuessedConfigNeedNotBeReadable(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "config.yml")
 
-	p, _, _, err := socketFromConfigFile(missing, false)
+	p, err := socketFromConfigFile(missing, false)
 	require.NoError(t, err)
 	assert.Equal(t, localapi.DefaultSocketPath(), p)
 
-	_, _, _, err = socketFromConfigFile(missing, true)
+	_, err = socketFromConfigFile(missing, true)
 	require.ErrorContains(t, err, missing)
 }
 
@@ -53,7 +53,7 @@ func TestResolveSocketTrustsANamedConfig(t *testing.T) {
 	cfg := filepath.Join(t.TempDir(), "config.yml")
 	require.NoError(t, os.WriteFile(cfg, []byte(namedSocketConfig), 0600))
 
-	p, _, _, err := resolveSocket("", cfg)
+	p, err := resolveSocket("", cfg)
 	require.NoError(t, err)
 	assert.Equal(t, nowhereSocket, p)
 }
@@ -64,10 +64,10 @@ func TestResolveSocketSaysTheSocketIsDisabled(t *testing.T) {
 	cfg := filepath.Join(t.TempDir(), "config.yml")
 	require.NoError(t, os.WriteFile(cfg, []byte("local_api:\n  control:\n    enabled: false\n"), 0600))
 
-	_, _, _, err := resolveSocket("", cfg)
+	_, err := resolveSocket("", cfg)
 	require.ErrorContains(t, err, "the control socket is disabled in "+cfg+" by local_api.control.enabled")
 
-	p, _, _, err := resolveSocket("/explicit.sock", cfg)
+	p, err := resolveSocket("/explicit.sock", cfg)
 	require.NoError(t, err)
 	assert.Equal(t, "/explicit.sock", p)
 }
@@ -80,45 +80,20 @@ func TestResolveSocketUsesTheDefaultWithoutAnOverride(t *testing.T) {
 	cfg := filepath.Join(t.TempDir(), "config.yml")
 	require.NoError(t, os.WriteFile(cfg, []byte("static_host_map: {}\n"), 0600))
 
-	p, readConfig, overrideIn, err := resolveSocket("", cfg)
+	p, err := resolveSocket("", cfg)
 	require.NoError(t, err)
 	assert.Equal(t, localapi.DefaultSocketPath(), p)
-	assert.Equal(t, cfg, readConfig)
-	assert.Empty(t, overrideIn)
 
 	// The test binary has no config next to it.
-	p, readConfig, overrideIn, err = resolveSocket("", "")
+	p, err = resolveSocket("", "")
 	require.NoError(t, err)
 	assert.Equal(t, localapi.DefaultSocketPath(), p)
-	assert.Empty(t, readConfig)
-	assert.Empty(t, overrideIn)
 }
 
 func TestResolveSocketFlagWins(t *testing.T) {
-	p, _, overrideIn, err := resolveSocket("/explicit.sock", "/does/not/matter.yml")
+	p, err := resolveSocket("/explicit.sock", "/does/not/matter.yml")
 	require.NoError(t, err)
 	assert.Equal(t, "/explicit.sock", p)
-	assert.Empty(t, overrideIn)
-}
-
-// TestResolveSocketSaysWhenTheConfigNamedThePath: a path read from the override key is
-// reported with the file it came from, so a dial failure can say that a daemon which
-// has not reloaded since the key changed is still on the old path. A derived path is
-// not an override.
-func TestResolveSocketSaysWhenTheConfigNamedThePath(t *testing.T) {
-	base := t.TempDir()
-
-	named := filepath.Join(base, "named.yml")
-	require.NoError(t, os.WriteFile(named, []byte(namedSocketConfig), 0600))
-	_, _, overrideIn, err := resolveSocket("", named)
-	require.NoError(t, err)
-	assert.Equal(t, named, overrideIn)
-
-	derived := filepath.Join(base, "derived.yml")
-	require.NoError(t, os.WriteFile(derived, []byte("static_host_map: {}\n"), 0600))
-	_, _, overrideIn, err = resolveSocket("", derived)
-	require.NoError(t, err)
-	assert.Empty(t, overrideIn)
 }
 
 // TestParseCommandReportsWhatFlagSaid covers the three ways a flag line goes wrong. They

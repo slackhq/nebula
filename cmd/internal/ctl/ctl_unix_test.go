@@ -22,7 +22,7 @@ func TestResolveSocketDiagnosesAnOverlongOverride(t *testing.T) {
 	long := "/" + strings.Repeat("x", 120)
 	require.NoError(t, os.WriteFile(cfg, []byte("local_api:\n  control:\n    socket: "+long+"\n"), 0600))
 
-	_, _, _, err := resolveSocket("", cfg)
+	_, err := resolveSocket("", cfg)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "too long for this platform")
 	assert.ErrorContains(t, err, localapi.CtlSocketKey)
@@ -35,7 +35,7 @@ func TestResolveSocketRefusesARelativeOverride(t *testing.T) {
 	cfg := filepath.Join(t.TempDir(), "config.yml")
 	require.NoError(t, os.WriteFile(cfg, []byte("local_api:\n  control:\n    socket: run/ctl.sock\n"), 0600))
 
-	_, _, _, err := resolveSocket("", cfg)
+	_, err := resolveSocket("", cfg)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "must be an absolute path")
 	assert.ErrorContains(t, err, localapi.CtlSocketKey)

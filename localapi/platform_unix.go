@@ -50,13 +50,13 @@ var currentUID = func() uint32 { return uint32(os.Geteuid()) }
 // looser than and which are set after bind, together with the peer check the server
 // applies on accept unless a group shares the socket, in which case the kernel's check
 // is the whole of it: connect(2) needs write permission on the socket file on every
-// unix we build for. The
-// directory is not part of that, and is never chmoded: a directory a service manager
-// made for us is served from at whatever mode it came with (systemd's
-// RuntimeDirectoryMode= is 0755 by default), and one an operator pointed us into keeps
-// whatever else it holds readable. The one we make ourselves is 0755, searchable by
-// everyone, so that an unprivileged nebula ctl can see a root daemon's socket and say
-// so; see ServedByRootFor.
+// unix we build for. The directory is not part of that, and is never chmoded: a
+// directory a service manager made for us is served from at whatever mode it came
+// with (systemd's RuntimeDirectoryMode= is 0755 by default), and one an operator
+// pointed us into keeps whatever else it holds readable. The one we make ourselves is
+// 0755, searchable by everyone, so that a nebula ctl run as another user reaches the
+// socket and gets the kernel's answer, which for a member of the configured group is
+// a connection and for anyone else is permission denied.
 func listen(path string, acc Access) (net.Listener, error) {
 	// The kernel silently truncates an over long sun_path and bind then fails with
 	// "invalid argument", which tells an operator nothing. Say what is actually wrong.

@@ -89,7 +89,7 @@ func Run(args []string) int {
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: nebula ctl [flags] <command> [command flags]\n\n")
 		fmt.Fprintf(os.Stderr, "Inspects and controls a nebula already running on this machine.\n")
-		fmt.Fprintf(os.Stderr, "Run it as the user who ran nebula; nobody else can connect.\n\n")
+		fmt.Fprintf(os.Stderr, "Run it as the user who ran nebula, or as a member of the group %s names.\n\n", localapi.CtlGroupKey)
 		fmt.Fprintf(os.Stderr, "Flags, which may come before or after the command:\n")
 		fs.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nRun `nebula ctl help` for the available commands.\n")
@@ -109,7 +109,7 @@ func Run(args []string) int {
 		cmdArgs = []string{"help"}
 	}
 
-	path, _, overrideIn, err := resolveSocket(*socketPath, *configPath)
+	path, err := resolveSocket(*socketPath, *configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s\n", err)
 		return 1
@@ -122,9 +122,8 @@ func Run(args []string) int {
 	// while the wire protocol stays a named-parameter API rather than a shipped argv.
 	schema, err := client.Describe()
 	if err != nil {
-		// A daemon that answered was reached; what it said, or that it could not be read,
-		// is the whole message, and the advice below, which is about finding the daemon,
-		// would send the operator after the wrong fix.
+		// A daemon that answered was reached, and what it said, or that it could not be
+		// read, is the whole message.
 		var refused *localapi.DaemonError
 		var unread *localapi.ReplyError
 		if errors.As(err, &refused) || errors.As(err, &unread) {
@@ -132,24 +131,10 @@ func Run(args []string) int {
 			return 1
 		}
 
+		// Otherwise the operating system said why, and it is passed on as it came: a
+		// permission denied or a missing socket says more about what to do than a
+		// guess at the operator's setup would.
 		fmt.Fprintf(os.Stderr, "nebula: could not reach the control socket at %s: %s\n", path, err)
-		switch {
-		case errors.Is(err, os.ErrPermission):
-			// The kernel refused the connect: the socket is another user's. Nebula runs as
-			// root for the tun device and this did not, as a rule.
-			fmt.Fprintf(os.Stderr, "The socket is not yours to connect to. Run nebula ctl as the user who ran nebula, or with sudo when nebula runs as root.\n")
-		case *socketPath != "":
-			// The operator named the path; there is nothing to add.
-		case overrideIn != "":
-			// When the config names the path, the usual way the two disagree is time: the
-			// key was edited and the daemon has not reloaded yet, which is exactly what
-			// `nebula ctl reload` against that config runs into.
-			fmt.Fprintf(os.Stderr, "The path is %s in %s. A daemon that has not reloaded since that key changed is still serving the old path: pass it with -socket <old path>, or reload the daemon another way, such as SIGHUP.\n", localapi.CtlSocketKey, overrideIn)
-		default:
-			// The path was computed, and the daemon computes its own from its environment.
-			// Failing all else, the daemon's log says where its socket is.
-			fmt.Fprintf(os.Stderr, "If nebula runs as root, run nebula ctl with sudo. If it runs with another config, pass -config <path>. The daemon logs its socket path at startup; pass it with -socket <path>.\n")
-		}
 		return 1
 	}
 
@@ -370,12 +355,9 @@ func splitLine(fs *flag.FlagSet, args []string) (own, cmd []string) {
 // An explicit flag wins. Otherwise the config is read, the one the operator named or the
 // one found next to the executable, and the path is the socket that config implies: its
 // local_api.control.socket if set, else the same derivation the daemon applies.
-// configPath is the config that was read, "" when none was; overrideIn is that config
-// when its key set the path, and "" when the path is the default or was named on the command
-// line.
-func resolveSocket(socketFlag, configFlag string) (path, configPath, overrideIn string, err error) {
+func resolveSocket(socketFlag, configFlag string) (string, error) {
 	if socketFlag != "" {
-		return socketFlag, "", "", nil
+		return socketFlag, nil
 	}
 
 	return pathFromConfig(configFlag)
@@ -383,26 +365,24 @@ func resolveSocket(socketFlag, configFlag string) (path, configPath, overrideIn 
 
 // pathFromConfig returns the socket path the daemon would be serving: the one
 // local_api.control.socket names in the config, so an operator who moved the socket does
-// not have to repeat themselves on every invocation, else the default. configPath is the
-// config that was read, "" when none was, and overrideIn is the same path when the key
-// is what answered.
+// not have to repeat themselves on every invocation, else the default.
 //
 // A config the operator did not name is a guess: config.DefaultPath looks next to the
 // executable, and a package that installs a default config there while systemd starts
 // the daemon with another will make it the wrong guess. It is still the only answer
 // that involves no searching. A guess that cannot be read is not an error, it is no
-// guess: a user the daemon's socket admits need not be able to read the daemon's
-// config, and is answered by the default path, where the daemon serves unless that
-// config moved it. A config the operator named is theirs to make readable.
-func pathFromConfig(configFlag string) (path, configPath, overrideIn string, err error) {
+// guess: a member of the socket's group cannot read a root daemon's config, and is
+// answered by the default path, where the daemon serves unless that config moved it.
+// A config the operator named is theirs to make readable.
+func pathFromConfig(configFlag string) (string, error) {
 	return socketFromConfigFile(configFlag, configFlag != "")
 }
 
-func socketFromConfigFile(configPath string, named bool) (path, readConfig, overrideIn string, err error) {
+func socketFromConfigFile(configPath string, named bool) (string, error) {
 	if !named {
 		p, err := config.DefaultPath()
 		if err != nil {
-			return localapi.DefaultSocketPath(), "", "", nil
+			return localapi.DefaultSocketPath(), nil
 		}
 		configPath = p
 	}
@@ -413,26 +393,25 @@ func socketFromConfigFile(configPath string, named bool) (path, readConfig, over
 	c := config.NewC(slog.New(slog.DiscardHandler))
 	if err := c.Load(configPath); err != nil {
 		if !named {
-			return localapi.DefaultSocketPath(), "", "", nil
+			return localapi.DefaultSocketPath(), nil
 		}
-		return "", "", "", fmt.Errorf("nebula: could not read %s: %s", configPath, err)
+		// The operating system's error, as it came: permission denied on a root daemon's
+		// config says what to do.
+		return "", fmt.Errorf("nebula: could not read %s: %w", configPath, err)
 	}
 
 	// A daemon running this config serves no socket; dialing the path would only say
 	// that nothing is there.
 	if !localapi.ControlEnabled(c) {
-		return "", "", "", fmt.Errorf("nebula: the control socket is disabled in %s by %s", configPath, localapi.CtlEnabledKey)
+		return "", fmt.Errorf("nebula: the control socket is disabled in %s by %s", configPath, localapi.CtlEnabledKey)
 	}
 
 	// The same call the daemon makes, so the two agree on the path and on what makes a
 	// path unusable.
 	p, err := localapi.SocketPathFromConfig(c)
 	if err != nil {
-		return "", "", "", fmt.Errorf("nebula: %s", err)
+		return "", fmt.Errorf("nebula: %w", err)
 	}
 
-	if c.GetString(localapi.CtlSocketKey, "") != "" {
-		overrideIn = configPath
-	}
-	return p, configPath, overrideIn, nil
+	return p, nil
 }
