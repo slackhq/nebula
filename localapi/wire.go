@@ -69,8 +69,18 @@ func followControlConfig(ctx context.Context, l *slog.Logger, c *config.C, srv *
 			return
 		}
 
+		acc, err := controlAccessFrom(c)
+		if err != nil {
+			if srv.Path() == "" {
+				l.Warn("Local control socket is not available, its group is unusable", "error", err)
+			} else {
+				l.Warn("Ignoring unusable local control socket group from reloaded config, keeping the current socket", "error", err)
+			}
+			return
+		}
+
 		old := srv.Path()
-		err = srv.Rebind(ctx, want)
+		err = srv.Rebind(ctx, want, acc)
 		reportRebind(l, old, want, err, srv.Path())
 	}
 

@@ -120,7 +120,7 @@ func TestListenRefused(t *testing.T) {
 // promises a non-administrator.
 func TestListenProtectedName(t *testing.T) {
 	path := protectedPrefix + "nebula-test-" + t.Name()
-	ln, err := listen(path)
+	ln, err := listen(path, ownerOnly())
 	if !isAdministrator() {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "requires an administrator")
@@ -149,7 +149,7 @@ func TestListenProtectedName(t *testing.T) {
 // is this account, or Administrators when the test is elevated.
 func TestDialAcceptsOwnPipe(t *testing.T) {
 	path := pipePrefix + "nebula-test-" + t.Name()
-	ln, err := listen(path)
+	ln, err := listen(path, ownerOnly())
 	require.NoError(t, err)
 	t.Cleanup(func() { ln.Close() })
 
@@ -173,12 +173,12 @@ func TestDialAcceptsOwnPipe(t *testing.T) {
 // served alongside, or in place of, the daemon.
 func TestListenRefusesHeldName(t *testing.T) {
 	path := pipePrefix + "nebula-test-" + t.Name()
-	first, err := listen(path)
+	first, err := listen(path, ownerOnly())
 	require.NoError(t, err)
 	t.Cleanup(func() { first.Close() })
 
 	var second net.Listener
-	second, err = listen(path)
+	second, err = listen(path, ownerOnly())
 	if second != nil {
 		second.Close()
 	}

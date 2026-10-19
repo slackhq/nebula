@@ -44,18 +44,20 @@ func withPeerFD(conn net.Conn, f func(fd int) error) error {
 // in for root, or for a stranger, without owning a second account on the host.
 var currentUID = func() uint32 { return uint32(os.Geteuid()) }
 
-// listen binds the socket at path.
+// listen binds the socket at path with the given access.
 //
-// Access control is the socket's own mode, 0600, which the node is created with and
-// which is pinned after bind, together with the peer check the server applies on accept:
-// connect(2) needs write permission on the socket file on every unix we build for. The
+// Access control is the socket's own mode and group, which the node is created no
+// looser than and which are set after bind, together with the peer check the server
+// applies on accept unless a group shares the socket, in which case the kernel's check
+// is the whole of it: connect(2) needs write permission on the socket file on every
+// unix we build for. The
 // directory is not part of that, and is never chmoded: a directory a service manager
 // made for us is served from at whatever mode it came with (systemd's
 // RuntimeDirectoryMode= is 0755 by default), and one an operator pointed us into keeps
 // whatever else it holds readable. The one we make ourselves is 0755, searchable by
 // everyone, so that an unprivileged nebula ctl can see a root daemon's socket and say
 // so; see ServedByRootFor.
-func listen(path string) (net.Listener, error) {
+func listen(path string, acc Access) (net.Listener, error) {
 	// The kernel silently truncates an over long sun_path and bind then fails with
 	// "invalid argument", which tells an operator nothing. Say what is actually wrong.
 	if pathTooLong(path) {
@@ -69,7 +71,7 @@ func listen(path string) (net.Listener, error) {
 	// mistake to report, not a tree to build. A directory made here is remembered, so
 	// that removeSocket can take it away again once nothing is left in it.
 	//
-	// 0755 gives nothing away: the socket is 0600. What it gives is a directory others
+	// 0755 gives nothing away: the socket's own mode is the access control. What it gives is a directory others
 	// can look into, which is what ServedByRootFor needs. Mkdir applies the umask, so
 	// the mode is pinned afterwards, as the socket's is; only on a directory this call
 	// created.
@@ -107,14 +109,29 @@ func listen(path string) (net.Listener, error) {
 		ul.SetUnlinkOnClose(false)
 	}
 
-	// The umask only promises no looser than 0600; this pins the mode exactly, and is
-	// the one place a failure to secure the socket is reported.
-	if err := os.Chmod(path, 0600); err != nil {
+	// The umask only promises no looser than 0600; this pins the mode and the group
+	// exactly, and is the one place a failure to secure the socket is reported.
+	if err := applyAccess(path, acc); err != nil {
 		release(ln, path)
 		return nil, fmt.Errorf("could not secure %s: %w", path, err)
 	}
 
 	return ln, nil
+}
+
+// applyAccess sets the owning group, when there is one, and the mode of the socket node
+// at path. The chown is Lchown, so a link at the path is not followed to its target.
+func applyAccess(path string, acc Access) error {
+	if acc.Group != nil {
+		gid, err := gidOf(acc.Group)
+		if err != nil {
+			return err
+		}
+		if err := os.Lchown(path, -1, gid); err != nil {
+			return err
+		}
+	}
+	return os.Chmod(path, acc.Mode.Perm())
 }
 
 // owner returns the uid that owns the file fi describes.
@@ -259,11 +276,15 @@ func checkSocketPath(key, value string) error {
 	return nil
 }
 
-// logListening is the line written when the socket is up. Every unix this builds for
-// checks the peer's credentials on each connection, on top of the socket's mode, so the
-// line has only the path to add.
-func logListening(l *slog.Logger, path string) {
-	l.Info("Local control socket listening", "path", path)
+// logListening is the line written when the socket is up. It says what the access
+// control is: the socket's mode plus the peer check on each connection, or, when a group
+// shares the socket, the mode and group alone.
+func logListening(l *slog.Logger, path string, acc Access) {
+	if acc.Group != nil {
+		l.Info("Local control socket listening, access decided by the socket's group", "path", path, "access", acc.String())
+		return
+	}
+	l.Info("Local control socket listening", "path", path, "access", acc.String())
 }
 
 func isSocket(fi os.FileInfo) bool { return fi.Mode()&os.ModeSocket != 0 }

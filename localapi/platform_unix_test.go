@@ -45,7 +45,7 @@ func TestListenLeavesAServiceManagersDirectoryAlone(t *testing.T) {
 	require.NoError(t, os.Mkdir(dir, 0755))
 
 	s := NewServer(test.NewLogger(), basicRegistry())
-	require.NoError(t, s.Rebind(context.Background(), filepath.Join(dir, "s.sock")))
+	require.NoError(t, s.Rebind(context.Background(), filepath.Join(dir, "s.sock"), ownerOnly()))
 	t.Cleanup(s.Stop)
 
 	fi, err := os.Stat(dir)
@@ -66,11 +66,11 @@ func TestListenCreatesOneLevelOnly(t *testing.T) {
 	base := privateBase(t)
 
 	s := NewServer(test.NewLogger(), basicRegistry())
-	require.NoError(t, s.Rebind(context.Background(), filepath.Join(base, DirName, "s.sock")))
+	require.NoError(t, s.Rebind(context.Background(), filepath.Join(base, DirName, "s.sock"), ownerOnly()))
 	s.Stop()
 
 	dir := filepath.Join(base, "missing", DirName)
-	err := s.Rebind(context.Background(), filepath.Join(dir, "s.sock"))
+	err := s.Rebind(context.Background(), filepath.Join(dir, "s.sock"), ownerOnly())
 	require.Error(t, err)
 	require.ErrorContains(t, err, "could not create "+dir)
 	assert.NoDirExists(t, filepath.Join(base, "missing"))
@@ -82,9 +82,9 @@ func TestReleaseRemovesTheDirectoryItMade(t *testing.T) {
 	base := privateBase(t)
 
 	made := filepath.Join(base, DirName)
-	first, err := listen(filepath.Join(made, "a.sock"))
+	first, err := listen(filepath.Join(made, "a.sock"), ownerOnly())
 	require.NoError(t, err)
-	second, err := listen(filepath.Join(made, "b.sock"))
+	second, err := listen(filepath.Join(made, "b.sock"), ownerOnly())
 	require.NoError(t, err)
 
 	release(first, filepath.Join(made, "a.sock"))
@@ -94,7 +94,7 @@ func TestReleaseRemovesTheDirectoryItMade(t *testing.T) {
 
 	given := filepath.Join(base, "given")
 	require.NoError(t, os.Mkdir(given, 0755))
-	ln, err := listen(filepath.Join(given, "s.sock"))
+	ln, err := listen(filepath.Join(given, "s.sock"), ownerOnly())
 	require.NoError(t, err)
 	release(ln, filepath.Join(given, "s.sock"))
 	assert.DirExists(t, given)
@@ -109,12 +109,12 @@ func TestListenRestoresTheUmask(t *testing.T) {
 	t.Cleanup(func() { syscall.Umask(old) })
 
 	base := privateBase(t)
-	ln, err := listen(filepath.Join(base, DirName, "s.sock"))
+	ln, err := listen(filepath.Join(base, DirName, "s.sock"), ownerOnly())
 	require.NoError(t, err)
 	t.Cleanup(func() { ln.Close() })
 	assert.Equal(t, 0022, syscall.Umask(0022), "umask after a successful listen")
 
-	_, err = listen(filepath.Join(base, DirName, "s.sock"))
+	_, err = listen(filepath.Join(base, DirName, "s.sock"), ownerOnly())
 	require.Error(t, err, "the path is already bound")
 	assert.Equal(t, 0022, syscall.Umask(0022), "umask after a failed listen")
 }
@@ -130,7 +130,7 @@ func TestListenServesFromASharedDirectory(t *testing.T) {
 	require.NoError(t, os.WriteFile(cfg, []byte("{}\n"), 0644))
 
 	s := NewServer(test.NewLogger(), basicRegistry())
-	require.NoError(t, s.Rebind(context.Background(), filepath.Join(dir, "ctl.sock")))
+	require.NoError(t, s.Rebind(context.Background(), filepath.Join(dir, "ctl.sock"), ownerOnly()))
 	t.Cleanup(s.Stop)
 
 	fi, err := os.Stat(dir)
@@ -148,7 +148,7 @@ func TestOverlongPathIsDiagnosed(t *testing.T) {
 	}
 
 	s := NewServer(test.NewLogger(), basicRegistry())
-	err := s.Rebind(context.Background(), filepath.Join(long, "s.sock"))
+	err := s.Rebind(context.Background(), filepath.Join(long, "s.sock"), ownerOnly())
 
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "byte limit for a unix socket")
@@ -170,7 +170,7 @@ func TestNamedPathIsUsedAsGiven(t *testing.T) {
 	path := filepath.Join(openDir(t, base), DirName, "s.sock")
 
 	s := NewServer(test.NewLogger(), basicRegistry())
-	require.NoError(t, s.Rebind(context.Background(), path))
+	require.NoError(t, s.Rebind(context.Background(), path, ownerOnly()))
 	t.Cleanup(s.Stop)
 
 	_, err := (&Client{Path: path}).Describe()
@@ -283,7 +283,7 @@ func TestPeerCheckRefusesAnotherUser(t *testing.T) {
 	asUID(t, me)
 
 	path := testSocket(t)
-	require.NoError(t, s.Rebind(context.Background(), path))
+	require.NoError(t, s.Rebind(context.Background(), path, ownerOnly()))
 	defer s.Stop()
 
 	_, err := (&Client{Path: path}).Describe()
@@ -299,7 +299,7 @@ func TestPeerCheckRefusesAnotherUser(t *testing.T) {
 // bound its own, and a second unlink would take that daemon's socket from under it.
 func TestListenerDoesNotUnlinkOnClose(t *testing.T) {
 	path := filepath.Join(privateBase(t), DirName, "s.sock")
-	old, err := listen(path)
+	old, err := listen(path, ownerOnly())
 	require.NoError(t, err)
 
 	// A newer daemon's start, with the old node gone and the path bound afresh.

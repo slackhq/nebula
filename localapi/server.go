@@ -9,9 +9,11 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"os"
 	"runtime/debug"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/slackhq/nebula/commands"
@@ -36,6 +38,11 @@ const (
 	defaultSlowAfter = 30 * time.Second
 )
 
+// ctlSocketMode is the control socket's mode when no group shares it: the user who ran
+// nebula, and nobody else. The mode itself is not configurable; what an operator can
+// choose is a group, CtlGroupKey, which makes it groupSocketMode.
+const ctlSocketMode os.FileMode = 0600
+
 // Server serves the read only portion of a command registry over a local socket.
 type Server struct {
 	l   *slog.Logger
@@ -52,6 +59,16 @@ type Server struct {
 
 	sem  chan struct{}
 	euid uint32
+
+	// access is what the socket at path was bound with, so a reload that changes only
+	// the group or the mode is applied without moving the socket.
+	access Access
+
+	// trustSocket is set while a group shares the socket. The kernel admitted the peer
+	// through the socket's mode and group, which is the whole access control then, and
+	// the peer check in serve stands aside: on unix it sees the peer's uid and primary
+	// gid only, so it could not tell a member of the group from anyone else.
+	trustSocket atomic.Bool
 }
 
 // servedHere decides what this surface will run.
@@ -106,16 +123,41 @@ func NewServer(l *slog.Logger, reg *commands.Registry) *Server {
 //
 // An error here is never fatal to the caller: nebula keeps forwarding packets without a
 // control endpoint, and the caller is expected to log and carry on.
-func (s *Server) Rebind(ctx context.Context, path string) error {
+func (s *Server) Rebind(ctx context.Context, path string, acc Access) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	reopening := false
 	if s.running && s.path == path {
-		return nil
+		if s.access.equal(acc) {
+			return nil
+		}
+
+		// Only the access changed. On unix it is set on the socket in place; on windows
+		// the descriptor is fixed when the pipe is created, so the pipe is created again.
+		// The name cannot be held twice, so the old one goes first, and a bind that then
+		// fails leaves the server down rather than on the access the operator asked to
+		// change; that is reported.
+		err := applyAccess(path, acc)
+		if err == nil {
+			s.access = acc
+			s.trustSocket.Store(acc.Group != nil)
+			s.l.Info("Changed the local control socket's access", "path", path, "access", acc.String())
+			return nil
+		}
+		if !errors.Is(err, errReopenForAccess) {
+			return fmt.Errorf("could not change the access of %s: %w", path, err)
+		}
+		reopening = true
+		release(s.ln, s.path)
+		s.ln, s.path, s.running, s.access = nil, "", false, Access{}
 	}
 
-	ln, err := listen(path)
+	ln, err := listen(path, acc)
 	if err != nil {
+		if reopening {
+			return fmt.Errorf("the local control socket was closed to change its access and could not be created again: %w", err)
+		}
 		return err
 	}
 
@@ -131,7 +173,9 @@ func (s *Server) Rebind(ctx context.Context, path string) error {
 	oldLn, oldPath := s.ln, s.path
 	s.ln = ln
 	s.path = path
+	s.access = acc
 	s.running = true
+	s.trustSocket.Store(acc.Group != nil)
 	sem := s.semaphore()
 
 	s.watchLocked(ctx)
@@ -144,7 +188,7 @@ func (s *Server) Rebind(ctx context.Context, path string) error {
 		release(oldLn, oldPath)
 	}
 
-	logListening(s.l, path)
+	logListening(s.l, path, acc)
 
 	go func() {
 		s.accept(ln, sem)
@@ -197,6 +241,7 @@ func (s *Server) Stop() {
 
 	release(s.ln, s.path)
 	s.running = false
+	s.access = Access{}
 	s.ln = nil
 	s.path = ""
 
@@ -314,10 +359,10 @@ func (s *Server) handle(conn net.Conn) {
 		}
 	}()
 
-	// Where the platform can identify the caller, check it. Where it cannot, the
-	// endpoint is still protected by the socket's mode or the pipe's security
-	// descriptor, which listen() set before serving.
-	if peerCheckSupported {
+	// Where the platform can identify the caller, check it. Where it cannot, or where a
+	// group shares the socket, the endpoint is protected by the socket's mode and group
+	// or the pipe's security descriptor, which listen() set before serving.
+	if peerCheckSupported && !s.trustSocket.Load() {
 		uid, err := peerUID(conn)
 		if err != nil {
 			s.l.Warn("Refusing local control connection with unreadable credentials", "error", err)

@@ -62,7 +62,7 @@ func TestRebindAfterReloadBoundTheSocket(t *testing.T) {
 	require.Equal(t, path, srv.Path(), "the reload callback does the first bind")
 
 	// Wire's second half.
-	require.NoError(t, srv.Rebind(ctx, path))
+	require.NoError(t, srv.Rebind(ctx, path, ownerOnly()))
 	assert.Equal(t, path, srv.Path())
 	out, errText := run(t, path, "echo", "hi")
 	assert.Empty(t, errText)

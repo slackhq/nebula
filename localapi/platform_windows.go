@@ -3,6 +3,7 @@
 package localapi
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -37,15 +38,18 @@ var currentUID = func() uint32 { return 0 }
 // the access control, so nobody assumes a per-connection check that is not running:
 // there is none here, the pipe's security descriptor admits only the accounts listed in
 // ownerOnlySDDL, and the kernel enforces that at connect time.
-func logListening(l *slog.Logger, path string) {
+func logListening(l *slog.Logger, path string, acc Access) {
 	l.Info("Local control socket listening, access restricted by the pipe's security descriptor",
 		"path", path,
+		"access", acc.String(),
 		"reason", "the security descriptor built at listen time is the access check; the connecting process is not identified separately",
 	)
 }
 
-// listen creates the named pipe at path with a security descriptor that admits only the
-// user nebula runs as, SYSTEM and Administrators.
+// listen creates the named pipe at path with a security descriptor that admits the user
+// nebula runs as, SYSTEM and Administrators, and the group acc names, if any, for
+// reading and writing, which is what connecting to a pipe takes. acc's mode means
+// nothing to a pipe.
 //
 // The first instance is created, never opened, so a name some other process already
 // holds is refused rather than joined: that process would otherwise answer clients in
@@ -55,8 +59,8 @@ func logListening(l *slog.Logger, path string) {
 // daemon that is not an administrator cannot create under protectedPrefix at all, and
 // that is told apart so the operator is sent to elevate or to name a pipe elsewhere
 // rather than to look for a process that is not there.
-func listen(path string) (net.Listener, error) {
-	sddl, err := ownerOnlySDDL()
+func listen(path string, acc Access) (net.Listener, error) {
+	sddl, err := sddlFor(acc)
 	if err != nil {
 		return nil, fmt.Errorf("could not build a security descriptor for %s: %w", path, err)
 	}
@@ -114,15 +118,17 @@ func isAdministrator() bool {
 	return err == nil && member
 }
 
-// ownerOnlySDDL grants full access to the account nebula is running as, to SYSTEM and
-// to Administrators, and to nobody else. P makes the DACL protected, so it does not
-// inherit entries that would widen it.
+// sddlFor grants full access to the account nebula is running as, to SYSTEM and to
+// Administrators, and pipeClientAccess to the group acc names, if any; nobody else. P
+// makes the DACL protected, so it does not inherit entries that would widen it. It is
+// dockerd's descriptor for its pipe, with its -G group in the same place, except for
+// the group's mask; see pipeClientAccess.
 //
 // Administrators is the counterpart of the uid 0 allowance in the unix peer check. The
 // service normally runs as LocalSystem, so without it an operator in an elevated shell
 // could not reach the daemon at all; and an administrator can already stop the service,
 // so this grants no authority they did not have.
-func ownerOnlySDDL() (string, error) {
+func sddlFor(acc Access) (string, error) {
 	token := windows.GetCurrentProcessToken()
 
 	user, err := token.GetTokenUser()
@@ -130,9 +136,28 @@ func ownerOnlySDDL() (string, error) {
 		return "", err
 	}
 
-	sid := user.User.Sid.String()
-	return fmt.Sprintf("D:P(A;;GA;;;%s)(A;;GA;;;SY)(A;;GA;;;BA)", sid), nil
+	sddl := fmt.Sprintf("D:P(A;;GA;;;%s)(A;;GA;;;SY)(A;;GA;;;BA)", user.User.Sid.String())
+	if acc.Group != nil {
+		sddl += fmt.Sprintf("(A;;0x%x;;;%s)", pipeClientAccess, acc.Group.ID)
+	}
+	return sddl, nil
 }
+
+// pipeClientAccess is what a client needs on the pipe to talk to the daemon, and all a
+// configured group is granted: read and write the data, read the pipe's attributes
+// and its security descriptor, which the owner check needs, and wait on it. Not the
+// generic rights. On a named pipe GENERIC_WRITE carries FILE_CREATE_PIPE_INSTANCE, the
+// right to put a second instance under the same name, and a group member with that
+// could sit on the name and answer other clients in the daemon's place; the client's
+// owner check would not catch it, since the instance it reached would be the
+// member's. A client therefore has to ask for exactly this, as dial does, and a
+// program that opens the info pipe with generic read and write is refused.
+const pipeClientAccess uint32 = windows.FILE_READ_DATA | windows.FILE_WRITE_DATA |
+	windows.FILE_READ_ATTRIBUTES | windows.READ_CONTROL | windows.SYNCHRONIZE
+
+// applyAccess cannot change a pipe's access in place: its security descriptor is fixed
+// when it is created, so a change means creating it again, which the caller does.
+func applyAccess(path string, acc Access) error { return errReopenForAccess }
 
 // removeSocket is a no-op: a named pipe disappears when its last handle closes, so
 // there is nothing to unlink and no stale instance to clean up.
@@ -145,7 +170,9 @@ func removeSocket(path string) {}
 // the check is what covers a CtlSocketKey override outside protectedPrefix, and costs
 // nothing to make on every name.
 func dial(path string, timeout time.Duration) (net.Conn, error) {
-	conn, err := winio.DialPipe(path, &timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	conn, err := winio.DialPipeAccess(ctx, path, pipeClientAccess)
 	if err != nil {
 		return nil, err
 	}

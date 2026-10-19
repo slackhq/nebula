@@ -247,6 +247,9 @@ punchy:
     # The absolute path where the control socket should live, or a full pipe name on
     # Windows. The last directory is created if missing.
     #socket: /var/run/nebula/ctl.sock
+    # A group (or account/group/SID on Windows) that should be allowed to access the
+    # socket.
+    #group: nebula
 
 # EXPERIMENTAL: relay support for networks that can't establish direct connections.
 relay:
