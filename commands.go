@@ -310,14 +310,42 @@ func textVersion(vi versionInfo, w io.Writer) error {
 	return err
 }
 
-func runQueryLighthouse(ifce *Interface, a []string) (commands.Result, error) {
+// vpnAddrOperand parses the vpn address a command takes as its first operand. noun is
+// how the command's messages name it, "vpn address" or "vpn addr", which the output
+// golden pins per command. With no operand, or one that does not parse, ok is false and
+// res is the refusal to return.
+func vpnAddrOperand(a []string, noun string) (vpnAddr netip.Addr, res commands.Result, ok bool) {
 	if len(a) == 0 {
-		return commands.Failed("No vpn address was provided"), nil
+		return netip.Addr{}, commands.Failed("No vpn address was provided"), false
 	}
 
 	vpnAddr, err := netip.ParseAddr(a[0])
-	if err != nil || !vpnAddr.IsValid() {
-		return commands.Failed("The provided vpn address could not be parsed: %s", a[0]), nil
+	if err != nil {
+		return netip.Addr{}, commands.Failed("The provided %s could not be parsed: %s", noun, a[0]), false
+	}
+
+	return vpnAddr, commands.Result{}, true
+}
+
+// tunnelOperand is vpnAddrOperand followed by the lookup of the tunnel it names.
+func tunnelOperand(ifce *Interface, a []string, noun string) (*HostInfo, commands.Result, bool) {
+	vpnAddr, res, ok := vpnAddrOperand(a, noun)
+	if !ok {
+		return nil, res, false
+	}
+
+	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
+	if hostInfo == nil {
+		return nil, commands.Failed("Could not find tunnel for %s: %v", noun, a[0]), false
+	}
+
+	return hostInfo, commands.Result{}, true
+}
+
+func runQueryLighthouse(ifce *Interface, a []string) (commands.Result, error) {
+	vpnAddr, res, ok := vpnAddrOperand(a, "vpn address")
+	if !ok {
+		return res, nil
 	}
 
 	var cm *CacheMap
@@ -329,19 +357,9 @@ func runQueryLighthouse(ifce *Interface, a []string) (commands.Result, error) {
 }
 
 func runCloseTunnel(ifce *Interface, flags *closeTunnelFlags, a []string) (commands.Result, error) {
-
-	if len(a) == 0 {
-		return commands.Failed("No vpn address was provided"), nil
-	}
-
-	vpnAddr, err := netip.ParseAddr(a[0])
-	if err != nil || !vpnAddr.IsValid() {
-		return commands.Failed("The provided vpn address could not be parsed: %s", a[0]), nil
-	}
-
-	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
-	if hostInfo == nil {
-		return commands.Failed("Could not find tunnel for vpn address: %v", a[0]), nil
+	hostInfo, res, ok := tunnelOperand(ifce, a, "vpn address")
+	if !ok {
+		return res, nil
 	}
 
 	if !flags.LocalOnly {
@@ -362,13 +380,9 @@ func runCloseTunnel(ifce *Interface, flags *closeTunnelFlags, a []string) (comma
 
 func runCreateTunnel(ifce *Interface, flags *createTunnelFlags, a []string) (commands.Result, error) {
 
-	if len(a) == 0 {
-		return commands.Failed("No vpn address was provided"), nil
-	}
-
-	vpnAddr, err := netip.ParseAddr(a[0])
-	if err != nil || !vpnAddr.IsValid() {
-		return commands.Failed("The provided vpn address could not be parsed: %s", a[0]), nil
+	vpnAddr, res, ok := vpnAddrOperand(a, "vpn address")
+	if !ok {
+		return res, nil
 	}
 
 	if hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr); hostInfo != nil {
@@ -381,6 +395,7 @@ func runCreateTunnel(ifce *Interface, flags *createTunnelFlags, a []string) (com
 
 	var addr netip.AddrPort
 	if flags.Address != "" {
+		var err error
 		addr, err = netip.ParseAddrPort(flags.Address)
 		if err != nil {
 			return commands.Failed("Address could not be parsed"), nil
@@ -414,14 +429,9 @@ func runChangeRemote(ifce *Interface, flags *changeRemoteFlags, a []string) (com
 		return commands.Failed("Address could not be parsed"), nil
 	}
 
-	vpnAddr, err := netip.ParseAddr(a[0])
-	if err != nil || !vpnAddr.IsValid() {
-		return commands.Failed("The provided vpn address could not be parsed: %s", a[0]), nil
-	}
-
-	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
-	if hostInfo == nil {
-		return commands.Failed("Could not find tunnel for vpn address: %v", a[0]), nil
+	hostInfo, res, ok := tunnelOperand(ifce, a, "vpn address")
+	if !ok {
+		return res, nil
 	}
 
 	hostInfo.SetRemote(addr)
@@ -481,16 +491,10 @@ func runPrintCert(ifce *Interface, args *printCertFlags, a []string) (commands.R
 
 	c := ifce.pki.getCertState().GetDefaultCertificate()
 	if len(a) > 0 {
-		vpnAddr, err := netip.ParseAddr(a[0])
-		if err != nil || !vpnAddr.IsValid() {
-			return commands.Failed("The provided vpn addr could not be parsed: %s", a[0]), nil
+		hostInfo, res, ok := tunnelOperand(ifce, a, "vpn addr")
+		if !ok {
+			return res, nil
 		}
-
-		hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
-		if hostInfo == nil {
-			return commands.Failed("Could not find tunnel for vpn addr: %v", a[0]), nil
-		}
-
 		c = hostInfo.GetCert().Certificate
 	}
 
@@ -581,18 +585,9 @@ func runPrintRelays(ifce *Interface) any {
 }
 
 func runPrintTunnel(ifce *Interface, a []string) (commands.Result, error) {
-	if len(a) == 0 {
-		return commands.Failed("No vpn address was provided"), nil
-	}
-
-	vpnAddr, err := netip.ParseAddr(a[0])
-	if err != nil || !vpnAddr.IsValid() {
-		return commands.Failed("The provided vpn addr could not be parsed: %s", a[0]), nil
-	}
-
-	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
-	if hostInfo == nil {
-		return commands.Failed("Could not find tunnel for vpn addr: %v", a[0]), nil
+	hostInfo, res, ok := tunnelOperand(ifce, a, "vpn addr")
+	if !ok {
+		return res, nil
 	}
 
 	return commands.Value(copyHostInfo(hostInfo, ifce.hostMap.GetPreferredRanges())), nil
