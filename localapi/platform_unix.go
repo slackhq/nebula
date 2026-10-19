@@ -71,10 +71,10 @@ func listen(path string, acc Access) (net.Listener, error) {
 	// mistake to report, not a tree to build. A directory made here is remembered, so
 	// that removeSocket can take it away again once nothing is left in it.
 	//
-	// 0755 gives nothing away: the socket's own mode is the access control. What it gives is a directory others
-	// can look into, which is what ServedByRootFor needs. Mkdir applies the umask, so
-	// the mode is pinned afterwards, as the socket's is; only on a directory this call
-	// created.
+	// 0755 gives nothing away: the socket's own mode is the access control. What it
+	// gives is a directory others can look into, which is what a client that is not the
+	// daemon's user needs to reach the socket. Mkdir applies the umask, so the mode is
+	// pinned afterwards, as the socket's is; only on a directory this call created.
 	switch err := os.Mkdir(dir, 0755); {
 	case err == nil:
 		if err := os.Chmod(dir, 0755); err != nil {
@@ -83,6 +83,12 @@ func listen(path string, acc Access) (net.Listener, error) {
 		madeDirs.add(dir)
 	case !errors.Is(err, os.ErrExist):
 		return nil, fmt.Errorf("could not create %s: %w", dir, err)
+	}
+
+	// Whether it was made here or came with the environment, the directory has to be
+	// one nobody else could change; see checkSocketDir.
+	if err := checkSocketDir(dir); err != nil {
+		return nil, err
 	}
 
 	if err := clearStale(path); err != nil {
@@ -132,6 +138,58 @@ func applyAccess(path string, acc Access) error {
 		}
 	}
 	return os.Chmod(path, acc.Mode.Perm())
+}
+
+// checkSocketDir refuses to serve from a directory that somebody other than the user
+// nebula runs as, or root, could change. The socket's mode and group say who may connect
+// to it; what makes the path they connect to the daemon's is the directory, since
+// whoever can write it can put a socket of their own at the path and answer the clients
+// in the daemon's place. So the directory must be owned by the daemon's user or by root
+// and writable by its owner alone; a sticky bit is not an exception. A runtime directory
+// a service manager made for another user, or /var/run/nebula created ahead of a root
+// daemon by a member of group daemon, where darwin lets that group write /var/run, are
+// both refused with the owner named.
+//
+// A link where the directory should be is judged twice: whoever owns the link decides
+// where the path leads, so the link must be ours or root's too, and the directory it
+// resolves to is then held to the rule above. /var/run is such a link on linux, root's,
+// to /run, and a socket named directly under it is served; a link somebody else planted
+// is refused as theirs.
+//
+// Only this directory is checked, not the ones above it. /var/run itself is group
+// writable on darwin by design, and the parents are the operator's to trust, as they are
+// for every file nebula reads. The check is made at bind, so a directory loosened while
+// the daemon runs is noticed at the next reload.
+func checkSocketDir(dir string) error {
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		if uid, ok := owner(fi); ok && uid != currentUID() && uid != 0 {
+			return fmt.Errorf("%s is a symlink owned by %s, not by the user nebula runs as or by root, and its owner decides where the path leads; name a socket path that does not go through it", dir, describeUID(uid))
+		}
+		if fi, err = os.Stat(dir); err != nil {
+			return err
+		}
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("%s is not a directory", dir)
+	}
+
+	if uid, ok := owner(fi); ok && uid != currentUID() && uid != 0 {
+		return fmt.Errorf("%s is owned by %s, not by the user nebula runs as or by root, and its owner could replace the socket; make it ours or root's, or name a socket path in a directory that is", dir, describeUID(uid))
+	}
+
+	if perm := fi.Mode().Perm(); perm&0022 != 0 {
+		who := "its group"
+		if perm&0002 != 0 {
+			who = "everyone"
+		}
+		return fmt.Errorf("%s is writable by %s (mode %04o), who could replace the socket; make it writable by its owner alone, or name a socket path in a directory that is", dir, who, perm)
+	}
+
+	return nil
 }
 
 // owner returns the uid that owns the file fi describes.

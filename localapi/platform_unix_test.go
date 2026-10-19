@@ -346,3 +346,72 @@ func TestMadeDirStaysRememberedUntilItIsGone(t *testing.T) {
 	d.remove(gone)
 	assert.False(t, d.made[gone])
 }
+
+// TestListenRefusesADirectoryOthersCanWrite: whoever can write the socket's directory
+// can put a socket of their own at the path and answer the clients, who trust the path;
+// so a directory writable by its group or by everyone is refused, and nothing is bound.
+func TestListenRefusesADirectoryOthersCanWrite(t *testing.T) {
+	for _, mode := range []os.FileMode{0775, 0757, 0777, 01777} {
+		dir := filepath.Join(privateBase(t), "loose")
+		require.NoError(t, os.Mkdir(dir, mode))
+		require.NoError(t, os.Chmod(dir, mode))
+
+		_, err := listen(filepath.Join(dir, "s.sock"), ownerOnly())
+		require.ErrorContains(t, err, "writable by", "mode %04o", mode)
+		assert.NoFileExists(t, filepath.Join(dir, "s.sock"))
+	}
+}
+
+// TestListenRefusesADirectoryOwnedBySomebodyElse: a directory that is neither ours nor
+// root's is refused, since its owner could replace the socket. The test's own directory
+// stands in for somebody else's by the process pretending to be another user.
+func TestListenRefusesADirectoryOwnedBySomebodyElse(t *testing.T) {
+	me := currentUID()
+	if me == 0 {
+		t.Skip("root's directories are accepted whoever is asking")
+	}
+	dir := filepath.Join(privateBase(t), "theirs")
+	require.NoError(t, os.Mkdir(dir, 0755))
+
+	asUID(t, me+1)
+	_, err := listen(filepath.Join(dir, "s.sock"), ownerOnly())
+	require.ErrorContains(t, err, "is owned by")
+	assert.NoFileExists(t, filepath.Join(dir, "s.sock"))
+
+	asUID(t, me)
+	ln, err := listen(filepath.Join(dir, "s.sock"), ownerOnly())
+	require.NoError(t, err, "the same directory, seen as our own, serves")
+	release(ln, filepath.Join(dir, "s.sock"))
+}
+
+// TestListenThroughASymlinkedDirectory: a link where the directory should be is judged
+// by who owns it, since they decide where the path leads, and then by the directory it
+// resolves to. Our own link to a proper directory serves, as /var/run on linux is root's
+// link to /run; somebody else's link is refused, and so is a link of ours to a directory
+// others can write.
+func TestListenThroughASymlinkedDirectory(t *testing.T) {
+	me := currentUID()
+	if me == 0 {
+		t.Skip("root's links are accepted whoever is asking")
+	}
+	base := privateBase(t)
+	real := filepath.Join(base, "real")
+	require.NoError(t, os.Mkdir(real, 0755))
+	link := filepath.Join(base, "link")
+	require.NoError(t, os.Symlink(real, link))
+	path := filepath.Join(link, "s.sock")
+
+	ln, err := listen(path, ownerOnly())
+	require.NoError(t, err, "our link to our directory")
+	release(ln, path)
+	assert.NoFileExists(t, filepath.Join(real, "s.sock"))
+
+	asUID(t, me+1)
+	_, err = listen(path, ownerOnly())
+	require.ErrorContains(t, err, "is a symlink owned by")
+	asUID(t, me)
+
+	require.NoError(t, os.Chmod(real, 0777))
+	_, err = listen(path, ownerOnly())
+	require.ErrorContains(t, err, "writable by everyone")
+}

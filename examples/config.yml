@@ -245,7 +245,8 @@ punchy:
   # the BSDs; on Windows it is a named pipe under \\.\pipe\ProtectedPrefix\Administrators.
   #control:
     # The absolute path where the control socket should live, or a full pipe name on
-    # Windows. The last directory is created if missing.
+    # Windows. The last directory is created if missing, and must be owned by root or by
+    # the user running nebula. It must not be writable by anyone else.
     #socket: /var/run/nebula/ctl.sock
     # A group (or account/group/SID on Windows) that should be allowed to access the
     # socket.
