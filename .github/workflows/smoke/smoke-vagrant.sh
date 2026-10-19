@@ -68,13 +68,13 @@ docker run --name host2 --rm -v "$PWD/build/host2.yml:/nebula/host2.yml:ro" "$CO
 up=0
 for attempt in 1 2 3; do
     if command -v virsh >/dev/null; then
-        (while sleep 20; do
+        (set +e; while sleep 20; do
             virsh -c qemu:///system screenshot "vagrant-$1_default" "logs/console-$attempt.ppm" >/dev/null 2>&1
         done) &
         shots=$!
     fi
     timeout 5m vagrant up && up=1
-    [ "${shots:-}" ] && kill "$shots"
+    [ "${shots:-}" ] && kill "$shots" 2>/dev/null || true
     [ "$up" = 1 ] && break
     vagrant destroy -f
 done
