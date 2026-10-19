@@ -76,31 +76,6 @@ func TestListenCreatesOneLevelOnly(t *testing.T) {
 	assert.NoDirExists(t, filepath.Join(base, "missing"))
 }
 
-// TestReleaseRemovesTheDirectoryItMade: a directory listen created goes away with the
-// last socket in it, and one that was already there is left alone, whatever it holds.
-func TestReleaseRemovesTheDirectoryItMade(t *testing.T) {
-	base := privateBase(t)
-
-	made := filepath.Join(base, DirName)
-	first, err := listen(filepath.Join(made, "a.sock"), ownerOnly())
-	require.NoError(t, err)
-	second, err := listen(filepath.Join(made, "b.sock"), ownerOnly())
-	require.NoError(t, err)
-
-	release(first, filepath.Join(made, "a.sock"))
-	assert.DirExists(t, made, "b.sock is still in it")
-	release(second, filepath.Join(made, "b.sock"))
-	assert.NoDirExists(t, made)
-
-	given := filepath.Join(base, "given")
-	require.NoError(t, os.Mkdir(given, 0755))
-	ln, err := listen(filepath.Join(given, "s.sock"), ownerOnly())
-	require.NoError(t, err)
-	release(ln, filepath.Join(given, "s.sock"))
-	assert.DirExists(t, given)
-	assert.NoFileExists(t, filepath.Join(given, "s.sock"))
-}
-
 // TestListenRestoresTheUmask: listen tightens the process umask around bind so the socket
 // node is never created looser than 0600. That is process wide state, so it must come
 // back exactly as it was, on success and on failure alike.
@@ -311,40 +286,6 @@ func TestListenerDoesNotUnlinkOnClose(t *testing.T) {
 	require.NoError(t, old.Close())
 	_, err = os.Stat(path)
 	assert.NoError(t, err, "closing the old listener left the newer daemon's socket in place")
-}
-
-// TestMadeDirStaysRememberedUntilItIsGone: a directory listen created that cannot be
-// removed right now is still ours to remove, so the record survives the failure and the
-// next release tries again. Only a directory that is gone is forgotten.
-func TestMadeDirStaysRememberedUntilItIsGone(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root is not refused by directory permissions")
-	}
-
-	parent := t.TempDir()
-	dir := filepath.Join(parent, "nebula")
-	require.NoError(t, os.Mkdir(dir, 0o755))
-
-	d := dirSet{made: map[string]bool{}}
-	d.add(dir)
-
-	// A parent without write permission refuses the rmdir.
-	require.NoError(t, os.Chmod(parent, 0o500))
-	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
-	d.remove(dir)
-	assert.True(t, d.made[dir], "a directory that is still there must stay remembered")
-	assert.DirExists(t, dir)
-
-	require.NoError(t, os.Chmod(parent, 0o700))
-	d.remove(dir)
-	assert.False(t, d.made[dir])
-	assert.NoDirExists(t, dir)
-
-	// One that something else already removed is simply forgotten.
-	gone := filepath.Join(parent, "gone")
-	d.add(gone)
-	d.remove(gone)
-	assert.False(t, d.made[gone])
 }
 
 // TestListenRefusesADirectoryOthersCanWrite: whoever can write the socket's directory

@@ -68,8 +68,8 @@ func listen(path string, acc Access) (net.Listener, error) {
 
 	// One level only. Every directory defaultPathFor offers sits directly under one that
 	// exists, and an operator who names a deeper path creates it; a missing parent is a
-	// mistake to report, not a tree to build. A directory made here is remembered, so
-	// that removeSocket can take it away again once nothing is left in it.
+	// mistake to report, not a tree to build. A directory made here stays when the
+	// socket goes: an empty one costs nothing, and the next start wants it again.
 	//
 	// 0755 gives nothing away: the socket's own mode is the access control. What it
 	// gives is a directory others can look into, which is what a client that is not the
@@ -80,7 +80,6 @@ func listen(path string, acc Access) (net.Listener, error) {
 		if err := os.Chmod(dir, 0755); err != nil {
 			return nil, fmt.Errorf("could not set the mode of %s: %w", dir, err)
 		}
-		madeDirs.add(dir)
 	case !errors.Is(err, os.ErrExist):
 		return nil, fmt.Errorf("could not create %s: %w", dir, err)
 	}
@@ -257,39 +256,6 @@ func clearStale(path string) error {
 // remove and is left as it was.
 func removeSocket(path string) {
 	_ = os.Remove(path)
-	madeDirs.remove(filepath.Dir(path))
-}
-
-// madeDirs is the set of directories listen created and has not yet removed. It is
-// package state because the socket's path is all release and listen share.
-var madeDirs = dirSet{made: map[string]bool{}}
-
-type dirSet struct {
-	mu   sync.Mutex
-	made map[string]bool
-}
-
-func (d *dirSet) add(dir string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.made[dir] = true
-}
-
-// remove takes dir away if listen made it and it is empty. One that still holds
-// something, another socket of ours or whatever else arrived, is kept and stays
-// remembered, so the release of the last socket in it is the one that removes it. The
-// same goes for any other failure: a directory that is still there is still ours to
-// remove, and the next release tries again. Only one that is gone is forgotten.
-func (d *dirSet) remove(dir string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if !d.made[dir] {
-		return
-	}
-	if err := os.Remove(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return
-	}
-	delete(d.made, dir)
 }
 
 func dial(path string, timeout time.Duration) (net.Conn, error) {
