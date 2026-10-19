@@ -15,8 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the handshake starts, so a pending hostinfo never exists without one.
 - A firewall rule with `group: []`, `groups:` with no value, or a `groups` entry that isn't a string, such as
   `groups: [1, 2]`, no longer crashes Nebula on startup or reload. A null `group` or `groups` means none was
-  provided, numbers and other simple values are read as strings, and an empty array, a null entry, a nested
-  array, or a map is rejected with an error.
+  provided. An unquoted int or bool group, such as `group: 7`, is still read as a string but logs a warning to
+  quote it, since YAML has already turned a value like `007` into `7`. A float, a date, an empty array, a null
+  entry, a nested array, or a map is rejected with an error.
 
 ## [1.11.1] - 2026-08-21
 

@@ -1454,6 +1454,10 @@ func TestAddFirewallRulesFromConfig(t *testing.T) {
 		{"groups", []any{"a", []any{"b"}}, "groups entry #1 should contain a single value, an array was provided"},
 		{"groups", []any{map[string]any{"a": "b"}}, "groups entry #0 should contain a single value, a map was provided"},
 		{"groups", map[string]any{"a": "b"}, "groups should contain an array or a single value, a map was provided"},
+		{"group", 1.1, "group should contain a single value, 1.1 was read as a float64, quote it to use it as a group name"},
+		{"group", []any{1.1}, "group should contain a single value, 1.1 was read as a float64, quote it to use it as a group name"},
+		{"groups", []any{"a", 1.1}, "groups entry #1 should contain a single value, 1.1 was read as a float64, quote it to use it as a group name"},
+		{"groups", time.Date(2001, 12, 14, 0, 0, 0, 0, time.UTC), "groups should contain an array or a single value, 2001-12-14 00:00:00 +0000 UTC was read as a time.Time, quote it to use it as a group name"},
 	}
 	for _, tc := range badGroups {
 		conf = config.NewC(test.NewLogger())
@@ -1462,7 +1466,7 @@ func TestAddFirewallRulesFromConfig(t *testing.T) {
 		require.EqualError(t, AddFirewallRulesFromConfig(l, true, conf, mf), "firewall.inbound rule #0; "+tc.err, "%s: %v", tc.key, tc.value)
 	}
 
-	// Test scalar groups entries that aren't strings are read as strings
+	// Test int and bool groups entries are read as strings
 	conf = config.NewC(test.NewLogger())
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[string]any{"inbound": []any{map[string]any{"port": "1", "proto": "any", "groups": []any{1, true}}}}
