@@ -1,7 +1,6 @@
 package ctl
 
 import (
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -154,7 +153,7 @@ func Run(args []string) int {
 		return 1
 	}
 
-	out := output(res.Result, req.Format)
+	out := output(res, req.Format)
 	if out != "" {
 		fmt.Fprint(os.Stdout, out)
 		if !strings.HasSuffix(out, "\n") {
@@ -169,7 +168,7 @@ func Run(args []string) int {
 		return 0
 	}
 
-	if len(res.Result) == 0 {
+	if len(res.Result) == 0 && len(res.Text) == 0 {
 		msg := res.Error
 		if !strings.HasSuffix(msg, "\n") {
 			msg += "\n"
@@ -181,22 +180,22 @@ func Run(args []string) int {
 }
 
 // output renders what the daemon answered for the format the line asked for. A text
-// request is answered with the command's rendering carried as a JSON string, and is
-// unquoted back into it; a JSON request is answered with the value itself, which is
-// printed as it came, since a value that happens to be a string is still JSON to the
-// script reading it. Indentation is the client's business: whitespace does not survive a
-// JSON envelope, and the daemon has no reason to care how its answer is laid out.
-func output(result json.RawMessage, format commands.Format) string {
+// request is answered in Text with the bytes the command wrote, printed as they are; a
+// JSON request is answered in Result with the value itself, printed as it came, since a
+// value that happens to be a string is still JSON to the script reading it. Indentation
+// is the client's business: whitespace does not survive a JSON envelope, and the daemon
+// has no reason to care how its answer is laid out.
+func output(res *localapi.Response, format commands.Format) string {
 	switch format {
 	case commands.FormatJSON:
-		return string(result)
+		return string(res.Result)
 	case commands.FormatPrettyJSON:
-		if indented, ok := localapi.Pretty(result); ok {
+		if indented, ok := localapi.Pretty(res.Result); ok {
 			return indented
 		}
-		return string(result)
+		return string(res.Result)
 	default:
-		return localapi.Text(result)
+		return string(res.Text)
 	}
 }
 

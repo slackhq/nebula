@@ -69,15 +69,21 @@ type Request struct {
 type Response struct {
 	Version int `json:"version"`
 
-	// Result is what the request produced: the command's output, or the schema when the
-	// request was a Describe. It is a JSON value when the command emitted JSON, so a
-	// caller reads it directly instead of parsing a string that happens to contain JSON,
-	// and a JSON string otherwise.
+	// Result is what a request for JSON produced: the command's value, or the schema
+	// when the request was a Describe, as a JSON value, so a caller reads it directly
+	// instead of parsing a string that happens to contain JSON.
 	//
 	// Whitespace inside a JSON result is not preserved: an envelope normalises it, and
 	// in an API it carries no meaning anyway. Formatting a result for a human to read is
 	// the client's job, which is what Pretty is for.
 	Result json.RawMessage `json:"result,omitempty"`
+
+	// Text is what a request for text produced: the command's own human rendering, the
+	// bytes it wrote and nothing else. They travel as bytes, base64 in the envelope,
+	// rather than as a JSON string, because a string is UTF-8 and the rendering need
+	// not be: a name from a certificate is whatever the certificate holds, and the ssh
+	// server passes it through, so this does too.
+	Text []byte `json:"text,omitempty"`
 
 	// Error explains a failure in a sentence, and is absent on success. It is the only
 	// signal a caller needs: there is no separate status field, because a command that

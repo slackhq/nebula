@@ -184,25 +184,3 @@ func Pretty(raw json.RawMessage) (string, bool) {
 
 	return buf.String(), true
 }
-
-// Text renders the Result of a request that asked for text. The daemon carries a text
-// rendering as a JSON string, which is unquoted back into the bytes the command wrote.
-// It is the caller's job to know that text was asked for: a JSON result whose value is
-// a string looks the same on the wire and must not be unquoted, so the choice is made
-// from the request's format, never from the bytes.
-func Text(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-
-	// Only an actual JSON string is unquoted. Unmarshalling into a string also accepts
-	// null, which would turn a `null` answer into no output at all.
-	if raw[0] == '"' {
-		var s string
-		if err := json.Unmarshal(raw, &s); err == nil {
-			return s
-		}
-	}
-
-	return string(raw)
-}

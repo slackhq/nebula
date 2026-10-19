@@ -510,13 +510,8 @@ func render(res *Response, cmd *commands.Command, r commands.Result, format comm
 		return res
 	}
 
-	quoted, err := json.Marshal(buf.String())
-	if err != nil {
-		res.Error = err.Error()
-		return res
-	}
-
-	res.Result = quoted
+	// The bytes the command wrote, as they are; see Response.Text.
+	res.Text = buf.Bytes()
 	return res
 }
 

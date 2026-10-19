@@ -200,24 +200,25 @@ func TestParseCommandReadsTheLineAsTheDaemonDoes(t *testing.T) {
 }
 
 // TestOutputRendersForTheFormatAsked: what the daemon answered is read by the format the
-// line asked for, never by sniffing the bytes. A text answer is the command's rendering
-// carried as a JSON string and comes back unquoted; a JSON answer whose value is a string
-// stays quoted, since to the script reading it that string is the JSON.
+// line asked for, never by sniffing the bytes. A text answer is the command's rendering,
+// printed as it came; a JSON answer whose value is a string stays quoted, since to the
+// script reading it that string is the JSON.
 func TestOutputRendersForTheFormatAsked(t *testing.T) {
-	text := json.RawMessage(`"Log level is: info\n"`)
+	text := &localapi.Response{Text: []byte("Log level is: info\n")}
 	assert.Equal(t, "Log level is: info\n", output(text, commands.FormatUnset))
 	assert.Equal(t, "Log level is: info\n", output(text, commands.FormatText))
 
-	str := json.RawMessage(`"some string"`)
+	str := &localapi.Response{Result: json.RawMessage(`"some string"`)}
 	assert.Equal(t, `"some string"`, output(str, commands.FormatJSON))
 	assert.Equal(t, `"some string"`, output(str, commands.FormatPrettyJSON))
 
-	obj := json.RawMessage(`{"a":1}`)
+	obj := &localapi.Response{Result: json.RawMessage(`{"a":1}`)}
 	assert.Equal(t, `{"a":1}`, output(obj, commands.FormatJSON))
 	assert.Equal(t, "{\n    \"a\": 1\n}", output(obj, commands.FormatPrettyJSON))
 
-	assert.Empty(t, output(nil, commands.FormatJSON))
-	assert.Empty(t, output(nil, commands.FormatUnset))
+	none := &localapi.Response{}
+	assert.Empty(t, output(none, commands.FormatJSON))
+	assert.Empty(t, output(none, commands.FormatUnset))
 }
 
 // TestSplitLineLiftsOwnFlagsFromAnywhere: -config and -socket are the client's wherever

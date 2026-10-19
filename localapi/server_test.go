@@ -93,7 +93,22 @@ func run(t *testing.T, path, command string, args ...string) (string, string) {
 
 	res, err := (&Client{Path: path}).Invoke(command, nil, args, "")
 	require.NoError(t, err)
-	return Text(res.Result), res.Error
+	return textOf(res), res.Error
+}
+
+// textOf is what a test reads as a command's output: the text when text was asked for,
+// else the JSON result, unquoted when it is a JSON string so a test can compare words.
+func textOf(res *Response) string {
+	if len(res.Text) > 0 {
+		return string(res.Text)
+	}
+	if len(res.Result) > 0 && res.Result[0] == '"' {
+		var s string
+		if err := json.Unmarshal(res.Result, &s); err == nil {
+			return s
+		}
+	}
+	return string(res.Result)
 }
 
 func TestServeAllowedCommand(t *testing.T) {
@@ -617,7 +632,7 @@ func TestNamedParametersDriveFlags(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Empty(t, res.Error)
-	assert.Equal(t, "verbose=true label=here args=[an-operand]", Text(res.Result))
+	assert.Equal(t, "verbose=true label=here args=[an-operand]", textOf(res))
 }
 
 // TestUnknownParameterIsReported: a misspelled parameter is an error rather than a
@@ -735,7 +750,7 @@ func TestPresentationParametersAreRefused(t *testing.T) {
 	res, err := c.Invoke("pair", nil, nil, "text")
 	require.NoError(t, err)
 	require.Empty(t, res.Error)
-	assert.Equal(t, "a is one\n", Text(res.Result))
+	assert.Equal(t, "a is one\n", textOf(res))
 
 	res, err = c.Invoke("pair", nil, nil, "")
 	require.NoError(t, err)
@@ -955,4 +970,28 @@ func TestUnknownRequestFieldIsRefused(t *testing.T) {
 	require.NoError(t, readFrame(conn, MaxResponseBytes, "response", &res, false))
 	assert.Contains(t, res.Error, `unknown field "arguments"`)
 	assert.Empty(t, res.Result)
+}
+
+// TestTextOutputKeepsTheBytes: a text rendering travels as the bytes the command wrote.
+// A JSON string would have had to be UTF-8, and a byte that is not would have come out
+// as U+FFFD, where the ssh server passes it through.
+func TestTextOutputKeepsTheBytes(t *testing.T) {
+	reg := commands.New()
+	raw := []byte{'n', 'a', 'm', 'e', ' ', 0xff, 0xfe, '\n'}
+	reg.Register(&commands.Command{
+		Name:             "raw",
+		ShortDescription: "writes what a certificate held",
+		Run:              func(fs any, a []string) (commands.Result, error) { return commands.Value("raw"), nil },
+		Text: func(v any, w io.Writer) error {
+			_, err := w.Write(raw)
+			return err
+		},
+	})
+	_, path := serve(t, reg)
+
+	res, err := (&Client{Path: path}).Invoke("raw", nil, nil, "text")
+	require.NoError(t, err)
+	assert.Empty(t, res.Error)
+	assert.Equal(t, raw, res.Text)
+	assert.Empty(t, res.Result, "text is not also carried as JSON")
 }
