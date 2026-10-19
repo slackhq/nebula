@@ -940,3 +940,19 @@ func TestRebindAndStopSerialize(t *testing.T) {
 		}
 	}
 }
+
+// TestUnknownRequestFieldIsRefused: a request with a field the protocol does not define
+// is answered with the field named, the way an unknown parameter is, and not run.
+func TestUnknownRequestFieldIsRefused(t *testing.T) {
+	_, path := serve(t, basicRegistry())
+
+	conn, err := dial(path, time.Second)
+	require.NoError(t, err)
+	defer conn.Close()
+	require.NoError(t, writeFrame(conn, map[string]any{"version": ProtocolVersion, "command": "echo", "arguments": []string{"x"}}))
+
+	var res Response
+	require.NoError(t, readFrame(conn, MaxResponseBytes, "response", &res, false))
+	assert.Contains(t, res.Error, `unknown field "arguments"`)
+	assert.Empty(t, res.Result)
+}

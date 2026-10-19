@@ -586,7 +586,7 @@ func stringParams(in map[string]any) (map[string]string, error) {
 
 func readRequest(conn net.Conn) (*Request, error) {
 	req := &Request{}
-	if err := readFrame(conn, MaxRequestBytes, "request", req); err != nil {
+	if err := readFrame(conn, MaxRequestBytes, "request", req, true); err != nil {
 		return nil, err
 	}
 

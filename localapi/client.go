@@ -153,7 +153,7 @@ func (c *Client) do(req *Request) (*Response, error) {
 
 func readResponse(conn net.Conn) (*Response, error) {
 	res := &Response{}
-	if err := readFrame(conn, MaxResponseBytes, "response", res); err != nil {
+	if err := readFrame(conn, MaxResponseBytes, "response", res, false); err != nil {
 		if errors.Is(err, io.EOF) {
 			return nil, errors.New("the daemon closed the connection without answering")
 		}

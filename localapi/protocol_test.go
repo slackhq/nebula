@@ -24,16 +24,16 @@ func TestReadFrameLimitIsOnTheBody(t *testing.T) {
 
 	// Exactly at the limit, terminated: accepted.
 	v = ""
-	require.NoError(t, readFrame(bytes.NewReader([]byte(body(64)+"\n")), 64, "request", &v))
+	require.NoError(t, readFrame(bytes.NewReader([]byte(body(64)+"\n")), 64, "request", &v, true))
 	assert.Len(t, v, 62)
 
 	// Exactly at the limit, EOF instead of a newline: still accepted.
 	v = ""
-	require.NoError(t, readFrame(bytes.NewReader([]byte(body(64))), 64, "request", &v))
+	require.NoError(t, readFrame(bytes.NewReader([]byte(body(64))), 64, "request", &v, true))
 	assert.Len(t, v, 62)
 
 	// One byte over: refused as oversized, not as a parse failure.
-	err := readFrame(bytes.NewReader([]byte(body(65)+"\n")), 64, "request", &v)
+	err := readFrame(bytes.NewReader([]byte(body(65)+"\n")), 64, "request", &v, true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeded 64 bytes")
 }
@@ -68,7 +68,7 @@ func (timeoutError) Temporary() bool { return true }
 func TestReadFramePartialLineThenReadErrorIsTheError(t *testing.T) {
 	var v map[string]any
 
-	err := readFrame(&stallingReader{data: []byte(`{"command": "hel`), err: timeoutError{}}, 1024, "request", &v)
+	err := readFrame(&stallingReader{data: []byte(`{"command": "hel`), err: timeoutError{}}, 1024, "request", &v, true)
 	require.Error(t, err)
 	var ne net.Error
 	require.ErrorAs(t, err, &ne, "the timeout is still visible through the wrapping: %v", err)
@@ -78,12 +78,25 @@ func TestReadFramePartialLineThenReadErrorIsTheError(t *testing.T) {
 	// EOF after an unterminated line is the one exception: a final line with no newline
 	// is still a frame.
 	v = nil
-	require.NoError(t, readFrame(&stallingReader{data: []byte(`{"command": "help"}`), err: io.EOF}, 1024, "request", &v))
+	require.NoError(t, readFrame(&stallingReader{data: []byte(`{"command": "help"}`), err: io.EOF}, 1024, "request", &v, true))
 	assert.Equal(t, "help", v["command"])
 
 	// And an unterminated line that is EOF only because the limit cut it off is still
 	// reported as oversized.
-	err = readFrame(bytes.NewReader([]byte(strings.Repeat("a", 70)+"\n")), 64, "request", &v)
+	err = readFrame(bytes.NewReader([]byte(strings.Repeat("a", 70)+"\n")), 64, "request", &v, true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeded 64 bytes")
+}
+
+// TestReadFrameUnknownFieldIsRefusedWhenStrict: the daemon refuses a request field it
+// does not know, as it refuses an unknown parameter, so a misspelling is reported rather
+// than ignored; the client, reading leniently, passes over a field a newer daemon sends.
+func TestReadFrameUnknownFieldIsRefusedWhenStrict(t *testing.T) {
+	var req Request
+	err := readFrame(bytes.NewReader([]byte(`{"version":1,"comand":"help"}`+"\n")), 1024, "request", &req, true)
+	require.ErrorContains(t, err, `unknown field "comand"`)
+
+	var res Response
+	require.NoError(t, readFrame(bytes.NewReader([]byte(`{"version":1,"later":true}`+"\n")), 1024, "response", &res, false))
+	assert.Equal(t, 1, res.Version)
 }

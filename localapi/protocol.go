@@ -103,7 +103,11 @@ func (e *frameError) Unwrap() error { return e.err }
 // single line, a line over max bytes is refused rather than buffered, and a final line
 // with no newline before EOF still counts. what names the frame in errors ("request", "response"); a
 // read failure is returned wrapped, so a caller can still see io.EOF or a timeout in it.
-func readFrame(r io.Reader, max int, what string, v any) error {
+// strict refuses a field v does not declare, which is the daemon's reading of a request:
+// a client that misspells one deserves to hear about it, as it does for a parameter.
+// The client reads a response leniently, so a field a newer daemon adds is passed over
+// rather than fatal.
+func readFrame(r io.Reader, max int, what string, v any, strict bool) error {
 	br := bufio.NewReader(io.LimitReader(r, int64(max)+1))
 
 	line, err := br.ReadBytes('\n')
@@ -124,7 +128,11 @@ func readFrame(r io.Reader, max int, what string, v any) error {
 		return &frameError{fmt.Errorf("%s exceeded %d bytes", what, max)}
 	}
 
-	if err := json.Unmarshal(body, v); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	if strict {
+		dec.DisallowUnknownFields()
+	}
+	if err := dec.Decode(v); err != nil {
 		return &frameError{fmt.Errorf("could not parse %s: %w", what, err)}
 	}
 
