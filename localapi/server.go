@@ -127,6 +127,20 @@ func (s *Server) Rebind(ctx context.Context, path string, acc Access) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Set before the access is applied, not after, so no connection the new access
+	// admits is checked against the old setting. Early is safe either way: a member
+	// arriving before a group's mode is set is refused by the kernel, and with a group
+	// being taken away the peer check applies a moment before the mode tightens.
+	prev := s.trustSocket.Swap(acc.Group != nil)
+	err := s.rebindLocked(ctx, path, acc)
+	if err != nil {
+		// Whatever was serving still is, with the access it had.
+		s.trustSocket.Store(prev)
+	}
+	return err
+}
+
+func (s *Server) rebindLocked(ctx context.Context, path string, acc Access) error {
 	reopening := false
 	if s.running && s.path == path {
 		if s.access.equal(acc) {
@@ -141,7 +155,6 @@ func (s *Server) Rebind(ctx context.Context, path string, acc Access) error {
 		err := applyAccess(path, acc)
 		if err == nil {
 			s.access = acc
-			s.trustSocket.Store(acc.Group != nil)
 			s.l.Info("Changed the local control socket's access", "path", path, "access", acc.String())
 			return nil
 		}
@@ -175,7 +188,6 @@ func (s *Server) Rebind(ctx context.Context, path string, acc Access) error {
 	s.path = path
 	s.access = acc
 	s.running = true
-	s.trustSocket.Store(acc.Group != nil)
 	sem := s.semaphore()
 
 	s.watchLocked(ctx)
