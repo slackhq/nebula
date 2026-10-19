@@ -53,35 +53,6 @@ jobs:
 
     timeout-minutes: 30
 
-  # linux-386 needs VirtualBox, which conflicts with KVM/libvirt -- isolated job.
-  smoke-extra-virtualbox:
-    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'smoke-test-extra')
-    name: linux-386
-    runs-on: ubuntu-latest
-    env:
-      VAGRANT_DEFAULT_PROVIDER: virtualbox
-    steps:
-
-    - uses: actions/checkout@v7
-
-    - uses: actions/setup-go@v7
-      with:
-        go-version: '1.27'
-        check-latest: true
-
-    - name: add hashicorp source
-      run: wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor | sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg && echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
-
-    - name: install vagrant and virtualbox
-      run: |
-        sudo apt-get update && sudo apt-get install -y vagrant virtualbox
-        sudo rmmod kvm_amd kvm_intel kvm 2>/dev/null || true
-
-    - name: linux-386
-      run: make smoke-vagrant/linux-386
-
-    timeout-minutes: 30
-
   smoke-windows:
     if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'smoke-test-extra')
     name: Run windows smoke test
