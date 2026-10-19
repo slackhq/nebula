@@ -295,7 +295,10 @@ func (s *Server) accept(ln net.Listener, sem chan struct{}) {
 func (s *Server) handle(conn net.Conn) {
 	defer conn.Close()
 
-	var args []string
+	var (
+		args    []string
+		replied bool
+	)
 	defer func() {
 		if r := recover(); r != nil {
 			s.l.Error("Recovered from panic serving a local control command",
@@ -303,7 +306,11 @@ func (s *Server) handle(conn net.Conn) {
 				"args", args,
 				"stack", string(debug.Stack()),
 			)
-			s.reply(conn, &Response{Version: ProtocolVersion, Error: "command failed"})
+			// A panic in a command's AfterReply arrives here after the answer has gone
+			// out; the client has its reply, so it is not sent a second one.
+			if !replied {
+				s.reply(conn, &Response{Version: ProtocolVersion, Error: "command failed"})
+			}
 		}
 	}()
 
@@ -340,17 +347,25 @@ func (s *Server) handle(conn net.Conn) {
 	_ = conn.SetReadDeadline(time.Time{})
 	_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 
-	s.reply(conn, s.serve(req))
+	res, after := s.serve(req)
+	s.reply(conn, res)
+	replied = true
+
+	// A command that would cut off its own reply acts only now, once the answer is out.
+	if after != nil {
+		after()
+	}
 }
 
-// serve runs one request and describes the outcome.
+// serve runs one request and describes the outcome. after, when not nil, is the
+// command's AfterReply, which the caller runs once the response has been written.
 //
 // Nothing bounds a command's run; a context would have to reach every Run. What is
 // bounded is the silence: a command still running at slowAfter is named in the log, with
 // the slot it is holding, so a socket that has gone "busy" can be traced to the commands
 // that wedged it. The timer is stopped however the command ends, a panic included, so
 // the line is only ever written about a command that is still running.
-func (s *Server) serve(req *Request) *Response {
+func (s *Server) serve(req *Request) (res *Response, after func()) {
 	slow := time.AfterFunc(s.slowAfter, func() {
 		s.l.Warn("Local control command is still running and holding a connection slot",
 			"command", req.Command,
@@ -361,58 +376,117 @@ func (s *Server) serve(req *Request) *Response {
 	})
 	defer slow.Stop()
 
-	res := &Response{Version: ProtocolVersion}
+	res = &Response{Version: ProtocolVersion}
+	reg := s.registry()
 
 	if req.Describe {
-		schema, err := json.Marshal(s.registry().Schema())
+		schema, err := json.Marshal(reg.Schema())
 		if err != nil {
 			res.Error = err.Error()
-			return res
+			return res, nil
 		}
 
 		res.Result = schema
-		return res
+		return res, nil
 	}
 
 	if req.Command == "" {
 		res.Error = "no command given"
-		return res
+		return res, nil
 	}
 
 	params, err := stringParams(req.Params)
 	if err != nil {
 		res.Error = err.Error()
-		return res
+		return res, nil
 	}
 
-	cmd, err := s.registry().Resolve(commands.Name(req.Command))
+	format, err := parseFormat(req.Format)
+	if err != nil {
+		res.Error = err.Error()
+		return res, nil
+	}
+
+	cmd, err := reg.Resolve(commands.Name(req.Command))
 	if err != nil {
 		s.l.Debug("Local control command refused", "command", req.Command, "error", err)
+		res.Error = err.Error()
+		return res, nil
+	}
+
+	r, err := commands.Invoke(commands.Request{Command: cmd, Params: params, Args: req.Args})
+	if err != nil {
+		s.l.Debug("Local control command failed", "command", req.Command, "error", err)
+		res.Error = err.Error()
+		return res, nil
+	}
+
+	after = cmd.AfterReply
+
+	// A command with nothing to say gets an empty, successful reply.
+	if r.Empty() {
+		return res, after
+	}
+
+	return render(res, cmd, r, format), after
+}
+
+// render turns a command's Result into the response, in the format the caller asked for.
+// Both formats come from commands.Render, which is where ssh and the control socket
+// meet: the JSON a program reads here is byte for byte what -json prints at an ssh
+// prompt, and the text is the command's own rendering, which only the daemon can run.
+func render(res *Response, cmd *commands.Command, r commands.Result, format commands.Format) *Response {
+	buf := &bytes.Buffer{}
+	if err := commands.Render(cmd, r, format, buf); err != nil {
 		res.Error = err.Error()
 		return res
 	}
 
-	out, errOut := &bytes.Buffer{}, &bytes.Buffer{}
+	if format != commands.FormatText {
+		// The caller is a program. Carry the payload as JSON rather than as a string that
+		// happens to contain some; the newline Render ends a line with is not the value's.
+		res.Result = bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 
-	// A command that failed may have explained itself on its error stream; if it did
-	// not, the returned error is the explanation.
-	if err := commands.Invoke(commands.Request{Command: cmd, Params: params, Args: req.Args}, commands.NewSplitStringWriter(out, errOut)); err != nil {
-		s.l.Debug("Local control command failed", "command", req.Command, "error", err)
-
-		// Whatever the command wrote is the better explanation; the returned error is the
-		// fallback for one that failed without saying so.
-		if errOut.Len() == 0 {
-			res.Error = err.Error()
+		// A command that ran and refused is a failure to whoever asked, in either format.
+		// The structured outcome still travels in Result for a program to read; Error
+		// carries the reason so the one rule, Error set means failed, holds here too and
+		// a client never has to guess from the payload.
+		if !r.OK {
+			res.Error = r.Reason
 		}
+
+		return res
 	}
 
-	if errOut.Len() > 0 {
-		res.Error = errOut.String()
+	// A command that ran and refused reads as an error to whoever asked for text: they
+	// are a person or a script, and both expect a refusal on the error stream.
+	if !r.OK {
+		res.Error = buf.String()
+		return res
 	}
 
-	// The command wrote bytes; carry them as a JSON value when they are one.
-	res.Result = jsonOrString(out.Bytes())
+	quoted, err := json.Marshal(buf.String())
+	if err != nil {
+		res.Error = err.Error()
+		return res
+	}
+
+	res.Result = quoted
 	return res
+}
+
+// parseFormat turns the request's format into the one the registry understands. An
+// unknown value is an error rather than a silent default, so a client that asks for
+// something this daemon cannot do hears about it.
+func parseFormat(s string) (commands.Format, error) {
+	switch s {
+	case "", "json":
+		return commands.FormatJSON, nil
+	case "text":
+		return commands.FormatText, nil
+	default:
+		return commands.FormatJSON, fmt.Errorf("unknown format %q, expected \"json\" or \"text\"", s)
+	}
 }
 
 // reply writes one response frame.

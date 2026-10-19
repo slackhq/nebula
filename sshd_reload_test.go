@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -250,9 +249,8 @@ func TestSSHExecExitStatusReflectsTheCommand(t *testing.T) {
 	h := newSSHDReloadHarness(t)
 	h.reg.Register(&commands.Command{
 		Name: "fails",
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			_ = w.WriteLine("nope")
-			return errors.New("failed")
+		Run: func(fs any, a []string) (commands.Result, error) {
+			return commands.Failed("nope"), nil
 		},
 	})
 	client, _ := h.connect(t)
@@ -269,7 +267,7 @@ func TestSSHExecExitStatusReflectsTheCommand(t *testing.T) {
 	require.NoError(t, err)
 	out, err = sess.CombinedOutput("help fails")
 	require.NoError(t, err)
-	assert.Equal(t, "fails - \n", string(out))
+	assert.Contains(t, string(out), "fails - \n")
 
 	// A word that is not a command is a failure too, with the command list as before.
 	sess, err = client.NewSession()

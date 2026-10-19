@@ -48,13 +48,21 @@ type Request struct {
 	// Params carries the command's options by name, with JSON's own types, true rather
 	// than "true", 3 rather than "3", or as the strings a command line parsed them from,
 	// which is what nebula ctl sends. Unknown names are an error, so a typo is reported
-	// instead of ignored.
+	// instead of ignored. The schema lists json and pretty on every command because the
+	// command lines take them; here they are refused, since Format is how a request
+	// chooses its rendering.
 	Params map[string]any `json:"params,omitempty"`
 
 	// Args carries the command's operands, the values that are not options: the vpn
 	// address `print-tunnel` prints, for instance. They stay positional because the
 	// commands do not name them.
 	Args []string `json:"args,omitempty"`
+
+	// Format asks for a rendering other than the default. "" and "json" return the
+	// command's result as a JSON value, which is what a program wants. "text" asks the
+	// daemon to run the command's own human rendering and return it as a string, which is
+	// how `nebula ctl` shows an operator the same output the ssh server would.
+	Format string `json:"format,omitempty"`
 }
 
 // Response is the single JSON object a server sends back.
@@ -75,27 +83,11 @@ type Response struct {
 	// signal a caller needs: there is no separate status field, because a command that
 	// failed always says why and one that succeeded never does. A command line client
 	// turns its presence into a non-zero exit.
+	//
+	// A command that ran and refused sets Error too, alongside its Result when the
+	// caller asked for JSON. That is how a refusal and a request that never ran are
+	// told apart: the first has both, the second has Error alone.
 	Error string `json:"error,omitempty"`
-}
-
-// jsonOrString renders b as a JSON value when it is one, and as a JSON string when it is
-// not. A command writes bytes; when those bytes are JSON a caller reads them directly
-// rather than parsing a string that happens to contain JSON.
-func jsonOrString(b []byte) json.RawMessage {
-	if len(b) == 0 {
-		return nil
-	}
-
-	if json.Valid(b) {
-		return json.RawMessage(b)
-	}
-
-	quoted, err := json.Marshal(string(b))
-	if err != nil {
-		return nil
-	}
-
-	return quoted
 }
 
 // frameError is a frame that arrived and was not one: oversized, or not the JSON object

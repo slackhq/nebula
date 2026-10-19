@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/netip"
 	"testing"
@@ -13,19 +14,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestLogFormatRefusalIsShown: a format the logger does not know is reported to the user
-// as a failure, rather than returned bare, which over ssh was silence.
+// TestLogFormatRefusalIsShown: a format the logger does not know is a refusal the user
+// sees, rather than a bare error, which over ssh was silence.
 func TestLogFormatRefusalIsShown(t *testing.T) {
 	l := logging.NewLogger(io.Discard)
+
+	res, err := runLogFormat(l, []string{"bogus"})
+	require.NoError(t, err)
+	assert.False(t, res.OK)
+	assert.Equal(t, "Unable to set log format: unknown log format `bogus`. possible formats: [text json]", res.Reason)
+
+	res, err = runLogFormat(l, []string{"JSON"})
+	require.NoError(t, err)
 	out := &bytes.Buffer{}
-	w := commands.NewStringWriter(out)
-
-	var f *commands.Failure
-	require.ErrorAs(t, logFormatCommand(l, nil, []string{"bogus"}, w), &f)
-	assert.Equal(t, "Unable to set log format: unknown log format `bogus`. possible formats: [text json]\n", out.String())
-
-	out.Reset()
-	require.NoError(t, logFormatCommand(l, nil, []string{"JSON"}, w))
+	require.NoError(t, commands.Typed(textLogFormat)(res.Value, out))
 	assert.Equal(t, "Log format is: json\n", out.String())
 }
 
@@ -41,9 +43,12 @@ func TestPrintRelaysReportsErrorsAsText(t *testing.T) {
 	hm.Relays[1] = &HostInfo{vpnAddrs: []netip.Addr{relay}}
 	ifce := &Interface{hostMap: hm}
 
-	out := &bytes.Buffer{}
-	require.NoError(t, printRelaysCommand(ifce, &printTunnelFlags{}, nil, commands.NewStringWriter(out)))
-	assert.JSONEq(t, `{"Relays":[{"NebulaAddr":"10.0.0.1","RelayForAddrs":[{"Error":"could not find hostinfo","Type":"","State":"","PeerAddr":"","LocalIndex":0,"RemoteIndex":0,"RelayedThrough":null}]}]}`, out.String())
+	marshal := func() string {
+		b, err := json.Marshal(runPrintRelays(ifce))
+		require.NoError(t, err)
+		return string(b)
+	}
+	assert.JSONEq(t, `{"Relays":[{"NebulaAddr":"10.0.0.1","RelayForAddrs":[{"Error":"could not find hostinfo","Type":"","State":"","PeerAddr":"","LocalIndex":0,"RemoteIndex":0,"RelayedThrough":null}]}]}`, marshal())
 
 	// The same relay host, found, relaying for a peer whose index matches: no Error key.
 	hi := hm.Relays[1]
@@ -53,15 +58,10 @@ func TestPrintRelaysReportsErrorsAsText(t *testing.T) {
 		relayForByIdx:  map[uint32]*Relay{r.LocalIndex: r},
 	}
 	hm.Hosts[relay] = hi
-
-	out.Reset()
-	require.NoError(t, printRelaysCommand(ifce, &printTunnelFlags{}, nil, commands.NewStringWriter(out)))
-	assert.JSONEq(t, `{"Relays":[{"NebulaAddr":"10.0.0.1","RelayForAddrs":[{"Type":"forwarding","State":"established","PeerAddr":"10.0.0.2","LocalIndex":1,"RemoteIndex":2,"RelayedThrough":null}]}]}`, out.String())
+	assert.JSONEq(t, `{"Relays":[{"NebulaAddr":"10.0.0.1","RelayForAddrs":[{"Type":"forwarding","State":"established","PeerAddr":"10.0.0.2","LocalIndex":1,"RemoteIndex":2,"RelayedThrough":null}]}]}`, marshal())
 
 	// And an index mismatch names it.
 	hm.Relays[7] = hi
 	delete(hm.Relays, 1)
-	out.Reset()
-	require.NoError(t, printRelaysCommand(ifce, &printTunnelFlags{}, nil, commands.NewStringWriter(out)))
-	assert.Contains(t, out.String(), `"Error":"hostmap LocalIndex '7' does not match RelayState LocalIndex"`)
+	assert.Contains(t, marshal(), `"Error":"hostmap LocalIndex '7' does not match RelayState LocalIndex"`)
 }

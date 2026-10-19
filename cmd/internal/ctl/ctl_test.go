@@ -1,6 +1,7 @@
 package ctl
 
 import (
+	"encoding/json"
 	"flag"
 	"os"
 	"path/filepath"
@@ -138,6 +139,98 @@ func TestParseCommandReportsWhatFlagSaid(t *testing.T) {
 	}
 }
 
+// TestParseCommandSendsATextlessCommandAsText: whether a command without a human form
+// can answer in text depends on what it returns, which the client cannot know until it
+// asks. A refusal always has a human form, so the request goes out as text and the
+// daemon decides.
+func TestParseCommandSendsATextlessCommandAsText(t *testing.T) {
+	schema := []commands.CommandSchema{{Name: "print-tunnel"}}
+
+	req, printedHelp, err := parseCommand(schema, []string{"print-tunnel"})
+	require.NoError(t, err)
+	assert.False(t, printedHelp)
+	assert.Equal(t, commands.PrintTunnel, req.name)
+	assert.Nil(t, req.Params)
+	assert.Empty(t, req.Args)
+	assert.Equal(t, commands.FormatUnset, req.Format)
+	assert.Equal(t, "text", wireFormat(req.Format))
+}
+
+// TestParseCommandOffPresentationFlagIsNoPreference: the daemon treats -json=false as
+// no preference, so nebula ctl must too, or the same line renders differently on the
+// two surfaces. Only a true value asks for JSON, and -pretty implies it.
+func TestParseCommandOffPresentationFlagIsNoPreference(t *testing.T) {
+	schema := []commands.CommandSchema{{
+		Name: "device-info",
+		Flags: []commands.FlagSchema{
+			{Name: commands.FlagJSON, Bool: true, Default: "false"},
+			{Name: commands.FlagPretty, Bool: true, Default: "false"},
+		},
+	}}
+
+	for _, tc := range []struct {
+		argv []string
+		want commands.Format
+		wire string
+	}{
+		{[]string{"device-info"}, commands.FormatUnset, "text"},
+		{[]string{"device-info", "-json=false"}, commands.FormatUnset, "text"},
+		{[]string{"device-info", "-pretty=false"}, commands.FormatUnset, "text"},
+		{[]string{"device-info", "-json=false", "-pretty=false"}, commands.FormatUnset, "text"},
+		{[]string{"device-info", "-json"}, commands.FormatJSON, "json"},
+		{[]string{"device-info", "-json=true"}, commands.FormatJSON, "json"},
+		{[]string{"device-info", "-pretty"}, commands.FormatPrettyJSON, "json"},
+		{[]string{"device-info", "-pretty", "-json=false"}, commands.FormatPrettyJSON, "json"},
+	} {
+		t.Run(strings.Join(tc.argv[1:], " "), func(t *testing.T) {
+			req, printedHelp, err := parseCommand(schema, tc.argv)
+			require.NoError(t, err)
+			assert.False(t, printedHelp)
+			assert.Equal(t, tc.want, req.Format)
+			assert.Equal(t, tc.wire, wireFormat(req.Format))
+			assert.Nil(t, req.Params, "presentation flags are never sent as parameters")
+		})
+	}
+}
+
+// TestParseCommandReadsTheLineAsTheDaemonDoes: nebula ctl parses the line with the same
+// rules as the daemon, so an operand after "--" reaches the command on both and a
+// negative number before it is the flag it would be at an ssh prompt.
+func TestParseCommandReadsTheLineAsTheDaemonDoes(t *testing.T) {
+	schema := []commands.CommandSchema{{Name: "set"}}
+
+	req, printedHelp, err := parseCommand(schema, []string{"set", "--", "-1"})
+	require.NoError(t, err)
+	assert.False(t, printedHelp)
+	assert.Equal(t, commands.Name("set"), req.name)
+	assert.Nil(t, req.Params)
+	assert.Equal(t, []string{"-1"}, req.Args)
+
+	_, _, err = parseCommand(schema, []string{"set", "-1"})
+	require.ErrorContains(t, err, "flag provided but not defined: -1")
+}
+
+// TestOutputRendersForTheFormatAsked: what the daemon answered is read by the format the
+// line asked for, never by sniffing the bytes. A text answer is the command's rendering
+// carried as a JSON string and comes back unquoted; a JSON answer whose value is a string
+// stays quoted, since to the script reading it that string is the JSON.
+func TestOutputRendersForTheFormatAsked(t *testing.T) {
+	text := json.RawMessage(`"Log level is: info\n"`)
+	assert.Equal(t, "Log level is: info\n", output(text, commands.FormatUnset))
+	assert.Equal(t, "Log level is: info\n", output(text, commands.FormatText))
+
+	str := json.RawMessage(`"some string"`)
+	assert.Equal(t, `"some string"`, output(str, commands.FormatJSON))
+	assert.Equal(t, `"some string"`, output(str, commands.FormatPrettyJSON))
+
+	obj := json.RawMessage(`{"a":1}`)
+	assert.Equal(t, `{"a":1}`, output(obj, commands.FormatJSON))
+	assert.Equal(t, "{\n    \"a\": 1\n}", output(obj, commands.FormatPrettyJSON))
+
+	assert.Empty(t, output(nil, commands.FormatJSON))
+	assert.Empty(t, output(nil, commands.FormatUnset))
+}
+
 // TestSplitLineLiftsOwnFlagsFromAnywhere: -config and -socket are the client's wherever
 // they appear, before the command or after it, in either spelling, so the two orders
 // mean the same line. Everything else after the command word stays in order for the
@@ -145,8 +238,8 @@ func TestParseCommandReportsWhatFlagSaid(t *testing.T) {
 func TestSplitLineLiftsOwnFlagsFromAnywhere(t *testing.T) {
 	newFS := func() *flag.FlagSet {
 		fs := flag.NewFlagSet("nebula ctl", flag.ContinueOnError)
-		fs.String("config", "", "")
-		fs.String("socket", "", "")
+		fs.String(commands.FlagConfig, "", "")
+		fs.String(commands.FlagSocket, "", "")
 		return fs
 	}
 

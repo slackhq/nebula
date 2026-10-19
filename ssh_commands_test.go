@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
-	"strings"
+	"sort"
 	"testing"
 
 	"github.com/slackhq/nebula/commands"
@@ -17,8 +17,9 @@ import (
 // It pins the registered command set, their descriptions, help text and flag definitions
 // so that moving the registry to a transport neutral package is provably a relocation
 // rather than a rewrite. Regenerate with `go test . -run TestSSHCommandSurface -update`.
+
 func TestSSHCommandSurface(t *testing.T) {
-	got := renderCommandSurface(registeredCommands(t).All())
+	got := renderCommandSurface(registeredCommands(t).Schema())
 	test.Golden(t, filepath.Join("testdata", "ssh_commands.golden"), got)
 }
 
@@ -32,29 +33,41 @@ func registeredCommands(t *testing.T) *commands.Registry {
 	return reg
 }
 
-func renderCommandSurface(cmds []*commands.Command) string {
+// renderCommandSurface prints what a client actually sees, which is the schema rather
+// than the Command structs: the presentation flags are offered on every command that
+// returns a value, so reading Command.Flags alone would under-report the surface.
+func renderCommandSurface(cmds []commands.CommandSchema) string {
 	lines := make([]string, 0, len(cmds))
 	for _, cmd := range cmds {
 		b := &bytes.Buffer{}
 		fmt.Fprintf(b, "%s\n", cmd.Name)
-		fmt.Fprintf(b, "  short: %s\n", cmd.ShortDescription)
+		fmt.Fprintf(b, "  short: %s\n", cmd.Short)
 		fmt.Fprintf(b, "  help: %s\n", cmd.Help)
 
-		if cmd.Flags != nil {
-			fl, _ := cmd.Flags()
-			if fl != nil {
-				fb := &bytes.Buffer{}
-				fl.SetOutput(fb)
-				fl.PrintDefaults()
-				fmt.Fprintf(b, "  flags:\n%s", fb.String())
+		if len(cmd.Flags) > 0 {
+			fmt.Fprintf(b, "  flags:\n")
+			for _, f := range cmd.Flags {
+				kind := " string"
+				if f.Bool {
+					kind = ""
+				}
+				fmt.Fprintf(b, "  -%s%s\n    \t%s\n", f.Name, kind, f.Usage)
 			}
 		}
 
 		lines = append(lines, b.String())
 	}
 
-	// In the order All gives, so the golden pins display order too.
-	return strings.Join(lines, "")
+	sort.Strings(lines)
+	return joinLines(lines)
+}
+
+func joinLines(in []string) string {
+	b := &bytes.Buffer{}
+	for _, l := range in {
+		b.WriteString(l)
+	}
+	return b.String()
 }
 
 // TestLocalSocketSurface pins which of nebula's commands the always-on local socket

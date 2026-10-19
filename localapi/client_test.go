@@ -29,13 +29,16 @@ func TestPrettyPreservesKeyOrderAndPrecision(t *testing.T) {
 }`, out)
 }
 
-func TestPrettyLeavesTextAlone(t *testing.T) {
-	// A JSON string is a command's plain text output; it is rendered by Text, not indented.
-	_, ok := Pretty(json.RawMessage(`"Log level is: info"`))
-	assert.False(t, ok)
+func TestPrettyKeepsAStringValueQuoted(t *testing.T) {
+	// A value that is a JSON string is still JSON to whoever asked for it: it has nothing
+	// to indent and comes back as it is, never unquoted.
+	out, ok := Pretty(json.RawMessage(`"some string"`))
+	assert.True(t, ok)
+	assert.Equal(t, `"some string"`, out)
 
-	_, ok = Pretty(json.RawMessage(`  "padded"`))
-	assert.False(t, ok)
+	out, ok = Pretty(json.RawMessage(`  "padded"`))
+	assert.True(t, ok)
+	assert.Equal(t, `"padded"`, out)
 }
 
 func TestPrettyRejectsEmptyAndInvalid(t *testing.T) {

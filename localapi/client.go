@@ -78,8 +78,10 @@ func (c *Client) Describe() ([]commands.CommandSchema, error) {
 
 // Invoke runs one command and returns what the daemon said. params are the command's
 // options by name, as the strings a command line parsed them from; a program speaking
-// the protocol directly may send JSON's own types instead, see Request.Params.
-func (c *Client) Invoke(command string, params map[string]string, args []string) (*Response, error) {
+// the protocol directly may send JSON's own types instead, see Request.Params. An empty
+// format asks for JSON, which is the API's default; "text" asks the daemon to apply the
+// command's own human rendering.
+func (c *Client) Invoke(command string, params map[string]string, args []string, format string) (*Response, error) {
 	var wire map[string]any
 	if len(params) > 0 {
 		wire = make(map[string]any, len(params))
@@ -93,6 +95,7 @@ func (c *Client) Invoke(command string, params map[string]string, args []string)
 		Command: command,
 		Params:  wire,
 		Args:    args,
+		Format:  format,
 	})
 }
 
@@ -161,14 +164,16 @@ func readResponse(conn net.Conn) (*Response, error) {
 }
 
 // Pretty renders a JSON Result indented for a human reader, reporting false when the
-// result is not a JSON value and there is nothing to indent.
+// result is empty or is not JSON and there is nothing to indent. A value that is a JSON
+// string has nothing to indent either, and comes back as it is, quotes and all: the
+// caller asked for JSON and that is what the value is.
 //
 // The bytes are re-indented rather than decoded and re-encoded: decoding into `any`
 // sorts object keys and routes every number through float64, so the layout would
 // differ from what the daemon wrote and from the ssh -pretty path.
 func Pretty(raw json.RawMessage) (string, bool) {
 	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || trimmed[0] == '"' {
+	if len(trimmed) == 0 {
 		return "", false
 	}
 
@@ -180,16 +185,18 @@ func Pretty(raw json.RawMessage) (string, bool) {
 	return buf.String(), true
 }
 
-// Text renders a Result for a human reader. A JSON value is written through unchanged so
-// the command's own formatting survives; a JSON string is unquoted back into the text the
-// command actually wrote.
+// Text renders the Result of a request that asked for text. The daemon carries a text
+// rendering as a JSON string, which is unquoted back into the bytes the command wrote.
+// It is the caller's job to know that text was asked for: a JSON result whose value is
+// a string looks the same on the wire and must not be unquoted, so the choice is made
+// from the request's format, never from the bytes.
 func Text(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
 
 	// Only an actual JSON string is unquoted. Unmarshalling into a string also accepts
-	// null, which would turn a command's `null` answer into no output at all.
+	// null, which would turn a `null` answer into no output at all.
 	if raw[0] == '"' {
 		var s string
 		if err := json.Unmarshal(raw, &s); err == nil {

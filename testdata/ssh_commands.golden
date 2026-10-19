@@ -4,29 +4,46 @@ change-remote
   flags:
   -address string
     	The new remote address, ip:port
+  -json
+    	outputs as json
+  -pretty
+    	pretty prints json, assumes -json
 close-tunnel
   short: Closes a tunnel for the provided vpn addr
   help: 
   flags:
   -local-only
     	Disables notifying the remote that the tunnel is shutting down
+  -json
+    	outputs as json
+  -pretty
+    	pretty prints json, assumes -json
 create-tunnel
   short: Creates a tunnel for the provided vpn address
   help: The lighthouses will be queried for real addresses but you can provide one as well.
   flags:
   -address string
     	Optionally provide a real remote address, ip:port 
+  -json
+    	outputs as json
+  -pretty
+    	pretty prints json, assumes -json
 device-info
   short: Prints information about the network device.
   help: 
   flags:
   -json
-    	outputs as json with more information
+    	outputs as json
   -pretty
     	pretty prints json, assumes -json
 help
   short: prints available commands or help <command> for specific usage info
   help: 
+  flags:
+  -json
+    	outputs as json
+  -pretty
+    	pretty prints json, assumes -json
 list-hostmap
   short: List all known previously connected hosts
   help: 
@@ -34,7 +51,7 @@ list-hostmap
   -by-index
     	gets all hosts in the hostmap from the index table
   -json
-    	outputs as json with more information
+    	outputs as json
   -pretty
     	pretty prints json, assumes -json
 list-lighthouse-addrmap
@@ -42,7 +59,7 @@ list-lighthouse-addrmap
   help: 
   flags:
   -json
-    	outputs as json with more information
+    	outputs as json
   -pretty
     	pretty prints json, assumes -json
 list-pending-hostmap
@@ -52,43 +69,72 @@ list-pending-hostmap
   -by-index
     	gets all hosts in the hostmap from the index table
   -json
-    	outputs as json with more information
+    	outputs as json
   -pretty
     	pretty prints json, assumes -json
 log-format
   short: Gets or sets the current log format
-  help: 
-log-level
-  short: Gets or sets the current log level
-  help: 
-print-cert
-  short: Prints the current certificate being used or the certificate for the provided vpn addr
   help: 
   flags:
   -json
     	outputs as json
   -pretty
     	pretty prints json, assumes -json
+log-level
+  short: Gets or sets the current log level
+  help: 
+  flags:
+  -json
+    	outputs as json
+  -pretty
+    	pretty prints json, assumes -json
+print-cert
+  short: Prints the current certificate being used or the certificate for the provided vpn addr
+  help: 
+  flags:
   -raw
-    	raw prints the PEM encoded certificate, not compatible with -json or -pretty
+    	prints the PEM encoded certificate; with -json, an object holding it
+  -json
+    	outputs as json
+  -pretty
+    	pretty prints json, assumes -json
 print-relays
   short: Prints json details about all relay info
   help: 
   flags:
+  -json
+    	outputs as json
   -pretty
-    	pretty prints json
+    	pretty prints json, assumes -json
 print-tunnel
   short: Prints json details about a tunnel for the provided vpn addr
   help: 
   flags:
+  -json
+    	outputs as json
   -pretty
-    	pretty prints json
+    	pretty prints json, assumes -json
 query-lighthouse
   short: Query the lighthouses for the provided vpn address
   help: This command is asynchronous. Only currently known udp addresses will be printed.
+  flags:
+  -json
+    	outputs as json
+  -pretty
+    	pretty prints json, assumes -json
 reload
   short: Reloads configuration from disk, same as sending HUP to the process
   help: 
+  flags:
+  -json
+    	outputs as json
+  -pretty
+    	pretty prints json, assumes -json
 version
   short: Prints the currently running version of nebula
   help: 
+  flags:
+  -json
+    	outputs as json
+  -pretty
+    	pretty prints json, assumes -json

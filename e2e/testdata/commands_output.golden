@@ -2,10 +2,12 @@ $ version
 e2e-test
 
 $ version -json
-e2e-test
+{"version":"e2e-test"}
 
 $ version -pretty
-e2e-test
+{
+    "version": "e2e-test"
+}
 
 $ device-info
 name= cidr=[10.222.0.1/24]
@@ -104,7 +106,7 @@ $ print-cert
 }
 
 $ print-cert -json
-{"details":{"curve":"CURVE25519","groups":[],"isCa":false,"issuer":"<hex>","name":"output-golden","networks":["10.222.0.1/24"],"notAfter":"<time>","notBefore":"<time>","publicKey":"<hex>","unsafeNetworks":[]},"fingerprint":"<hex>","signature":"<hex>","version":1}\ No newline at end of output
+{"details":{"curve":"CURVE25519","groups":[],"isCa":false,"issuer":"<hex>","name":"output-golden","networks":["10.222.0.1/24"],"notAfter":"<time>","notBefore":"<time>","publicKey":"<hex>","unsafeNetworks":[]},"fingerprint":"<hex>","signature":"<hex>","version":1}
 
 $ print-cert -pretty
 {
@@ -125,7 +127,7 @@ $ print-cert -pretty
     "fingerprint": "<hex>",
     "signature": "<hex>",
     "version": 1
-}\ No newline at end of output
+}
 
 $ print-cert -raw
 -----BEGIN NEBULA CERTIFICATE-----
@@ -133,39 +135,41 @@ $ print-cert -raw
 -----END NEBULA CERTIFICATE-----
 
 $ print-cert -json -raw
-{"details":{"curve":"CURVE25519","groups":[],"isCa":false,"issuer":"<hex>","name":"output-golden","networks":["10.222.0.1/24"],"notAfter":"<time>","notBefore":"<time>","publicKey":"<hex>","unsafeNetworks":[]},"fingerprint":"<hex>","signature":"<hex>","version":1}\ No newline at end of output
+{"pem":"-----BEGIN NEBULA CERTIFICATE-----\n<pem>\n-----END NEBULA CERTIFICATE-----\n"}
 
 $ print-cert -pretty -raw
 {
-    "details": {
-        "curve": "CURVE25519",
-        "groups": [],
-        "isCa": false,
-        "issuer": "<hex>",
-        "name": "output-golden",
-        "networks": [
-            "10.222.0.1/24"
-        ],
-        "notAfter": "<time>",
-        "notBefore": "<time>",
-        "publicKey": "<hex>",
-        "unsafeNetworks": []
-    },
-    "fingerprint": "<hex>",
-    "signature": "<hex>",
-    "version": 1
-}\ No newline at end of output
+    "pem": "-----BEGIN NEBULA CERTIFICATE-----\n<pem>\n-----END NEBULA CERTIFICATE-----\n"
+}
 
 $ print-cert 10.222.0.9
 Could not find tunnel for vpn addr: 10.222.0.9
 exit status 1
 
 $ print-cert -json 10.222.0.9
-Could not find tunnel for vpn addr: 10.222.0.9
+{"ok":false,"reason":"Could not find tunnel for vpn addr: 10.222.0.9"}
 exit status 1
 
 $ print-cert -pretty 10.222.0.9
-Could not find tunnel for vpn addr: 10.222.0.9
+{
+    "ok": false,
+    "reason": "Could not find tunnel for vpn addr: 10.222.0.9"
+}
+exit status 1
+
+$ print-cert 10.222.0.9 -json
+{"ok":false,"reason":"Could not find tunnel for vpn addr: 10.222.0.9"}
+exit status 1
+
+$ print-cert -json 10.222.0.9 -json
+{"ok":false,"reason":"Could not find tunnel for vpn addr: 10.222.0.9"}
+exit status 1
+
+$ print-cert -pretty 10.222.0.9 -json
+{
+    "ok": false,
+    "reason": "Could not find tunnel for vpn addr: 10.222.0.9"
+}
 exit status 1
 
 $ print-cert 10.222.0.250
@@ -173,11 +177,14 @@ Could not find tunnel for vpn addr: 10.222.0.250
 exit status 1
 
 $ print-cert -json 10.222.0.250
-Could not find tunnel for vpn addr: 10.222.0.250
+{"ok":false,"reason":"Could not find tunnel for vpn addr: 10.222.0.250"}
 exit status 1
 
 $ print-cert -pretty 10.222.0.250
-Could not find tunnel for vpn addr: 10.222.0.250
+{
+    "ok": false,
+    "reason": "Could not find tunnel for vpn addr: 10.222.0.250"
+}
 exit status 1
 
 $ print-cert not-an-address
@@ -185,11 +192,14 @@ The provided vpn addr could not be parsed: not-an-address
 exit status 1
 
 $ print-cert -json not-an-address
-The provided vpn addr could not be parsed: not-an-address
+{"ok":false,"reason":"The provided vpn addr could not be parsed: not-an-address"}
 exit status 1
 
 $ print-cert -pretty not-an-address
-The provided vpn addr could not be parsed: not-an-address
+{
+    "ok": false,
+    "reason": "The provided vpn addr could not be parsed: not-an-address"
+}
 exit status 1
 
 $ print-tunnel
@@ -197,14 +207,14 @@ No vpn address was provided
 exit status 1
 
 $ print-tunnel -json
-flag provided but not defined: -json
-Usage:
-  -pretty
-    	pretty prints json
+{"ok":false,"reason":"No vpn address was provided"}
 exit status 1
 
 $ print-tunnel -pretty
-No vpn address was provided
+{
+    "ok": false,
+    "reason": "No vpn address was provided"
+}
 exit status 1
 
 $ print-tunnel 10.222.0.9
@@ -212,14 +222,14 @@ Could not find tunnel for vpn addr: 10.222.0.9
 exit status 1
 
 $ print-tunnel -json 10.222.0.9
-flag provided but not defined: -json
-Usage:
-  -pretty
-    	pretty prints json
+{"ok":false,"reason":"Could not find tunnel for vpn addr: 10.222.0.9"}
 exit status 1
 
 $ print-tunnel -pretty 10.222.0.9
-Could not find tunnel for vpn addr: 10.222.0.9
+{
+    "ok": false,
+    "reason": "Could not find tunnel for vpn addr: 10.222.0.9"
+}
 exit status 1
 
 $ print-tunnel 10.222.0.250
@@ -227,25 +237,21 @@ Could not find tunnel for vpn addr: 10.222.0.250
 exit status 1
 
 $ print-tunnel -json 10.222.0.250
-flag provided but not defined: -json
-Usage:
-  -pretty
-    	pretty prints json
+{"ok":false,"reason":"Could not find tunnel for vpn addr: 10.222.0.250"}
 exit status 1
 
 $ print-tunnel -pretty 10.222.0.250
-Could not find tunnel for vpn addr: 10.222.0.250
+{
+    "ok": false,
+    "reason": "Could not find tunnel for vpn addr: 10.222.0.250"
+}
 exit status 1
 
 $ print-relays
 {"Relays":null}
 
 $ print-relays -json
-flag provided but not defined: -json
-Usage:
-  -pretty
-    	pretty prints json
-exit status 1
+{"Relays":null}
 
 $ print-relays -pretty
 {
@@ -257,34 +263,38 @@ No vpn address was provided
 exit status 1
 
 $ query-lighthouse -json
-The provided vpn address could not be parsed: -json
+{"ok":false,"reason":"No vpn address was provided"}
 exit status 1
 
 $ query-lighthouse -pretty
-The provided vpn address could not be parsed: -pretty
+{
+    "ok": false,
+    "reason": "No vpn address was provided"
+}
 exit status 1
 
 $ query-lighthouse 10.222.0.9
 {}
 
 $ query-lighthouse -json 10.222.0.9
-The provided vpn address could not be parsed: -json
-exit status 1
+{}
 
 $ query-lighthouse -pretty 10.222.0.9
-The provided vpn address could not be parsed: -pretty
-exit status 1
+{}
 
 $ query-lighthouse not-an-address
 The provided vpn address could not be parsed: not-an-address
 exit status 1
 
 $ query-lighthouse -json not-an-address
-The provided vpn address could not be parsed: -json
+{"ok":false,"reason":"The provided vpn address could not be parsed: not-an-address"}
 exit status 1
 
 $ query-lighthouse -pretty not-an-address
-The provided vpn address could not be parsed: -pretty
+{
+    "ok": false,
+    "reason": "The provided vpn address could not be parsed: not-an-address"
+}
 exit status 1
 
 $ log-level
@@ -292,11 +302,14 @@ Log level is not reconfigurable on this logger
 exit status 1
 
 $ log-level -json
-Log level is not reconfigurable on this logger
+{"ok":false,"reason":"Log level is not reconfigurable on this logger"}
 exit status 1
 
 $ log-level -pretty
-Log level is not reconfigurable on this logger
+{
+    "ok": false,
+    "reason": "Log level is not reconfigurable on this logger"
+}
 exit status 1
 
 $ log-level debug
@@ -304,11 +317,14 @@ Log level is not reconfigurable on this logger
 exit status 1
 
 $ log-level -json debug
-Log level is not reconfigurable on this logger
+{"ok":false,"reason":"Log level is not reconfigurable on this logger"}
 exit status 1
 
 $ log-level -pretty debug
-Log level is not reconfigurable on this logger
+{
+    "ok": false,
+    "reason": "Log level is not reconfigurable on this logger"
+}
 exit status 1
 
 $ log-level bogus
@@ -316,11 +332,14 @@ Log level is not reconfigurable on this logger
 exit status 1
 
 $ log-level -json bogus
-Log level is not reconfigurable on this logger
+{"ok":false,"reason":"Log level is not reconfigurable on this logger"}
 exit status 1
 
 $ log-level -pretty bogus
-Log level is not reconfigurable on this logger
+{
+    "ok": false,
+    "reason": "Log level is not reconfigurable on this logger"
+}
 exit status 1
 
 $ log-level info
@@ -328,11 +347,14 @@ Log level is not reconfigurable on this logger
 exit status 1
 
 $ log-level -json info
-Log level is not reconfigurable on this logger
+{"ok":false,"reason":"Log level is not reconfigurable on this logger"}
 exit status 1
 
 $ log-level -pretty info
-Log level is not reconfigurable on this logger
+{
+    "ok": false,
+    "reason": "Log level is not reconfigurable on this logger"
+}
 exit status 1
 
 $ log-format
@@ -340,11 +362,14 @@ Log format is not reconfigurable on this logger
 exit status 1
 
 $ log-format -json
-Log format is not reconfigurable on this logger
+{"ok":false,"reason":"Log format is not reconfigurable on this logger"}
 exit status 1
 
 $ log-format -pretty
-Log format is not reconfigurable on this logger
+{
+    "ok": false,
+    "reason": "Log format is not reconfigurable on this logger"
+}
 exit status 1
 
 $ log-format json
@@ -352,11 +377,14 @@ Log format is not reconfigurable on this logger
 exit status 1
 
 $ log-format -json json
-Log format is not reconfigurable on this logger
+{"ok":false,"reason":"Log format is not reconfigurable on this logger"}
 exit status 1
 
 $ log-format -pretty json
-Log format is not reconfigurable on this logger
+{
+    "ok": false,
+    "reason": "Log format is not reconfigurable on this logger"
+}
 exit status 1
 
 $ log-format text
@@ -364,11 +392,14 @@ Log format is not reconfigurable on this logger
 exit status 1
 
 $ log-format -json text
-Log format is not reconfigurable on this logger
+{"ok":false,"reason":"Log format is not reconfigurable on this logger"}
 exit status 1
 
 $ log-format -pretty text
-Log format is not reconfigurable on this logger
+{
+    "ok": false,
+    "reason": "Log format is not reconfigurable on this logger"
+}
 exit status 1
 
 $ change-remote
@@ -376,17 +407,14 @@ No vpn address was provided
 exit status 1
 
 $ change-remote -json
-flag provided but not defined: -json
-Usage:
-  -address string
-    	The new remote address, ip:port
+{"ok":false,"reason":"No vpn address was provided"}
 exit status 1
 
 $ change-remote -pretty
-flag provided but not defined: -pretty
-Usage:
-  -address string
-    	The new remote address, ip:port
+{
+    "ok": false,
+    "reason": "No vpn address was provided"
+}
 exit status 1
 
 $ change-remote 10.222.0.9
@@ -394,17 +422,14 @@ No address was provided
 exit status 1
 
 $ change-remote -json 10.222.0.9
-flag provided but not defined: -json
-Usage:
-  -address string
-    	The new remote address, ip:port
+{"ok":false,"reason":"No address was provided"}
 exit status 1
 
 $ change-remote -pretty 10.222.0.9
-flag provided but not defined: -pretty
-Usage:
-  -address string
-    	The new remote address, ip:port
+{
+    "ok": false,
+    "reason": "No address was provided"
+}
 exit status 1
 
 $ change-remote -address 10.94.0.10:4242 10.222.0.9
@@ -412,17 +437,14 @@ Could not find tunnel for vpn address: 10.222.0.9
 exit status 1
 
 $ change-remote -json -address 10.94.0.10:4242 10.222.0.9
-flag provided but not defined: -json
-Usage:
-  -address string
-    	The new remote address, ip:port
+{"ok":false,"reason":"Could not find tunnel for vpn address: 10.222.0.9"}
 exit status 1
 
 $ change-remote -pretty -address 10.94.0.10:4242 10.222.0.9
-flag provided but not defined: -pretty
-Usage:
-  -address string
-    	The new remote address, ip:port
+{
+    "ok": false,
+    "reason": "Could not find tunnel for vpn address: 10.222.0.9"
+}
 exit status 1
 
 $ change-remote -address 10.94.0.10:4242 10.222.0.250
@@ -430,17 +452,14 @@ Could not find tunnel for vpn address: 10.222.0.250
 exit status 1
 
 $ change-remote -json -address 10.94.0.10:4242 10.222.0.250
-flag provided but not defined: -json
-Usage:
-  -address string
-    	The new remote address, ip:port
+{"ok":false,"reason":"Could not find tunnel for vpn address: 10.222.0.250"}
 exit status 1
 
 $ change-remote -pretty -address 10.94.0.10:4242 10.222.0.250
-flag provided but not defined: -pretty
-Usage:
-  -address string
-    	The new remote address, ip:port
+{
+    "ok": false,
+    "reason": "Could not find tunnel for vpn address: 10.222.0.250"
+}
 exit status 1
 
 $ create-tunnel
@@ -448,17 +467,14 @@ No vpn address was provided
 exit status 1
 
 $ create-tunnel -json
-flag provided but not defined: -json
-Usage:
-  -address string
-    	Optionally provide a real remote address, ip:port 
+{"ok":false,"reason":"No vpn address was provided"}
 exit status 1
 
 $ create-tunnel -pretty
-flag provided but not defined: -pretty
-Usage:
-  -address string
-    	Optionally provide a real remote address, ip:port 
+{
+    "ok": false,
+    "reason": "No vpn address was provided"
+}
 exit status 1
 
 $ create-tunnel 10.222.0.9
@@ -466,34 +482,28 @@ Tunnel already handshaking
 exit status 1
 
 $ create-tunnel -json 10.222.0.9
-flag provided but not defined: -json
-Usage:
-  -address string
-    	Optionally provide a real remote address, ip:port 
+{"ok":false,"reason":"Tunnel already handshaking"}
 exit status 1
 
 $ create-tunnel -pretty 10.222.0.9
-flag provided but not defined: -pretty
-Usage:
-  -address string
-    	Optionally provide a real remote address, ip:port 
+{
+    "ok": false,
+    "reason": "Tunnel already handshaking"
+}
 exit status 1
 
 $ create-tunnel -address 10.94.0.10:4242 10.222.0.10
 Created
 
 $ create-tunnel -json -address 10.94.0.10:4242 10.222.0.10
-flag provided but not defined: -json
-Usage:
-  -address string
-    	Optionally provide a real remote address, ip:port 
+{"ok":false,"reason":"Tunnel already handshaking"}
 exit status 1
 
 $ create-tunnel -pretty -address 10.94.0.10:4242 10.222.0.10
-flag provided but not defined: -pretty
-Usage:
-  -address string
-    	Optionally provide a real remote address, ip:port 
+{
+    "ok": false,
+    "reason": "Tunnel already handshaking"
+}
 exit status 1
 
 $ create-tunnel not-an-address
@@ -501,17 +511,14 @@ The provided vpn address could not be parsed: not-an-address
 exit status 1
 
 $ create-tunnel -json not-an-address
-flag provided but not defined: -json
-Usage:
-  -address string
-    	Optionally provide a real remote address, ip:port 
+{"ok":false,"reason":"The provided vpn address could not be parsed: not-an-address"}
 exit status 1
 
 $ create-tunnel -pretty not-an-address
-flag provided but not defined: -pretty
-Usage:
-  -address string
-    	Optionally provide a real remote address, ip:port 
+{
+    "ok": false,
+    "reason": "The provided vpn address could not be parsed: not-an-address"
+}
 exit status 1
 
 $ close-tunnel
@@ -519,17 +526,14 @@ No vpn address was provided
 exit status 1
 
 $ close-tunnel -json
-flag provided but not defined: -json
-Usage:
-  -local-only
-    	Disables notifying the remote that the tunnel is shutting down
+{"ok":false,"reason":"No vpn address was provided"}
 exit status 1
 
 $ close-tunnel -pretty
-flag provided but not defined: -pretty
-Usage:
-  -local-only
-    	Disables notifying the remote that the tunnel is shutting down
+{
+    "ok": false,
+    "reason": "No vpn address was provided"
+}
 exit status 1
 
 $ close-tunnel 10.222.0.250
@@ -537,17 +541,14 @@ Could not find tunnel for vpn address: 10.222.0.250
 exit status 1
 
 $ close-tunnel -json 10.222.0.250
-flag provided but not defined: -json
-Usage:
-  -local-only
-    	Disables notifying the remote that the tunnel is shutting down
+{"ok":false,"reason":"Could not find tunnel for vpn address: 10.222.0.250"}
 exit status 1
 
 $ close-tunnel -pretty 10.222.0.250
-flag provided but not defined: -pretty
-Usage:
-  -local-only
-    	Disables notifying the remote that the tunnel is shutting down
+{
+    "ok": false,
+    "reason": "Could not find tunnel for vpn address: 10.222.0.250"
+}
 exit status 1
 
 $ close-tunnel not-an-address
@@ -555,17 +556,14 @@ The provided vpn address could not be parsed: not-an-address
 exit status 1
 
 $ close-tunnel -json not-an-address
-flag provided but not defined: -json
-Usage:
-  -local-only
-    	Disables notifying the remote that the tunnel is shutting down
+{"ok":false,"reason":"The provided vpn address could not be parsed: not-an-address"}
 exit status 1
 
 $ close-tunnel -pretty not-an-address
-flag provided but not defined: -pretty
-Usage:
-  -local-only
-    	Disables notifying the remote that the tunnel is shutting down
+{
+    "ok": false,
+    "reason": "The provided vpn address could not be parsed: not-an-address"
+}
 exit status 1
 
 $ help
@@ -590,49 +588,440 @@ version - Prints the currently running version of nebula
 
 
 $ help -json
-Command not available -json
-exit status 1
+[{"name":"change-remote","short":"Changes the remote address used in the tunnel for the provided vpn addr","flags":[{"name":"address","usage":"The new remote address, ip:port"},{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"close-tunnel","short":"Closes a tunnel for the provided vpn addr","flags":[{"name":"local-only","bool":true,"default":"false","usage":"Disables notifying the remote that the tunnel is shutting down"},{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"create-tunnel","short":"Creates a tunnel for the provided vpn address","help":"The lighthouses will be queried for real addresses but you can provide one as well.","flags":[{"name":"address","usage":"Optionally provide a real remote address, ip:port "},{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"device-info","short":"Prints information about the network device.","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"help","short":"prints available commands or help \u003ccommand\u003e for specific usage info","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"list-hostmap","short":"List all known previously connected hosts","flags":[{"name":"by-index","bool":true,"default":"false","usage":"gets all hosts in the hostmap from the index table"},{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"list-lighthouse-addrmap","short":"List all lighthouse map entries","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"list-pending-hostmap","short":"List all handshaking hosts","flags":[{"name":"by-index","bool":true,"default":"false","usage":"gets all hosts in the hostmap from the index table"},{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"log-format","short":"Gets or sets the current log format","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"log-level","short":"Gets or sets the current log level","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"logout","short":"Ends the current session","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"print-cert","short":"Prints the current certificate being used or the certificate for the provided vpn addr","flags":[{"name":"raw","bool":true,"default":"false","usage":"prints the PEM encoded certificate; with -json, an object holding it"},{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"print-relays","short":"Prints json details about all relay info","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"print-tunnel","short":"Prints json details about a tunnel for the provided vpn addr","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"query-lighthouse","short":"Query the lighthouses for the provided vpn address","help":"This command is asynchronous. Only currently known udp addresses will be printed.","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"reload","short":"Reloads configuration from disk, same as sending HUP to the process","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]},{"name":"version","short":"Prints the currently running version of nebula","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]}]
 
 $ help -pretty
-Command not available -pretty
-exit status 1
+[
+    {
+        "name": "change-remote",
+        "short": "Changes the remote address used in the tunnel for the provided vpn addr",
+        "flags": [
+            {
+                "name": "address",
+                "usage": "The new remote address, ip:port"
+            },
+            {
+                "name": "json",
+                "bool": true,
+                "default": "false",
+                "usage": "outputs as json"
+            },
+            {
+                "name": "pretty",
+                "bool": true,
+                "default": "false",
+                "usage": "pretty prints json, assumes -json"
+            }
+        ]
+    },
+    {
+        "name": "close-tunnel",
+        "short": "Closes a tunnel for the provided vpn addr",
+        "flags": [
+            {
+                "name": "local-only",
+                "bool": true,
+                "default": "false",
+                "usage": "Disables notifying the remote that the tunnel is shutting down"
+            },
+            {
+                "name": "json",
+                "bool": true,
+                "default": "false",
+                "usage": "outputs as json"
+            },
+            {
+                "name": "pretty",
+                "bool": true,
+                "default": "false",
+                "usage": "pretty prints json, assumes -json"
+            }
+        ]
+    },
+    {
+        "name": "create-tunnel",
+        "short": "Creates a tunnel for the provided vpn address",
+        "help": "The lighthouses will be queried for real addresses but you can provide one as well.",
+        "flags": [
+            {
+                "name": "address",
+                "usage": "Optionally provide a real remote address, ip:port "
+            },
+            {
+                "name": "json",
+                "bool": true,
+                "default": "false",
+                "usage": "outputs as json"
+            },
+            {
+                "name": "pretty",
+                "bool": true,
+                "default": "false",
+                "usage": "pretty prints json, assumes -json"
+            }
+        ]
+    },
+    {
+        "name": "device-info",
+        "short": "Prints information about the network device.",
+        "flags": [
+            {
+                "name": "json",
+                "bool": true,
+                "default": "false",
+                "usage": "outputs as json"
+            },
+            {
+                "name": "pretty",
+                "bool": true,
+                "default": "false",
+                "usage": "pretty prints json, assumes -json"
+            }
+        ]
+    },
+    {
+        "name": "help",
+        "short": "prints available commands or help \u003ccommand\u003e for specific usage info",
+        "flags": [
+            {
+                "name": "json",
+                "bool": true,
+                "default": "false",
+                "usage": "outputs as json"
+            },
+            {
+                "name": "pretty",
+                "bool": true,
+                "default": "false",
+                "usage": "pretty prints json, assumes -json"
+            }
+        ]
+    },
+    {
+        "name": "list-hostmap",
+        "short": "List all known previously connected hosts",
+        "flags": [
+            {
+                "name": "by-index",
+                "bool": true,
+                "default": "false",
+                "usage": "gets all hosts in the hostmap from the index table"
+            },
+            {
+                "name": "json",
+                "bool": true,
+                "default": "false",
+                "usage": "outputs as json"
+            },
+            {
+                "name": "pretty",
+                "bool": true,
+                "default": "false",
+                "usage": "pretty prints json, assumes -json"
+            }
+        ]
+    },
+    {
+        "name": "list-lighthouse-addrmap",
+        "short": "List all lighthouse map entries",
+        "flags": [
+            {
+                "name": "json",
+                "bool": true,
+                "default": "false",
+                "usage": "outputs as json"
+            },
+            {
+                "name": "pretty",
+                "bool": true,
+                "default": "false",
+                "usage": "pretty prints json, assumes -json"
+            }
+        ]
+    },
+    {
+        "name": "list-pending-hostmap",
+        "short": "List all handshaking hosts",
+        "flags": [
+            {
+                "name": "by-index",
+                "bool": true,
+                "default": "false",
+                "usage": "gets all hosts in the hostmap from the index table"
+            },
+            {
+                "name": "json",
+                "bool": true,
+                "default": "false",
+                "usage": "outputs as json"
+            },
+            {
+                "name": "pretty",
+                "bool": true,
+                "default": "false",
+                "usage": "pretty prints json, assumes -json"
+            }
+        ]
+    },
+    {
+        "name": "log-format",
+        "short": "Gets or sets the current log format",
+        "flags": [
+            {
+                "name": "json",
+                "bool": true,
+                "default": "false",
+                "usage": "outputs as json"
+            },
+            {
+                "name": "pretty",
+                "bool": true,
+                "default": "false",
+                "usage": "pretty prints json, assumes -json"
+            }
+        ]
+    },
+    {
+        "name": "log-level",
+        "short": "Gets or sets the current log level",
+        "flags": [
+            {
+                "name": "json",
+                "bool": true,
+                "default": "false",
+                "usage": "outputs as json"
+            },
+            {
+                "name": "pretty",
+                "bool": true,
+                "default": "false",
+                "usage": "pretty prints json, assumes -json"
+            }
+        ]
+    },
+    {
+        "name": "logout",
+        "short": "Ends the current session",
+        "flags": [
+            {
+                "name": "json",
+                "bool": true,
+                "default": "false",
+                "usage": "outputs as json"
+            },
+            {
+                "name": "pretty",
+                "bool": true,
+                "default": "false",
+                "usage": "pretty prints json, assumes -json"
+            }
+        ]
+    },
+    {
+        "name": "print-cert",
+        "short": "Prints the current certificate being used or the certificate for the provided vpn addr",
+        "flags": [
+            {
+                "name": "raw",
+                "bool": true,
+                "default": "false",
+                "usage": "prints the PEM encoded certificate; with -json, an object holding it"
+            },
+            {
+                "name": "json",
+                "bool": true,
+                "default": "false",
+                "usage": "outputs as json"
+            },
+            {
+                "name": "pretty",
+                "bool": true,
+                "default": "false",
+                "usage": "pretty prints json, assumes -json"
+            }
+        ]
+    },
+    {
+        "name": "print-relays",
+        "short": "Prints json details about all relay info",
+        "flags": [
+            {
+                "name": "json",
+                "bool": true,
+                "default": "false",
+                "usage": "outputs as json"
+            },
+            {
+                "name": "pretty",
+                "bool": true,
+                "default": "false",
+                "usage": "pretty prints json, assumes -json"
+            }
+        ]
+    },
+    {
+        "name": "print-tunnel",
+        "short": "Prints json details about a tunnel for the provided vpn addr",
+        "flags": [
+            {
+                "name": "json",
+                "bool": true,
+                "default": "false",
+                "usage": "outputs as json"
+            },
+            {
+                "name": "pretty",
+                "bool": true,
+                "default": "false",
+                "usage": "pretty prints json, assumes -json"
+            }
+        ]
+    },
+    {
+        "name": "query-lighthouse",
+        "short": "Query the lighthouses for the provided vpn address",
+        "help": "This command is asynchronous. Only currently known udp addresses will be printed.",
+        "flags": [
+            {
+                "name": "json",
+                "bool": true,
+                "default": "false",
+                "usage": "outputs as json"
+            },
+            {
+                "name": "pretty",
+                "bool": true,
+                "default": "false",
+                "usage": "pretty prints json, assumes -json"
+            }
+        ]
+    },
+    {
+        "name": "reload",
+        "short": "Reloads configuration from disk, same as sending HUP to the process",
+        "flags": [
+            {
+                "name": "json",
+                "bool": true,
+                "default": "false",
+                "usage": "outputs as json"
+            },
+            {
+                "name": "pretty",
+                "bool": true,
+                "default": "false",
+                "usage": "pretty prints json, assumes -json"
+            }
+        ]
+    },
+    {
+        "name": "version",
+        "short": "Prints the currently running version of nebula",
+        "flags": [
+            {
+                "name": "json",
+                "bool": true,
+                "default": "false",
+                "usage": "outputs as json"
+            },
+            {
+                "name": "pretty",
+                "bool": true,
+                "default": "false",
+                "usage": "pretty prints json, assumes -json"
+            }
+        ]
+    }
+]
 
 $ help print-cert
 print-cert - Prints the current certificate being used or the certificate for the provided vpn addr
+  -raw
+    	prints the PEM encoded certificate; with -json, an object holding it
   -json
     	outputs as json
   -pretty
     	pretty prints json, assumes -json
-  -raw
-    	raw prints the PEM encoded certificate, not compatible with -json or -pretty
 
 $ help -json print-cert
-Command not available -json
-exit status 1
+{"name":"print-cert","short":"Prints the current certificate being used or the certificate for the provided vpn addr","flags":[{"name":"raw","bool":true,"default":"false","usage":"prints the PEM encoded certificate; with -json, an object holding it"},{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]}
 
 $ help -pretty print-cert
-Command not available -pretty
-exit status 1
+{
+    "name": "print-cert",
+    "short": "Prints the current certificate being used or the certificate for the provided vpn addr",
+    "flags": [
+        {
+            "name": "raw",
+            "bool": true,
+            "default": "false",
+            "usage": "prints the PEM encoded certificate; with -json, an object holding it"
+        },
+        {
+            "name": "json",
+            "bool": true,
+            "default": "false",
+            "usage": "outputs as json"
+        },
+        {
+            "name": "pretty",
+            "bool": true,
+            "default": "false",
+            "usage": "pretty prints json, assumes -json"
+        }
+    ]
+}
 
 $ help logout
 logout - Ends the current session
+  -json
+    	outputs as json
+  -pretty
+    	pretty prints json, assumes -json
 
 $ help -json logout
-Command not available -json
-exit status 1
+{"name":"logout","short":"Ends the current session","flags":[{"name":"json","bool":true,"default":"false","usage":"outputs as json"},{"name":"pretty","bool":true,"default":"false","usage":"pretty prints json, assumes -json"}]}
 
 $ help -pretty logout
-Command not available -pretty
-exit status 1
+{
+    "name": "logout",
+    "short": "Ends the current session",
+    "flags": [
+        {
+            "name": "json",
+            "bool": true,
+            "default": "false",
+            "usage": "outputs as json"
+        },
+        {
+            "name": "pretty",
+            "bool": true,
+            "default": "false",
+            "usage": "pretty prints json, assumes -json"
+        }
+    ]
+}
 
 $ logout -h
 logout - Ends the current session
+  -json
+    	outputs as json
+  -pretty
+    	pretty prints json, assumes -json
 
 $ logout -json -h
 logout - Ends the current session
+  -json
+    	outputs as json
+  -pretty
+    	pretty prints json, assumes -json
 
 $ logout -pretty -h
 logout - Ends the current session
+  -json
+    	outputs as json
+  -pretty
+    	pretty prints json, assumes -json
 
 $ not-a-command 10.222.0.9
 did not understand: not-a-command
@@ -709,12 +1098,13 @@ Config reload failed, the new config did not load: no config files found at
 exit status 1
 
 $ reload -json
-Reloading config
-Config reload failed, the new config did not load: no config files found at 
+{"ok":false,"reason":"Reloading config\nConfig reload failed, the new config did not load: no config files found at "}
 exit status 1
 
 $ reload -pretty
-Reloading config
-Config reload failed, the new config did not load: no config files found at 
+{
+    "ok": false,
+    "reason": "Reloading config\nConfig reload failed, the new config did not load: no config files found at "
+}
 exit status 1
 
