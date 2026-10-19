@@ -13,11 +13,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// notWithheld is a stand in for a surface's own policy; these tests use ForProfiling
-// because it is the only such flag today, not because the registry knows about it.
-func notWithheld(c *Command) bool { return !c.ForProfiling }
+// notWithheld is a stand in for a surface's own policy, which the registry knows nothing
+// of; see Command.Identity for the one the info API applies.
+func notWithheld(c *Command) bool { return c.Name != "withheld" }
 
-const testReason = "this surface does not run profiling commands"
+const testReason = "this surface does not run commands that write"
 
 // textLine is a Text renderer for test commands whose result is one string.
 func textLine(v any, w io.Writer) error {
@@ -38,7 +38,6 @@ func testRegistry() *Registry {
 	r.Register(&Command{
 		Name:             "withheld",
 		ShortDescription: "a command this surface withholds",
-		ForProfiling:     true,
 		Run: func(fs any, a []string) (Result, error) {
 			return Value("wrote"), nil
 		},
@@ -47,9 +46,8 @@ func testRegistry() *Registry {
 	return r
 }
 
-// TestLocalSocketServesEverythingElse: the surface serves commands by default and
-// withholds only those that write files on the host.
-func TestLocalSocketServesEverythingElse(t *testing.T) {
+// TestFilterKeepsWhatKeepSays: the copy holds the commands keep accepted, and help.
+func TestFilterKeepsWhatKeepSays(t *testing.T) {
 	ro := testRegistry().Filter(notWithheld, testReason)
 
 	names := make([]string, 0)
@@ -58,31 +56,6 @@ func TestLocalSocketServesEverythingElse(t *testing.T) {
 	}
 
 	assert.ElementsMatch(t, []string{"help", "served"}, names)
-}
-
-func TestUnannotatedCommandIsServed(t *testing.T) {
-	r := New()
-	r.Register(&Command{
-		Name:             "plain",
-		ShortDescription: "a command with no annotations",
-		Run:              func(fs any, a []string) (Result, error) { return Nothing(), nil },
-	})
-
-	cmd := r.Filter(notWithheld, testReason).Get("plain")
-	assert.NotNil(t, cmd, "commands reach the local socket unless they say otherwise")
-}
-
-func TestProfilingCommandIsWithheld(t *testing.T) {
-	r := New()
-	r.Register(&Command{
-		Name:             "save-a-profile",
-		ShortDescription: "drives the profiler",
-		ForProfiling:     true,
-		Run:              func(fs any, a []string) (Result, error) { return Nothing(), nil },
-	})
-
-	cmd := r.Filter(notWithheld, testReason).Get("save-a-profile")
-	assert.Nil(t, cmd, "a profiling command must not reach the local socket")
 }
 
 // TestRefusesWithheldByName covers a client that knows a command exists and asks for it

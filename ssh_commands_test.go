@@ -71,23 +71,13 @@ func joinLines(in []string) string {
 }
 
 // TestLocalSocketSurface pins which of nebula's commands the always-on local socket
-// serves. Commands are served by default, so this test is what turns "somebody forgot to
-// think about it" into a visible decision: adding a command fails here until the lists
-// below say where it belongs.
+// serves: every one registered. Adding a command fails here until the list below says
+// so, which turns "somebody forgot to think about it" into a visible decision.
 func TestLocalSocketSurface(t *testing.T) {
-	reg := registeredCommands(t)
-
-	var served, withheld []commands.Name
-	for _, c := range reg.All() {
-		if c.ForProfiling {
-			withheld = append(withheld, c.Name)
-		} else {
-			served = append(served, c.Name)
-		}
+	var served []commands.Name
+	for _, c := range registeredCommands(t).All() {
+		served = append(served, c.Name)
 	}
-
-	// Nothing is withheld today: the profiling commands, which were, are gone.
-	assert.Empty(t, withheld)
 
 	assert.ElementsMatch(t, []commands.Name{
 		commands.Help,

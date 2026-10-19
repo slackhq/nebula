@@ -71,28 +71,8 @@ type Server struct {
 	trustSocket atomic.Bool
 }
 
-// servedHere decides what this surface will run.
-//
-// Everything except the profiling commands, which stay on the ssh debug server. Profile
-// output is written on the host running nebula, under sshd.sandbox_dir, so a path typed
-// here would not mean what the person typing it expects; and the profiling commands are
-// one workflow, so splitting them would leave someone able to start a CPU profile in one
-// place and stop it only in another.
-func servedHere(c *commands.Command) bool {
-	return !c.ForProfiling
-}
-
-// notServedHere explains a refusal in terms an operator can act on, naming the surface
-// that will run the command instead.
-const notServedHere = "profiling is driven from the ssh debug server, where the sshd.sandbox_dir " +
-	"setting governs where profile output is written on the host running nebula"
-
-// NewServer returns a Server that will serve the commands in reg that this surface
-// accepts.
-//
-// reg is kept rather than filtered here, so a command registered on it after the server
-// is built is served too. Filtering happens per request, which is how the ssh server
-// treats the same registry, cloning it per session.
+// NewServer returns a Server that will serve every command in reg, including one
+// registered on it after the server is built.
 func NewServer(l *slog.Logger, reg *commands.Registry) *Server {
 	return &Server{
 		l:         l,
@@ -221,13 +201,6 @@ func (s *Server) watchLocked(ctx context.Context) {
 		return
 	}
 	s.unwatch = context.AfterFunc(ctx, s.Stop)
-}
-
-// registry returns the commands this surface serves, filtered from the source at the
-// time of the call. It is a few allocations per request, which a control socket that
-// sees a request every few seconds at most never notices.
-func (s *Server) registry() *commands.Registry {
-	return s.src.Filter(servedHere, notServedHere)
 }
 
 // Path returns the socket path currently being served, or "" when stopped.
@@ -419,7 +392,7 @@ func (s *Server) serve(req *Request) *Response {
 	defer slow.Stop()
 
 	res := &Response{Version: ProtocolVersion}
-	reg := s.registry()
+	reg := s.src
 
 	if req.Describe {
 		schema, err := json.Marshal(reg.Schema())

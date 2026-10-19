@@ -34,8 +34,6 @@ type Command struct {
 	ShortDescription string
 	Help             string
 
-	ForProfiling bool
-
 	Flags CommandFlags
 
 	// Run produces the command's Result, leaving presentation to Render.

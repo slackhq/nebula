@@ -69,14 +69,6 @@ func basicRegistry() *commands.Registry {
 	reg := commands.New()
 	reg.Register(echoCommand())
 	reg.Register(&commands.Command{
-		Name:             "withheld",
-		ShortDescription: "a command this surface withholds",
-		ForProfiling:     true,
-		Run: func(fs any, a []string) (commands.Result, error) {
-			return commands.Value("mutated"), nil
-		},
-	})
-	reg.Register(&commands.Command{
 		Name:             "boom",
 		ShortDescription: "panics",
 		Run: func(fs any, a []string) (commands.Result, error) {
@@ -117,16 +109,6 @@ func TestServeAllowedCommand(t *testing.T) {
 	out, errOut := run(t, path, "echo", "a", "b")
 	assert.Equal(t, "[a b]", out)
 	assert.Empty(t, errOut, "a command that worked reports no error")
-}
-
-// TestWithheldCommandIsRefused checks the filter at the wire: the daemon refuses even
-// though the client named the command directly.
-func TestWithheldCommandIsRefused(t *testing.T) {
-	_, path := serve(t, basicRegistry())
-
-	out, errOut := run(t, path, "withheld")
-	assert.Empty(t, out)
-	assert.Contains(t, errOut, "withheld is not available on this surface")
 }
 
 // TestPanicInCommandDoesNotKillTheDaemon is ADR 003's requirement: a broken command
