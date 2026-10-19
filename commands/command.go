@@ -159,8 +159,11 @@ func (r *Registry) execLine(c *Command, args []string, w Output) error {
 
 	format := presentationFormat(fl)
 
+	// An error from Run is something the command could not do rather than a refusal it
+	// chose, but the person at the prompt still hears it; the surface logs it too.
 	res, err := c.Run(fs, operands)
 	if err != nil {
+		_, _ = fmt.Fprintln(w.Err, err.Error())
 		return err
 	}
 

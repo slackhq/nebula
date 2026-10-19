@@ -501,7 +501,7 @@ func runPrintCert(ifce *Interface, args *printCertFlags, a []string) (commands.R
 	if args.Raw {
 		b, err := c.MarshalPEM()
 		if err != nil {
-			return commands.Result{}, err
+			return commands.Failed("Unable to marshal the certificate: %s", err), nil
 		}
 		return commands.Value(certPEM{PEM: string(b)}), nil
 	}

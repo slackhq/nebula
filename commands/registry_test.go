@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"io"
 	"strings"
@@ -398,4 +399,22 @@ func TestBadFlagIsAnsweredWithTheCommandsHelp(t *testing.T) {
 	require.Error(t, r.DispatchArgs([]string{"x", "-nope"}, Output{Out: out, Err: errOut}))
 	assert.Empty(t, out.String())
 	assert.Equal(t, "flag provided but not defined: -nope\nx - has no flags\n  -json\n    \toutputs as json\n  -pretty\n    \tpretty prints json, assumes -json\n", errOut.String())
+}
+
+// TestRunErrorIsShown: an error Run returns reaches the person at the prompt on the
+// error stream, as well as the surface that logs it.
+func TestRunErrorIsShown(t *testing.T) {
+	r := New()
+	r.Register(&Command{
+		Name:             "broken",
+		ShortDescription: "cannot do what it is asked",
+		Run: func(fs any, a []string) (Result, error) {
+			return Result{}, errors.New("no certificate is loaded")
+		},
+	})
+
+	out, errOut := &bytes.Buffer{}, &bytes.Buffer{}
+	require.EqualError(t, r.DispatchArgs([]string{"broken"}, Output{Out: out, Err: errOut}), "no certificate is loaded")
+	assert.Empty(t, out.String())
+	assert.Equal(t, "no certificate is loaded\n", errOut.String())
 }
