@@ -270,8 +270,15 @@ func routeArgs(action, cidr string, extra ...string) []string {
 }
 
 func routeCmd(t *testing.T, action, cidr string, extra ...string) {
-	out, err := exec.Command("route", routeArgs(action, cidr, extra...)...).CombinedOutput()
+	requireRouteOK(t, exec.Command("route", routeArgs(action, cidr, extra...)...))
+}
+
+// requireRouteOK runs cmd, which runs route(8). route exits 0 when the kernel rejects its request, only what it prints
+// says so
+func requireRouteOK(t *testing.T, cmd *exec.Cmd) {
+	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(out))
+	require.NotContains(t, string(out), "writing to routing socket")
 }
 
 // cleanupRoute deletes cidr's route when the test ends, whoever holds it
@@ -323,8 +330,7 @@ func TestTunYieldsToARouteThatReplacesIt(t *testing.T) {
 	require.Equal(t, ours, routeVia(t, cidr))
 
 	cleanupRoute(t, cidr)
-	out, err := exec.Command("sh", "-c", "route -q -n delete -net "+cidr+" && route -q -n add -net "+cidr+" -interface lo0").CombinedOutput()
-	require.NoError(t, err, string(out))
+	requireRouteOK(t, exec.Command("sh", "-c", "route -q -n delete -net "+cidr+" && route -q -n add -net "+cidr+" -interface lo0"))
 	lo0, err := net.InterfaceByName("lo0")
 	require.NoError(t, err)
 	time.Sleep(2 * routeRetryDelay)
@@ -429,9 +435,10 @@ func TestTunAddsRouteWhenItsInterfaceDetaches(t *testing.T) {
 	t.Cleanup(func() { _ = exec.Command("ifconfig", feth, "destroy").Run() })
 	require.NoError(t, exec.Command("ifconfig", feth, "inet", "198.51.100.5/24", "up").Run())
 
-	// Static, like the lan routes configd installs
+	// Static and cloning with no gateway, like the lan routes configd installs. Named by the feth's address, macOS 27
+	// refuses one named by the feth itself
 	cidr := "10.251.2.0/24"
-	routeCmd(t, "add", cidr, "-interface", feth)
+	routeCmd(t, "add", cidr, "-interface", "198.51.100.5")
 	cleanupRoute(t, cidr)
 	ifc, err := net.InterfaceByName(feth)
 	require.NoError(t, err)
