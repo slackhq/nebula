@@ -71,14 +71,18 @@ func listen(path string, acc Access) (net.Listener, error) {
 	// exists, and an operator who names a deeper path creates it; a missing parent is a
 	// mistake to report, not a tree to build. A directory made here stays when the
 	// socket goes: an empty one costs nothing, and the next start wants it again.
-	// Mkdir applies the umask, so the 0755 is pinned afterwards, as the socket's mode
-	// is; only on a directory this call created.
-	switch err := os.Mkdir(dir, 0755); {
-	case err == nil:
-		if err := os.Chmod(dir, 0755); err != nil {
-			return nil, fmt.Errorf("could not set the mode of %s: %w", dir, err)
-		}
-	case !errors.Is(err, os.ErrExist):
+	//
+	// The mode comes from the umask around the call, never from a chmod afterwards: a
+	// chmod by path could land on whatever somebody who can write the parent swapped in
+	// between the two calls, and a chmod through a descriptor on a root-owned directory
+	// they moved there, since root owns both. Born 0755 there is nothing to fix up.
+	// The umask is process wide and the window is one syscall; see umaskMu.
+	umaskMu.Lock()
+	old := syscall.Umask(0022)
+	err := os.Mkdir(dir, 0755)
+	syscall.Umask(old)
+	umaskMu.Unlock()
+	if err != nil && !errors.Is(err, os.ErrExist) {
 		return nil, fmt.Errorf("could not create %s: %w", dir, err)
 	}
 
@@ -96,7 +100,7 @@ func listen(path string, acc Access) (net.Listener, error) {
 	// and a later chmod would be queued for accept. Tighten the umask around the bind so
 	// the node is never looser than 0600, however briefly; see umaskMu.
 	umaskMu.Lock()
-	old := syscall.Umask(0077)
+	old = syscall.Umask(0077)
 	ln, err := net.Listen(network, path)
 	syscall.Umask(old)
 	umaskMu.Unlock()
@@ -270,12 +274,12 @@ const sunPathMax = 104
 // with a bare EINVAL, so the usable limit is one byte short of the buffer.
 const maxSocketPath = sunPathMax - 1
 
-// umaskMu serialises setting the process umask around one syscall: the umask is process
-// wide, and two binds at once, a reload landing during startup, would otherwise
-// interleave their save and restore and leave the daemon's umask at one of ours. It is
-// held for the syscall alone. Another goroutine creating a file in that moment gets the
-// umask of the window rather than the process's own; nothing creates files on a hot
-// path.
+// umaskMu serialises the two places the process umask is set around one syscall: the
+// umask is process wide, and two endpoints binding at once, a reload landing during
+// startup, would otherwise interleave their save and restore and leave the daemon's
+// umask at one of ours. It is held for the syscall alone. Another goroutine creating a
+// file in that moment gets the umask of the window, 0022 or 0077, rather than the
+// process's own; nothing creates files on a hot path.
 var umaskMu sync.Mutex
 
 func pathTooLong(path string) bool { return len(path) > maxSocketPath }
