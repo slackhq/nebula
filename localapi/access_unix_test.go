@@ -139,3 +139,36 @@ func TestControlSocketWithAGroupTrustsTheKernel(t *testing.T) {
 	_, err = (&Client{Path: path}).Describe()
 	require.ErrorContains(t, err, "not permitted")
 }
+
+// TestRemovingTheGroupHandsTheSocketBack: a reload that drops the group key leaves the
+// mode the operator set but returns the socket to the daemon's own group, so the old
+// group's members are no longer admitted. The socket is first handed to a group this
+// process belongs to other than its own, which not every host offers.
+func TestRemovingTheGroupHandsTheSocketBack(t *testing.T) {
+	own := os.Getegid()
+	groups, err := os.Getgroups()
+	require.NoError(t, err)
+	other := -1
+	for _, g := range groups {
+		if g != own {
+			other = g
+			break
+		}
+	}
+	if other < 0 {
+		t.Skip("this process belongs to no group but its own")
+	}
+	gid := strconv.Itoa(other)
+
+	s := NewServer(test.NewLogger(), basicRegistry())
+	path := testSocket(t)
+	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: 0660, Group: &Group{Name: gid, ID: gid}}))
+	defer s.Stop()
+	assert.Equal(t, uint32(other), socketGroup(t, path))
+
+	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: 0660}))
+	assert.Equal(t, uint32(own), socketGroup(t, path), "the daemon's own group again")
+	fi, err := os.Lstat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0660), fi.Mode().Perm(), "the mode is the operator's")
+}

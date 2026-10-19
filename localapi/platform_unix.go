@@ -125,17 +125,17 @@ func listen(path string, acc Access) (net.Listener, error) {
 	return ln, nil
 }
 
-// applyAccess sets the owning group, when there is one, and the mode of the socket node
-// at path. The chown is Lchown, so a link at the path is not followed to its target.
+// applyAccess sets the owning group and the mode of the socket node at path. With no
+// group configured the socket is handed back to the daemon's own group, so taking the
+// key out of the config on a reload takes the access away as surely as a restart would.
+// The chown is Lchown, so a link at the path is not followed to its target.
 func applyAccess(path string, acc Access) error {
-	if acc.Group != nil {
-		gid, err := gidOf(acc.Group)
-		if err != nil {
-			return err
-		}
-		if err := os.Lchown(path, -1, gid); err != nil {
-			return err
-		}
+	gid, err := gidFor(acc)
+	if err != nil {
+		return err
+	}
+	if err := os.Lchown(path, -1, gid); err != nil {
+		return err
 	}
 	return os.Chmod(path, acc.Mode.Perm())
 }

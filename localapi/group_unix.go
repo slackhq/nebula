@@ -4,6 +4,7 @@ package localapi
 
 import (
 	"fmt"
+	"os"
 	"os/user"
 	"strconv"
 )
@@ -24,11 +25,15 @@ func lookupGroupID(name string) (string, error) {
 	return "", fmt.Errorf("group %q does not exist on this host", name)
 }
 
-// gidOf returns the group's gid as the number chown takes.
-func gidOf(g *Group) (int, error) {
-	gid, err := strconv.ParseUint(g.ID, 10, 32)
+// gidFor returns the gid the socket is owned by under acc: the configured group's, or
+// the daemon's own effective group when none is configured.
+func gidFor(acc Access) (int, error) {
+	if acc.Group == nil {
+		return os.Getegid(), nil
+	}
+	gid, err := strconv.ParseUint(acc.Group.ID, 10, 32)
 	if err != nil {
-		return 0, fmt.Errorf("group %q resolved to %q, which is not a gid", g.Name, g.ID)
+		return 0, fmt.Errorf("group %q resolved to %q, which is not a gid", acc.Group.Name, acc.Group.ID)
 	}
 	return int(gid), nil
 }
