@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -219,4 +220,42 @@ firewall:
 		},
 	}
 	assert.Equal(t, expected, m)
+}
+
+// TestRegisterReloadCallbackDuringReload: registration is not confined to startup. The
+// HUP handler runs from inside nebula.Main, and anything wired after Main returns
+// registers while a reload may already be iterating the callbacks. Under -race this is
+// the data race on the slice; without it, it checks a callback registered mid-reload is
+// picked up by the next one.
+func TestRegisterReloadCallbackDuringReload(t *testing.T) {
+	l := test.NewLogger()
+	c := NewC(l)
+	require.NoError(t, c.LoadString("a: 1"))
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			c.RegisterReloadCallback(func(*C, *Reload) {})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			assert.NoError(t, c.ReloadConfigString("a: 1").Err)
+		}
+	}()
+	wg.Wait()
+
+	// A callback that registers another callback must not deadlock, and the new one
+	// runs from the following reload on.
+	var ran int
+	c.RegisterReloadCallback(func(c *C, _ *Reload) {
+		c.RegisterReloadCallback(func(*C, *Reload) { ran++ })
+	})
+	require.NoError(t, c.ReloadConfigString("a: 1").Err)
+	assert.Equal(t, 0, ran, "registered during this reload, so not run by it")
+	require.NoError(t, c.ReloadConfigString("a: 1").Err)
+	assert.Equal(t, 1, ran, "and run by the next")
 }

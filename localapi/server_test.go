@@ -1,0 +1,726 @@
+//go:build !windows
+
+package localapi
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"math"
+	"net"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/slackhq/nebula/commands"
+	"github.com/slackhq/nebula/test"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
+)
+
+// testSocket returns a short socket path whose directory does not exist yet and whose
+// parent is private: one level below the test's own directory, so that listen has a
+// directory of its own to create.
+func testSocket(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(test.ShortTempDir(t), "n", "s.sock")
+}
+
+func serve(t *testing.T, reg *commands.Registry) (*Server, string) {
+	t.Helper()
+
+	path := testSocket(t)
+	s := NewServer(test.NewLogger(), reg)
+	require.NoError(t, s.Rebind(context.Background(), path))
+	t.Cleanup(s.Stop)
+
+	return s, path
+}
+
+// serveAt starts a server on an exact path, for tests that care where the socket is.
+func serveAt(t *testing.T, path string) (*Server, func()) {
+	t.Helper()
+
+	s := NewServer(test.NewLogger(), basicRegistry())
+	require.NoError(t, s.Rebind(context.Background(), path))
+	return s, s.Stop
+}
+
+// echoCommand reports its operands, for tests on either surface.
+func echoCommand() *commands.Command {
+	return &commands.Command{
+		Name:             "echo",
+		ShortDescription: "echoes its arguments",
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
+			return w.Write(fmt.Sprintf("%v", a))
+		},
+	}
+}
+
+func basicRegistry() *commands.Registry {
+	reg := commands.New()
+	reg.Register(echoCommand())
+	reg.Register(&commands.Command{
+		Name:             "withheld",
+		ShortDescription: "a command this surface withholds",
+		ForProfiling:     true,
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
+			return w.Write("mutated")
+		},
+	})
+	reg.Register(&commands.Command{
+		Name:             "boom",
+		ShortDescription: "panics",
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
+			panic("this command is broken")
+		},
+	})
+	return reg
+}
+
+// run invokes one command and returns its output and its error text. An empty error is
+// success: the protocol has no separate status field.
+func run(t *testing.T, path, command string, args ...string) (string, string) {
+	t.Helper()
+
+	res, err := (&Client{Path: path}).Invoke(command, nil, args)
+	require.NoError(t, err)
+	return Text(res.Result), res.Error
+}
+
+func TestServeAllowedCommand(t *testing.T) {
+	_, path := serve(t, basicRegistry())
+
+	out, errOut := run(t, path, "echo", "a", "b")
+	assert.Equal(t, "[a b]", out)
+	assert.Empty(t, errOut, "a command that worked reports no error")
+}
+
+// TestWithheldCommandIsRefused checks the filter at the wire: the daemon refuses even
+// though the client named the command directly.
+func TestWithheldCommandIsRefused(t *testing.T) {
+	_, path := serve(t, basicRegistry())
+
+	out, errOut := run(t, path, "withheld")
+	assert.Empty(t, out)
+	assert.Contains(t, errOut, "withheld is not available on this surface")
+}
+
+// TestPanicInCommandDoesNotKillTheDaemon is ADR 003's requirement: a broken command
+// costs a connection, not the overlay.
+func TestPanicInCommandDoesNotKillTheDaemon(t *testing.T) {
+	_, path := serve(t, basicRegistry())
+
+	out, errOut := run(t, path, "boom")
+	assert.Empty(t, out)
+	assert.Contains(t, errOut, "command failed")
+
+	// The server is still serving, which is the point of the test.
+	out, errOut = run(t, path, "echo", "still", "here")
+	assert.Equal(t, "[still here]", out)
+	assert.Empty(t, errOut)
+}
+
+func TestSocketPermissions(t *testing.T) {
+	old := unix.Umask(0)
+	defer unix.Umask(old)
+
+	_, path := serve(t, basicRegistry())
+
+	fi, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), fi.Mode().Perm(), "socket must not be reachable by other users")
+
+	di, err := os.Stat(filepath.Dir(path))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0755), di.Mode().Perm(), "a directory we create ourselves is searchable, so ServedByRoot can see into it")
+}
+
+// TestSocketPermissionsUnderTightUmask: the modes are pinned, not left to the umask. A
+// 077 umask would make the directory 0700 and hide a root daemon's socket from an
+// unprivileged nebula ctl.
+func TestSocketPermissionsUnderTightUmask(t *testing.T) {
+	old := unix.Umask(0077)
+	defer unix.Umask(old)
+
+	_, path := serve(t, basicRegistry())
+
+	fi, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), fi.Mode().Perm())
+
+	di, err := os.Stat(filepath.Dir(path))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0755), di.Mode().Perm(), "the umask must not take the directory's searchability back")
+}
+
+func TestStaleSocketIsReplaced(t *testing.T) {
+	path := testSocket(t)
+	require.NoError(t, os.Mkdir(filepath.Dir(path), 0700))
+
+	// A hard kill leaves a socket file with nothing behind it.
+	ln, err := net.Listen("unix", path)
+	require.NoError(t, err)
+	require.NoError(t, ln.Close())
+	require.NoError(t, os.WriteFile(path, nil, 0600))
+	_ = os.Remove(path)
+	ln, err = net.Listen("unix", path)
+	require.NoError(t, err)
+	fl, ok := ln.(*net.UnixListener)
+	require.True(t, ok)
+	fl.SetUnlinkOnClose(false)
+	require.NoError(t, ln.Close())
+
+	_, err = os.Stat(path)
+	require.NoError(t, err, "test setup should leave a stale socket behind")
+
+	s := NewServer(test.NewLogger(), basicRegistry())
+	require.NoError(t, s.Rebind(context.Background(), path), "a stale socket must not block startup")
+	defer s.Stop()
+
+	out, _ := run(t, path, "echo", "ok")
+	assert.Equal(t, "[ok]", out)
+}
+
+func TestLiveSocketIsNotStolen(t *testing.T) {
+	first, path := serve(t, basicRegistry())
+	require.NotNil(t, first)
+
+	second := NewServer(test.NewLogger(), basicRegistry())
+	err := second.Rebind(context.Background(), path)
+	assert.ErrorContains(t, err, "already in use", "a live endpoint must not be unlinked by a second instance")
+}
+
+// TestLiveSocketIsNotStolenBeforeItsChmod: between an instance's bind and its chmod the
+// socket is at whatever mode the umask left. A second instance starting in that window
+// must still see it as live, not stale: only a refused connect proves nothing is behind
+// the file.
+func TestLiveSocketIsNotStolenBeforeItsChmod(t *testing.T) {
+	first, path := serve(t, basicRegistry())
+	require.NotNil(t, first)
+	require.NoError(t, os.Chmod(path, 0666))
+
+	second := NewServer(test.NewLogger(), basicRegistry())
+	err := second.Rebind(context.Background(), path)
+	require.ErrorContains(t, err, "already in use", "a live socket at any mode is not thereby dead")
+
+	_, err = os.Stat(path)
+	require.NoError(t, err, "the first instance's socket is still there")
+	require.NoError(t, os.Chmod(path, 0600))
+	out, _ := run(t, path, "echo", "ok")
+	assert.Equal(t, "[ok]", out, "and still served")
+}
+
+func TestRebindMovesTheSocket(t *testing.T) {
+	s, path := serve(t, basicRegistry())
+	next := filepath.Join(filepath.Dir(path), "n.sock")
+
+	require.NoError(t, s.Rebind(context.Background(), next))
+	assert.Equal(t, next, s.Path())
+
+	out, _ := run(t, next, "echo", "moved")
+	assert.Equal(t, "[moved]", out)
+
+	_, err := os.Stat(path)
+	assert.True(t, os.IsNotExist(err), "the old socket should be unlinked")
+}
+
+func TestRebindFailureKeepsTheOldSocket(t *testing.T) {
+	s, path := serve(t, basicRegistry())
+
+	err := s.Rebind(context.Background(), "/nonexistent-dir-for-tests/x.sock")
+	require.Error(t, err)
+	assert.Equal(t, path, s.Path(), "a bad path must leave the working endpoint alone")
+
+	out, _ := run(t, path, "echo", "ok")
+	assert.Equal(t, "[ok]", out)
+}
+
+// TestSemaphoreSurvivesRestart pins the rule that the connection limiter is made once. A
+// handler releases into the channel it acquired from, so if Rebind replaced it after a
+// Stop, a command still running across the restart would block forever on the new,
+// empty channel and leak its goroutine and connection.
+func TestSemaphoreSurvivesRestart(t *testing.T) {
+	s := NewServer(test.NewLogger(), basicRegistry())
+	path := testSocket(t)
+
+	require.NoError(t, s.Rebind(context.Background(), path))
+	first := s.sem
+	require.NotNil(t, first)
+	s.Stop()
+
+	require.NoError(t, s.Rebind(context.Background(), path))
+	defer s.Stop()
+	assert.Equal(t, first, s.sem, "Rebind after Stop must keep the same semaphore")
+
+	require.NoError(t, s.Rebind(context.Background(), testSocket(t)))
+	assert.Equal(t, first, s.sem, "Rebind must keep the same semaphore")
+}
+
+// TestRestartIsWatchedOnItsOwnContext: the ctx watcher is installed by the first bind of
+// a run and cleared by Stop, so a server stopped by one context's cancellation and
+// started again under another is stopped when that second context is cancelled, not
+// left serving until the process exits.
+func TestRestartIsWatchedOnItsOwnContext(t *testing.T) {
+	s := NewServer(test.NewLogger(), basicRegistry())
+	path := testSocket(t)
+
+	ctxA, cancelA := context.WithCancel(context.Background())
+	require.NoError(t, s.Rebind(ctxA, path))
+	cancelA()
+	require.Eventually(t, func() bool { return s.Path() == "" }, time.Second, 10*time.Millisecond, "the first context must stop the server")
+
+	ctxB, cancelB := context.WithCancel(context.Background())
+	require.NoError(t, s.Rebind(ctxB, path))
+	defer s.Stop()
+	assert.Equal(t, path, s.Path())
+
+	cancelB()
+	require.Eventually(t, func() bool { return s.Path() == "" }, time.Second, 10*time.Millisecond, "the second context must stop the server too")
+	_, err := os.Stat(path)
+	assert.True(t, os.IsNotExist(err), "the socket must be removed when the second context stops the server")
+}
+
+// TestStopDetachesTheWatcher: a server stopped by Stop and started again under another
+// context belongs to that context alone. The one that started the earlier run, ending
+// later, must not take the new run down with it.
+func TestStopDetachesTheWatcher(t *testing.T) {
+	s := NewServer(test.NewLogger(), basicRegistry())
+	path := testSocket(t)
+
+	ctxA, cancelA := context.WithCancel(context.Background())
+	t.Cleanup(cancelA)
+	require.NoError(t, s.Rebind(ctxA, path))
+	s.Stop()
+
+	ctxB, cancelB := context.WithCancel(context.Background())
+	t.Cleanup(cancelB)
+	require.NoError(t, s.Rebind(ctxB, path))
+	t.Cleanup(s.Stop)
+
+	cancelA()
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, path, s.Path(), "the first run's context has nothing to do with the second run")
+	_, err := (&Client{Path: path}).Describe()
+	require.NoError(t, err)
+
+	cancelB()
+	require.Eventually(t, func() bool { return s.Path() == "" }, time.Second, 10*time.Millisecond, "the second run's context stops it")
+}
+
+func TestVersionMismatchIsExplained(t *testing.T) {
+	_, path := serve(t, basicRegistry())
+
+	conn, err := net.Dial("unix", path)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	body, _ := json.Marshal(Request{Version: ProtocolVersion + 1, Command: "echo"})
+	_, err = conn.Write(append(body, '\n'))
+	require.NoError(t, err)
+
+	res, err := readResponse(conn)
+	require.NoError(t, err)
+	assert.Contains(t, res.Error, "different versions")
+}
+
+func TestOversizedRequestIsRejected(t *testing.T) {
+	_, path := serve(t, basicRegistry())
+
+	conn, err := net.Dial("unix", path)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	_, err = conn.Write(append(bytes.Repeat([]byte("a"), MaxRequestBytes+10), '\n'))
+	if err == nil {
+		res, rerr := readResponse(conn)
+		require.NoError(t, rerr)
+		assert.NotEmpty(t, res.Error)
+	}
+}
+
+// TestConcurrentClientsAreBounded checks that going over the connection cap is answered
+// rather than queued, so a burst of clients cannot pile up against the packet path.
+func TestConcurrentClientsAreBounded(t *testing.T) {
+	reg := commands.New()
+	release := make(chan struct{})
+	reg.Register(&commands.Command{
+		Name:             "block",
+		ShortDescription: "blocks until released",
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
+			<-release
+			return w.Write("done")
+		},
+	})
+
+	s := NewServer(test.NewLogger(), reg)
+	s.maxConns = 2
+	path := testSocket(t)
+	require.NoError(t, s.Rebind(context.Background(), path))
+	defer s.Stop()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = (&Client{Path: path}).Invoke("block", nil, nil)
+		}()
+	}
+
+	// Give the two blockers time to occupy the slots.
+	time.Sleep(200 * time.Millisecond)
+
+	res, err := (&Client{Path: path}).Invoke("block", nil, nil)
+	require.NoError(t, err)
+	assert.Contains(t, res.Error, "busy")
+
+	close(release)
+	wg.Wait()
+}
+
+// flakyListener fails its first few Accepts the way a process that is out of file
+// descriptors does, then behaves.
+type flakyListener struct {
+	net.Listener
+	failures int
+}
+
+func (f *flakyListener) Accept() (net.Conn, error) {
+	if f.failures > 0 {
+		f.failures--
+		return nil, &net.OpError{Op: "accept", Net: "unix", Err: errors.New("too many open files")}
+	}
+	return f.Listener.Accept()
+}
+
+// TestAcceptSurvivesTransientErrors: an Accept that fails for a reason other than the
+// listener being closed is retried, so a moment at the descriptor limit does not take
+// the control socket down for the rest of the process. Closing the listener is still
+// what ends the loop.
+func TestAcceptSurvivesTransientErrors(t *testing.T) {
+	path := testSocket(t)
+	require.NoError(t, os.Mkdir(filepath.Dir(path), 0700))
+	ln, err := listen(path)
+	require.NoError(t, err)
+
+	s := NewServer(test.NewLogger(), basicRegistry())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.accept(&flakyListener{Listener: ln, failures: 3}, make(chan struct{}, 1))
+	}()
+
+	out, errText := run(t, path, "echo", "still", "here")
+	assert.Empty(t, errText)
+	assert.Equal(t, "[still here]", out)
+
+	require.NoError(t, ln.Close())
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("accept loop did not exit when the listener was closed")
+	}
+}
+
+func TestStopRemovesTheSocket(t *testing.T) {
+	s, path := serve(t, basicRegistry())
+	s.Stop()
+
+	_, err := os.Stat(path)
+	assert.True(t, os.IsNotExist(err))
+}
+
+func TestContextCancellationStops(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	path := testSocket(t)
+
+	s := NewServer(test.NewLogger(), basicRegistry())
+	require.NoError(t, s.Rebind(ctx, path))
+
+	cancel()
+	assert.Eventually(t, func() bool {
+		_, err := os.Stat(path)
+		return os.IsNotExist(err)
+	}, 2*time.Second, 20*time.Millisecond)
+}
+
+// TestNamedParametersDriveFlags is the point of the protocol: a caller passes options by
+// name, with JSON's own types, and never assembles a command line.
+// TestStringParamsNumbers: JSON numbers arrive as float64. Whole ones render as integers
+// so int flags accept them, and a whole one outside int64 is refused rather than
+// converted, since Go's float-to-int conversion of an out-of-range value is unspecified
+// and would set a number the caller never sent.
+func TestStringParamsNumbers(t *testing.T) {
+	cases := map[string]struct {
+		in      float64
+		want    string
+		wantErr bool
+	}{
+		"whole":            {in: 3, want: "3"},
+		"negative whole":   {in: -1, want: "-1"},
+		"fraction":         {in: 1.5, want: "1.5"},
+		"min int64":        {in: math.MinInt64, want: "-9223372036854775808"},
+		"largest in range": {in: 9223372036854774784, want: "9223372036854774784"},
+		"2^63":             {in: 9223372036854775808, wantErr: true},
+		"1e19":             {in: 1e19, wantErr: true},
+		"below min int64":  {in: -9.3e18, wantErr: true},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			out, err := stringParams(map[string]any{"n": tc.in})
+			if tc.wantErr {
+				require.Error(t, err)
+				require.ErrorContains(t, err, `parameter "n" is `)
+				assert.ErrorContains(t, err, "outside the range of a 64-bit integer")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, out["n"])
+		})
+	}
+}
+
+func TestNamedParametersDriveFlags(t *testing.T) {
+	reg := commands.New()
+	reg.Register(&commands.Command{
+		Name:             "report",
+		ShortDescription: "reports its flags",
+		Flags: func() (*flag.FlagSet, any) {
+			fl := flag.NewFlagSet("", flag.ContinueOnError)
+			s := struct {
+				Verbose bool
+				Label   string
+			}{}
+			fl.BoolVar(&s.Verbose, "verbose", false, "say more")
+			fl.StringVar(&s.Label, "label", "none", "a label")
+			return fl, &s
+		},
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
+			s := fs.(*struct {
+				Verbose bool
+				Label   string
+			})
+			return w.Write(fmt.Sprintf("verbose=%v label=%s args=%v", s.Verbose, s.Label, a))
+		},
+	})
+
+	_, path := serve(t, reg)
+
+	res, err := (&Client{Path: path}).Invoke("report",
+		map[string]string{"verbose": "true", "label": "here"},
+		[]string{"an-operand"},
+	)
+	require.NoError(t, err)
+
+	assert.Empty(t, res.Error)
+	assert.Equal(t, "verbose=true label=here args=[an-operand]", Text(res.Result))
+}
+
+// TestUnknownParameterIsReported: a misspelled parameter is an error rather than a
+// silently applied default, which is the difference between an API and a guess.
+func TestUnknownParameterIsReported(t *testing.T) {
+	reg := commands.New()
+	reg.Register(&commands.Command{
+		Name:             "report",
+		ShortDescription: "takes a flag",
+		Flags: func() (*flag.FlagSet, any) {
+			fl := flag.NewFlagSet("", flag.ContinueOnError)
+			fl.Bool("verbose", false, "say more")
+			return fl, nil
+		},
+		Callback: func(fs any, a []string, w commands.StringWriter) error { return nil },
+	})
+
+	_, path := serve(t, reg)
+
+	res, err := (&Client{Path: path}).Invoke("report", map[string]string{"verbos": "true"}, nil)
+	require.NoError(t, err)
+
+	assert.Contains(t, res.Error, `report has no parameter "verbos"`)
+}
+
+func TestParametersOnACommandThatTakesNoneAreReported(t *testing.T) {
+	_, path := serve(t, basicRegistry())
+
+	res, err := (&Client{Path: path}).Invoke("echo", map[string]string{"nope": "true"}, nil)
+	require.NoError(t, err)
+
+	assert.Contains(t, res.Error, "echo takes no parameters")
+}
+
+// TestJSONOutputIsAJSONValue: a command that emits JSON lands in the response as JSON,
+// not as a string a caller has to parse a second time.
+func TestJSONOutputIsAJSONValue(t *testing.T) {
+	reg := commands.New()
+	reg.Register(&commands.Command{
+		Name:             "emit",
+		ShortDescription: "emits json",
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
+			return w.Write(`{"hosts":[1,2,3]}`)
+		},
+	})
+
+	_, path := serve(t, reg)
+
+	res, err := (&Client{Path: path}).Invoke("emit", nil, nil)
+	require.NoError(t, err)
+
+	var decoded struct {
+		Hosts []int `json:"hosts"`
+	}
+	require.NoError(t, json.Unmarshal(res.Result, &decoded))
+	assert.Equal(t, []int{1, 2, 3}, decoded.Hosts)
+}
+
+// TestTextOutputIsAJSONString: everything else round trips as a string, unchanged.
+func TestTextOutputIsAJSONString(t *testing.T) {
+	_, path := serve(t, basicRegistry())
+
+	res, err := (&Client{Path: path}).Invoke("echo", nil, []string{"hi"})
+	require.NoError(t, err)
+
+	var s string
+	require.NoError(t, json.Unmarshal(res.Result, &s))
+	assert.Equal(t, "[hi]", s)
+}
+
+func TestDescribeReportsFlagTypes(t *testing.T) {
+	_, path := serve(t, basicRegistry())
+
+	schema, err := (&Client{Path: path}).Describe()
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(schema))
+	for _, c := range schema {
+		names = append(names, string(c.Name))
+	}
+
+	assert.Contains(t, names, "echo")
+	assert.NotContains(t, names, "withheld", "the schema advertises only what this surface serves")
+}
+
+// TestRebindAfterFailedBindStillStopsOnCancel covers a daemon whose initial listen
+// failed and which later Rebinds onto a good path from a reloaded config. The context
+// watcher has to be installed by that Rebind, or the socket outlives the daemon.
+func TestRebindAfterFailedBindStillStopsOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	base := test.ShortTempDir(t)
+
+	// listen creates one level only, so a socket directory under a parent that is not
+	// there yet fails to bind, the shape of a runtime directory that does not exist.
+	s := NewServer(test.NewLogger(), basicRegistry())
+	require.Error(t, s.Rebind(ctx, filepath.Join(base, "missing", "n", "s.sock")))
+
+	good := filepath.Join(base, "n", "s.sock")
+	require.NoError(t, s.Rebind(ctx, good))
+	t.Cleanup(s.Stop)
+	_, err := (&Client{Path: good}).Describe()
+	require.NoError(t, err)
+
+	cancel()
+	assert.Eventually(t, func() bool {
+		_, err := os.Stat(good)
+		return os.IsNotExist(err)
+	}, 2*time.Second, 20*time.Millisecond)
+}
+
+// TestCommandRegisteredAfterStartIsServed: the server filters the registry per request,
+// so a command an embedder registers after wiring the socket is served, and described,
+// just as it would be over ssh.
+func TestCommandRegisteredAfterStartIsServed(t *testing.T) {
+	reg := basicRegistry()
+	_, path := serve(t, reg)
+
+	reg.Register(&commands.Command{
+		Name:             "late",
+		ShortDescription: "registered after the server started",
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
+			return w.Write("late")
+		},
+	})
+
+	c := &Client{Path: path}
+
+	schema, err := c.Describe()
+	require.NoError(t, err)
+	names := make([]string, 0, len(schema))
+	for _, cs := range schema {
+		names = append(names, string(cs.Name))
+	}
+	assert.Contains(t, names, "late")
+
+	res, err := c.Invoke("late", nil, nil)
+	require.NoError(t, err)
+	require.Empty(t, res.Error)
+	assert.JSONEq(t, `"late"`, string(res.Result))
+}
+
+// TestRebindRefusesDuringShutdown: a reload that lands after the daemon's context is
+// cancelled must not bring the endpoint back. Stop is not terminal, so Rebind has to
+// take the answer from the context rather than from the running flag.
+func TestRebindRefusesDuringShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Built by hand rather than through serve: the context watcher is installed once,
+	// by the first bind, and this test needs it on a context it can cancel.
+	s := NewServer(test.NewLogger(), basicRegistry())
+	require.NoError(t, s.Rebind(ctx, testSocket(t)))
+	t.Cleanup(s.Stop)
+
+	cancel()
+	assert.Eventually(t, func() bool { return s.Path() == "" }, 2*time.Second, 20*time.Millisecond, "the watcher stops the server")
+
+	next := testSocket(t)
+	err := s.Rebind(ctx, next)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "shutting down")
+	assert.Empty(t, s.Path(), "the server stays stopped")
+
+	_, statErr := os.Stat(next)
+	assert.True(t, os.IsNotExist(statErr), "and the refused socket is not left on disk")
+}
+
+// TestRebindAndStopSerialize hammers Rebind against Stop. Whichever runs last decides
+// the final state, so after the dust settles a Stop must leave nothing listening and no
+// socket file behind, on either path.
+func TestRebindAndStopSerialize(t *testing.T) {
+	a := testSocket(t)
+	b := testSocket(t)
+
+	for i := 0; i < 50; i++ {
+		s := NewServer(test.NewLogger(), basicRegistry())
+		require.NoError(t, s.Rebind(context.Background(), a))
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_ = s.Rebind(context.Background(), b)
+		}()
+		go func() {
+			defer wg.Done()
+			s.Stop()
+		}()
+		wg.Wait()
+
+		// The Rebind may have run after the Stop, which restarts the server by design.
+		// A final Stop then has to take everything down.
+		s.Stop()
+		assert.Empty(t, s.Path())
+		for _, p := range []string{a, b} {
+			_, err := os.Stat(p)
+			assert.True(t, os.IsNotExist(err), "iteration %d: %s left behind", i, p)
+		}
+	}
+}

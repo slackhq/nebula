@@ -10,6 +10,7 @@ import (
 	"github.com/slackhq/nebula/commands"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/test"
+	"github.com/stretchr/testify/assert"
 )
 
 // TestSSHCommandSurface is a characterization test for the ssh command surface.
@@ -54,4 +55,43 @@ func renderCommandSurface(cmds []*commands.Command) string {
 
 	// In the order All gives, so the golden pins display order too.
 	return strings.Join(lines, "")
+}
+
+// TestLocalSocketSurface pins which of nebula's commands the always-on local socket
+// serves. Commands are served by default, so this test is what turns "somebody forgot to
+// think about it" into a visible decision: adding a command fails here until the lists
+// below say where it belongs.
+func TestLocalSocketSurface(t *testing.T) {
+	reg := registeredCommands(t)
+
+	var served, withheld []commands.Name
+	for _, c := range reg.All() {
+		if c.ForProfiling {
+			withheld = append(withheld, c.Name)
+		} else {
+			served = append(served, c.Name)
+		}
+	}
+
+	// Nothing is withheld today: the profiling commands, which were, are gone.
+	assert.Empty(t, withheld)
+
+	assert.ElementsMatch(t, []commands.Name{
+		commands.Help,
+		commands.ListHostmap,
+		commands.ListPendingHostmap,
+		commands.ListLighthouseAddrmap,
+		commands.PrintCert,
+		commands.PrintTunnel,
+		commands.PrintRelays,
+		commands.DeviceInfo,
+		commands.Version,
+		commands.QueryLighthouse,
+		commands.Reload,
+		commands.LogLevel,
+		commands.LogFormat,
+		commands.ChangeRemote,
+		commands.CloseTunnel,
+		commands.CreateTunnel,
+	}, served)
 }

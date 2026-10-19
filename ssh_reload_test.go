@@ -26,6 +26,7 @@ func (w *lineWriter) WriteLine(s string) error {
 func (w *lineWriter) Write(s string) error      { return w.WriteLine(s) }
 func (w *lineWriter) WriteBytes(b []byte) error { return w.WriteLine(string(b)) }
 func (w *lineWriter) GetWriter() io.Writer      { return io.Discard }
+func (w *lineWriter) Err() io.Writer            { return io.Discard }
 
 func TestReloadCommandReportsTheResult(t *testing.T) {
 	dir := t.TempDir()
