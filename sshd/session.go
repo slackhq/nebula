@@ -1,6 +1,7 @@
 package sshd
 
 import (
+	"errors"
 	"log/slog"
 	"strings"
 
@@ -25,17 +26,23 @@ func NewSession(reg *commands.Registry, conn *ssh.ServerConn, chans <-chan ssh.N
 		cancel:   cancel,
 	}
 
-	s.commands.Register(&commands.Command{
-		Name:             commands.Logout,
-		ShortDescription: "Ends the current session",
-		Callback: func(a any, args []string, w commands.StringWriter) error {
-			s.Close()
-			return nil
-		},
-	})
+	s.commands.Register(LogoutCommand(s.Close))
 
 	go s.handleChannels(chans)
 	return s
+}
+
+// LogoutCommand is the logout command a session registers on its clone of the registry,
+// with end as what it does. Exported so a test can serve what a session serves.
+func LogoutCommand(end func()) *commands.Command {
+	return &commands.Command{
+		Name:             commands.Logout,
+		ShortDescription: "Ends the current session",
+		Callback: func(fs any, a []string, w commands.StringWriter) error {
+			end()
+			return nil
+		},
+	}
 }
 
 func (s *session) handleChannels(chans <-chan ssh.NewChannel) {
@@ -84,9 +91,13 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 			}
 
 			req.Reply(true, nil)
-			s.dispatchCommand(payload.Value, commands.NewStringWriter(channel))
+			err := s.dispatchCommand(payload.Value, commands.NewStringWriter(channel))
 
+			// A command that failed exits 1, so `ssh host cmd` callers can tell.
 			status := struct{ Status uint32 }{uint32(0)}
+			if err != nil {
+				status.Status = 1
+			}
 			channel.SendRequest("exit-status", false, ssh.Marshal(status))
 			channel.Close()
 			return
@@ -135,8 +146,20 @@ func (s *session) handleInput() {
 	}
 }
 
-func (s *session) dispatchCommand(line string, w commands.StringWriter) {
-	s.commands.Dispatch(line, w)
+// dispatchCommand runs line and returns the command's error, which it has logged unless
+// the command already told the user everything: the log line is for the operator reading
+// the daemon's log, who learns nothing from a failure the user caused.
+func (s *session) dispatchCommand(line string, w commands.StringWriter) error {
+	err := s.commands.Dispatch(line, w)
+	if err == nil {
+		return nil
+	}
+
+	var f *commands.Failure
+	if !errors.As(err, &f) {
+		s.l.Debug("Command returned an error", "line", line, "error", err)
+	}
+	return err
 }
 
 func (s *session) Close() {

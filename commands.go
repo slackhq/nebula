@@ -3,7 +3,6 @@ package nebula
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -14,42 +13,51 @@ import (
 
 	"github.com/slackhq/nebula/commands"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/logging"
 )
 
 // The commands nebula serves. attachCommands builds the one registry every surface
 // reads. See the commands package for what a Command is.
 
-type sshListHostMapFlags struct {
+type listHostMapFlags struct {
 	Json    bool
 	Pretty  bool
 	ByIndex bool
 }
 
-type sshPrintCertFlags struct {
+// listHostMapFlagSet is the flag set list-hostmap and list-pending-hostmap share.
+func listHostMapFlagSet() (*flag.FlagSet, any) {
+	fl := flag.NewFlagSet("", flag.ContinueOnError)
+	s := listHostMapFlags{}
+	fl.BoolVar(&s.Json, "json", false, "outputs as json with more information")
+	fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
+	fl.BoolVar(&s.ByIndex, "by-index", false, "gets all hosts in the hostmap from the index table")
+	return fl, &s
+}
+
+type printCertFlags struct {
 	Json   bool
 	Pretty bool
 	Raw    bool
 }
 
-type sshPrintTunnelFlags struct {
+type printTunnelFlags struct {
 	Pretty bool
 }
 
-type sshChangeRemoteFlags struct {
+type changeRemoteFlags struct {
 	Address string
 }
 
-type sshCloseTunnelFlags struct {
+type closeTunnelFlags struct {
 	LocalOnly bool
 }
 
-type sshCreateTunnelFlags struct {
+type createTunnelFlags struct {
 	Address string
 }
 
-type sshDeviceInfoFlags struct {
+type deviceInfoFlags struct {
 	Json   bool
 	Pretty bool
 }
@@ -58,32 +66,18 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 	reg.Register(&commands.Command{
 		Name:             commands.ListHostmap,
 		ShortDescription: "List all known previously connected hosts",
-		Flags: func() (*flag.FlagSet, any) {
-			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := sshListHostMapFlags{}
-			fl.BoolVar(&s.Json, "json", false, "outputs as json with more information")
-			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
-			fl.BoolVar(&s.ByIndex, "by-index", false, "gets all hosts in the hostmap from the index table")
-			return fl, &s
-		},
+		Flags:            listHostMapFlagSet,
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return sshListHostMap(f.hostMap, fs, w)
+			return listHostMapCommand(f.hostMap, fs, w)
 		},
 	})
 
 	reg.Register(&commands.Command{
 		Name:             commands.ListPendingHostmap,
 		ShortDescription: "List all handshaking hosts",
-		Flags: func() (*flag.FlagSet, any) {
-			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := sshListHostMapFlags{}
-			fl.BoolVar(&s.Json, "json", false, "outputs as json with more information")
-			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
-			fl.BoolVar(&s.ByIndex, "by-index", false, "gets all hosts in the hostmap from the index table")
-			return fl, &s
-		},
+		Flags:            listHostMapFlagSet,
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return sshListHostMap(f.handshakeManager, fs, w)
+			return listHostMapCommand(f.handshakeManager, fs, w)
 		},
 	})
 
@@ -92,13 +86,13 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 		ShortDescription: "List all lighthouse map entries",
 		Flags: func() (*flag.FlagSet, any) {
 			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := sshListHostMapFlags{}
+			s := listHostMapFlags{}
 			fl.BoolVar(&s.Json, "json", false, "outputs as json with more information")
 			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
 			return fl, &s
 		},
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return sshListLighthouseMap(f.lightHouse, fs, w)
+			return listLighthouseAddrmapCommand(f.lightHouse, fs, w)
 		},
 	})
 
@@ -106,7 +100,7 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 		Name:             commands.Reload,
 		ShortDescription: "Reloads configuration from disk, same as sending HUP to the process",
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return sshReload(l, c, w)
+			return reloadCommand(l, c, w)
 		},
 	})
 
@@ -114,7 +108,7 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 		Name:             commands.LogLevel,
 		ShortDescription: "Gets or sets the current log level",
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return sshLogLevel(l, fs, a, w)
+			return logLevelCommand(l, fs, a, w)
 		},
 	})
 
@@ -122,7 +116,7 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 		Name:             commands.LogFormat,
 		ShortDescription: "Gets or sets the current log format",
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return sshLogFormat(l, fs, a, w)
+			return logFormatCommand(l, fs, a, w)
 		},
 	})
 
@@ -130,7 +124,7 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 		Name:             commands.Version,
 		ShortDescription: "Prints the currently running version of nebula",
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return sshVersion(f, fs, a, w)
+			return versionCommand(f, fs, a, w)
 		},
 	})
 
@@ -139,13 +133,13 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 		ShortDescription: "Prints information about the network device.",
 		Flags: func() (*flag.FlagSet, any) {
 			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := sshDeviceInfoFlags{}
+			s := deviceInfoFlags{}
 			fl.BoolVar(&s.Json, "json", false, "outputs as json with more information")
 			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
 			return fl, &s
 		},
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return sshDeviceInfo(f, fs, w)
+			return deviceInfoCommand(f, fs, w)
 		},
 	})
 
@@ -154,14 +148,14 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 		ShortDescription: "Prints the current certificate being used or the certificate for the provided vpn addr",
 		Flags: func() (*flag.FlagSet, any) {
 			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := sshPrintCertFlags{}
+			s := printCertFlags{}
 			fl.BoolVar(&s.Json, "json", false, "outputs as json")
 			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
 			fl.BoolVar(&s.Raw, "raw", false, "raw prints the PEM encoded certificate, not compatible with -json or -pretty")
 			return fl, &s
 		},
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return sshPrintCert(f, fs, a, w)
+			return printCertCommand(f, fs, a, w)
 		},
 	})
 
@@ -170,12 +164,12 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 		ShortDescription: "Prints json details about a tunnel for the provided vpn addr",
 		Flags: func() (*flag.FlagSet, any) {
 			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := sshPrintTunnelFlags{}
+			s := printTunnelFlags{}
 			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json")
 			return fl, &s
 		},
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return sshPrintTunnel(f, fs, a, w)
+			return printTunnelCommand(f, fs, a, w)
 		},
 	})
 
@@ -184,12 +178,12 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 		ShortDescription: "Prints json details about all relay info",
 		Flags: func() (*flag.FlagSet, any) {
 			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := sshPrintTunnelFlags{}
+			s := printTunnelFlags{}
 			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json")
 			return fl, &s
 		},
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return sshPrintRelays(f, fs, a, w)
+			return printRelaysCommand(f, fs, a, w)
 		},
 	})
 
@@ -198,12 +192,12 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 		ShortDescription: "Changes the remote address used in the tunnel for the provided vpn addr",
 		Flags: func() (*flag.FlagSet, any) {
 			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := sshChangeRemoteFlags{}
+			s := changeRemoteFlags{}
 			fl.StringVar(&s.Address, "address", "", "The new remote address, ip:port")
 			return fl, &s
 		},
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return sshChangeRemote(f, fs, a, w)
+			return changeRemoteCommand(f, fs, a, w)
 		},
 	})
 
@@ -212,12 +206,12 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 		ShortDescription: "Closes a tunnel for the provided vpn addr",
 		Flags: func() (*flag.FlagSet, any) {
 			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := sshCloseTunnelFlags{}
+			s := closeTunnelFlags{}
 			fl.BoolVar(&s.LocalOnly, "local-only", false, "Disables notifying the remote that the tunnel is shutting down")
 			return fl, &s
 		},
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return sshCloseTunnel(f, fs, a, w)
+			return closeTunnelCommand(f, fs, a, w)
 		},
 	})
 
@@ -227,12 +221,12 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 		Help:             "The lighthouses will be queried for real addresses but you can provide one as well.",
 		Flags: func() (*flag.FlagSet, any) {
 			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := sshCreateTunnelFlags{}
+			s := createTunnelFlags{}
 			fl.StringVar(&s.Address, "address", "", "Optionally provide a real remote address, ip:port ")
 			return fl, &s
 		},
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return sshCreateTunnel(f, fs, a, w)
+			return createTunnelCommand(f, fs, a, w)
 		},
 	})
 
@@ -241,15 +235,15 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 		ShortDescription: "Query the lighthouses for the provided vpn address",
 		Help:             "This command is asynchronous. Only currently known udp addresses will be printed.",
 		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return sshQueryLighthouse(f, fs, a, w)
+			return queryLighthouseCommand(f, fs, a, w)
 		},
 	})
 }
 
-func sshListHostMap(hl controlHostLister, a any, w commands.StringWriter) error {
-	fs, ok := a.(*sshListHostMapFlags)
+func listHostMapCommand(hl controlHostLister, a any, w commands.StringWriter) error {
+	fs, ok := a.(*listHostMapFlags)
 	if !ok {
-		return nil
+		return fmt.Errorf("internal error: expected *listHostMapFlags but was %T", a)
 	}
 
 	var hm []ControlHostInfo
@@ -269,9 +263,8 @@ func sshListHostMap(hl controlHostLister, a any, w commands.StringWriter) error 
 			js.SetIndent("", "    ")
 		}
 
-		err := js.Encode(hm)
-		if err != nil {
-			return nil
+		if err := js.Encode(hm); err != nil {
+			return err
 		}
 
 	} else {
@@ -286,10 +279,10 @@ func sshListHostMap(hl controlHostLister, a any, w commands.StringWriter) error 
 	return nil
 }
 
-func sshListLighthouseMap(lightHouse *LightHouse, a any, w commands.StringWriter) error {
-	fs, ok := a.(*sshListHostMapFlags)
+func listLighthouseAddrmapCommand(lightHouse *LightHouse, a any, w commands.StringWriter) error {
+	fs, ok := a.(*listHostMapFlags)
 	if !ok {
-		return nil
+		return fmt.Errorf("internal error: expected *listHostMapFlags but was %T", a)
 	}
 
 	type lighthouseInfo struct {
@@ -319,9 +312,8 @@ func sshListLighthouseMap(lightHouse *LightHouse, a any, w commands.StringWriter
 			js.SetIndent("", "    ")
 		}
 
-		err := js.Encode(addrMap)
-		if err != nil {
-			return nil
+		if err := js.Encode(addrMap); err != nil {
+			return err
 		}
 
 	} else {
@@ -340,22 +332,30 @@ func sshListLighthouseMap(lightHouse *LightHouse, a any, w commands.StringWriter
 	return nil
 }
 
-func sshVersion(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
-	return w.WriteLine(fmt.Sprintf("%s", ifce.version))
-}
-
-func sshQueryLighthouse(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
+// parseVpnAddr parses the vpn address a command takes as its first operand, failing to w
+// when there is none or it does not parse. noun is how the command's messages name it,
+// "vpn address" or "vpn addr", which the output golden pins per command.
+func parseVpnAddr(a []string, noun string, w commands.StringWriter) (netip.Addr, error) {
 	if len(a) == 0 {
-		return w.WriteLine("No vpn address was provided")
+		return netip.Addr{}, commands.Fail(w, "No vpn address was provided")
 	}
 
 	vpnAddr, err := netip.ParseAddr(a[0])
 	if err != nil {
-		return w.WriteLine(fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
+		return netip.Addr{}, commands.Fail(w, fmt.Sprintf("The provided %s could not be parsed: %s", noun, a[0]))
 	}
 
-	if !vpnAddr.IsValid() {
-		return w.WriteLine(fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
+	return vpnAddr, nil
+}
+
+func versionCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
+	return w.WriteLine(ifce.version)
+}
+
+func queryLighthouseCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
+	vpnAddr, err := parseVpnAddr(a, "vpn address", w)
+	if err != nil {
+		return err
 	}
 
 	var cm *CacheMap
@@ -366,80 +366,56 @@ func sshQueryLighthouse(ifce *Interface, fs any, a []string, w commands.StringWr
 	return json.NewEncoder(w.GetWriter()).Encode(cm)
 }
 
-func sshCloseTunnel(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
-	flags, ok := fs.(*sshCloseTunnelFlags)
+func closeTunnelCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
+	flags, ok := fs.(*closeTunnelFlags)
 	if !ok {
-		return nil
+		return fmt.Errorf("internal error: expected *closeTunnelFlags but was %T", fs)
 	}
 
-	if len(a) == 0 {
-		return w.WriteLine("No vpn address was provided")
-	}
-
-	vpnAddr, err := netip.ParseAddr(a[0])
+	vpnAddr, err := parseVpnAddr(a, "vpn address", w)
 	if err != nil {
-		return w.WriteLine(fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
-	}
-
-	if !vpnAddr.IsValid() {
-		return w.WriteLine(fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
+		return err
 	}
 
 	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
 	if hostInfo == nil {
-		return w.WriteLine(fmt.Sprintf("Could not find tunnel for vpn address: %v", a[0]))
+		return commands.Fail(w, fmt.Sprintf("Could not find tunnel for vpn address: %v", a[0]))
 	}
 
 	if !flags.LocalOnly {
-		ifce.send(
-			header.CloseTunnel,
-			0,
-			hostInfo.ConnectionState,
-			hostInfo,
-			[]byte{},
-			make([]byte, 12, 12),
-			make([]byte, mtu),
-		)
+		ifce.sendCloseTunnel(hostInfo)
 	}
 
 	ifce.closeTunnel(hostInfo)
 	return w.WriteLine("Closed")
 }
 
-func sshCreateTunnel(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
-	flags, ok := fs.(*sshCreateTunnelFlags)
+func createTunnelCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
+	flags, ok := fs.(*createTunnelFlags)
 	if !ok {
-		return nil
+		return fmt.Errorf("internal error: expected *createTunnelFlags but was %T", fs)
 	}
 
-	if len(a) == 0 {
-		return w.WriteLine("No vpn address was provided")
-	}
-
-	vpnAddr, err := netip.ParseAddr(a[0])
+	vpnAddr, err := parseVpnAddr(a, "vpn address", w)
 	if err != nil {
-		return w.WriteLine(fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
-	}
-
-	if !vpnAddr.IsValid() {
-		return w.WriteLine(fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
+		return err
 	}
 
 	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
 	if hostInfo != nil {
-		return w.WriteLine(fmt.Sprintf("Tunnel already exists"))
+		return commands.Fail(w, "Tunnel already exists")
 	}
 
 	hostInfo = ifce.handshakeManager.QueryVpnAddr(vpnAddr)
 	if hostInfo != nil {
-		return w.WriteLine(fmt.Sprintf("Tunnel already handshaking"))
+		return commands.Fail(w, "Tunnel already handshaking")
 	}
 
 	var addr netip.AddrPort
 	if flags.Address != "" {
 		addr, err = netip.ParseAddrPort(flags.Address)
 		if err != nil {
-			return w.WriteLine("Address could not be parsed")
+			return commands.Fail(w, "Address could not be parsed")
 		}
 	}
 
@@ -455,50 +431,42 @@ func sshCreateTunnel(ifce *Interface, fs any, a []string, w commands.StringWrite
 	return w.WriteLine("Created")
 }
 
-func sshChangeRemote(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
-	flags, ok := fs.(*sshChangeRemoteFlags)
+func changeRemoteCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
+	flags, ok := fs.(*changeRemoteFlags)
 	if !ok {
-		return nil
+		return fmt.Errorf("internal error: expected *changeRemoteFlags but was %T", fs)
 	}
 
-	if len(a) == 0 {
-		return w.WriteLine("No vpn address was provided")
+	vpnAddr, err := parseVpnAddr(a, "vpn address", w)
+	if err != nil {
+		return err
 	}
 
 	if flags.Address == "" {
-		return w.WriteLine("No address was provided")
+		return commands.Fail(w, "No address was provided")
 	}
 
 	addr, err := netip.ParseAddrPort(flags.Address)
 	if err != nil {
-		return w.WriteLine("Address could not be parsed")
-	}
-
-	vpnAddr, err := netip.ParseAddr(a[0])
-	if err != nil {
-		return w.WriteLine(fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
-	}
-
-	if !vpnAddr.IsValid() {
-		return w.WriteLine(fmt.Sprintf("The provided vpn address could not be parsed: %s", a[0]))
+		return commands.Fail(w, "Address could not be parsed")
 	}
 
 	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
 	if hostInfo == nil {
-		return w.WriteLine(fmt.Sprintf("Could not find tunnel for vpn address: %v", a[0]))
+		return commands.Fail(w, fmt.Sprintf("Could not find tunnel for vpn address: %v", a[0]))
 	}
 
 	hostInfo.SetRemote(addr)
 	return w.WriteLine("Changed")
 }
 
-func sshLogLevel(l *slog.Logger, fs any, a []string, w commands.StringWriter) error {
+func logLevelCommand(l *slog.Logger, fs any, a []string, w commands.StringWriter) error {
 	ctrl, ok := l.Handler().(interface {
 		GetLevel() slog.Level
 		SetLevel(slog.Level)
 	})
 	if !ok {
-		return w.WriteLine("Log level is not reconfigurable on this logger")
+		return commands.Fail(w, "Log level is not reconfigurable on this logger")
 	}
 
 	if len(a) == 0 {
@@ -507,20 +475,20 @@ func sshLogLevel(l *slog.Logger, fs any, a []string, w commands.StringWriter) er
 
 	level, err := logging.ParseLevel(strings.ToLower(a[0]))
 	if err != nil {
-		return w.WriteLine(fmt.Sprintf("Unknown log level %s. Possible log levels: trace, debug, info, warn, error", a))
+		return commands.Fail(w, fmt.Sprintf("Unknown log level %s. Possible log levels: trace, debug, info, warn, error", a))
 	}
 
 	ctrl.SetLevel(level)
 	return w.WriteLine(fmt.Sprintf("Log level is: %s", logging.LevelName(ctrl.GetLevel())))
 }
 
-func sshLogFormat(l *slog.Logger, fs any, a []string, w commands.StringWriter) error {
+func logFormatCommand(l *slog.Logger, fs any, a []string, w commands.StringWriter) error {
 	ctrl, ok := l.Handler().(interface {
 		GetFormat() string
 		SetFormat(string) error
 	})
 	if !ok {
-		return w.WriteLine("Log format is not reconfigurable on this logger")
+		return commands.Fail(w, "Log format is not reconfigurable on this logger")
 	}
 
 	if len(a) == 0 {
@@ -528,31 +496,27 @@ func sshLogFormat(l *slog.Logger, fs any, a []string, w commands.StringWriter) e
 	}
 
 	if err := ctrl.SetFormat(strings.ToLower(a[0])); err != nil {
-		return err
+		return commands.Fail(w, fmt.Sprintf("Unable to set log format: %s", err))
 	}
 	return w.WriteLine(fmt.Sprintf("Log format is: %s", ctrl.GetFormat()))
 }
 
-func sshPrintCert(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
-	args, ok := fs.(*sshPrintCertFlags)
+func printCertCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
+	args, ok := fs.(*printCertFlags)
 	if !ok {
-		return nil
+		return fmt.Errorf("internal error: expected *printCertFlags but was %T", fs)
 	}
 
 	cert := ifce.pki.getCertState().GetDefaultCertificate()
 	if len(a) > 0 {
-		vpnAddr, err := netip.ParseAddr(a[0])
+		vpnAddr, err := parseVpnAddr(a, "vpn addr", w)
 		if err != nil {
-			return w.WriteLine(fmt.Sprintf("The provided vpn addr could not be parsed: %s", a[0]))
-		}
-
-		if !vpnAddr.IsValid() {
-			return w.WriteLine(fmt.Sprintf("The provided vpn addr could not be parsed: %s", a[0]))
+			return err
 		}
 
 		hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
 		if hostInfo == nil {
-			return w.WriteLine(fmt.Sprintf("Could not find tunnel for vpn addr: %v", a[0]))
+			return commands.Fail(w, fmt.Sprintf("Could not find tunnel for vpn addr: %v", a[0]))
 		}
 
 		cert = hostInfo.GetCert().Certificate
@@ -561,16 +525,15 @@ func sshPrintCert(ifce *Interface, fs any, a []string, w commands.StringWriter) 
 	if args.Json || args.Pretty {
 		b, err := cert.MarshalJSON()
 		if err != nil {
-			return nil
+			return commands.Fail(w, fmt.Sprintf("Unable to marshal the certificate: %s", err))
 		}
 
 		if args.Pretty {
 			buf := new(bytes.Buffer)
-			err := json.Indent(buf, b, "", "    ")
-			b = buf.Bytes()
-			if err != nil {
-				return nil
+			if err := json.Indent(buf, b, "", "    "); err != nil {
+				return commands.Fail(w, fmt.Sprintf("Unable to marshal the certificate: %s", err))
 			}
+			b = buf.Bytes()
 		}
 
 		return w.WriteBytes(b)
@@ -579,7 +542,7 @@ func sshPrintCert(ifce *Interface, fs any, a []string, w commands.StringWriter) 
 	if args.Raw {
 		b, err := cert.MarshalPEM()
 		if err != nil {
-			return nil
+			return commands.Fail(w, fmt.Sprintf("Unable to marshal the certificate: %s", err))
 		}
 
 		return w.WriteBytes(b)
@@ -588,20 +551,18 @@ func sshPrintCert(ifce *Interface, fs any, a []string, w commands.StringWriter) 
 	return w.WriteLine(cert.String())
 }
 
-func sshPrintRelays(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
-	args, ok := fs.(*sshPrintTunnelFlags)
+func printRelaysCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
+	args, ok := fs.(*printTunnelFlags)
 	if !ok {
-		w.WriteLine(fmt.Sprintf("sshPrintRelays failed to convert args type"))
-		return nil
+		return fmt.Errorf("internal error: expected *printTunnelFlags but was %T", fs)
 	}
 
-	relays := map[uint32]*HostInfo{}
-	ifce.hostMap.Lock()
-	maps.Copy(relays, ifce.hostMap.Relays)
-	ifce.hostMap.Unlock()
+	ifce.hostMap.RLock()
+	relays := maps.Clone(ifce.hostMap.Relays)
+	ifce.hostMap.RUnlock()
 
 	type RelayFor struct {
-		Error          error
+		Error          string `json:",omitempty"`
 		Type           string
 		State          string
 		PeerAddr       netip.Addr
@@ -632,11 +593,11 @@ func sshPrintRelays(ifce *Interface, fs any, a []string, w commands.StringWriter
 		co.Relays = append(co.Relays, &ro)
 		relayHI := ifce.hostMap.QueryVpnAddr(v.vpnAddrs[0])
 		if relayHI == nil {
-			ro.RelayForAddrs = append(ro.RelayForAddrs, RelayFor{Error: errors.New("could not find hostinfo")})
+			ro.RelayForAddrs = append(ro.RelayForAddrs, RelayFor{Error: "could not find hostinfo"})
 			continue
 		}
 		for _, vpnAddr := range relayHI.relayState.CopyRelayForIps() {
-			rf := RelayFor{Error: nil}
+			rf := RelayFor{}
 			r, ok := relayHI.relayState.GetRelayForByAddr(vpnAddr)
 			if ok {
 				t := ""
@@ -665,7 +626,7 @@ func sshPrintRelays(ifce *Interface, fs any, a []string, w commands.StringWriter
 				rf.Type = t
 				rf.State = s
 				if rf.LocalIndex != k {
-					rf.Error = fmt.Errorf("hostmap LocalIndex '%v' does not match RelayState LocalIndex", k)
+					rf.Error = fmt.Sprintf("hostmap LocalIndex '%v' does not match RelayState LocalIndex", k)
 				}
 			}
 			relayedHI := ifce.hostMap.QueryVpnAddr(vpnAddr)
@@ -676,35 +637,23 @@ func sshPrintRelays(ifce *Interface, fs any, a []string, w commands.StringWriter
 			ro.RelayForAddrs = append(ro.RelayForAddrs, rf)
 		}
 	}
-	err := enc.Encode(co)
-	if err != nil {
-		return err
-	}
-	return nil
+	return enc.Encode(co)
 }
 
-func sshPrintTunnel(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
-	args, ok := fs.(*sshPrintTunnelFlags)
+func printTunnelCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
+	args, ok := fs.(*printTunnelFlags)
 	if !ok {
-		return nil
+		return fmt.Errorf("internal error: expected *printTunnelFlags but was %T", fs)
 	}
 
-	if len(a) == 0 {
-		return w.WriteLine("No vpn address was provided")
-	}
-
-	vpnAddr, err := netip.ParseAddr(a[0])
+	vpnAddr, err := parseVpnAddr(a, "vpn addr", w)
 	if err != nil {
-		return w.WriteLine(fmt.Sprintf("The provided vpn addr could not be parsed: %s", a[0]))
-	}
-
-	if !vpnAddr.IsValid() {
-		return w.WriteLine(fmt.Sprintf("The provided vpn addr could not be parsed: %s", a[0]))
+		return err
 	}
 
 	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
 	if hostInfo == nil {
-		return w.WriteLine(fmt.Sprintf("Could not find tunnel for vpn addr: %v", a[0]))
+		return commands.Fail(w, fmt.Sprintf("Could not find tunnel for vpn addr: %v", a[0]))
 	}
 
 	enc := json.NewEncoder(w.GetWriter())
@@ -715,7 +664,11 @@ func sshPrintTunnel(ifce *Interface, fs any, a []string, w commands.StringWriter
 	return enc.Encode(copyHostInfo(hostInfo, ifce.hostMap.GetPreferredRanges()))
 }
 
-func sshDeviceInfo(ifce *Interface, fs any, w commands.StringWriter) error {
+func deviceInfoCommand(ifce *Interface, fs any, w commands.StringWriter) error {
+	flags, ok := fs.(*deviceInfoFlags)
+	if !ok {
+		return fmt.Errorf("internal error: expected flags to be deviceInfoFlags but was %+v", fs)
+	}
 
 	data := struct {
 		Name string         `json:"name"`
@@ -726,11 +679,6 @@ func sshDeviceInfo(ifce *Interface, fs any, w commands.StringWriter) error {
 	}
 
 	copy(data.Cidr, ifce.inside.Networks())
-
-	flags, ok := fs.(*sshDeviceInfoFlags)
-	if !ok {
-		return fmt.Errorf("internal error: expected flags to be sshDeviceInfoFlags but was %+v", fs)
-	}
 
 	if flags.Json || flags.Pretty {
 		js := json.NewEncoder(w.GetWriter())
@@ -744,13 +692,19 @@ func sshDeviceInfo(ifce *Interface, fs any, w commands.StringWriter) error {
 	}
 }
 
-// sshReload reloads the config and writes the result to the client. It reloads even if the client has gone away
-func sshReload(l *slog.Logger, c *config.C, w commands.StringWriter) error {
+// reloadCommand reloads the config and writes the result to the client. It reloads even if the client has gone away
+func reloadCommand(l *slog.Logger, c *config.C, w commands.StringWriter) error {
 	writeErr := w.WriteLine("Reloading config")
 	res := c.ReloadConfig()
 	res.Log(l)
 	if err := w.WriteLine(res.String()); writeErr == nil {
 		writeErr = err
 	}
-	return writeErr
+	if writeErr != nil {
+		return writeErr
+	}
+	if res.Err != nil || res.Failed {
+		return &commands.Failure{Msg: res.String()}
+	}
+	return nil
 }

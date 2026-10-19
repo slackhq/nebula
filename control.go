@@ -374,6 +374,9 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	return
 }
 
+// Commands returns the registry the daemon's surfaces serve from. It is the live
+// registry, not a copy: a command registered on it is served to every ssh session that
+// starts afterwards. Clone it to run commands without that reach.
 func (c *Control) Commands() *commands.Registry {
 	return c.commands
 }
