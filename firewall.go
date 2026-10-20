@@ -211,13 +211,13 @@ func NewFirewallFromConfig(l *slog.Logger, cs *CertState, c *config.C) (*Firewal
 	defaultTimeout := c.GetDuration("firewall.conntrack.default_timeout", time.Minute*10)
 
 	if tcpTimeout <= 0 {
-		return nil, fmt.Errorf("firewall.conntrack.tcp_timeout must be greater than 0: %s", c.GetString("firewall.conntrack.tcp_timeout", ""))
+		return nil, fmt.Errorf("firewall.conntrack.tcp_timeout must be greater than 0, got: %s", tcpTimeout)
 	}
 	if udpTimeout <= 0 {
-		return nil, fmt.Errorf("firewall.conntrack.udp_timeout must be greater than 0: %s", c.GetString("firewall.conntrack.udp_timeout", ""))
+		return nil, fmt.Errorf("firewall.conntrack.udp_timeout must be greater than 0, got: %s", udpTimeout)
 	}
 	if defaultTimeout <= 0 {
-		return nil, fmt.Errorf("firewall.conntrack.default_timeout must be greater than 0: %s", c.GetString("firewall.conntrack.default_timeout", ""))
+		return nil, fmt.Errorf("firewall.conntrack.default_timeout must be greater than 0, got: %s", defaultTimeout)
 	}
 
 	fw := NewFirewall(

@@ -64,10 +64,12 @@ func TestNewFirewall_ZeroOrNegativeTimeout(t *testing.T) {
 	cs := &CertState{v2Cert: c, initiatingVersion: cert.Version2}
 
 	cases := map[string]string{
-		"tcp_timeout zero":        "firewall:\n  conntrack:\n    tcp_timeout: 0s\n",
-		"tcp_timeout negative":    "firewall:\n  conntrack:\n    tcp_timeout: -5s\n",
-		"udp_timeout zero":        "firewall:\n  conntrack:\n    udp_timeout: 0s\n",
-		"default_timeout zero":    "firewall:\n  conntrack:\n    default_timeout: 0s\n",
+		"tcp_timeout zero":         "firewall:\n  conntrack:\n    tcp_timeout: 0s\n",
+		"tcp_timeout negative":     "firewall:\n  conntrack:\n    tcp_timeout: -5s\n",
+		"udp_timeout zero":         "firewall:\n  conntrack:\n    udp_timeout: 0s\n",
+		"udp_timeout negative":     "firewall:\n  conntrack:\n    udp_timeout: -5s\n",
+		"default_timeout zero":     "firewall:\n  conntrack:\n    default_timeout: 0s\n",
+		"default_timeout negative": "firewall:\n  conntrack:\n    default_timeout: -5s\n",
 	}
 
 	for name, cfgStr := range cases {
@@ -76,6 +78,7 @@ func TestNewFirewall_ZeroOrNegativeTimeout(t *testing.T) {
 			require.NoError(t, cfg.LoadString(cfgStr))
 			_, err := NewFirewallFromConfig(l, cs, cfg)
 			require.Error(t, err, "expected error for non-positive timeout duration")
+			assert.ErrorContains(t, err, "must be greater than 0")
 		})
 	}
 }
