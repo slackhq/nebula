@@ -3,6 +3,7 @@ package nebula
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"io"
 	"net/netip"
 	"testing"
 	"time"
@@ -266,12 +267,12 @@ func Test_NewConnectionManager_CounterLimits(t *testing.T) {
 
 	// Still below the reject limit, the tunnel stays up
 	nc.In(hostinfo)
-	decision, _, _ := nc.makeTrafficDecision(hostinfo.localIndexId, time.Now())
+	decision, _, _, _ := nc.makeTrafficDecision(hostinfo.localIndexId, time.Now())
 	assert.Equal(t, tryRehandshake, decision)
 
 	// At the reject limit, the tunnel is deleted locally without a doomed CloseTunnel notify
 	hostinfo.ConnectionState.messageCounter.Store(RejectAfterMessages)
-	decision, _, _ = nc.makeTrafficDecision(hostinfo.localIndexId, time.Now())
+	decision, _, _, _ = nc.makeTrafficDecision(hostinfo.localIndexId, time.Now())
 	assert.Equal(t, deleteTunnel, decision)
 }
 
@@ -333,14 +334,14 @@ func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
 	assert.True(t, (hostinfo.state.Load()&stateIn != 0))
 
 	now := time.Now()
-	decision, _, _ := nc.makeTrafficDecision(hostinfo.localIndexId, now)
+	decision, _, _, _ := nc.makeTrafficDecision(hostinfo.localIndexId, now)
 	assert.Equal(t, tryRehandshake, decision)
 	assert.Equal(t, now, hostinfo.lastUsed)
 	assert.False(t, hostinfo.isPendingDeletion())
 	assert.False(t, hostinfo.sentSinceCheck())
 	assert.False(t, (hostinfo.state.Load()&stateIn != 0))
 
-	decision, _, _ = nc.makeTrafficDecision(hostinfo.localIndexId, now.Add(time.Second*5))
+	decision, _, _, _ = nc.makeTrafficDecision(hostinfo.localIndexId, now.Add(time.Second*5))
 	assert.Equal(t, doNothing, decision)
 	assert.Equal(t, now, hostinfo.lastUsed)
 	assert.False(t, hostinfo.isPendingDeletion())
@@ -348,7 +349,7 @@ func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
 	assert.False(t, (hostinfo.state.Load()&stateIn != 0))
 
 	// Do another traffic check tick, should still not be pending deletion
-	decision, _, _ = nc.makeTrafficDecision(hostinfo.localIndexId, now.Add(time.Second*10))
+	decision, _, _, _ = nc.makeTrafficDecision(hostinfo.localIndexId, now.Add(time.Second*10))
 	assert.Equal(t, doNothing, decision)
 	assert.Equal(t, now, hostinfo.lastUsed)
 	assert.False(t, hostinfo.isPendingDeletion())
@@ -358,7 +359,7 @@ func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
 	assert.Contains(t, nc.hostMap.Hosts, hostinfo.vpnAddrs[0])
 
 	// Finally advance beyond the inactivity timeout
-	decision, _, _ = nc.makeTrafficDecision(hostinfo.localIndexId, now.Add(time.Minute*10))
+	decision, _, _, _ = nc.makeTrafficDecision(hostinfo.localIndexId, now.Add(time.Minute*10))
 	assert.Equal(t, closeTunnel, decision)
 	assert.Equal(t, now, hostinfo.lastUsed)
 	assert.False(t, hostinfo.isPendingDeletion())
@@ -577,4 +578,101 @@ func (d *dummyCert) MarshalJSON() ([]byte, error) {
 
 func (d *dummyCert) Copy() cert.Certificate {
 	return d
+}
+
+// newPunchTestConnectionManager is a connection manager punching through conn, holding the tunnel from newPunchTarget
+func newPunchTestConnectionManager(t *testing.T, conn udp.Conn) (*connectionManager, *HostInfo) {
+	l := test.NewLogger()
+	hostMap := newHostMap(l)
+	hostMap.preferredRanges.Store(&[]netip.Prefix{})
+
+	lh := newTestLighthouse()
+	ifce := &Interface{
+		hostMap:          hostMap,
+		inside:           &overlaytest.NoopTun{},
+		outside:          &udp.NoopConn{},
+		firewall:         &Firewall{},
+		lightHouse:       lh,
+		pki:              &PKI{},
+		handshakeManager: NewHandshakeManager(l, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
+		l:                l,
+	}
+	ifce.pki.cs.Store(&CertState{
+		initiatingVersion: cert.Version1,
+		privateKey:        []byte{},
+		v1Cert:            &dummyCert{version: cert.Version1},
+	})
+
+	punchy := newPunchyForTest(t, map[string]any{"punch": true}, conn)
+	nc := newConnectionManagerFromConfig(l, config.NewC(l), hostMap, punchy)
+	nc.intf = ifce
+	ifce.connectionManager = nc
+
+	hostinfo := newPunchTarget()
+	hostinfo.localIndexId = 1099
+	hostinfo.remoteIndexId = 9901
+	hostinfo.ConnectionState = &ConnectionState{myCert: &dummyCert{version: cert.Version1}}
+	nc.hostMap.unlockedAddHostInfo(hostinfo, ifce)
+	return nc, hostinfo
+}
+
+// A tunnel we are not sending on gets punched whether or not it is receiving, the punch is the only thing that
+// would notice its remote has become unreachable.
+func Test_makeTrafficDecision_punchesWhenNotSending(t *testing.T) {
+	nc, hostinfo := newPunchTestConnectionManager(t, &recordingConn{})
+	now := time.Now()
+
+	// Receiving but not sending
+	hostinfo.takeTraffic()
+	nc.In(hostinfo)
+	decision, _, _, punch := nc.makeTrafficDecision(hostinfo.localIndexId, now)
+	assert.Equal(t, tryRehandshake, decision)
+	assert.Same(t, hostinfo, punch)
+
+	// Sending and receiving, our own traffic keeps the NAT state alive
+	nc.Out(hostinfo)
+	nc.In(hostinfo)
+	decision, _, _, punch = nc.makeTrafficDecision(hostinfo.localIndexId, now)
+	assert.Equal(t, tryRehandshake, decision)
+	assert.Nil(t, punch)
+
+	// Unused
+	decision, decided, _, punch := nc.makeTrafficDecision(hostinfo.localIndexId, now)
+	assert.Equal(t, doNothing, decision)
+	assert.Nil(t, decided, "an unused tunnel has no relay usage to reset")
+	assert.Same(t, hostinfo, punch)
+
+	// Sending but not receiving gets a test packet instead, which finds an unreachable remote on its own
+	nc.Out(hostinfo)
+	decision, _, _, punch = nc.makeTrafficDecision(hostinfo.localIndexId, now)
+	assert.Equal(t, sendTestPacket, decision)
+	assert.Nil(t, punch)
+}
+
+func Test_sendPunch_probesWhenRemoteUnreachable(t *testing.T) {
+	t.Run("unreachable", func(t *testing.T) {
+		conn := &recordingConn{fail: map[netip.AddrPort]error{punchTargetV6: errNoRoute}}
+		nc, hostinfo := newPunchTestConnectionManager(t, conn)
+
+		nc.sendPunch(hostinfo)
+		assert.Equal(t, []netip.AddrPort{punchTargetV6}, conn.wrote)
+		assert.NotZero(t, hostinfo.nextUnreachableProbe.Load(), "the tunnel should have probed its other remotes")
+	})
+
+	t.Run("delivered", func(t *testing.T) {
+		conn := &recordingConn{}
+		nc, hostinfo := newPunchTestConnectionManager(t, conn)
+
+		nc.sendPunch(hostinfo)
+		assert.Equal(t, []netip.AddrPort{punchTargetV6}, conn.wrote)
+		assert.Zero(t, hostinfo.nextUnreachableProbe.Load())
+	})
+
+	t.Run("other failure", func(t *testing.T) {
+		conn := &recordingConn{fail: map[netip.AddrPort]error{punchTargetV6: io.ErrShortWrite}}
+		nc, hostinfo := newPunchTestConnectionManager(t, conn)
+
+		nc.sendPunch(hostinfo)
+		assert.Zero(t, hostinfo.nextUnreachableProbe.Load(), "only a missing route says to look elsewhere")
+	})
 }

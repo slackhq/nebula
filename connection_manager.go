@@ -14,6 +14,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/udp"
 )
 
 type trafficDecision int
@@ -171,7 +172,7 @@ func (cm *connectionManager) Start(ctx context.Context) {
 }
 
 func (cm *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte, now time.Time) {
-	decision, hostinfo, primary := cm.makeTrafficDecision(localIndex, now)
+	decision, hostinfo, primary, punch := cm.makeTrafficDecision(localIndex, now)
 
 	switch decision {
 	case deleteTunnel:
@@ -196,6 +197,20 @@ func (cm *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte
 	}
 
 	cm.resetRelayTrafficCheck(hostinfo)
+
+	if punch != nil {
+		cm.sendPunch(punch)
+	}
+}
+
+// sendPunch keeps a tunnel's NAT state alive when we are not sending on it. When we have no route to its remote any
+// more, typically after moving to a network without that address family, the tunnel probes its other remotes so the
+// peer roams over to us. Nothing else would notice, a tunnel we are not sending on has nothing else that could fail.
+func (cm *connectionManager) sendPunch(hostinfo *HostInfo) {
+	remote, err := cm.punchy.SendPunch(hostinfo)
+	if udp.IsUnreachable(err) {
+		hostinfo.remoteUnreachable(cm.intf, remote)
+	}
 }
 
 func (cm *connectionManager) resetRelayTrafficCheck(hostinfo *HostInfo) {
@@ -313,7 +328,9 @@ func (cm *connectionManager) migrateRelayUsed(oldhostinfo, newhostinfo *HostInfo
 	}
 }
 
-func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Time) (trafficDecision, *HostInfo, *HostInfo) {
+// makeTrafficDecision decides what to do with a tunnel under the hostmap lock. It also returns the tunnel to punch when
+// we are not sending on it, for the caller to send once the lock is released.
+func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Time) (trafficDecision, *HostInfo, *HostInfo, *HostInfo) {
 	// Read lock the main hostmap to order decisions based on tunnels being the primary tunnel
 	cm.hostMap.RLock()
 	defer cm.hostMap.RUnlock()
@@ -321,17 +338,17 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 	hostinfo := cm.hostMap.Indexes[localIndex]
 	if hostinfo == nil {
 		cm.l.Debug("Not found in hostmap", "localIndex", localIndex)
-		return doNothing, nil, nil
+		return doNothing, nil, nil, nil
 	}
 
 	if cm.isInvalidCertificate(now, hostinfo) {
-		return closeTunnel, hostinfo, nil
+		return closeTunnel, hostinfo, nil, nil
 	}
 
 	if hostinfo.ConnectionState != nil && hostinfo.ConnectionState.messageCounter.Load() >= RejectAfterMessages {
 		// Send path can't encrypt a CloseTunnel notify, so just delete locally; the peer recovers via recv_error.
 		hostinfo.logger(cm.l).Error("Dropping tunnel, message counter is exhausted")
-		return deleteTunnel, hostinfo, nil
+		return deleteTunnel, hostinfo, nil, nil
 	}
 
 	primary := cm.hostMap.Hosts[hostinfo.vpnAddrs[0]]
@@ -368,10 +385,10 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 
 		if !outTraffic {
 			// Send a punch packet to keep the NAT state alive
-			cm.punchy.SendPunch(hostinfo)
+			return decision, hostinfo, primary, hostinfo
 		}
 
-		return decision, hostinfo, primary
+		return decision, hostinfo, primary, nil
 	}
 
 	if hostinfo.isPendingDeletion() {
@@ -380,7 +397,7 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 			"tunnelCheck", m{"state": "dead", "method": "active"},
 		)
 
-		return deleteTunnel, hostinfo, nil
+		return deleteTunnel, hostinfo, nil, nil
 	}
 
 	decision := doNothing
@@ -394,14 +411,13 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 					"primary", mainHostInfo,
 				)
 
-				return closeTunnel, hostinfo, primary
+				return closeTunnel, hostinfo, primary, nil
 			}
 
 			// If we aren't sending or receiving traffic then its an unused tunnel and we don't to test the tunnel.
 			// Just maintain NAT state if configured to do so.
-			cm.punchy.SendPunch(hostinfo)
 			cm.trafficTimer.Add(hostinfo.localIndexId, cm.checkInterval)
-			return doNothing, nil, nil
+			return doNothing, nil, nil, hostinfo
 		}
 
 		// We aren't receiving traffic but we are sending it. The outbound
@@ -427,7 +443,7 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 
 	hostinfo.setPendingDeletion(true)
 	cm.trafficTimer.Add(hostinfo.localIndexId, cm.pendingDeletionInterval)
-	return decision, hostinfo, nil
+	return decision, hostinfo, nil, nil
 }
 
 func (cm *connectionManager) isInactive(hostinfo *HostInfo, now time.Time) (time.Duration, bool) {

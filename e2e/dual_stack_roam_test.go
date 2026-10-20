@@ -31,6 +31,8 @@ func TestDualStackRoamToV4Only(t *testing.T) {
 		{name: "peer sends", themSends: true},
 		{name: "peer sends, rebind", themSends: true, rebind: true},
 		{name: "peer sends, lh over v4", themSends: true, lhOverV4: true},
+		{name: "peer sends, punchy", themSends: true, punchy: true},
+		{name: "peer sends, punchy all", themSends: true, punchy: true, punchAll: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -51,6 +53,8 @@ type dualStackRoamCase struct {
 	// simultaneous has both sides initiate at once at the office, which can leave each side a different primary
 	// tunnel for the other
 	simultaneous bool
+	// punchy turns on punchy.punch everywhere, punchAll adds punchy.target_all_remotes
+	punchy, punchAll bool
 }
 
 func fmtRecovery(d time.Duration) string {
@@ -114,6 +118,10 @@ func measureDualStackRoam(t *testing.T, tc dualStackRoamCase) (time.Duration, ti
 		"timers": m{
 			"connection_alive_interval": 5,
 			"pending_deletion_interval": 10,
+		},
+		"punchy": m{
+			"punch":              tc.punchy,
+			"target_all_remotes": tc.punchAll,
 		},
 	}
 
