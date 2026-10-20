@@ -832,6 +832,11 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 	t.routeTree.Store(newTree)
 }
 
+// Shutdown wakes the tun readers without releasing their fds, Close releases them
+func (t *tun) Shutdown() error {
+	return t.readers.Shutdown()
+}
+
 func (t *tun) Close() error {
 	t.closeLock.Lock()
 	defer t.closeLock.Unlock()

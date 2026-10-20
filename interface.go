@@ -124,6 +124,8 @@ type Interface struct {
 	// reused (every udp.Conn ListenOut guarantees that ordering).
 	batchers []*batch.MultiCoalescer
 	wg       sync.WaitGroup
+	// readers covers just the listenIn and listenOut goroutines, wg also holds the construction token Close releases
+	readers sync.WaitGroup
 
 	udpTxErrLimiter      *ratelimit.Limiter // udp direct transmit error log limiter
 	udpRelayTxErrLimiter *ratelimit.Limiter // udp relay transmit error log limiter
@@ -341,14 +343,18 @@ func (f *Interface) activate() error {
 func (f *Interface) run() {
 	// Launch n queues to read packets from udp
 	for i := 0; i < f.routines; i++ {
+		f.readers.Add(1)
 		f.wg.Go(func() {
+			defer f.readers.Done()
 			f.listenOut(i)
 		})
 	}
 
 	// Launch n queues to read packets from tun dev
 	for i := 0; i < f.routines; i++ {
+		f.readers.Add(1)
 		f.wg.Go(func() {
+			defer f.readers.Done()
 			f.listenIn(f.queues[i], i)
 		})
 	}
@@ -683,6 +689,14 @@ func (f *Interface) GetCertState() *CertState {
 	return f.pki.getCertState()
 }
 
+// shutdowner is a udp.Conn or overlay.Device whose readers can be woken without releasing their fds
+type shutdowner interface {
+	Shutdown() error
+}
+
+// readerShutdownTimeout bounds how long Close waits on woken readers before releasing their fds anyway
+const readerShutdownTimeout = 5 * time.Second
+
 // Close releases the interface's resources: the udp sockets and the tun device.
 // It is idempotent and safe to call at any point in the lifecycle, including on an interface that never activated,
 // calls after the first return nil without doing anything.
@@ -692,20 +706,55 @@ func (f *Interface) Close() error {
 	}
 
 	var errs []error
-
-	// Release the udp readers
-	for i, u := range f.writers {
-		err := u.Close()
-		if err != nil {
+	closeUdp := func(i int, u udp.Conn) {
+		if err := u.Close(); err != nil {
 			f.l.Error("Error while closing udp socket", "error", err, "writer", i)
 			errs = append(errs, err)
 		}
 	}
+	closeTun := func() {
+		if err := f.inside.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
 
-	// Release the tun device (closing the tun also closes all readers)
-	closeErr := f.inside.Close()
-	if closeErr != nil {
-		errs = append(errs, closeErr)
+	// Wake every reader before releasing any fd, one that loops back into a syscall on a reused fd number never wakes.
+	// Anything without Shutdown is closed right away, as before.
+	var deferred []func()
+	for i, u := range f.writers {
+		if s, ok := u.(shutdowner); ok {
+			if err := s.Shutdown(); err != nil {
+				f.l.Error("Error while shutting down udp socket", "error", err, "writer", i)
+				errs = append(errs, err)
+			}
+			deferred = append(deferred, func() { closeUdp(i, u) })
+		} else {
+			closeUdp(i, u)
+		}
+	}
+	if s, ok := f.inside.(shutdowner); ok {
+		if err := s.Shutdown(); err != nil {
+			errs = append(errs, err)
+		}
+		deferred = append(deferred, closeTun)
+	} else {
+		closeTun()
+	}
+
+	if len(deferred) > 0 {
+		readersDone := make(chan struct{})
+		go func() {
+			f.readers.Wait()
+			close(readersDone)
+		}()
+		select {
+		case <-readersDone:
+		case <-time.After(readerShutdownTimeout):
+			f.l.Warn("Readers did not stop, closing their fds anyway", "timeout", readerShutdownTimeout)
+		}
+		for _, closeFn := range deferred {
+			closeFn()
+		}
 	}
 
 	// Release the construction token so waiters know the resources are gone

@@ -255,6 +255,10 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 	msgs, buffers, names, _ := prepareRawMessages(u.batch, bufSize, cmsgSpace)
 
 	for {
+		// A shut down socket still queues and returns datagrams, a busy reader would never see an empty read
+		if u.closed.Load() {
+			return net.ErrClosed
+		}
 		if cmsgSpace > 0 {
 			for i := range msgs {
 				setMsgControllen(&msgs[i].Hdr, cmsgSpace)
@@ -446,12 +450,16 @@ func (u *StdConn) getMemInfo(meminfo *[unix.SK_MEMINFO_VARS]uint32) error {
 	return nil
 }
 
-func (u *StdConn) Close() error {
+// Shutdown wakes the reader without releasing the fd, Close only once it has exited
+func (u *StdConn) Shutdown() error {
 	u.closed.Store(true)
-	// Wake the reader parked in recvmmsg. shutdown(2) on an unconnected socket
-	// returns ENOTCONN but still wakes it, so ignore the error.
-	// The reader then sees closed and stops touching the fd, making the Close below safe.
+	// shutdown(2) on an unconnected socket returns ENOTCONN but still wakes the reader, so ignore the error
 	_ = unix.Shutdown(u.sysFd, unix.SHUT_RDWR)
+	return nil
+}
+
+func (u *StdConn) Close() error {
+	_ = u.Shutdown()
 	return unix.Close(u.sysFd)
 }
 

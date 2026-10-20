@@ -13,7 +13,9 @@ import (
 type Poll struct {
 	fd         int
 	shutdownFd int
-	closed     atomic.Bool
+	// shutdown is set before shutdownFd is signaled, a busy reader never polls to see that
+	shutdown atomic.Bool
+	closed   atomic.Bool
 
 	readBuf  []byte
 	batchRet [1]Packet
@@ -52,6 +54,9 @@ func (t *Poll) blockOnWrite() error {
 // config currently lose that batching. blockOn and the EAGAIN plumbing are
 // already shared; kept one-packet-per-Read for now to preserve behavior.
 func (t *Poll) Read() ([]Packet, error) {
+	if t.shutdown.Load() {
+		return nil, os.ErrClosed
+	}
 	n, err := t.readOne(t.readBuf)
 	if err != nil {
 		return nil, err

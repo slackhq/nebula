@@ -16,6 +16,7 @@ type pollQueueSet struct {
 	// pqi is exactly the same as pq, but stored as the interface type
 	pqi        []Queue
 	shutdownFd int
+	shutdown   atomic.Bool
 	closed     atomic.Bool
 }
 
@@ -59,6 +60,17 @@ func (c *pollQueueSet) wakeForShutdown() error {
 	return err
 }
 
+// Shutdown wakes every reader without releasing any fds, they see POLLIN on the eventfd and return os.ErrClosed
+func (c *pollQueueSet) Shutdown() error {
+	if c.shutdown.Swap(true) {
+		return nil
+	}
+	for _, x := range c.pq {
+		x.shutdown.Store(true)
+	}
+	return c.wakeForShutdown()
+}
+
 func (c *pollQueueSet) Close() error {
 	if c.closed.Swap(true) {
 		return nil
@@ -66,9 +78,7 @@ func (c *pollQueueSet) Close() error {
 
 	errs := []error{}
 
-	// Signal all readers blocked in poll to wake up and exit.
-	// They observe POLLIN on the shutdown eventfd and return os.ErrClosed.
-	if err := c.wakeForShutdown(); err != nil {
+	if err := c.Shutdown(); err != nil {
 		errs = append(errs, err)
 	}
 

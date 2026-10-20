@@ -7,6 +7,8 @@ import (
 // QueueSet holds one or many Queue objects and helps close them in an orderly way.
 type QueueSet interface {
 	io.Closer
+	// Shutdown wakes every reader without releasing any fds, Close only once they have exited
+	Shutdown() error
 	Queues() []Queue
 
 	// Add takes a tun fd, adds it to the set, and prepares it for use as a Queue.

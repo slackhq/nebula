@@ -223,3 +223,30 @@ func TestOffloadQueueSet_Close_ClosesShutdownFd(t *testing.T) {
 	// Second Close must not touch fds (shutdownFd is now -1) and must return nil.
 	require.NoError(t, qs.Close())
 }
+
+// A busy reader never polls the shutdown eventfd, so Read has to stop on its own with data still waiting
+func TestQueueSet_ShutdownStopsReaderWithDataWaiting(t *testing.T) {
+	sets := map[string]func() (QueueSet, error){
+		"poll":    NewPollQueueSet,
+		"offload": func() (QueueSet, error) { return NewOffloadQueueSet(false, slog.New(slog.DiscardHandler)) },
+	}
+	for name, newSet := range sets {
+		t.Run(name, func(t *testing.T) {
+			var fds [2]int
+			require.NoError(t, unix.Pipe2(fds[:], unix.O_CLOEXEC))
+			t.Cleanup(func() { _ = unix.Close(fds[1]) })
+
+			qs, err := newSet()
+			require.NoError(t, err)
+			require.NoError(t, qs.Add(fds[0]))
+			t.Cleanup(func() { _ = qs.Close() })
+
+			_, err = unix.Write(fds[1], make([]byte, 64))
+			require.NoError(t, err)
+			require.NoError(t, qs.Shutdown())
+
+			_, err = qs.Queues()[0].Read()
+			require.ErrorIs(t, err, os.ErrClosed)
+		})
+	}
+}

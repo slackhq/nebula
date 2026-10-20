@@ -20,6 +20,7 @@ type offloadQueueSet struct {
 	// usoEnabled is true when newTun successfully negotiated TUN_F_USO4|6 with the kernel.
 	// Queues created by Add inherit this and surface it via Offload.USOSupported so coalescers can gate USO emission.
 	usoEnabled bool
+	shutdown   atomic.Bool
 	closed     atomic.Bool
 	// l is handed to each queue for its bad-vnet-header drop logging.
 	l *slog.Logger
@@ -69,6 +70,17 @@ func (c *offloadQueueSet) wakeForShutdown() error {
 	return err
 }
 
+// Shutdown wakes every reader without releasing any fds, they see POLLIN on the eventfd and return os.ErrClosed
+func (c *offloadQueueSet) Shutdown() error {
+	if c.shutdown.Swap(true) {
+		return nil
+	}
+	for _, x := range c.pq {
+		x.shutdown.Store(true)
+	}
+	return c.wakeForShutdown()
+}
+
 func (c *offloadQueueSet) Close() error {
 	if c.closed.Swap(true) {
 		return nil
@@ -76,9 +88,7 @@ func (c *offloadQueueSet) Close() error {
 
 	errs := []error{}
 
-	// Signal all readers blocked in poll to wake up and exit.
-	// They observe POLLIN on the shutdown eventfd and return os.ErrClosed.
-	if err := c.wakeForShutdown(); err != nil {
+	if err := c.Shutdown(); err != nil {
 		errs = append(errs, err)
 	}
 
