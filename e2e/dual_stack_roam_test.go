@@ -47,18 +47,24 @@ func TestDualStackRoamToV4Only(t *testing.T) {
 // TestDualStackRoamRecovers holds the line TestDualStackRoamToV4Only measures: a tunnel whose remote became unreachable
 // moves to the peer's other address instead of waiting out the connection manager to rehandshake, which takes 20s.
 func TestDualStackRoamRecovers(t *testing.T) {
-	for _, tc := range []dualStackRoamCase{
-		{name: "both send", meSends: true, themSends: true},
-		{name: "laptop sends, peer NAT", meSends: true, peerNAT: true},
+	for _, tc := range []struct {
+		dualStackRoamCase
+		// within bounds recovery in each direction that has traffic
+		within time.Duration
+	}{
+		// Measures 0.4s. Under the 5s connection manager check, so it fails if the data path stops probing.
+		{dualStackRoamCase{name: "both send", meSends: true, themSends: true}, 2 * time.Second},
+		// Measures 2.6s or 3.8s, depending on whether a probe beats the peer's punch. Half the 20s it used to take.
+		{dualStackRoamCase{name: "laptop sends, peer NAT", meSends: true, peerNAT: true}, 10 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			fwd, rev := measureDualStackRoam(t, tc)
-			if fwd == 0 || fwd > 5*time.Second {
-				t.Errorf("laptop->peer recovered in %v, want within 5s", fmtRecovery(fwd))
+			fwd, rev := measureDualStackRoam(t, tc.dualStackRoamCase)
+			if fwd == 0 || fwd > tc.within {
+				t.Errorf("laptop->peer recovered in %v, want within %v", fmtRecovery(fwd), tc.within)
 			}
-			if tc.themSends && (rev == 0 || rev > 5*time.Second) {
-				t.Errorf("peer->laptop recovered in %v, want within 5s", fmtRecovery(rev))
+			if tc.themSends && (rev == 0 || rev > tc.within) {
+				t.Errorf("peer->laptop recovered in %v, want within %v", fmtRecovery(rev), tc.within)
 			}
 		})
 	}

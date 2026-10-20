@@ -805,6 +805,13 @@ func (i *HostInfo) remoteUnreachable(ifce *Interface, dead netip.AddrPort) {
 		ifce.sendTo(header.Test, header.TestRequest, i.ConnectionState, i, addr, []byte(""), nb, out)
 	})
 
+	if ifce.l.Enabled(context.Background(), slog.LevelDebug) {
+		i.logger(ifce.l).Debug("Remote unreachable, probing other remotes",
+			"udpAddr", dead,
+			"probed", probed,
+		)
+	}
+
 	if probed == 0 {
 		// With nothing else to try, the lighthouse is our only way to learn of another remote. The peer may not have
 		// one, so ask on the usual requery schedule rather than every probe for as long as the tunnel sits here.
@@ -813,6 +820,11 @@ func (i *HostInfo) remoteUnreachable(ifce *Interface, dead netip.AddrPort) {
 		}
 		i.nextLHQuery.Store(now + ifce.reQueryWait.Load())
 	}
+
+	// With other remotes to probe we ask on every probe, without backing off. A repeat re-sends the peer its punch
+	// notification in case the last one or its punches were lost. If the tunnel stays up on inbound traffic while
+	// our sends to its remote keep failing (only one direction broken), this continues once a second for as long as
+	// that lasts. That is a bounded cost for a rare state, and the probe that would clear it has to keep running.
 	ifce.lightHouse.QueryServer(i.vpnAddrs[0])
 }
 
