@@ -497,11 +497,10 @@ func (r *R) RouteUntilTxTun(sender *nebula.Control, receiver *nebula.Control) []
 		// Nope, lets push the sender along
 		case p := <-udpTx:
 			r.Lock()
-			a := sender.GetUDPAddr()
-			c := r.getControl(a, p.To, p)
+			c := r.getControl(p)
 			if c == nil {
 				r.Unlock()
-				panic("No control for udp tx " + a.String())
+				panic("No control for udp tx " + p.To.String())
 			}
 			fp := r.unlockedInjectFlow(sender, c, p, false)
 			c.InjectUDPPacket(p) // copies internally; original is ours to release
@@ -622,8 +621,7 @@ func (r *R) stopFanInWorkers() {
 func (r *R) routeUDP(from *nebula.Control, p *udp.Packet) {
 	r.Lock()
 	defer r.Unlock()
-	a := from.GetUDPAddr()
-	c := r.getControl(a, p.To, p)
+	c := r.getControl(p)
 	if c == nil {
 		panic(fmt.Sprintf("No control for udp tx %s", p.To))
 	}
@@ -671,7 +669,7 @@ func (r *R) RouteExitFunc(sender *nebula.Control, whatDo ExitFunc) {
 			panic(err)
 		}
 
-		receiver := r.getControl(sender.GetUDPAddr(), p.To, p)
+		receiver := r.getControl(p)
 		if receiver == nil {
 			r.Unlock()
 			panic("Can't RouteExitFunc for host: " + p.To.String())
@@ -767,7 +765,7 @@ func (r *R) RouteForAllExitFuncOrTimeout(timeout time.Duration, whatDo ExitFunc)
 
 		r.Lock()
 		p := rx.Interface().(*udp.Packet)
-		receiver := r.getControl(cm[x].GetUDPAddr(), p.To, p)
+		receiver := r.getControl(p)
 		if receiver == nil {
 			r.Unlock()
 			panic("Can't RouteForAllExitFuncOrTimeout for host: " + p.To.String())
@@ -876,7 +874,7 @@ func (r *R) RouteForAllExitFunc(whatDo ExitFunc) {
 		r.Lock()
 
 		p := rx.Interface().(*udp.Packet)
-		receiver := r.getControl(cm[x].GetUDPAddr(), p.To, p)
+		receiver := r.getControl(p)
 		if receiver == nil {
 			r.Unlock()
 			panic("Can't RouteForAllExitFunc for host: " + p.To.String())
@@ -939,7 +937,7 @@ func (r *R) FlushAll() {
 	})
 
 	for {
-		x, rx, ok := reflect.Select(sc)
+		_, rx, ok := reflect.Select(sc)
 		if !ok {
 			return
 		}
@@ -947,7 +945,7 @@ func (r *R) FlushAll() {
 
 		p := rx.Interface().(*udp.Packet)
 
-		receiver := r.getControl(cm[x].GetUDPAddr(), p.To, p)
+		receiver := r.getControl(p)
 		if receiver == nil {
 			r.Unlock()
 			panic("Can't FlushAll for host: " + p.To.String())
@@ -958,9 +956,11 @@ func (r *R) FlushAll() {
 	}
 }
 
-// getControl performs or seeds NAT translation and returns the control for toAddr, p from fields may change
+// getControl performs or seeds NAT translation and returns the control for p.To, p from fields may change
 // This is an internal router function, the caller must hold the lock
-func (r *R) getControl(fromAddr, toAddr netip.AddrPort, p *udp.Packet) *nebula.Control {
+func (r *R) getControl(p *udp.Packet) *nebula.Control {
+	// Key on the address the packet actually left from, a dual stack sender has one per family
+	fromAddr, toAddr := p.From, p.To
 	if newAddr, ok := r.outNat[outNatKey{from: fromAddr, to: toAddr}]; ok {
 		p.From = newAddr
 	}

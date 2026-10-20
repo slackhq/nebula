@@ -264,6 +264,9 @@ type HostInfo struct {
 	// This is used to limit lighthouse re-queries in chatty clients
 	nextLHQuery atomic.Int64
 
+	// nextUnreachableProbe is the earliest we will probe our other remotes again after failing to reach the current one
+	nextUnreachableProbe atomic.Int64
+
 	// lastHandshakeTime records the time the remote side told us about at the stage when the handshake was completed locally
 	// Stage 1 packet will contain it if I am a responder, stage 2 packet if I am an initiator
 	// This is used to avoid an attack where a handshake packet is replayed after some time
@@ -764,6 +767,33 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []netip.Prefix, ifce *Interfac
 		i.nextLHQuery.Store(now + ifce.reQueryWait.Load())
 		ifce.lightHouse.QueryServer(i.vpnAddrs[0])
 	}
+}
+
+// unreachableProbeInterval bounds how often a tunnel whose remote we cannot reach probes its other remotes
+const unreachableProbeInterval = time.Second
+
+// remoteUnreachable is called when a send to our current remote failed because we have no route to it, typically
+// after moving to a network without that address family. Sends a test packet to every other remote we know for this
+// host: the first one that arrives roams the peer over to wherever we are now, and its reply roams us onto that path.
+func (i *HostInfo) remoteUnreachable(ifce *Interface, dead netip.AddrPort) {
+	if i.remotes == nil || i.ConnectionState == nil {
+		return
+	}
+
+	now := time.Now().UnixNano()
+	next := i.nextUnreachableProbe.Load()
+	if now < next || !i.nextUnreachableProbe.CompareAndSwap(next, now+int64(unreachableProbeInterval)) {
+		return
+	}
+
+	nb := make([]byte, 12)
+	out := make([]byte, mtu)
+	i.remotes.ForEach(ifce.hostMap.GetPreferredRanges(), func(addr netip.AddrPort, _ bool) {
+		if addr == dead {
+			return
+		}
+		ifce.sendTo(header.Test, header.TestRequest, i.ConnectionState, i, addr, []byte(""), nb, out)
+	})
 }
 
 // Bits within HostInfo.state, everything above stateEpochShift is the epoch

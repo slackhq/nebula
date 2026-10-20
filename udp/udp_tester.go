@@ -6,10 +6,12 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net"
 	"net/netip"
 	"os"
 	"sync"
 	"sync/atomic"
+	"syscall"
 
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
@@ -63,10 +65,19 @@ func acquirePacket() *Packet {
 	}
 }
 
+// testerAddrs is where a TesterConn sends from. A single address host sends everything from addr, whatever the
+// destination. A dual stack host sends from the address matching the destination's family and has no route at all
+// for a family it holds no address in.
+type testerAddrs struct {
+	addr   netip.AddrPort
+	v4, v6 netip.AddrPort
+	dual   bool
+}
+
 type TesterConn struct {
-	// addr is read by nebula's own goroutines on every send and by the router's flow renderer, and a test can
+	// addrs is read by nebula's own goroutines on every send and by the router's flow renderer, and a test can
 	// move it mid-run to simulate roaming, so it is atomic rather than a plain field.
-	addr atomic.Pointer[netip.AddrPort]
+	addrs atomic.Pointer[testerAddrs]
 
 	RxPackets chan *Packet // Packets to receive into nebula
 	TxPackets chan *Packet // Packets transmitted outside by nebula
@@ -94,14 +105,45 @@ func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 	return c, nil
 }
 
-// GetAddr returns the underlay address this conn currently sends from.
+// GetAddr returns the underlay address this conn currently sends from. For a dual stack conn that is the IPv4
+// address, or the IPv6 one when there is no IPv4 service.
 func (u *TesterConn) GetAddr() netip.AddrPort {
-	return *u.addr.Load()
+	return u.addrs.Load().addr
 }
 
 // SetAddr moves this conn to a new underlay address, standing in for a host waking up on a different network.
 func (u *TesterConn) SetAddr(addr netip.AddrPort) {
-	u.addr.Store(&addr)
+	u.addrs.Store(&testerAddrs{addr: addr})
+}
+
+// SetDualStackAddrs gives this conn one underlay address per family, standing in for a host whose routing table picks
+// the source by destination. Pass an invalid AddrPort for a family the network does not offer, sends to that family
+// then fail with ENETUNREACH like they would on a host with no route for it.
+func (u *TesterConn) SetDualStackAddrs(v4, v6 netip.AddrPort) {
+	a := &testerAddrs{v4: v4, v6: v6, dual: true}
+	if v4.IsValid() {
+		a.addr = v4
+	} else {
+		a.addr = v6
+	}
+	u.addrs.Store(a)
+}
+
+// sourceFor returns the address a send to dst leaves from
+func (u *TesterConn) sourceFor(dst netip.AddrPort) (netip.AddrPort, error) {
+	a := u.addrs.Load()
+	if !a.dual {
+		return a.addr, nil
+	}
+
+	src := a.v6
+	if dst.Addr().Unmap().Is4() {
+		src = a.v4
+	}
+	if !src.IsValid() {
+		return netip.AddrPort{}, &net.OpError{Op: "write", Net: "udp", Addr: net.UDPAddrFromAddrPort(dst), Err: syscall.ENETUNREACH}
+	}
+	return src, nil
 }
 
 // Send will place a UdpPacket onto the receive queue for nebula to consume
@@ -153,6 +195,11 @@ func (u *TesterConn) Get(block bool) *Packet {
 //********************************************************************************************************************//
 
 func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
+	from, err := u.sourceFor(addr)
+	if err != nil {
+		return err
+	}
+
 	p := acquirePacket()
 	if cap(p.Data) < len(b) {
 		p.Data = make([]byte, len(b))
@@ -160,7 +207,7 @@ func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
 		p.Data = p.Data[:len(b)]
 	}
 	copy(p.Data, b)
-	p.From = u.GetAddr()
+	p.From = from
 	p.To = addr
 	select {
 	case <-u.done:
