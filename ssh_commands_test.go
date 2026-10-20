@@ -115,5 +115,5 @@ func TestInfoAPISurface(t *testing.T) {
 		}
 	}
 
-	assert.ElementsMatch(t, []commands.Name{commands.Identity, commands.Whoami}, served)
+	assert.ElementsMatch(t, []commands.Name{commands.PrintCert, commands.Identity, commands.Whoami}, served)
 }

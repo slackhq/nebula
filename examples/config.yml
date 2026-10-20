@@ -262,6 +262,9 @@ punchy:
   #                                               is ignored. 404 when no tunnel is
   #                                               up, 400 when no address is given.
   #   GET /v1/whoami                              this node's identity
+  #   GET /v1/print-cert?address=<vpn addr>[:port]&raw=true
+  #                                               the certificate for the specified
+  #                                               address, as {"pem": ...}.
   #   GET /v1                                     describes what is served
   #
   # NB: unless a connection arrived on the nebula interface, there's no guarantee

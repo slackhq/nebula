@@ -100,8 +100,10 @@ log-level
     	pretty prints json, assumes -json
 print-cert
   short: Prints the current certificate being used or the certificate for the provided vpn addr
-  help: 
+  help: The vpn addr is an operand or -address, which may carry a port so a connection's remote address can be passed through as is. For a peer it is the certificate nebula verified when the tunnel came up; with no address it is this node's own, the v2 certificate when both versions are loaded. -raw prints the PEM.
   flags:
+  -address string
+    	The vpn addr to look up, optionally with a port
   -raw
     	prints the PEM encoded certificate; with -json, an object holding it
   -json

@@ -28,6 +28,17 @@ type listHostMapFlags struct {
 
 type printCertFlags struct {
 	Raw bool
+
+	// Address is the -address form of the vpn addr, which the info API needs since a
+	// query string has no operands; see identityFlags for why presence is recorded.
+	Address    string
+	addressSet bool
+}
+
+func (f *printCertFlags) setAddress(v string) error {
+	f.Address = v
+	f.addressSet = true
+	return nil
 }
 
 type changeRemoteFlags struct {
@@ -176,9 +187,12 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 	reg.Register(commands.Flagged(&commands.Command{
 		Name:             commands.PrintCert,
 		ShortDescription: "Prints the current certificate being used or the certificate for the provided vpn addr",
+		Help:             "The vpn addr is an operand or -address, which may carry a port so a connection's remote address can be passed through as is. For a peer it is the certificate nebula verified when the tunnel came up; with no address it is this node's own, the v2 certificate when both versions are loaded. -raw prints the PEM.",
+		Identity:         true,
 		Text:             textPrintCert,
 	}, func(fl *flag.FlagSet, s *printCertFlags) {
 		fl.BoolVar(&s.Raw, "raw", false, "prints the PEM encoded certificate; with -json, an object holding it")
+		fl.Func("address", "The vpn addr to look up, optionally with a port", s.setAddress)
 	}, func(s *printCertFlags, a []string) (commands.Result, error) {
 		return runPrintCert(f, s, a)
 	}))
@@ -513,20 +527,39 @@ func textLogFormat(fi logFormatInfo, w io.Writer) error {
 	return err
 }
 
+// runPrintCert prints a certificate: this node's own, or the one the host owning a vpn
+// addr presented. The addr is an operand, as it always was over ssh, or -address, which
+// is how the info API names it, and an address of our own answers with our own
+// certificate as identity does. A tunnel still handshaking, or one being torn down, has
+// no certificate and is reported as not found.
 func runPrintCert(ifce *Interface, args *printCertFlags, a []string) (commands.Result, error) {
+	if len(a) > 0 && args.addressSet {
+		return commands.Failed("print-cert takes one vpn addr, as -address or as an operand, not both"), nil
+	}
 
-	c := ifce.pki.getCertState().GetDefaultCertificate()
-	if len(a) > 0 {
-		hostInfo, res, ok := tunnelOperand(ifce, a, "vpn addr")
+	cs := ifce.pki.getCertState()
+	var c cert.Certificate
+	switch {
+	case len(a) > 0:
+		vpnAddr, res, ok := vpnAddrOperand(a, "vpn addr")
 		if !ok {
 			return res, nil
 		}
-		// A tunnel still handshaking, or one being torn down, has no certificate.
-		cc := hostInfo.GetCert()
-		if cc == nil {
-			return commands.Failed("Could not find tunnel for vpn addr: %v", a[0]), nil
+		if c, _ = findCertificateForVpnAddr(cs, ifce.hostMap, vpnAddr); c == nil {
+			return commands.NotFound("Could not find tunnel for vpn addr: %v", a[0]), nil
 		}
-		c = cc.Certificate
+	case args.addressSet:
+		vpnAddr, err := parseVpnAddrWithOptionalPort(args.Address)
+		if err != nil {
+			return commands.Failed("The provided vpn addr could not be parsed: %s", args.Address), nil
+		}
+		if c, _ = findCertificateForVpnAddr(cs, ifce.hostMap, vpnAddr); c == nil {
+			return commands.NotFound("Could not find tunnel for vpn addr: %v", args.Address), nil
+		}
+	default:
+		if c = ownCertificate(cs); c == nil {
+			return commands.Failed("No certificate is loaded"), nil
+		}
 	}
 
 	if args.Raw {

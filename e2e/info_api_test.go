@@ -64,11 +64,12 @@ func TestIdentityOverTheInfoAPI(t *testing.T) {
 	assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
 
 	type identity struct {
-		Name     string         `json:"name"`
-		VpnAddrs []netip.Addr   `json:"vpnAddrs"`
-		Networks []netip.Prefix `json:"networks"`
-		Groups   []string       `json:"groups"`
-		Issuer   string         `json:"issuer"`
+		Name        string         `json:"name"`
+		VpnAddrs    []netip.Addr   `json:"vpnAddrs"`
+		Networks    []netip.Prefix `json:"networks"`
+		Groups      []string       `json:"groups"`
+		Issuer      string         `json:"issuer"`
+		Fingerprint string         `json:"fingerprint"`
 	}
 
 	// A connection's RemoteAddr, port and all, resolves to the peer.
@@ -101,6 +102,30 @@ func TestIdentityOverTheInfoAPI(t *testing.T) {
 	status, body = test.HTTPGet(t, path, "/v1/identity?address=")
 	assert.Equal(t, http.StatusBadRequest, status)
 	assert.JSONEq(t, `{"error":"The provided vpn addr could not be parsed: "}`, body)
+
+	// The certificate itself, for a program that verifies it against its own CAs: the one
+	// nebula verified when the tunnel came up, as PEM, by the address a connection carries.
+	status, body = test.HTTPGet(t, path, "/v1/print-cert?address="+netip.AddrPortFrom(theirVpnIpNet[0].Addr(), 51234).String()+"&raw=true")
+	require.Equal(t, http.StatusOK, status, body)
+	var raw struct {
+		PEM string `json:"pem"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(body), &raw))
+	theirs, _, err := cert.UnmarshalCertificateFromPEM([]byte(raw.PEM))
+	require.NoError(t, err)
+	assert.Equal(t, "them", theirs.Name())
+	fp, err := theirs.Fingerprint()
+	require.NoError(t, err)
+	assert.Equal(t, them.Fingerprint, fp, "the same certificate identity reports")
+
+	// Without raw it is the certificate's fields; without an address, our own.
+	status, body = test.HTTPGet(t, path, "/v1/print-cert")
+	require.Equal(t, http.StatusOK, status, body)
+	assert.Contains(t, body, `"name":"me"`)
+
+	status, body = test.HTTPGet(t, path, "/v1/print-cert?address=10.128.0.9")
+	assert.Equal(t, http.StatusNotFound, status)
+	assert.JSONEq(t, `{"error":"Could not find tunnel for vpn addr: 10.128.0.9"}`, body)
 
 	// Nothing else nebula serves is reachable here.
 	status, body = test.HTTPGet(t, path, "/v1/list-hostmap")

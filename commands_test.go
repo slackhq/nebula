@@ -6,7 +6,10 @@ import (
 	"io"
 	"net/netip"
 	"testing"
+	"time"
 
+	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/commands"
 	"github.com/slackhq/nebula/logging"
 	"github.com/slackhq/nebula/test"
@@ -79,4 +82,64 @@ func TestPrintCertOfATunnelWithoutACertificate(t *testing.T) {
 	r, err = runPrintCert(f, &printCertFlags{}, []string{"10.0.0.2"})
 	require.NoError(t, err)
 	assert.True(t, r.OK, "a tunnel with a certificate is printed")
+}
+
+// TestPrintCertByAddressFlag: -address is the info API's spelling of the operand, takes a
+// port and a 4in6 form the way identity does, answers our own address with our own
+// certificate, and is refused together with an operand.
+func TestPrintCertByAddressFlag(t *testing.T) {
+	f, peerCert := identityFixture(t)
+
+	for _, addr := range []string{"10.0.0.2", "10.0.0.2:4242", "[::ffff:10.0.0.2]:4242"} {
+		fl := &printCertFlags{}
+		require.NoError(t, fl.setAddress(addr))
+		r, err := runPrintCert(f, fl, nil)
+		require.NoError(t, err)
+		require.True(t, r.OK, addr)
+		assert.Equal(t, peerCert, r.Value, addr)
+	}
+
+	fl := &printCertFlags{}
+	require.NoError(t, fl.setAddress("10.0.0.1"))
+	r, err := runPrintCert(f, fl, nil)
+	require.NoError(t, err)
+	require.True(t, r.OK)
+	assert.Equal(t, ownCertificate(f.pki.getCertState()), r.Value, "our own address is our own certificate")
+
+	fl = &printCertFlags{}
+	require.NoError(t, fl.setAddress("10.0.0.3"))
+	r, err = runPrintCert(f, fl, nil)
+	require.NoError(t, err)
+	assert.False(t, r.OK)
+	assert.True(t, r.NotFound)
+
+	fl = &printCertFlags{}
+	require.NoError(t, fl.setAddress("not-an-address"))
+	r, err = runPrintCert(f, fl, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "The provided vpn addr could not be parsed: not-an-address", r.Reason)
+
+	fl = &printCertFlags{}
+	require.NoError(t, fl.setAddress("10.0.0.2"))
+	r, err = runPrintCert(f, fl, []string{"10.0.0.2"})
+	require.NoError(t, err)
+	assert.Equal(t, "print-cert takes one vpn addr, as -address or as an operand, not both", r.Reason)
+}
+
+// TestPrintCertPrefersOwnV2: with no address print-cert reports the certificate whoami
+// does, the v2 when both versions are loaded, rather than the one handshakes start with.
+func TestPrintCertPrefersOwnV2(t *testing.T) {
+	v4 := netip.MustParsePrefix("10.0.0.1/24")
+	ca1, _, caKey1, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	v1, _, _, _ := cert_test.NewTestCert(cert.Version1, cert.Curve_CURVE25519, ca1, caKey1, "me", time.Time{}, time.Time{}, []netip.Prefix{v4}, nil, nil)
+	ca2, _, caKey2, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	v2, _, _, _ := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, ca2, caKey2, "me", time.Time{}, time.Time{}, []netip.Prefix{v4}, nil, nil)
+
+	f := &Interface{pki: &PKI{}, hostMap: newHostMap(test.NewLogger())}
+	f.pki.cs.Store(&CertState{v1Cert: v1, v2Cert: v2, initiatingVersion: cert.Version1})
+
+	r, err := runPrintCert(f, &printCertFlags{}, nil)
+	require.NoError(t, err)
+	require.True(t, r.OK)
+	assert.Equal(t, v2, r.Value)
 }
