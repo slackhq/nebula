@@ -36,7 +36,7 @@ func TestWriteBatchConcurrent(t *testing.T) {
 					bufs = append(bufs, []byte{byte(producer), byte(i), byte(j), 0})
 					addrs = append(addrs, remote)
 				}
-				n, err := conn.WriteBatch(bufs, addrs)
+				n, err := conn.WriteBatch(bufs, addrs, nil)
 				if err != nil || n != len(bufs) {
 					t.Errorf("WriteBatch = %d, %v; want %d, nil", n, err, len(bufs))
 					return

@@ -44,7 +44,7 @@ func (u *GenericConn) WriteTo(b []byte, addr netip.AddrPort) error {
 	return err
 }
 
-func (u *GenericConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
+func (u *GenericConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, failed func(i int, err error)) (int, error) {
 	// An un-sendable destination costs its own packet, never the ones behind it in the batch.
 	written := 0
 	for i, b := range bufs {
@@ -52,6 +52,9 @@ func (u *GenericConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, er
 			written++
 		} else {
 			u.l.Debug("failed to write packet in batch", "udpAddr", addrs[i], "error", err)
+			if failed != nil {
+				failed(i, err)
+			}
 		}
 	}
 	return written, nil

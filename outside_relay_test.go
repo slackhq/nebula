@@ -34,7 +34,7 @@ func (c *relayBatchConn) ListenOut(r udp.EncReader, flush func()) error {
 	return nil
 }
 
-func (c *relayBatchConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
+func (c *relayBatchConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, _ func(int, error)) (int, error) {
 	w := relayBatchWrite{remotes: append([]netip.AddrPort(nil), addrs...), batched: true}
 	for _, b := range bufs {
 		w.packets = append(w.packets, bytes.Clone(b))

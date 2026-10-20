@@ -80,11 +80,11 @@ func TestWriteBatchNoAllocs(t *testing.T) {
 
 			var werr error
 			// Warm-up outside the measured runs.
-			if _, err := tx.WriteBatch(bufs, addrs); err != nil {
+			if _, err := tx.WriteBatch(bufs, addrs, nil); err != nil {
 				t.Fatalf("WriteBatch warm-up: %v", err)
 			}
 			allocs := testing.AllocsPerRun(100, func() {
-				if _, err := tx.WriteBatch(bufs, addrs); err != nil {
+				if _, err := tx.WriteBatch(bufs, addrs, nil); err != nil {
 					werr = err
 				}
 			})

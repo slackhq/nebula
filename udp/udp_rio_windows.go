@@ -319,7 +319,7 @@ func (u *RIOConn) WriteTo(buf []byte, ip netip.AddrPort) error {
 	return winrio.SendEx(u.rq, dataBuffer, 1, nil, addressBuffer, nil, nil, 0, 0)
 }
 
-func (u *RIOConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
+func (u *RIOConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, failed func(i int, err error)) (int, error) {
 	// An un-sendable destination costs its own packet, never the ones behind it in the batch.
 	written := 0
 	for i, b := range bufs {
@@ -327,6 +327,9 @@ func (u *RIOConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error)
 			written++
 		} else {
 			u.l.Debug("failed to write packet in batch", "udpAddr", addrs[i], "error", err)
+			if failed != nil {
+				failed(i, err)
+			}
 		}
 	}
 	return written, nil

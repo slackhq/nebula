@@ -505,7 +505,8 @@ func (f *Interface) listenIn(queue tio.Queue, i int) {
 
 // flushSendBatch drains sb to the underlay and accounts for anything it could not deliver. A shortfall means
 // specific destinations were undeliverable (a stale remote, a reject rule), which the backend logs per peer at
-// debug; here it is only a counter, so one unreachable peer cannot spam a log line per batch.
+// debug; here it is only a counter, so one unreachable peer cannot spam a log line per batch. Tunnels whose remote
+// we no longer have a route to go looking for another path.
 func (f *Interface) flushSendBatch(sb *batch.SendBatch, q int) {
 	queued := sb.Len()
 	written, err := sb.Flush()
@@ -514,6 +515,23 @@ func (f *Interface) flushSendBatch(sb *batch.SendBatch, q int) {
 	}
 	if dropped := queued - written; dropped > 0 {
 		f.metricTxDropped.Inc(int64(dropped))
+	}
+
+	// Packets are tagged with the local index of the tunnel they belong to. A tunnel's packets tend to fail together,
+	// so skip straight past a repeat of the one before.
+	var last batch.Failure
+	for i, fail := range sb.Failures() {
+		if i > 0 && fail.Tag == last.Tag && fail.Dst == last.Dst {
+			continue
+		}
+		last = fail
+
+		if !udp.IsUnreachable(fail.Err) {
+			continue
+		}
+		if hostinfo := f.hostMap.QueryIndex(fail.Tag); hostinfo != nil {
+			hostinfo.remoteUnreachable(f, fail.Dst)
+		}
 	}
 }
 

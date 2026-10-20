@@ -776,7 +776,8 @@ const unreachableProbeInterval = time.Second
 // after moving to a network without that address family. Sends a test packet to every other remote we know for this
 // host: the first one that arrives roams the peer over to wherever we are now, and its reply roams us onto that path.
 func (i *HostInfo) remoteUnreachable(ifce *Interface, dead netip.AddrPort) {
-	if i.remotes == nil || i.ConnectionState == nil {
+	if i.remotes == nil || i.ConnectionState == nil || i.GetRemote() != dead {
+		// Nothing to probe with, or we already moved on from the remote that failed
 		return
 	}
 
