@@ -142,6 +142,15 @@ func readFrame(r io.Reader, max int, what string, v any, strict bool) error {
 		return &frameError{fmt.Errorf("could not parse %s: %w", what, err)}
 	}
 
+	// Strict is one object and nothing after it: a second object, or stray bytes, on
+	// the line would be read as part of a request that happened to decode, and is
+	// refused the way an unknown field is.
+	if strict {
+		if _, err := dec.Token(); err != io.EOF {
+			return fmt.Errorf("could not parse %s: unexpected data after the object", what)
+		}
+	}
+
 	return nil
 }
 

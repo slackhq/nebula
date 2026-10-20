@@ -792,6 +792,23 @@ func TestThenIsAnsweredInTheOneReply(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"ok":true,"reason":"acted"}`, string(res.Result))
 
+	// A refusal from Then still carries Run's line ahead of it in text, as ssh prints it.
+	acted = false
+	reg.Register(&commands.Command{
+		Name:             "fail",
+		ShortDescription: "replies, then fails to act",
+		Run: func(fs any, a []string) (commands.Result, error) {
+			return commands.Did("about to act"), nil
+		},
+		Then: func() commands.Result {
+			return commands.Failed("could not act")
+		},
+	})
+	res, err = (&Client{Path: path}).Invoke("fail", nil, nil, "text")
+	require.NoError(t, err)
+	assert.Equal(t, "about to act\ncould not act\n", res.Error)
+	assert.Empty(t, res.Text)
+
 	// A Run that refused is the outcome, and Then does not run.
 	acted = false
 	reg.Register(&commands.Command{
@@ -885,6 +902,27 @@ func TestUnknownRequestFieldIsRefused(t *testing.T) {
 	require.NoError(t, readFrame(conn, MaxResponseBytes, "response", &res, false))
 	assert.Contains(t, res.Error, `unknown field "arguments"`)
 	assert.Empty(t, res.Result)
+}
+
+// TestTrailingBytesOnARequestAreRefused: a request line is one object and nothing
+// more; a second object or stray bytes after it are refused rather than ignored.
+func TestTrailingBytesOnARequestAreRefused(t *testing.T) {
+	_, path := serve(t, basicRegistry())
+
+	for _, line := range []string{
+		`{"version":1,"command":"echo"} junk` + "\n",
+		`{"version":1,"command":"echo"}{"version":1,"command":"boom"}` + "\n",
+	} {
+		conn, err := dial(path, time.Second)
+		require.NoError(t, err)
+		_, err = conn.Write([]byte(line))
+		require.NoError(t, err)
+
+		var res Response
+		require.NoError(t, readFrame(conn, MaxResponseBytes, "response", &res, false))
+		assert.Contains(t, res.Error, "unexpected data after the object", line)
+		conn.Close()
+	}
 }
 
 // TestTextOutputKeepsTheBytes: a text rendering travels as the bytes the command wrote.

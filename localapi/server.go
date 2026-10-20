@@ -480,7 +480,7 @@ func render(res *Response, cmd *commands.Command, r commands.Result, format comm
 	// A command that ran and refused reads as an error to whoever asked for text: they
 	// are a person or a script, and both expect a refusal on the error stream.
 	if !r.OK {
-		res.Error = buf.String()
+		res.Error = string(append(preface, buf.Bytes()...))
 		return res
 	}
 
