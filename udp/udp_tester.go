@@ -11,7 +11,6 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
-	"syscall"
 
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
@@ -118,7 +117,7 @@ func (u *TesterConn) SetAddr(addr netip.AddrPort) {
 
 // SetDualStackAddrs gives this conn one underlay address per family, standing in for a host whose routing table picks
 // the source by destination. Pass an invalid AddrPort for a family the network does not offer, sends to that family
-// then fail with ENETUNREACH like they would on a host with no route for it.
+// then fail like they would on a host with no route for it.
 func (u *TesterConn) SetDualStackAddrs(v4, v6 netip.AddrPort) {
 	a := &testerAddrs{v4: v4, v6: v6, dual: true}
 	if v4.IsValid() {
@@ -149,7 +148,7 @@ func (u *TesterConn) sourceFor(dst netip.AddrPort) (netip.AddrPort, error) {
 		src = a.v4
 	}
 	if !src.IsValid() {
-		return netip.AddrPort{}, &net.OpError{Op: "write", Net: "udp", Addr: net.UDPAddrFromAddrPort(dst), Err: syscall.ENETUNREACH}
+		return netip.AddrPort{}, &net.OpError{Op: "write", Net: "udp", Addr: net.UDPAddrFromAddrPort(dst), Err: errNetUnreachable}
 	}
 	return src, nil
 }

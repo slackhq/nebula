@@ -6,6 +6,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// errNetUnreachable is the error this platform's sockets give for a destination with no route
+var errNetUnreachable error = windows.WSAENETUNREACH
+
 // IsUnreachable reports whether a send failed because this host has no way to reach the destination from where it
 // is now, rather than for something transient. Moving from a dual stack network to one without IPv6 turns every send
 // to an IPv6 remote into one of these.
