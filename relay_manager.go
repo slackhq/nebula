@@ -528,6 +528,10 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 		if !rm.GetAmRelay() {
 			return
 		}
+		if !slices.Contains(h.vpnAddrs, from) {
+			logMsg.Info("Discarding relay request where relayFrom is not the sending peer")
+			return
+		}
 		peer := rm.hostmap.QueryVpnAddr(target)
 		if peer == nil {
 			// Try to establish a connection to this host. If we get a future relay request,
