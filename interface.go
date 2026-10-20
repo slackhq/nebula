@@ -689,9 +689,6 @@ func (f *Interface) GetCertState() *CertState {
 	return f.pki.getCertState()
 }
 
-// Close releases the interface's resources: the udp sockets and the tun device.
-// It is idempotent and safe to call at any point in the lifecycle, including on an interface that never activated,
-// calls after the first return nil without doing anything.
 // shutdowner is a udp.Conn or overlay.Device whose readers can be woken without releasing their fds
 type shutdowner interface {
 	Shutdown() error
@@ -700,6 +697,9 @@ type shutdowner interface {
 // readerShutdownTimeout bounds how long Close waits on woken readers before releasing their fds anyway
 const readerShutdownTimeout = 5 * time.Second
 
+// Close releases the interface's resources: the udp sockets and the tun device.
+// It is idempotent and safe to call at any point in the lifecycle, including on an interface that never activated,
+// calls after the first return nil without doing anything.
 func (f *Interface) Close() error {
 	if !f.closed.CompareAndSwap(false, true) {
 		return nil
