@@ -117,6 +117,13 @@ func (c *Control) SetUDPAddr(addr netip.AddrPort) {
 	c.f.outside.(*udp.TesterConn).SetAddr(addr)
 }
 
+// SetDualStackUDPAddrs gives this node one underlay address per family, sending from whichever matches the
+// destination. An invalid AddrPort leaves the node without that family, sends to it fail with ENETUNREACH. Register
+// any address the node did not start on with the router as well or nothing will route back.
+func (c *Control) SetDualStackUDPAddrs(v4, v6 netip.AddrPort) {
+	c.f.outside.(*udp.TesterConn).SetDualStackAddrs(v4, v6)
+}
+
 // SetLocalAddrsFn replaces underlay address discovery so a test can advertise its simulated address instead of
 // whatever this machine's NICs happen to be. Call it before Start, SendUpdate reads it from the update worker.
 func (c *Control) SetLocalAddrsFn(fn func(*LocalAllowList) []netip.Addr) {
