@@ -66,7 +66,9 @@ type Offload struct {
 	// usoEnabled records whether the kernel agreed to TUN_F_USO* on this FD,
 	// so writers can decide whether emitting GSO_UDP_L4 superpackets is safe.
 	usoEnabled bool
-	closed     atomic.Bool
+	// shutdown is set before shutdownFd is signaled, a busy reader never polls to see that
+	shutdown atomic.Bool
+	closed   atomic.Bool
 
 	// gsoHdrBuf is a per-queue 10-byte scratch for the virtio_net_hdr emitted
 	// by WriteGSO. Kept separate from the read-only package-level validVnetHdr
@@ -176,6 +178,9 @@ func (r *Offload) readPacket(block bool) (int, error) {
 // This amortizes the poll wake over bursts of small packets (e.g. TCP ACKs).
 // Packet.Bytes slices point into the Offload's internal buffer and are only valid until the next Read or Close on this Queue.
 func (r *Offload) Read() ([]Packet, error) {
+	if r.shutdown.Load() {
+		return nil, os.ErrClosed
+	}
 	r.pending = r.pending[:0]
 	r.rxOff = 0
 

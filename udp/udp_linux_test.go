@@ -76,7 +76,7 @@ func TestShutdownWakesAfterRx_Mechanism(t *testing.T) {
 }
 
 // TestListenOutTeardown_TrafficPatterns reproduces the field report: a blocking
-// reader must tear down cleanly on Close() regardless of what the socket has
+// reader must tear down cleanly on Shutdown() regardless of what the socket has
 // carried. The three cases the report called out:
 //
 //	no traffic ever      -> works (shutdown wakes recvmmsg with n==0)
@@ -162,11 +162,12 @@ func runTeardownCase(t *testing.T, batch int, name string, traffic func(send net
 	// empty queue with the socket already having received a packet.
 	time.Sleep(500 * time.Millisecond)
 
+	// Tear down the way Interface.Close does, the fd stays open until the reader is gone
 	start := time.Now()
-	if err := sc.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
+	if err := sc.Shutdown(); err != nil {
+		t.Fatalf("Shutdown: %v", err)
 	}
-	close(stop)
+	defer func() { _ = sc.Close() }()
 
 	select {
 	case err := <-loopDone:
@@ -179,7 +180,75 @@ func runTeardownCase(t *testing.T, batch int, name string, traffic func(send net
 	case <-time.After(3 * time.Second):
 		buf := make([]byte, 1<<20)
 		n := runtime.Stack(buf, true)
-		t.Fatalf("%s: HANG, ListenOut did not return within 3s of Close\n%s", name, buf[:n])
+		t.Fatalf("%s: HANG, ListenOut did not return within 3s of Shutdown\n%s", name, buf[:n])
 	}
+	close(stop)
 	<-trafficDone
+}
+
+// A shut down socket still returns queued datagrams, so a reader that is behind has to stop on its own within the
+// batch it was working on
+func TestListenOutShutdown_BusyReader(t *testing.T) {
+	const batch = 64
+	udpSettings := Settings{Listen: netip.MustParseAddrPort("127.0.0.1:0"), Multi: true, Batch: batch}
+	c, err := NewListener(testLogger(), udpSettings)
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	sc := c.(*StdConn)
+	defer sc.Close()
+	addr, err := sc.LocalAddr()
+	if err != nil {
+		t.Fatalf("LocalAddr: %v", err)
+	}
+
+	stop := make(chan struct{})
+	defer close(stop)
+	for range 8 {
+		send, err := net.Dial("udp", addr.String())
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		defer send.Close()
+		go func() {
+			b := make([]byte, 1200)
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_, _ = send.Write(b)
+				}
+			}
+		}()
+	}
+
+	var afterShutdown atomic.Int64
+	loopDone := make(chan error, 1)
+	go func() {
+		loopDone <- sc.ListenOut(func(netip.AddrPort, []byte) {
+			if sc.closed.Load() {
+				afterShutdown.Add(1)
+			}
+			// Slower than the senders so the queue never drains
+			for start := time.Now(); time.Since(start) < 200*time.Microsecond; {
+			}
+		}, func() {})
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	if err := sc.Shutdown(); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	select {
+	case err := <-loopDone:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("ListenOut returned %v, want net.ErrClosed", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("ListenOut still running 3s after Shutdown, delivered %d packets since", afterShutdown.Load())
+	}
+	if n := afterShutdown.Load(); n > batch {
+		t.Fatalf("delivered %d packets after Shutdown, more than the one batch in flight", n)
+	}
 }
