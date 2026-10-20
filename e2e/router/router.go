@@ -967,7 +967,8 @@ func (r *R) getControl(p *udp.Packet) *nebula.Control {
 
 	c, ok := r.inNat[toAddr]
 	if ok {
-		r.outNat[outNatKey{from: c.GetUDPAddr(), to: fromAddr}] = toAddr
+		// Key the return path on the address the receiver will answer from, which is per family for a dual stack node
+		r.outNat[outNatKey{from: c.GetUDPAddrFor(fromAddr), to: fromAddr}] = toAddr
 		return c
 	}
 

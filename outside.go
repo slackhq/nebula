@@ -236,7 +236,7 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 				out, err := f.prepareSendVia(targetHI, targetRelay, signedPayload, rxc.nb, fwdBuf, true)
 				if err == nil {
 					// Borrows the receive buffer, the listener's flush callback drains it before the buffer is reused
-					rxc.relayBatch.Commit(out, targetHI.GetRemote(), targetHI.localIndexId)
+					rxc.relayBatch.Commit(out, targetHI.GetRemote())
 					if rxc.relayBatch.Len() >= batch.SendBatchCap {
 						f.flushSendBatch(rxc.relayBatch, rxc.q)
 					}

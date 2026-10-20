@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
@@ -248,16 +249,35 @@ func TestPunchyReloadRestartRequired(t *testing.T) {
 // errNoRoute is the unreachable error every platform classifies the same way
 var errNoRoute = udp.ErrInvalidIPv6RemoteForSocket
 
-// recordingConn records where every write went and fails the ones to an address in fail
+// recordingConn records where every write went and what kind of message it was, and fails the ones to an address in
+// fail
 type recordingConn struct {
 	udp.NoopConn
 	fail  map[netip.AddrPort]error
 	wrote []netip.AddrPort
+	// types is the message type of each write, a punch has none
+	types []header.MessageType
 }
 
-func (c *recordingConn) WriteTo(_ []byte, addr netip.AddrPort) error {
+func (c *recordingConn) WriteTo(b []byte, addr netip.AddrPort) error {
 	c.wrote = append(c.wrote, addr)
+	var h header.H
+	if h.Parse(b) == nil {
+		c.types = append(c.types, h.Type)
+	}
 	return c.fail[addr]
+}
+
+func (c *recordingConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, failed func(int, error)) (int, error) {
+	written := 0
+	for i := range bufs {
+		if err := c.WriteTo(bufs[i], addrs[i]); err != nil {
+			failed(i, err)
+			continue
+		}
+		written++
+	}
+	return written, nil
 }
 
 type noLighthouses struct{}

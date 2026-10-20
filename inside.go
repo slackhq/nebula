@@ -215,7 +215,7 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 				return nil
 			}
 
-			sendBatch.Commit(toSend, relayHostInfo.GetRemote(), relayHostInfo.localIndexId)
+			sendBatch.Commit(toSend, relayHostInfo.GetRemote())
 			return nil
 		})
 		if err != nil {
@@ -233,7 +233,7 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 			return nil
 		}
 
-		sendBatch.Commit(out, remote, hostinfo.localIndexId)
+		sendBatch.Commit(out, remote)
 		return nil
 	})
 	if err != nil {
@@ -612,7 +612,8 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 					"udpAddr", hr,
 				)
 			}
-			if udp.IsUnreachable(err) {
+			// A closing tunnel is about to be torn down, there is no point looking for another path for it
+			if t != header.CloseTunnel && udp.IsUnreachable(err) {
 				hostinfo.remoteUnreachable(f, hr)
 			}
 		}

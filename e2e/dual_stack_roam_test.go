@@ -33,11 +33,33 @@ func TestDualStackRoamToV4Only(t *testing.T) {
 		{name: "peer sends, lh over v4", themSends: true, lhOverV4: true},
 		{name: "peer sends, punchy", themSends: true, punchy: true},
 		{name: "peer sends, punchy all", themSends: true, punchy: true, punchAll: true},
+		{name: "laptop sends, peer NAT", meSends: true, peerNAT: true},
+		{name: "laptop sends, peer NAT, lh v4", meSends: true, peerNAT: true, lhOverV4: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			fwd, rev := measureDualStackRoam(t, tc)
 			t.Logf("RESULT %-24s laptop->peer %-9v peer->laptop %-9v", tc.name, fmtRecovery(fwd), fmtRecovery(rev))
+		})
+	}
+}
+
+// TestDualStackRoamRecovers holds the line TestDualStackRoamToV4Only measures: a tunnel whose remote became unreachable
+// moves to the peer's other address instead of waiting out the connection manager to rehandshake, which takes 20s.
+func TestDualStackRoamRecovers(t *testing.T) {
+	for _, tc := range []dualStackRoamCase{
+		{name: "both send", meSends: true, themSends: true},
+		{name: "laptop sends, peer NAT", meSends: true, peerNAT: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fwd, rev := measureDualStackRoam(t, tc)
+			if fwd == 0 || fwd > 5*time.Second {
+				t.Errorf("laptop->peer recovered in %v, want within 5s", fmtRecovery(fwd))
+			}
+			if tc.themSends && (rev == 0 || rev > 5*time.Second) {
+				t.Errorf("peer->laptop recovered in %v, want within 5s", fmtRecovery(rev))
+			}
 		})
 	}
 }
@@ -55,6 +77,8 @@ type dualStackRoamCase struct {
 	simultaneous bool
 	// punchy turns on punchy.punch everywhere, punchAll adds punchy.target_all_remotes
 	punchy, punchAll bool
+	// peerNAT puts the peer behind a NAT that, after the move, only lets in traffic from addresses the peer has sent to
+	peerNAT bool
 }
 
 func fmtRecovery(d time.Duration) string {
@@ -226,9 +250,20 @@ func measureDualStackRoam(t *testing.T, tc dualStackRoamCase) (time.Duration, ti
 	done := func() bool {
 		return (!tc.meSends || fwd.Load() != 0) && (!tc.themSends || rev.Load() != 0)
 	}
+	// The peer's NAT has state for the lighthouse, which its own updates keep fresh, and for wherever it sends from here
+	natOpen := map[netip.AddrPort]bool{lhV4: true, lhV6: true}
+	isPeer := func(a netip.AddrPort) bool { return a == them.v4 || a == them.v6 }
+
 	r.RouteForAllExitFuncOrTimeout(time.Second*90, func(p *udp.Packet, _ *nebula.Control) router.ExitType {
 		if p.To == officeV4 || p.To == officeV6Addr {
 			return router.Drop
+		}
+		if tc.peerNAT {
+			if isPeer(p.From) {
+				natOpen[p.To] = true
+			} else if isPeer(p.To) && !natOpen[p.From] {
+				return router.Drop
+			}
 		}
 		if done() {
 			return router.ExitNow
