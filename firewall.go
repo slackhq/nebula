@@ -66,6 +66,9 @@ type Firewall struct {
 	rules        string
 	rulesVersion uint16
 
+	// source is the rendered firewall config this firewall was built from, the cert networks are kept above
+	source string
+
 	defaultLocalCIDRAny bool
 	incomingMetrics     firewallMetrics
 	outgoingMetrics     firewallMetrics
@@ -246,6 +249,7 @@ func NewFirewallFromConfig(l *slog.Logger, cs *CertState, c *config.C) (*Firewal
 		return nil, err
 	}
 
+	fw.source = c.Render("firewall")
 	return fw, nil
 }
 
