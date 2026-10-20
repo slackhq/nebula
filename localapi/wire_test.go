@@ -198,6 +198,12 @@ func TestWireRefusesOnePathForBothAPIs(t *testing.T) {
 	t.Cleanup(eps.Stop)
 	assert.Empty(t, eps.Control.Path(), "the control socket does not take the info API's path")
 	assert.Empty(t, eps.Info.Path(), "the info API does not take the control socket's path")
+
+	// The same node spelled differently is the same node.
+	doubled := filepath.Join(filepath.Dir(shared), "") + "//" + filepath.Base(shared)
+	require.NoError(t, c.ReloadConfigString(section(shared, doubled)).Err)
+	assert.Empty(t, eps.Control.Path())
+	assert.Empty(t, eps.Info.Path())
 	_, err := os.Stat(shared)
 	assert.True(t, os.IsNotExist(err), "neither side bound the shared path")
 
