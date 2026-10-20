@@ -251,6 +251,19 @@ const DefaultSocketPath = protectedPrefix + "nebula-ctl"
 // pipePrefix is used as given. An override outside protectedPrefix is a name any
 // account could have created first; the owner check in dial is what protects a client
 // of one.
+// unprotectedNameWarning says what a pipe name outside protectedPrefix costs, or "" for
+// one under it. A program reading the info API opens the pipe by name and has no owner
+// check of its own, so for a name any local user could create first, whoever did
+// would be answering its queries; the daemon refuses to serve a held name and logs it,
+// but the program cannot tell. The default control pipe is under the prefix; an info
+// pipe is wherever the operator put it.
+func unprotectedNameWarning(path string) string {
+	if isProtectedPath(path) {
+		return ""
+	}
+	return "any local user can create a pipe by this name ahead of the daemon and answer in its place; name it under " + protectedPrefix
+}
+
 func checkSocketPath(key, value string) error {
 	if len(value) <= len(pipePrefix) || !strings.EqualFold(value[:len(pipePrefix)], pipePrefix) {
 		return fmt.Errorf(`%s must be a full pipe name under %s, got %q`, key, pipePrefix, value)

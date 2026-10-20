@@ -274,7 +274,8 @@ punchy:
   #
   #info:
     #enabled: false
-    # The absolute path to listen on, or a full pipe name on Windows.
+    # The absolute path to listen on, or a full pipe name on Windows. Name a pipe under
+    # \\.\pipe\ProtectedPrefix\Administrators\.
     #socket: /var/run/nebula/info.sock
     # A group (or account/group/SID on Windows) that should be allowed to access the
     # socket.

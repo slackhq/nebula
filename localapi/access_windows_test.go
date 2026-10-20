@@ -42,3 +42,11 @@ func TestSDDLAdmitsTheGroup(t *testing.T) {
 	assert.Zero(t, pipeClientAccess&windows.FILE_APPEND_DATA, "FILE_APPEND_DATA is FILE_CREATE_PIPE_INSTANCE on a pipe")
 	assert.Zero(t, pipeClientAccess&(windows.GENERIC_READ|windows.GENERIC_WRITE|windows.GENERIC_ALL))
 }
+
+// TestUnprotectedNameWarning: a pipe outside the protected namespace is warned about,
+// since anyone could have created the name first; one under it, however spelled, is not.
+func TestUnprotectedNameWarning(t *testing.T) {
+	assert.Empty(t, unprotectedNameWarning(DefaultSocketPath))
+	assert.Empty(t, unprotectedNameWarning(`\\.\PIPE\protectedprefix\administrators\nebula-info`))
+	assert.Contains(t, unprotectedNameWarning(`\\.\pipe\nebula-info`), protectedPrefix)
+}

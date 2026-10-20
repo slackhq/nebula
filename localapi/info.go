@@ -127,6 +127,9 @@ func (s *InfoServer) Rebind(ctx context.Context, path string, acc Access) error 
 		}
 
 		s.l.Info("Local info API listening", "path", path, "access", acc.String())
+		if w := unprotectedNameWarning(path); w != "" {
+			s.l.Warn("Local info API is served on a pipe name that is not protected", "path", path, "risk", w)
+		}
 		go s.serve(srv, ln)
 
 		// Closing the server closes the listener Serve was handed, and a Serve that has
