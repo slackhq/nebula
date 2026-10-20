@@ -183,3 +183,74 @@ func runTeardownCase(t *testing.T, batch int, name string, traffic func(send net
 	}
 	<-trafficDone
 }
+
+// TestCloseWaitsForReader_InCallback covers a reader that is inside the packet
+// callback, not parked in the syscall, when Close runs. Close must not release
+// the descriptor until the reader has left ListenOut, or the reader's next read
+// could land on a recycled descriptor number.
+func TestCloseWaitsForReader_InCallback(t *testing.T) {
+	c, err := NewListener(testLogger(), Settings{Listen: netip.MustParseAddrPort("127.0.0.1:0"), Multi: true, Batch: 64})
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	sc := c.(*StdConn)
+	addr, err := sc.LocalAddr()
+	if err != nil {
+		t.Fatalf("LocalAddr: %v", err)
+	}
+
+	inCallback := make(chan struct{})
+	release := make(chan struct{}, 1)
+	loopDone := make(chan error, 1)
+	go func() {
+		loopDone <- sc.ListenOut(func(netip.AddrPort, []byte) {
+			close(inCallback)
+			<-release
+		}, func() {})
+	}()
+
+	send, err := net.Dial("udp", addr.String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer send.Close()
+	if _, err := send.Write([]byte("hello")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	select {
+	case <-inCallback:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("reader never entered the callback")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- sc.Close() }()
+
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned (%v) while the reader was still inside the callback", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	release <- struct{}{}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Close did not return after the reader left the callback")
+	}
+	select {
+	case err := <-loopDone:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Errorf("ListenOut returned %v, want net.ErrClosed", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("ListenOut did not return after Close")
+	}
+
+	if err := sc.ListenOut(nil, func() {}); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("ListenOut after Close returned %v, want net.ErrClosed", err)
+	}
+}
