@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"encoding/binary"
+	"fmt"
 	"net/netip"
 	"testing"
 
@@ -344,5 +345,40 @@ func newIp6AndPortFromString(s string) *V6AddrPort {
 		Hi:   binary.BigEndian.Uint64(v6Addr[:8]),
 		Lo:   binary.BigEndian.Uint64(v6Addr[8:]),
 		Port: uint32(a.Port()),
+	}
+}
+
+func TestRemoteList_SetFiltersBeforeCap(t *testing.T) {
+	owner := netip.MustParseAddr("0.0.0.0")
+	rl := NewRemoteList([]netip.Addr{owner}, nil)
+
+	// MaxRemotes denied addrs first, then the only allowed one, then enough allowed to exceed the cap
+	var v4 []*V4AddrPort
+	for i := 0; i < MaxRemotes; i++ {
+		v4 = append(v4, newIp4AndPortFromString(fmt.Sprintf("172.17.0.%d:4242", i+1)))
+	}
+	for i := 0; i < MaxRemotes+1; i++ {
+		v4 = append(v4, newIp4AndPortFromString(fmt.Sprintf("70.199.182.%d:4242", i+1)))
+	}
+	rl.unlockedSetV4(owner, owner, v4, func(_ netip.Addr, a *V4AddrPort) bool {
+		return protoV4AddrPortToNetAddrPort(a).Addr().As4()[0] != 172
+	})
+
+	var v6 []*V6AddrPort
+	for i := 0; i < MaxRemotes; i++ {
+		v6 = append(v6, newIp6AndPortFromString(fmt.Sprintf("[fd00::%d]:4242", i+1)))
+	}
+	for i := 0; i < MaxRemotes+1; i++ {
+		v6 = append(v6, newIp6AndPortFromString(fmt.Sprintf("[2001:db8::%d]:4242", i+1)))
+	}
+	rl.unlockedSetV6(owner, owner, v6, func(_ netip.Addr, a *V6AddrPort) bool {
+		return protoV6AddrPortToNetAddrPort(a).Addr().As16()[0] != 0xfd
+	})
+
+	rl.Rebuild([]netip.Prefix{})
+	assert.Len(t, rl.addrs, MaxRemotes*2)
+	for _, a := range rl.addrs {
+		assert.NotEqual(t, byte(172), a.Addr().As16()[12], "denied v4 addr %v was kept", a)
+		assert.NotEqual(t, byte(0xfd), a.Addr().As16()[0], "denied v6 addr %v was kept", a)
 	}
 }
