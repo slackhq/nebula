@@ -117,6 +117,11 @@ func (c *Control) SetUDPAddr(addr netip.AddrPort) {
 	c.f.outside.(*udp.TesterConn).SetAddr(addr)
 }
 
+// GetUDPAddrFor returns the underlay address this node sends to dst from, which differs by family for a dual stack node
+func (c *Control) GetUDPAddrFor(dst netip.AddrPort) netip.AddrPort {
+	return c.f.outside.(*udp.TesterConn).GetAddrFor(dst)
+}
+
 // SetDualStackUDPAddrs gives this node one underlay address per family, sending from whichever matches the
 // destination. An invalid AddrPort leaves the node without that family, sends to it fail with ENETUNREACH. Register
 // any address the node did not start on with the router as well or nothing will route back.

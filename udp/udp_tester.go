@@ -129,6 +129,14 @@ func (u *TesterConn) SetDualStackAddrs(v4, v6 netip.AddrPort) {
 	u.addrs.Store(a)
 }
 
+// GetAddrFor returns the underlay address a send to dst leaves from, GetAddr when there is no route to dst
+func (u *TesterConn) GetAddrFor(dst netip.AddrPort) netip.AddrPort {
+	if src, err := u.sourceFor(dst); err == nil {
+		return src
+	}
+	return u.GetAddr()
+}
+
 // sourceFor returns the address a send to dst leaves from
 func (u *TesterConn) sourceFor(dst netip.AddrPort) (netip.AddrPort, error) {
 	a := u.addrs.Load()
