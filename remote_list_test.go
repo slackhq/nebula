@@ -1,11 +1,15 @@
 package nebula
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
+	"net"
 	"net/netip"
 	"testing"
+	"time"
 
+	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -327,6 +331,55 @@ func BenchmarkSortRebuild(b *testing.B) {
 			rl.Rebuild([]netip.Prefix{ipNet1, ipNet2, ipNet3})
 		}
 	})
+}
+
+func TestApplyLookup(t *testing.T) {
+	prev := []netip.AddrPort{netip.MustParseAddrPort("1.1.1.1:4242")}
+
+	// A successful lookup replaces the previous addresses
+	got := applyLookup(prev, 4242, []netip.Addr{netip.MustParseAddr("::ffff:2.2.2.2")}, nil)
+	assert.Equal(t, []netip.AddrPort{netip.MustParseAddrPort("2.2.2.2:4242")}, got)
+
+	// A not found answer means the record is gone
+	assert.Empty(t, applyLookup(prev, 4242, nil, &net.DNSError{Err: "no such host", IsNotFound: true}))
+
+	// Anything else is not new information, keep what we had
+	assert.Equal(t, prev, applyLookup(prev, 4242, nil, &net.DNSError{Err: "i/o timeout", IsTimeout: true}))
+	assert.Equal(t, prev, applyLookup(prev, 4242, nil, &net.DNSError{Err: "server misbehaving", IsTemporary: true}))
+	assert.Equal(t, prev, applyLookup(prev, 4242, nil, context.DeadlineExceeded))
+}
+
+func TestNewHostnameResults_CarriesKnown(t *testing.T) {
+	// A canceled context keeps the background lookup from learning anything, as if DNS were down
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	known := netip.MustParseAddrPort("1.1.1.1:4242")
+	prev := &hostnamesResults{network: "ip4"}
+	prev.known.Store(&map[hostnamePort][]netip.AddrPort{{name: "lh.invalid", port: 4242}: {known}})
+
+	hostPorts := []string{"lh.invalid:4242", "10.0.0.1:4242"}
+	literal := netip.MustParseAddrPort("10.0.0.1:4242")
+
+	hr, err := NewHostnameResults(ctx, test.NewLogger(), time.Hour, "ip4", time.Second, hostPorts, prev, func() {})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []netip.AddrPort{known, literal}, hr.GetAddrs())
+	assert.Equal(t, []netip.AddrPort{literal}, hr.literalAddrs())
+
+	// And again from the new one, before it has finished a lookup of its own
+	hr2, err := NewHostnameResults(ctx, test.NewLogger(), time.Hour, "ip4", time.Second, hostPorts, hr, func() {})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []netip.AddrPort{known, literal}, hr2.GetAddrs())
+
+	// A port change is a different entry
+	hr3, err := NewHostnameResults(ctx, test.NewLogger(), time.Hour, "ip4", time.Second, []string{"lh.invalid:4243"}, prev, func() {})
+	require.NoError(t, err)
+	assert.Empty(t, hr3.GetAddrs())
+
+	// So is a network change
+	hr4, err := NewHostnameResults(ctx, test.NewLogger(), time.Hour, "ip6", time.Second, hostPorts, prev, func() {})
+	require.NoError(t, err)
+	assert.Equal(t, []netip.AddrPort{literal}, hr4.GetAddrs())
 }
 
 func newIp4AndPortFromString(s string) *V4AddrPort {

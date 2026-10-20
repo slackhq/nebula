@@ -405,6 +405,8 @@ func (hm *HandshakeManager) StartHandshake(vpnAddr netip.Addr, cacheCb func(*Han
 
 	hm.Unlock()
 	hm.lightHouse.QueryServer(vpnAddr)
+	// If this host came from a static_map hostname its addresses may have moved, retries will pick up anything new
+	hostinfo.remotes.ResolveHostnames()
 	return hostinfo
 }
 

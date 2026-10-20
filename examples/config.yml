@@ -39,8 +39,9 @@ static_host_map:
   # public address. Other valid options are "ip6" and "ip" (returns both.)
   #network: ip4
 
-  # lookup_timeout is the DNS query timeout.
-  #lookup_timeout: 250ms
+  # lookup_timeout is the DNS query timeout. A failed lookup keeps the last known good addresses, only a not found
+  # answer removes them.
+  #lookup_timeout: 5s
 
 lighthouse:
   # am_lighthouse is used to enable lighthouse functionality for a node. This should ONLY be true on nodes

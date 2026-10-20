@@ -452,7 +452,7 @@ func getStaticMapCadence(c *config.C) (time.Duration, error) {
 }
 
 func getStaticMapLookupTimeout(c *config.C) (time.Duration, error) {
-	lookupTimeout := c.GetString("static_map.lookup_timeout", "250ms")
+	lookupTimeout := c.GetString("static_map.lookup_timeout", "5s")
 	d, err := time.ParseDuration(lookupTimeout)
 	if err != nil {
 		return 0, err
@@ -630,7 +630,8 @@ func (lh *LightHouse) addStaticRemotes(i int, d time.Duration, network string, t
 	ctx := lh.ctx
 	lh.Unlock()
 
-	hr, err := NewHostnameResults(ctx, lh.l, d, network, timeout, toAddrs, func() {
+	// On reload am.hr is the previous resolver, its last known good addresses carry over in case DNS is down right now
+	hr, err := NewHostnameResults(ctx, lh.l, d, network, timeout, toAddrs, am.hr, func() {
 		// This callback runs whenever the DNS hostname resolver finds a different set of addr's
 		// in its resolution for hostnames.
 		am.Lock()
@@ -642,7 +643,8 @@ func (lh *LightHouse) addStaticRemotes(i int, d time.Duration, network string, t
 	}
 	am.unlockedSetHostnamesResults(hr)
 
-	for _, addrPort := range hr.GetAddrs() {
+	// Only literals belong in the cache, anything from DNS has to stay in hr where a not found answer can remove it
+	for _, addrPort := range hr.literalAddrs() {
 		if !lh.shouldAdd([]netip.Addr{vpnAddr}, addrPort.Addr()) {
 			continue
 		}

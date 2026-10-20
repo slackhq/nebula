@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -58,6 +59,8 @@ type cacheV6 struct {
 type hostnamePort struct {
 	name string
 	port uint16
+	// addr is set when name is an ip literal, these never need a lookup
+	addr netip.Addr
 }
 
 type hostnamesResults struct {
@@ -65,15 +68,20 @@ type hostnamesResults struct {
 	network       string
 	lookupTimeout time.Duration
 	cancelFn      func()
+	resolveNow    chan struct{}
 	l             *slog.Logger
 	ips           atomic.Pointer[map[netip.AddrPort]struct{}]
+	// known is the last known good addresses per hostname, kept so a reload can carry them forward
+	known atomic.Pointer[map[hostnamePort][]netip.AddrPort]
 }
 
-func NewHostnameResults(ctx context.Context, l *slog.Logger, d time.Duration, network string, timeout time.Duration, hostPorts []string, onUpdate func()) (*hostnamesResults, error) {
+// NewHostnameResults starts resolving hostPorts. Any hostnames also in prev start with its last known good addresses.
+func NewHostnameResults(ctx context.Context, l *slog.Logger, d time.Duration, network string, timeout time.Duration, hostPorts []string, prev *hostnamesResults, onUpdate func()) (*hostnamesResults, error) {
 	r := &hostnamesResults{
 		hostnames:     make([]hostnamePort, len(hostPorts)),
 		network:       network,
 		lookupTimeout: timeout,
+		resolveNow:    make(chan struct{}, 1),
 		l:             l,
 	}
 
@@ -81,6 +89,13 @@ func NewHostnameResults(ctx context.Context, l *slog.Logger, d time.Duration, ne
 	// DNS lookups for hostnames that aren't hardcoded IP's will happen in a background goroutine.
 	performBackgroundLookup := false
 	ips := map[netip.AddrPort]struct{}{}
+	known := make([][]netip.AddrPort, len(hostPorts))
+	var prevKnown map[hostnamePort][]netip.AddrPort
+	if prev != nil && prev.network == network {
+		if p := prev.known.Load(); p != nil {
+			prevKnown = *p
+		}
+	}
 	for idx, hostPort := range hostPorts {
 
 		rIp, sPort, err := net.SplitHostPort(hostPort)
@@ -98,13 +113,19 @@ func NewHostnameResults(ctx context.Context, l *slog.Logger, d time.Duration, ne
 		if err != nil {
 			// This address is a hostname, not an IP address
 			performBackgroundLookup = true
+			known[idx] = prevKnown[r.hostnames[idx]]
+			for _, a := range known[idx] {
+				ips[a] = struct{}{}
+			}
 			continue
 		}
 
 		// Save the IP address immediately
+		r.hostnames[idx].addr = addr
 		ips[netip.AddrPortFrom(addr, uint16(iPort))] = struct{}{}
 	}
 	r.ips.Store(&ips)
+	r.storeKnown(known)
 
 	// Time for the DNS lookup goroutine
 	if performBackgroundLookup {
@@ -114,21 +135,12 @@ func NewHostnameResults(ctx context.Context, l *slog.Logger, d time.Duration, ne
 		go func() {
 			defer ticker.Stop()
 			for {
+				r.resolve(newCtx, known)
+				r.storeKnown(known)
 				netipAddrs := map[netip.AddrPort]struct{}{}
-				for _, hostPort := range r.hostnames {
-					timeoutCtx, timeoutCancel := context.WithTimeout(ctx, r.lookupTimeout)
-					addrs, err := net.DefaultResolver.LookupNetIP(timeoutCtx, r.network, hostPort.name)
-					timeoutCancel()
-					if err != nil {
-						l.Error("DNS resolution failed for static_map host",
-							"hostname", hostPort.name,
-							"network", r.network,
-							"error", err,
-						)
-						continue
-					}
+				for _, addrs := range known {
 					for _, a := range addrs {
-						netipAddrs[netip.AddrPortFrom(a.Unmap(), hostPort.port)] = struct{}{}
+						netipAddrs[a] = struct{}{}
 					}
 				}
 				origSet := r.ips.Load()
@@ -159,13 +171,91 @@ func NewHostnameResults(ctx context.Context, l *slog.Logger, d time.Duration, ne
 				case <-newCtx.Done():
 					return
 				case <-ticker.C:
-					continue
+				case <-r.resolveNow:
 				}
 			}
 		}()
 	}
 
 	return r, nil
+}
+
+// resolve looks up every hostname in parallel and folds the results into known
+func (hr *hostnamesResults) resolve(ctx context.Context, known [][]netip.AddrPort) {
+	var wg sync.WaitGroup
+	for i, hostPort := range hr.hostnames {
+		if hostPort.addr.IsValid() {
+			known[i] = []netip.AddrPort{netip.AddrPortFrom(hostPort.addr, hostPort.port)}
+			continue
+		}
+
+		wg.Go(func() {
+			timeoutCtx, timeoutCancel := context.WithTimeout(ctx, hr.lookupTimeout)
+			addrs, err := net.DefaultResolver.LookupNetIP(timeoutCtx, hr.network, hostPort.name)
+			timeoutCancel()
+			known[i] = applyLookup(known[i], hostPort.port, addrs, err)
+			// A canceled ctx means we are reloading or shutting down, not that DNS failed
+			if err != nil && ctx.Err() == nil {
+				hr.l.Error("DNS resolution failed for static_map host",
+					"hostname", hostPort.name,
+					"network", hr.network,
+					"error", err,
+					"usingAddrs", known[i],
+				)
+			}
+		})
+	}
+	wg.Wait()
+}
+
+// applyLookup returns the addresses to use for a hostname given the previous ones and a lookup result.
+// Only a not found answer clears them, a stale lighthouse address costs a handshake but an empty set costs everything.
+// darwin also reports not found while offline, that's harmless since nothing is reachable and the next handshake
+// triggers a fresh lookup once we're back.
+func applyLookup(prev []netip.AddrPort, port uint16, addrs []netip.Addr, err error) []netip.AddrPort {
+	if err != nil {
+		var dnsErr *net.DNSError
+		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+			return nil
+		}
+		return prev
+	}
+
+	out := make([]netip.AddrPort, 0, len(addrs))
+	for _, a := range addrs {
+		out = append(out, netip.AddrPortFrom(a.Unmap(), port))
+	}
+	return out
+}
+
+func (hr *hostnamesResults) storeKnown(known [][]netip.AddrPort) {
+	byName := make(map[hostnamePort][]netip.AddrPort, len(known))
+	for i, addrs := range known {
+		byName[hr.hostnames[i]] = addrs
+	}
+	hr.known.Store(&byName)
+}
+
+// literalAddrs returns the entries that were configured as ip addresses rather than hostnames
+func (hr *hostnamesResults) literalAddrs() []netip.AddrPort {
+	var out []netip.AddrPort
+	for _, hostPort := range hr.hostnames {
+		if hostPort.addr.IsValid() {
+			out = append(out, netip.AddrPortFrom(hostPort.addr, hostPort.port))
+		}
+	}
+	return out
+}
+
+// ResolveNow asks the background goroutine to look up the hostnames again without waiting for the next tick
+func (hr *hostnamesResults) ResolveNow() {
+	if hr == nil || hr.resolveNow == nil {
+		return
+	}
+	select {
+	case hr.resolveNow <- struct{}{}:
+	default:
+	}
 }
 
 func (hr *hostnamesResults) Cancel() {
@@ -254,6 +344,13 @@ func (r *RemoteList) ResetForOwner(ownerVpnAddr netip.Addr) {
 		}
 	}
 	r.shouldRebuild = true
+}
+
+// ResolveHostnames kicks a fresh DNS lookup of any static_map hostnames for this host
+func (r *RemoteList) ResolveHostnames() {
+	r.RLock()
+	defer r.RUnlock()
+	r.hr.ResolveNow()
 }
 
 // ClearHostnameResults cancels the in-flight DNS resolver goroutine (if any) and drops the resolved IP cache.
