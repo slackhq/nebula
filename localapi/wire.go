@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"path/filepath"
+	"runtime"
+	"strings"
 
 	"github.com/slackhq/nebula/commands"
 	"github.com/slackhq/nebula/config"
@@ -63,11 +66,22 @@ func sharedSocketPath(c *config.C) (string, bool) {
 	}
 
 	info, err := infoConfigFrom(c)
-	if err != nil || !info.Enabled || info.Path != ctl {
+	if err != nil || !info.Enabled || !samePath(info.Path, ctl) {
 		return "", false
 	}
 
 	return ctl, true
+}
+
+// samePath reports whether two configured socket paths name one node: cleaned, so a
+// doubled separator or a trailing one does not hide the match, and on windows, where
+// pipe names are case-insensitive, compared without case.
+func samePath(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 // wireControl brings up the control socket and keeps it pointed at the configured path.
