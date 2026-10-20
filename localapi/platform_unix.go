@@ -337,6 +337,10 @@ func pathTooLong(path string) bool { return len(path) > maxSocketPath }
 // of its own with CtlSocketKey.
 const DefaultSocketPath = "/var/run/" + DirName + "/ctl.sock"
 
+// unprotectedNameWarning is for windows pipe names; a unix socket's directory is
+// checked instead.
+func unprotectedNameWarning(string) string { return "" }
+
 // checkSocketPath refuses a configured socket path that is relative, or too long to
 // bind. A relative path would mean a different socket to the daemon and to nebula ctl,
 // each resolving it against the directory it happened to be started from.
