@@ -251,11 +251,8 @@ func clearStale(path string) error {
 	return os.Remove(path)
 }
 
-// removeSocket unlinks the socket node and, when listen made the directory it is in,
-// removes that too, so a socket that moves off an override or a daemon that stops
-// leaves nothing behind. A directory that came with the environment, a service
-// manager's runtime directory or one the operator pointed us into, is not ours to
-// remove and is left as it was.
+// removeSocket unlinks the socket node. Its directory stays, whoever made it; see
+// listen.
 func removeSocket(path string) {
 	_ = os.Remove(path)
 }
