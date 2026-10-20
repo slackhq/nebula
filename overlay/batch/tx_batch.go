@@ -1,11 +1,15 @@
 package batch
 
-import "net/netip"
+import (
+	"net/netip"
+
+	"github.com/slackhq/nebula/header"
+)
 
 const SendBatchCap = 128
 
 // FailureHeadLen is how much of a refused packet a Failure keeps, nebula's header, which says whose packet it was
-const FailureHeadLen = 16
+const FailureHeadLen = header.Len
 
 // batchWriter is the minimal subset of udp.Conn needed by SendBatch to flush.
 type batchWriter interface {

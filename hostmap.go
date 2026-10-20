@@ -783,7 +783,7 @@ func (i *HostInfo) remoteUnreachable(ifce *Interface, dead netip.AddrPort) {
 		// Nothing to probe with, or we already moved on from the remote that failed
 		return
 	}
-	if ifce.lightHouse.amLighthouse {
+	if ifce.lightHouse == nil || ifce.lightHouse.amLighthouse {
 		// A lighthouse hands out the address it reaches a client on, it must not go roaming its clients itself
 		return
 	}
