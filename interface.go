@@ -514,6 +514,11 @@ func (f *Interface) flushSendBatch(sb *batch.SendBatch, q int) {
 		f.metricTxDropped.Inc(int64(dropped))
 	}
 
+	if f.lightHouse == nil || f.lightHouse.amLighthouse {
+		// Lighthouses never probe, see remoteUnreachable, so skip finding the tunnels
+		return
+	}
+
 	// A tunnel's packets tend to fail together, so skip straight past a repeat of the one before. The first 8 bytes
 	// of a header say whose packet it is, the counter after them changes with every packet.
 	var last batch.Failure
