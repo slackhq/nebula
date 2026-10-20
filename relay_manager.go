@@ -528,6 +528,12 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 		if !rm.GetAmRelay() {
 			return
 		}
+		// The initiator of a forwarded relay must be the peer that sent the request. Otherwise any
+		// peer could reset another host's established relay back to Requested, or grow our relay table.
+		if !slices.Contains(h.vpnAddrs, from) {
+			logMsg.Info("Discarding relay request where relayFrom is not the sending peer")
+			return
+		}
 		peer := rm.hostmap.QueryVpnAddr(target)
 		if peer == nil {
 			// Try to establish a connection to this host. If we get a future relay request,
