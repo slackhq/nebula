@@ -86,7 +86,7 @@ func TestWriteBatchOffloadsDisabledScripted(t *testing.T) {
 		addrs[i] = dst
 	}
 
-	written, err := w.WriteBatch(bufs, addrs)
+	written, err := w.WriteBatch(bufs, addrs, nil)
 	if err != nil {
 		t.Fatalf("WriteBatch: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestOffloadsDisabledOnLoopback(t *testing.T) {
 		addrs[i] = dst
 	}
 
-	written, err := sc.WriteBatch(bufs, addrs)
+	written, err := sc.WriteBatch(bufs, addrs, nil)
 	if err != nil {
 		t.Fatalf("WriteBatch: %v", err)
 	}

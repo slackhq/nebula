@@ -23,15 +23,10 @@ import (
 //
 //	go test -tags e2e_testing -v -run TestDualStackRoamToV4Only ./e2e/
 func TestDualStackRoamToV4Only(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		meSends   bool
-		themSends bool
-		rebind    bool
-		lhOverV4  bool
-	}{
+	for _, tc := range []dualStackRoamCase{
 		{name: "both send", meSends: true, themSends: true},
 		{name: "both send, rebind", meSends: true, themSends: true, rebind: true},
+		{name: "both send, two tunnels", meSends: true, themSends: true, simultaneous: true},
 		{name: "laptop sends", meSends: true},
 		{name: "peer sends", themSends: true},
 		{name: "peer sends, rebind", themSends: true, rebind: true},
@@ -39,10 +34,23 @@ func TestDualStackRoamToV4Only(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			fwd, rev := measureDualStackRoam(t, tc.meSends, tc.themSends, tc.rebind, tc.lhOverV4)
+			fwd, rev := measureDualStackRoam(t, tc)
 			t.Logf("RESULT %-24s laptop->peer %-9v peer->laptop %-9v", tc.name, fmtRecovery(fwd), fmtRecovery(rev))
 		})
 	}
+}
+
+type dualStackRoamCase struct {
+	name string
+	// meSends and themSends say who keeps traffic flowing after the move
+	meSends, themSends bool
+	// rebind fires RebindUDPServer on the move, as the darwin network change monitor would
+	rebind bool
+	// lhOverV4 forms the lighthouse tunnel over IPv4 at the office, so the move does not break it
+	lhOverV4 bool
+	// simultaneous has both sides initiate at once at the office, which can leave each side a different primary
+	// tunnel for the other
+	simultaneous bool
 }
 
 func fmtRecovery(d time.Duration) string {
@@ -84,7 +92,7 @@ func newDualStackNode(ca cert.Certificate, caKey []byte, name, vpnNet string, v4
 
 // measureDualStackRoam returns how long after the move the first packet made it laptop->peer and peer->laptop, zero
 // for a direction that never recovered.
-func measureDualStackRoam(t *testing.T, meSends, themSends, rebind, lhOverV4 bool) (time.Duration, time.Duration) {
+func measureDualStackRoam(t *testing.T, tc dualStackRoamCase) (time.Duration, time.Duration) {
 	t.Helper()
 	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
 
@@ -131,16 +139,24 @@ func measureDualStackRoam(t *testing.T, meSends, themSends, rebind, lhOverV4 boo
 	// for a static_host_map that only lists the lighthouse's IPv4 address.
 	officeV6 := func(p *udp.Packet, _ *nebula.Control) router.ExitType {
 		lhTraffic := p.To == lhV4 || p.To == lhV6 || p.From == lhV4 || p.From == lhV6
-		if p.To.Addr().Is4() == (lhOverV4 && lhTraffic) {
+		if p.To.Addr().Is4() == (tc.lhOverV4 && lhTraffic) {
 			return router.KeepRouting
 		}
 		return router.Drop
 	}
 	r.RouteForAllExitFuncOrTimeout(time.Second, officeV6)
 
+	// One side at a time, so both sides hold the same single tunnel, unless the case wants them racing
 	me.c.InjectTunPacket(BuildTunUDPPacket(them.vpnAddr, 80, me.vpnAddr, 80, []byte("establish")))
+	if !tc.simultaneous {
+		r.RouteForAllExitFuncOrTimeout(time.Second, officeV6)
+	}
 	them.c.InjectTunPacket(BuildTunUDPPacket(me.vpnAddr, 80, them.vpnAddr, 80, []byte("establish")))
-	r.RouteForAllExitFuncOrTimeout(time.Second*2, officeV6)
+	r.RouteForAllExitFuncOrTimeout(time.Second, officeV6)
+	if tc.simultaneous && me.c.GetHostmapIndexCount() < 3 {
+		// A tunnel to the lighthouse and two to the peer, or the race did not happen
+		t.Logf("simultaneous handshakes settled on a single tunnel this run")
+	}
 	drainTun(me.c)
 	drainTun(them.c)
 
@@ -152,7 +168,7 @@ func measureDualStackRoam(t *testing.T, meSends, themSends, rebind, lhOverV4 boo
 	}{
 		{"laptop->peer", me.c, them.vpnAddr, true},
 		{"peer->laptop", them.c, me.vpnAddr, true},
-		{"laptop->lh", me.c, lh.vpnAddr, !lhOverV4},
+		{"laptop->lh", me.c, lh.vpnAddr, !tc.lhOverV4},
 	} {
 		hi := want.c.GetHostInfoByVpnAddr(want.vpnAddr, false)
 		if hi == nil {
@@ -170,7 +186,7 @@ func measureDualStackRoam(t *testing.T, meSends, themSends, rebind, lhOverV4 boo
 	r.AddRoute(hotel.Addr(), hotel.Port(), me.c)
 
 	start := time.Now()
-	if rebind {
+	if tc.rebind {
 		me.c.RebindUDPServer()
 	}
 
@@ -188,10 +204,10 @@ func measureDualStackRoam(t *testing.T, meSends, themSends, rebind, lhOverV4 boo
 			case <-stop:
 				return
 			case <-tick.C:
-				if meSends {
+				if tc.meSends {
 					me.c.InjectTunPacket(BuildTunUDPPacket(them.vpnAddr, 80, me.vpnAddr, 80, []byte("retry")))
 				}
-				if themSends {
+				if tc.themSends {
 					them.c.InjectTunPacket(BuildTunUDPPacket(me.vpnAddr, 80, them.vpnAddr, 80, []byte("retry")))
 				}
 			}
@@ -200,7 +216,7 @@ func measureDualStackRoam(t *testing.T, meSends, themSends, rebind, lhOverV4 boo
 
 	// When only one side has traffic, the other direction recovering is a bonus we still report but do not wait for
 	done := func() bool {
-		return (!meSends || fwd.Load() != 0) && (!themSends || rev.Load() != 0)
+		return (!tc.meSends || fwd.Load() != 0) && (!tc.themSends || rev.Load() != 0)
 	}
 	r.RouteForAllExitFuncOrTimeout(time.Second*90, func(p *udp.Packet, _ *nebula.Control) router.ExitType {
 		if p.To == officeV4 || p.To == officeV6Addr {

@@ -215,7 +215,7 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 				return nil
 			}
 
-			sendBatch.Commit(toSend, relayHostInfo.GetRemote())
+			sendBatch.Commit(toSend, relayHostInfo.GetRemote(), relayHostInfo.localIndexId)
 			return nil
 		})
 		if err != nil {
@@ -233,7 +233,7 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 			return nil
 		}
 
-		sendBatch.Commit(out, remote)
+		sendBatch.Commit(out, remote, hostinfo.localIndexId)
 		return nil
 	})
 	if err != nil {

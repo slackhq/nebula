@@ -217,13 +217,16 @@ func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
 		return nil
 	}
 }
-func (u *TesterConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
+func (u *TesterConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, failed func(i int, err error)) (int, error) {
 	written := 0
 	for i, b := range bufs {
 		if err := u.WriteTo(b, addrs[i]); err == nil {
 			written++
 		} else {
 			u.l.Debug("failed to write packet in batch", "udpAddr", addrs[i], "error", err)
+			if failed != nil {
+				failed(i, err)
+			}
 		}
 	}
 	return written, nil

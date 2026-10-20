@@ -3,6 +3,7 @@
 package udp
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -96,12 +97,21 @@ func TestWriteBatchBadFamilyDeliversOthers(t *testing.T) {
 	bufs := [][]byte{[]byte("AAA"), []byte("BBB"), []byte("CCC")}
 	addrs := []netip.AddrPort{good, bad, good}
 
-	n, err := sender.WriteBatch(bufs, addrs)
+	var failed []int
+	n, err := sender.WriteBatch(bufs, addrs, func(i int, err error) {
+		if !IsUnreachable(err) {
+			t.Errorf("packet %d failed with %v, want an unreachable error", i, err)
+		}
+		failed = append(failed, i)
+	})
 	if err != nil {
 		t.Fatalf("WriteBatch returned error, want nil (bad dest should be isolated): %v", err)
 	}
 	if n != 2 {
 		t.Errorf("WriteBatch wrote %d packets, want 2 of 3 (the bad-family dest is the only casualty)", n)
+	}
+	if want := []int{1}; !slices.Equal(failed, want) {
+		t.Errorf("failed reported %v, want %v", failed, want)
 	}
 
 	got := map[string]bool{}
@@ -154,7 +164,7 @@ func TestWriteBatchUnreachableDestDeliversOthers(t *testing.T) {
 	addrs := []netip.AddrPort{good, good, bad, good, good}
 
 	// The bad destination is reported, but only after every other packet has been attempted.
-	if _, err := sender.WriteBatch(bufs, addrs); err == nil {
+	if _, err := sender.WriteBatch(bufs, addrs, nil); err == nil {
 		t.Log("WriteBatch returned nil; kernel accepted the reserved address, delivery assertions still apply")
 	}
 
@@ -376,7 +386,7 @@ func TestWriteBatchPartialSendRewind(t *testing.T) {
 				return accept, nil
 			}
 
-			written, err := w.WriteBatch(bufs, addrs)
+			written, err := w.WriteBatch(bufs, addrs, nil)
 			if err != nil {
 				t.Fatalf("WriteBatch: %v", err)
 			}
@@ -429,12 +439,21 @@ func TestWriteBatchSkipUnroutableRunAccounting(t *testing.T) {
 				return accept, nil
 			}
 
-			written, err := w.WriteBatch(bufs, addrs)
+			var failed []int
+			written, err := w.WriteBatch(bufs, addrs, func(i int, err error) {
+				if !IsUnreachable(err) {
+					t.Errorf("packet %d failed with %v, want an unreachable error", i, err)
+				}
+				failed = append(failed, i)
+			})
 			if err != nil {
 				t.Fatalf("WriteBatch: %v", err)
 			}
 			if written != 4 {
 				t.Errorf("written = %d, want 4 (the unroutable run is the only casualty)", written)
+			}
+			if want := []int{2}; !slices.Equal(failed, want) {
+				t.Errorf("failed reported %v, want %v", failed, want)
 			}
 			wantTags := []byte{1, 2, 4, 5}
 			if len(wire) != len(wantTags) {
@@ -486,12 +505,22 @@ func TestWriteBatchMidChunkRejectResumes(t *testing.T) {
 		}
 	}
 
-	written, err := w.WriteBatch(bufs, addrs)
+	var failed []int
+	written, err := w.WriteBatch(bufs, addrs, func(i int, err error) {
+		if !errors.Is(err, unix.EPERM) {
+			t.Errorf("packet %d failed with %v, want EPERM", i, err)
+		}
+		failed = append(failed, i)
+	})
 	if err != nil {
 		t.Fatalf("WriteBatch: %v", err)
 	}
 	if written != 3 {
 		t.Errorf("written = %d, want 3 (B's rejected run is the only casualty)", written)
+	}
+	// Every packet in B's run is reported, not just the entry
+	if want := []int{2, 3}; !slices.Equal(failed, want) {
+		t.Errorf("failed reported %v, want %v", failed, want)
 	}
 	wantTags := []byte{1, 2, 5}
 	if len(wire) != len(wantTags) {
@@ -543,7 +572,7 @@ func TestWriteBatchMidChunkEIODisablesGSOWithoutDup(t *testing.T) {
 		}
 	}
 
-	written, err := w.WriteBatch(bufs, addrs)
+	written, err := w.WriteBatch(bufs, addrs, nil)
 	if err != nil {
 		t.Fatalf("WriteBatch: %v", err)
 	}
@@ -571,7 +600,7 @@ func TestWriteBatchZeroProgress(t *testing.T) {
 	w.sendFn = func(start, n int) (int, error) { return 0, nil }
 	bufs := [][]byte{make([]byte, 100)}
 	addrs := []netip.AddrPort{netip.MustParseAddrPort("127.0.0.1:4242")}
-	if _, err := w.WriteBatch(bufs, addrs); err == nil {
+	if _, err := w.WriteBatch(bufs, addrs, nil); err == nil {
 		t.Fatal("WriteBatch = nil error on zero progress, want error")
 	}
 }
@@ -597,7 +626,7 @@ func TestWriteBatchEIODisablesGSOAndReplays(t *testing.T) {
 		return n, nil
 	}
 
-	written, err := w.WriteBatch(bufs, addrs)
+	written, err := w.WriteBatch(bufs, addrs, nil)
 	if err != nil {
 		t.Fatalf("WriteBatch: %v", err)
 	}
@@ -674,7 +703,7 @@ func TestGSOEngagesOnLoopback(t *testing.T) {
 		addrs[i] = dst
 	}
 
-	written, err := sc.WriteBatch(bufs, addrs)
+	written, err := sc.WriteBatch(bufs, addrs, nil)
 	if err != nil {
 		t.Fatalf("WriteBatch: %v", err)
 	}
