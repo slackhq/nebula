@@ -206,11 +206,25 @@ func NewFirewallFromConfig(l *slog.Logger, cs *CertState, c *config.C) (*Firewal
 		panic("No certificate available to reconfigure the firewall")
 	}
 
+	tcpTimeout := c.GetDuration("firewall.conntrack.tcp_timeout", time.Minute*12)
+	udpTimeout := c.GetDuration("firewall.conntrack.udp_timeout", time.Minute*3)
+	defaultTimeout := c.GetDuration("firewall.conntrack.default_timeout", time.Minute*10)
+
+	if tcpTimeout <= 0 {
+		return nil, fmt.Errorf("firewall.conntrack.tcp_timeout must be greater than 0, got: %s", tcpTimeout)
+	}
+	if udpTimeout <= 0 {
+		return nil, fmt.Errorf("firewall.conntrack.udp_timeout must be greater than 0, got: %s", udpTimeout)
+	}
+	if defaultTimeout <= 0 {
+		return nil, fmt.Errorf("firewall.conntrack.default_timeout must be greater than 0, got: %s", defaultTimeout)
+	}
+
 	fw := NewFirewall(
 		l,
-		c.GetDuration("firewall.conntrack.tcp_timeout", time.Minute*12),
-		c.GetDuration("firewall.conntrack.udp_timeout", time.Minute*3),
-		c.GetDuration("firewall.conntrack.default_timeout", time.Minute*10),
+		tcpTimeout,
+		udpTimeout,
+		defaultTimeout,
 		certificate,
 		//TODO: max_connections
 	)
