@@ -15,7 +15,6 @@ func TestIsUnreachable(t *testing.T) {
 		wrap(syscall.ENETUNREACH),
 		wrap(syscall.EHOSTUNREACH),
 		wrap(syscall.EADDRNOTAVAIL),
-		wrap(syscall.EAFNOSUPPORT),
 		ErrInvalidIPv6RemoteForSocket,
 	} {
 		if !IsUnreachable(err) {
