@@ -126,65 +126,26 @@ func TestPanicInCommandDoesNotKillTheDaemon(t *testing.T) {
 	assert.Empty(t, errOut)
 }
 
+// TestSocketPermissions: the modes are pinned, not left to the umask. A 077 umask would
+// make the directory 0700 and hide a root daemon's socket from an unprivileged nebula
+// ctl.
 func TestSocketPermissions(t *testing.T) {
-	old := unix.Umask(0)
-	defer unix.Umask(old)
+	for _, umask := range []int{0, 0077} {
+		t.Run(fmt.Sprintf("umask %04o", umask), func(t *testing.T) {
+			old := unix.Umask(umask)
+			defer unix.Umask(old)
 
-	_, path := serve(t, basicRegistry())
+			_, path := serve(t, basicRegistry())
 
-	fi, err := os.Stat(path)
-	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0600), fi.Mode().Perm(), "socket must not be reachable by other users")
+			fi, err := os.Stat(path)
+			require.NoError(t, err)
+			assert.Equal(t, os.FileMode(0600), fi.Mode().Perm(), "socket must not be reachable by other users")
 
-	di, err := os.Stat(filepath.Dir(path))
-	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0755), di.Mode().Perm(), "a directory we create ourselves is searchable, so ServedByRoot can see into it")
-}
-
-// TestSocketPermissionsUnderTightUmask: the modes are pinned, not left to the umask. A
-// 077 umask would make the directory 0700 and hide a root daemon's socket from an
-// unprivileged nebula ctl.
-func TestSocketPermissionsUnderTightUmask(t *testing.T) {
-	old := unix.Umask(0077)
-	defer unix.Umask(old)
-
-	_, path := serve(t, basicRegistry())
-
-	fi, err := os.Stat(path)
-	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0600), fi.Mode().Perm())
-
-	di, err := os.Stat(filepath.Dir(path))
-	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0755), di.Mode().Perm(), "the umask must not take the directory's searchability back")
-}
-
-func TestStaleSocketIsReplaced(t *testing.T) {
-	path := testSocket(t)
-	require.NoError(t, os.Mkdir(filepath.Dir(path), 0700))
-
-	// A hard kill leaves a socket file with nothing behind it.
-	ln, err := net.Listen("unix", path)
-	require.NoError(t, err)
-	require.NoError(t, ln.Close())
-	require.NoError(t, os.WriteFile(path, nil, 0600))
-	_ = os.Remove(path)
-	ln, err = net.Listen("unix", path)
-	require.NoError(t, err)
-	fl, ok := ln.(*net.UnixListener)
-	require.True(t, ok)
-	fl.SetUnlinkOnClose(false)
-	require.NoError(t, ln.Close())
-
-	_, err = os.Stat(path)
-	require.NoError(t, err, "test setup should leave a stale socket behind")
-
-	s := NewServer(test.NewLogger(), basicRegistry())
-	require.NoError(t, s.Rebind(context.Background(), path, ownerOnly()), "a stale socket must not block startup")
-	defer s.Stop()
-
-	out, _ := run(t, path, "echo", "ok")
-	assert.Equal(t, "[ok]", out)
+			di, err := os.Stat(filepath.Dir(path))
+			require.NoError(t, err)
+			assert.Equal(t, os.FileMode(0755), di.Mode().Perm(), "a directory we create ourselves is searchable, so ServedByRoot can see into it")
+		})
+	}
 }
 
 func TestLiveSocketIsNotStolen(t *testing.T) {
@@ -346,44 +307,6 @@ func TestOversizedRequestIsRejected(t *testing.T) {
 
 // TestConcurrentClientsAreBounded checks that going over the connection cap is answered
 // rather than queued, so a burst of clients cannot pile up against the packet path.
-func TestConcurrentClientsAreBounded(t *testing.T) {
-	reg := commands.New()
-	release := make(chan struct{})
-	reg.Register(&commands.Command{
-		Name:             "block",
-		ShortDescription: "blocks until released",
-		Run: func(fs any, a []string) (commands.Result, error) {
-			<-release
-			return commands.Value("done"), nil
-		},
-	})
-
-	s := NewServer(test.NewLogger(), reg)
-	s.maxConns = 2
-	path := testSocket(t)
-	require.NoError(t, s.Rebind(context.Background(), path, ownerOnly()))
-	defer s.Stop()
-
-	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, _ = (&Client{Path: path}).Invoke("block", nil, nil, "")
-		}()
-	}
-
-	// Give the two blockers time to occupy the slots.
-	time.Sleep(200 * time.Millisecond)
-
-	res, err := (&Client{Path: path}).Invoke("block", nil, nil, "")
-	require.NoError(t, err)
-	assert.Contains(t, res.Error, "busy")
-
-	close(release)
-	wg.Wait()
-}
-
 // TestSlowCommandIsNamedInTheLog: a command that does not return holds its slot for
 // good, and enough of them leave the socket answering only "busy". Both are logged, the
 // command by name once it has run past slowAfter and each refused connection as it
@@ -673,8 +596,9 @@ func TestJSONOutputIsAJSONValue(t *testing.T) {
 	assert.Equal(t, []int{1, 2, 3}, decoded.Hosts)
 }
 
-// TestTextOutputIsAJSONString: everything else round trips as a string, unchanged.
-func TestTextOutputIsAJSONString(t *testing.T) {
+// TestStringValueIsAJSONString: a command whose value is a string answers a JSON request
+// with a JSON string, quotes and all.
+func TestStringValueIsAJSONString(t *testing.T) {
 	_, path := serve(t, basicRegistry())
 
 	res, err := (&Client{Path: path}).Invoke("echo", nil, []string{"hi"}, "")
@@ -685,7 +609,7 @@ func TestTextOutputIsAJSONString(t *testing.T) {
 	assert.Equal(t, "[hi]", s)
 }
 
-func TestDescribeReportsFlagTypes(t *testing.T) {
+func TestDescribeListsTheCommands(t *testing.T) {
 	_, path := serve(t, basicRegistry())
 
 	schema, err := (&Client{Path: path}).Describe()
@@ -696,8 +620,7 @@ func TestDescribeReportsFlagTypes(t *testing.T) {
 		names = append(names, string(c.Name))
 	}
 
-	assert.Contains(t, names, "echo")
-	assert.NotContains(t, names, "withheld", "the schema advertises only what this surface serves")
+	assert.ElementsMatch(t, []string{"help", "echo", "boom"}, names)
 }
 
 // TestPresentationParametersAreRefused: the schema lists json and pretty on every

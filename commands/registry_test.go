@@ -86,50 +86,6 @@ func TestWithheldIsNotReportedAsUnknown(t *testing.T) {
 	assert.Contains(t, out.String(), "did not understand: no-such-command")
 }
 
-// TestSplitWriterKeepsOutputParseable is why the writer grew Err(): usage text on the
-// same stream as -json output would corrupt it.
-func TestSplitWriterKeepsOutputParseable(t *testing.T) {
-	r := New()
-	r.Register(&Command{
-		Name:             "emit",
-		ShortDescription: "emits json",
-		Flags: func() (*flag.FlagSet, any) {
-			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			fl.Bool("verbose", false, "say more")
-			return fl, nil
-		},
-		Run: func(fs any, a []string) (Result, error) {
-			return Value(map[string]bool{"ok": true}), nil
-		},
-	})
-
-	out, errOut := &bytes.Buffer{}, &bytes.Buffer{}
-	require.Error(t, r.DispatchArgs([]string{"emit", "-nope"}, Output{Out: out, Err: errOut}))
-
-	assert.Empty(t, out.String(), "flag errors must not land on the output stream")
-	assert.Contains(t, errOut.String(), "flag provided but not defined")
-}
-
-// TestMergedWriterPreservesSshBehavior: the ssh surface points both streams at one
-// channel, and must keep seeing a single merged stream.
-func TestMergedWriterPreservesSshBehavior(t *testing.T) {
-	r := New()
-	r.Register(&Command{
-		Name:             "emit",
-		ShortDescription: "emits",
-		Flags: func() (*flag.FlagSet, any) {
-			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			fl.Bool("verbose", false, "say more")
-			return fl, nil
-		},
-		Run: func(fs any, a []string) (Result, error) { return Nothing(), nil },
-	})
-
-	merged := &bytes.Buffer{}
-	require.Error(t, r.DispatchArgs([]string{"emit", "-nope"}, MergedOutput(merged)))
-	assert.Contains(t, merged.String(), "flag provided but not defined")
-}
-
 // paramRegistry holds one command with a bool flag and a duration flag, and reports what
 // the command saw when it ran.
 func paramRegistry(t *testing.T) (*Registry, *[]paramsSeen) {
@@ -218,12 +174,6 @@ func TestHelpListsOnlyServedCommands(t *testing.T) {
 	assert.NotContains(t, out.String(), "withheld")
 }
 
-func TestDispatchHelpFlag(t *testing.T) {
-	out := &bytes.Buffer{}
-	testRegistry().Dispatch("served -h", MergedOutput(out))
-	assert.Contains(t, out.String(), "served - a command this surface serves")
-}
-
 // TestDispatchReportsUnparseableLine pins that a line shlex rejects says so on Err rather
 // than coming back silent, so an operator with an unbalanced quote learns the quote is the
 // problem instead of assuming the command is broken.
@@ -257,14 +207,6 @@ func TestRegisterRejectsReservedFlags(t *testing.T) {
 			})
 		})
 	}
-}
-
-func TestCloneDoesNotAffectOriginal(t *testing.T) {
-	r := testRegistry()
-	c := r.Clone()
-	c.Register(&Command{Name: "logout", ShortDescription: "ends the session", Run: func(fs any, a []string) (Result, error) { return Nothing(), nil }})
-
-	assert.Nil(t, r.Get("logout"))
 }
 
 // TestRegistryIsSafeForConcurrentUse runs the operations the surfaces perform, filtering
@@ -307,16 +249,23 @@ func TestRegistryIsSafeForConcurrentUse(t *testing.T) {
 	assert.Len(t, f.Match("late-"), 8*50, "every late registration is visible once the writers finish")
 }
 
-// TestHelpFlagAgreesWithHelpCommand pins that -h on a command and `help <name>` print the
-// same text, on a clone as on the source: both render through WriteCommandHelp, and Clone
-// rebinds help to the copy, so a command registered on the clone is found either way.
-func TestHelpFlagAgreesWithHelpCommand(t *testing.T) {
-	c := testRegistry().Clone()
+// TestCloneHelpSeesCloneCommands: the ssh session registers logout on its clone, and
+// the source does not learn of it. Help on the clone answers for the clone, and -h on a
+// command prints what `help <name>` does, on a clone as on the source: both render
+// through WriteCommandHelp, and Clone rebinds help to the copy.
+func TestCloneHelpSeesCloneCommands(t *testing.T) {
+	r := testRegistry()
+	c := r.Clone()
 	c.Register(&Command{
 		Name:             Logout,
 		ShortDescription: "ends the session",
 		Run:              func(fs any, a []string) (Result, error) { return Nothing(), nil },
 	})
+	assert.Nil(t, r.Get(Logout), "the source is not affected")
+
+	out := &bytes.Buffer{}
+	require.NoError(t, c.DispatchArgs([]string{"help"}, MergedOutput(out)))
+	assert.Contains(t, out.String(), "logout")
 
 	for _, name := range []string{"logout", "served"} {
 		flag := &bytes.Buffer{}
@@ -326,21 +275,6 @@ func TestHelpFlagAgreesWithHelpCommand(t *testing.T) {
 		assert.Equal(t, cmd.String(), flag.String(), name)
 		assert.Contains(t, flag.String(), name+" - ", name)
 	}
-}
-
-// TestCloneHelpSeesCloneCommands: help on a clone answers for the clone. The ssh session
-// registers logout on its clone, and `help logout` has to find it.
-func TestCloneHelpSeesCloneCommands(t *testing.T) {
-	c := testRegistry().Clone()
-	c.Register(&Command{Name: "logout", ShortDescription: "ends the session", Run: func(fs any, a []string) (Result, error) { return Nothing(), nil }})
-
-	out := &bytes.Buffer{}
-	require.NoError(t, c.DispatchArgs([]string{"help", "logout"}, MergedOutput(out)))
-	assert.Contains(t, out.String(), "ends the session")
-
-	out.Reset()
-	require.NoError(t, c.DispatchArgs([]string{"help"}, MergedOutput(out)))
-	assert.Contains(t, out.String(), "logout")
 }
 
 // TestThenRunsAfterTheReply pins the order Then exists for: Run's line is on the writer

@@ -14,6 +14,7 @@ import (
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 // ownGroup returns a group this process may hand a socket to: its own effective group,
@@ -85,9 +86,12 @@ func TestControlAccessFromConfig(t *testing.T) {
 }
 
 // TestControlSocketIsHandedToTheGroup: the socket is created with the group's gid and
-// 0660, and a reload that takes the group away tightens the socket in place, without
-// moving it.
+// 0660, whatever the umask, and a reload that takes the group away tightens the socket
+// in place, without moving it.
 func TestControlSocketIsHandedToTheGroup(t *testing.T) {
+	old := unix.Umask(0077)
+	defer unix.Umask(old)
+
 	name, gid := ownGroup(t)
 	want, err := strconv.ParseUint(gid, 10, 32)
 	require.NoError(t, err)

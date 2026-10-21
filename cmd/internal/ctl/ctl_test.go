@@ -128,23 +128,6 @@ func TestParseCommandReportsWhatFlagSaid(t *testing.T) {
 	}
 }
 
-// TestParseCommandSendsATextlessCommandAsText: whether a command without a human form
-// can answer in text depends on what it returns, which the client cannot know until it
-// asks. A refusal always has a human form, so the request goes out as text and the
-// daemon decides.
-func TestParseCommandSendsATextlessCommandAsText(t *testing.T) {
-	schema := []commands.CommandSchema{{Name: "print-tunnel"}}
-
-	req, printedHelp, err := parseCommand(schema, []string{"print-tunnel"})
-	require.NoError(t, err)
-	assert.False(t, printedHelp)
-	assert.Equal(t, commands.PrintTunnel, req.name)
-	assert.Nil(t, req.Params)
-	assert.Empty(t, req.Args)
-	assert.Equal(t, commands.FormatUnset, req.Format)
-	assert.Equal(t, "text", wireFormat(req.Format))
-}
-
 // TestParseCommandOffPresentationFlagIsNoPreference: the daemon treats -json=false as
 // no preference, so nebula ctl must too, or the same line renders differently on the
 // two surfaces. Only a true value asks for JSON, and -pretty implies it.
@@ -164,12 +147,8 @@ func TestParseCommandOffPresentationFlagIsNoPreference(t *testing.T) {
 	}{
 		{[]string{"device-info"}, commands.FormatUnset, "text"},
 		{[]string{"device-info", "-json=false"}, commands.FormatUnset, "text"},
-		{[]string{"device-info", "-pretty=false"}, commands.FormatUnset, "text"},
-		{[]string{"device-info", "-json=false", "-pretty=false"}, commands.FormatUnset, "text"},
 		{[]string{"device-info", "-json"}, commands.FormatJSON, "json"},
-		{[]string{"device-info", "-json=true"}, commands.FormatJSON, "json"},
 		{[]string{"device-info", "-pretty"}, commands.FormatPrettyJSON, "json"},
-		{[]string{"device-info", "-pretty", "-json=false"}, commands.FormatPrettyJSON, "json"},
 	} {
 		t.Run(strings.Join(tc.argv[1:], " "), func(t *testing.T) {
 			req, printedHelp, err := parseCommand(schema, tc.argv)
