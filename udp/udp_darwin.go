@@ -180,11 +180,121 @@ func NewUDPStatsEmitter(udpConns []Conn) func() {
 	return func() {}
 }
 
+// recvBatch is how many datagrams one recvmsg_x call may return.
+const recvBatch = 64
+
+// msghdrX mirrors xnu's struct msghdr_x (bsd/sys/socket_private.h). recvmsg_x reports each
+// datagram's length in Datalen rather than in its return value.
+type msghdrX struct {
+	Name       *byte
+	Namelen    uint32
+	Iov        *unix.Iovec
+	Iovlen     int32
+	Control    *byte
+	Controllen uint32
+	Flags      int32
+	Datalen    uint64
+}
+
+// ListenOut drains the socket with recvmsg_x, darwin's private batched recvmsg, so one syscall reads
+// up to recvBatch datagrams instead of one. Sends stay on sendto: xnu batches sendmsg_x through
+// the stack only on connected sockets, and on this unconnected one it loops sendit per message.
 func (u *StdConn) ListenOut(r EncReader, flush func()) error {
+	rc, err := u.UDPConn.SyscallConn()
+	if err != nil {
+		return err
+	}
+
+	bufs := make([][]byte, recvBatch)
+	names := make([]unix.RawSockaddrInet6, recvBatch)
+	iovs := make([]unix.Iovec, recvBatch)
+	hdrs := make([]msghdrX, recvBatch)
+	for i := range hdrs {
+		bufs[i] = make([]byte, MTU)
+		iovs[i].Base = &bufs[i][0]
+		iovs[i].SetLen(MTU)
+		hdrs[i].Iov = &iovs[i]
+		hdrs[i].Iovlen = 1
+		hdrs[i].Name = (*byte)(unsafe.Pointer(&names[i]))
+	}
+
+	for {
+		var n int
+		var errno syscall.Errno
+		err := rc.Read(func(fd uintptr) bool {
+			for i := range hdrs {
+				hdrs[i].Namelen = unix.SizeofSockaddrInet6
+				hdrs[i].Flags = 0
+				hdrs[i].Datalen = 0
+			}
+			r0, _, e := unix.Syscall6(unix.SYS_RECVMSG_X, fd, uintptr(unsafe.Pointer(&hdrs[0])), recvBatch, 0, 0, 0)
+			if e == unix.EAGAIN {
+				return false
+			}
+			n, errno = int(r0), e
+			return true
+		})
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return err
+			}
+			u.l.Error("unexpected udp socket receive error", "error", err)
+			continue
+		}
+		if errno == unix.ENOSYS || errno == unix.EPERM || errno == unix.EOPNOTSUPP {
+			// recvmsg_x is private, so a kernel or sandbox (such as an iOS extension's) may refuse it.
+			u.l.Warn("recvmsg_x unavailable, reading one datagram per syscall", "error", errno)
+			return u.listenOutSingle(r, flush)
+		}
+		if errno != 0 {
+			if errno != unix.EINTR {
+				u.l.Error("unexpected udp socket receive error", "error", errno)
+			}
+			continue
+		}
+		if err := checkMsghdrX(hdrs, names, n); err != nil {
+			// The batch was read through a layout the kernel no longer writes, so none of it is trustworthy.
+			u.l.Warn("recvmsg_x returned an unexpected header, reading one datagram per syscall", "error", err)
+			return u.listenOutSingle(r, flush)
+		}
+
+		for i := 0; i < n; i++ {
+			addr, ok := sockaddrToAddrPort(&names[i])
+			if !ok {
+				continue
+			}
+			l := int(hdrs[i].Datalen)
+			r(addr, bufs[i][:l:l])
+		}
+		flush()
+	}
+}
+
+// checkMsghdrX rejects a recvmsg_x result that intact msghdr_x entries can't produce, which is how a change
+// to xnu's private struct layout would show up.
+func checkMsghdrX(hdrs []msghdrX, names []unix.RawSockaddrInet6, n int) error {
+	if n > len(hdrs) {
+		return fmt.Errorf("returned %d datagrams for %d headers", n, len(hdrs))
+	}
+	for i := range n {
+		if hdrs[i].Datalen > MTU {
+			return fmt.Errorf("datagram %d is %d bytes, past the %d byte buffer", i, hdrs[i].Datalen, MTU)
+		}
+		switch {
+		case names[i].Family == unix.AF_INET && hdrs[i].Namelen == unix.SizeofSockaddrInet4:
+		case names[i].Family == unix.AF_INET6 && hdrs[i].Namelen == unix.SizeofSockaddrInet6:
+		default:
+			return fmt.Errorf("datagram %d has address family %d with length %d", i, names[i].Family, hdrs[i].Namelen)
+		}
+	}
+	return nil
+}
+
+// listenOutSingle reads one datagram per recvfrom and flushes after each, for when recvmsg_x is refused or misbehaves.
+func (u *StdConn) listenOutSingle(r EncReader, flush func()) error {
 	buffer := make([]byte, MTU)
 
 	for {
-		// Just read one packet at a time
 		n, rua, err := u.ReadFromUDPAddrPort(buffer)
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
@@ -197,6 +307,19 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n:n])
 		flush()
 	}
+}
+
+func sockaddrToAddrPort(sa *unix.RawSockaddrInet6) (netip.AddrPort, bool) {
+	switch sa.Family {
+	case unix.AF_INET:
+		sa4 := (*unix.RawSockaddrInet4)(unsafe.Pointer(sa))
+		port := binary.BigEndian.Uint16((*[2]byte)(unsafe.Pointer(&sa4.Port))[:])
+		return netip.AddrPortFrom(netip.AddrFrom4(sa4.Addr), port), true
+	case unix.AF_INET6:
+		port := binary.BigEndian.Uint16((*[2]byte)(unsafe.Pointer(&sa.Port))[:])
+		return netip.AddrPortFrom(netip.AddrFrom16(sa.Addr).Unmap(), port), true
+	}
+	return netip.AddrPort{}, false
 }
 
 func (u *StdConn) SupportsMultipleReaders() bool {
