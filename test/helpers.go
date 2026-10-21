@@ -10,6 +10,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// ShortTempDir returns a short private directory of the test's own, removed when the
+// test ends. t.TempDir embeds the test name, which on darwin routinely pushes a unix
+// socket path laid out under it past the 104 byte sun_path limit.
+func ShortTempDir(t *testing.T) string {
+	t.Helper()
+
+	dir, err := os.MkdirTemp("", "la")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 // Update is the -update flag: Golden rewrites its file instead of comparing against it.
 var Update = flag.Bool("update", false, "rewrite golden files instead of comparing against them")
 

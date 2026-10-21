@@ -3,6 +3,7 @@ package sshd
 import (
 	"errors"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"github.com/slackhq/nebula/commands"
@@ -25,6 +26,7 @@ func NewSession(reg *commands.Registry, conn *ssh.ServerConn, chans <-chan ssh.N
 		c:        conn,
 		cancel:   cancel,
 	}
+	s.commands.DefaultFormat = DefaultFormat
 
 	s.commands.Register(LogoutCommand(s.Close))
 
@@ -38,11 +40,29 @@ func LogoutCommand(end func()) *commands.Command {
 	return &commands.Command{
 		Name:             commands.Logout,
 		ShortDescription: "Ends the current session",
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
+		Run: func(a any, args []string) (commands.Result, error) {
 			end()
-			return nil
+			return commands.Nothing(), nil
 		},
 	}
+}
+
+// DefaultFormat is what an ssh session renders when the operator gave neither -json nor
+// -pretty: text where a command has a human form, and compact JSON for the ones that
+// have none (print-tunnel, print-relays, query-lighthouse). It is ssh's policy, exported so a test
+// can dispatch through the same choice, and ssh's to change.
+func DefaultFormat(c *commands.Command, r commands.Result) commands.Format {
+	if !c.JSONOnly {
+		return commands.FormatText
+	}
+
+	// A JSON-only command's refusal ("No vpn address was provided") is a sentence for a
+	// person, so an outcome renders as text here; ssh users and scripts expect it.
+	if r.Value == nil {
+		return commands.FormatText
+	}
+
+	return commands.FormatJSON
 }
 
 func (s *session) handleChannels(chans <-chan ssh.NewChannel) {
@@ -91,7 +111,7 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 			}
 
 			req.Reply(true, nil)
-			err := s.dispatchCommand(payload.Value, commands.NewStringWriter(channel))
+			err := s.dispatchCommand(payload.Value, commands.MergedOutput(channel))
 
 			// A command that failed exits 1, so `ssh host cmd` callers can tell.
 			status := struct{ Status uint32 }{uint32(0)}
@@ -124,6 +144,7 @@ func (s *session) createTerm(channel ssh.Channel) *term.Terminal {
 				return cmds[0] + " ", len(cmds[0]) + 1, true
 			}
 
+			sort.Strings(cmds)
 			term.Write([]byte(strings.Join(cmds, "\n") + "\n\n"))
 		}
 
@@ -135,7 +156,7 @@ func (s *session) createTerm(channel ssh.Channel) *term.Terminal {
 }
 
 func (s *session) handleInput() {
-	w := commands.NewStringWriter(s.term)
+	w := commands.MergedOutput(s.term)
 	for {
 		line, err := s.term.ReadLine()
 		if err != nil {
@@ -149,7 +170,7 @@ func (s *session) handleInput() {
 // dispatchCommand runs line and returns the command's error, which it has logged unless
 // the command already told the user everything: the log line is for the operator reading
 // the daemon's log, who learns nothing from a failure the user caused.
-func (s *session) dispatchCommand(line string, w commands.StringWriter) error {
+func (s *session) dispatchCommand(line string, w commands.Output) error {
 	err := s.commands.Dispatch(line, w)
 	if err == nil {
 		return nil

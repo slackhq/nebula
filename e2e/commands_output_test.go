@@ -69,12 +69,15 @@ func TestCommandOutput(t *testing.T) {
 	// help on the clone lists and describes. There is no session to end here.
 	reg := control.Commands().Clone()
 	reg.Register(sshd.LogoutCommand(func() {}))
+	// Dispatch with ssh's default-format policy, so the no-flag column records what an
+	// operator at an ssh prompt sees.
+	reg.DefaultFormat = sshd.DefaultFormat
 
 	// run dispatches as the ssh exec path does and returns the output and the error, which
 	// over ssh is exit status 1.
 	run := func(args ...string) (string, error) {
 		buf := &bytes.Buffer{}
-		err := reg.DispatchArgs(args, commands.NewStringWriter(buf))
+		err := reg.DispatchArgs(args, commands.MergedOutput(buf))
 		return buf.String(), err
 	}
 
@@ -94,6 +97,8 @@ func TestCommandOutput(t *testing.T) {
 		{"print-cert", nil},
 		{"print-cert", []string{"-raw"}},
 		{"print-cert", []string{"10.222.0.9"}},
+		// A flag after the operand is still a flag, on both surfaces.
+		{"print-cert", []string{"10.222.0.9", "-json"}},
 		{"print-cert", []string{"10.222.0.250"}},
 		{"print-cert", []string{"not-an-address"}},
 		{"print-tunnel", nil},

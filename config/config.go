@@ -32,6 +32,11 @@ type C struct {
 
 	// Set by the first reload that needs a restart and never cleared. Guarded by reloadLock
 	needsRestart bool
+
+	// callbackLock guards callbacks. Registration is not confined to startup: CatchHUP is
+	// running from inside Main, and anything wired up after Main returns registers while
+	// a HUP could already be reloading, so append and iteration have to be serialized.
+	callbackLock sync.Mutex
 }
 
 func NewC(l *slog.Logger) *C {
@@ -78,7 +83,20 @@ func (c *C) LoadString(raw string) error {
 // These functions should return quickly or spawn their own go routine if they will take a while.
 // Use r to report anything that failed or needs a restart to apply.
 func (c *C) RegisterReloadCallback(f func(c *C, r *Reload)) {
+	c.callbackLock.Lock()
+	defer c.callbackLock.Unlock()
 	c.callbacks = append(c.callbacks, f)
+}
+
+// reloadCallbacks returns a snapshot of the registered callbacks. Reloads iterate the
+// snapshot rather than the live slice, so a registration from another goroutine cannot
+// race the loop; a callback registered while a reload is in progress runs from the next
+// reload on. callbackLock is not held during the calls themselves, so a callback that
+// registers another callback does not deadlock.
+func (c *C) reloadCallbacks() []func(*C, *Reload) {
+	c.callbackLock.Lock()
+	defer c.callbackLock.Unlock()
+	return append(make([]func(*C, *Reload), 0, len(c.callbacks)), c.callbacks...)
 }
 
 // InitialLoad returns true if this is the first load of the config, and ReloadConfig has not been called yet.
@@ -204,7 +222,7 @@ func (c *C) ReloadConfigString(raw string) ReloadResult {
 
 func (c *C) runCallbacks() ReloadResult {
 	r := &Reload{c: c}
-	for _, v := range c.callbacks {
+	for _, v := range c.reloadCallbacks() {
 		v(c, r)
 	}
 

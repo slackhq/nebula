@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A control socket that provides access to all of the ssh debug server's commands along with support
+  for running `nebula ctl <command>` as a client from the CLI.
+
 ### Removed
 
 - The SSH debug server's `start-cpu-profile`, `stop-cpu-profile`, `save-heap-profile`, `save-mutex-profile`, and

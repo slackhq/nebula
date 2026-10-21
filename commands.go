@@ -1,48 +1,33 @@
 package nebula
 
 import (
-	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"net/netip"
 	"sort"
 	"strings"
 
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/commands"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/logging"
 )
 
 // The commands nebula serves. attachCommands builds the one registry every surface
-// reads. See the commands package for what a Command is.
+// reads; the ssh debug server is a consumer of it, not its owner, which is why this
+// is not ssh.go. See the commands package for what a Command is.
 
 type listHostMapFlags struct {
-	Json    bool
-	Pretty  bool
 	ByIndex bool
 }
 
-// listHostMapFlagSet is the flag set list-hostmap and list-pending-hostmap share.
-func listHostMapFlagSet() (*flag.FlagSet, any) {
-	fl := flag.NewFlagSet("", flag.ContinueOnError)
-	s := listHostMapFlags{}
-	fl.BoolVar(&s.Json, "json", false, "outputs as json with more information")
-	fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
-	fl.BoolVar(&s.ByIndex, "by-index", false, "gets all hosts in the hostmap from the index table")
-	return fl, &s
-}
-
 type printCertFlags struct {
-	Json   bool
-	Pretty bool
-	Raw    bool
-}
-
-type printTunnelFlags struct {
-	Pretty bool
+	Raw bool
 }
 
 type changeRemoteFlags struct {
@@ -57,195 +42,210 @@ type createTunnelFlags struct {
 	Address string
 }
 
-type deviceInfoFlags struct {
-	Json   bool
-	Pretty bool
+// lighthouseInfo is one entry of list-lighthouse-addrmap.
+type lighthouseInfo struct {
+	VpnAddr string    `json:"vpnAddr"`
+	Addrs   *CacheMap `json:"addrs"`
+}
+
+// deviceInfo is the result of device-info.
+type deviceInfo struct {
+	Name string         `json:"name"`
+	Cidr []netip.Prefix `json:"cidr"`
+}
+
+// certPEM is the result of print-cert -raw. The PEM form is a different thing to emit,
+// not a different formatting of the certificate, so it is its own shape.
+type certPEM struct {
+	PEM string `json:"pem"`
+}
+
+// Result shapes for print-relays. Field names are the JSON keys; changing them would
+// change the output.
+type relayFor struct {
+	Error          string `json:",omitempty"`
+	Type           string
+	State          string
+	PeerAddr       netip.Addr
+	LocalIndex     uint32
+	RemoteIndex    uint32
+	RelayedThrough []netip.Addr
+}
+
+type relayOutput struct {
+	NebulaAddr    netip.Addr
+	RelayForAddrs []relayFor
+}
+
+type relaysOutput struct {
+	Relays []*relayOutput
+}
+
+type versionInfo struct {
+	Version string `json:"version"`
+}
+
+type logLevelInfo struct {
+	Level string `json:"level"`
+}
+
+type logFormatInfo struct {
+	Format string `json:"format"`
+}
+
+// defineListHostMapFlags declares the flags list-hostmap and list-pending-hostmap share.
+func defineListHostMapFlags(fl *flag.FlagSet, s *listHostMapFlags) {
+	fl.BoolVar(&s.ByIndex, "by-index", false, "gets all hosts in the hostmap from the index table")
 }
 
 func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Interface) {
-	reg.Register(&commands.Command{
+	reg.Register(commands.Flagged(&commands.Command{
 		Name:             commands.ListHostmap,
 		ShortDescription: "List all known previously connected hosts",
-		Flags:            listHostMapFlagSet,
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return listHostMapCommand(f.hostMap, fs, w)
-		},
-	})
+		Text:             commands.Typed(textListHostMap),
+	}, defineListHostMapFlags, func(s *listHostMapFlags, a []string) (commands.Result, error) {
+		return runListHostMap(f.hostMap, s)
+	}))
 
-	reg.Register(&commands.Command{
+	reg.Register(commands.Flagged(&commands.Command{
 		Name:             commands.ListPendingHostmap,
 		ShortDescription: "List all handshaking hosts",
-		Flags:            listHostMapFlagSet,
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return listHostMapCommand(f.handshakeManager, fs, w)
-		},
-	})
+		Text:             commands.Typed(textListHostMap),
+	}, defineListHostMapFlags, func(s *listHostMapFlags, a []string) (commands.Result, error) {
+		return runListHostMap(f.handshakeManager, s)
+	}))
 
 	reg.Register(&commands.Command{
 		Name:             commands.ListLighthouseAddrmap,
 		ShortDescription: "List all lighthouse map entries",
-		Flags: func() (*flag.FlagSet, any) {
-			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := listHostMapFlags{}
-			fl.BoolVar(&s.Json, "json", false, "outputs as json with more information")
-			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
-			return fl, &s
+		Run: func(fs any, a []string) (commands.Result, error) {
+			return runListLighthouseMap(f.lightHouse)
 		},
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return listLighthouseAddrmapCommand(f.lightHouse, fs, w)
-		},
+		Text: commands.Typed(textListLighthouseMap),
 	})
 
 	reg.Register(&commands.Command{
 		Name:             commands.Reload,
 		ShortDescription: "Reloads configuration from disk, same as sending HUP to the process",
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return reloadCommand(l, c, w)
+		// The line goes out before the reload: a reload that restarts the ssh server ends
+		// the session that asked, and this is what it sees.
+		Run: func(fs any, a []string) (commands.Result, error) {
+			return commands.Did("Reloading config"), nil
+		},
+		Then: func() commands.Result {
+			return runReload(l, c)
 		},
 	})
 
 	reg.Register(&commands.Command{
 		Name:             commands.LogLevel,
 		ShortDescription: "Gets or sets the current log level",
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return logLevelCommand(l, fs, a, w)
+		Run: func(fs any, a []string) (commands.Result, error) {
+			return runLogLevel(l, a)
 		},
+		Text: commands.Typed(textLogLevel),
 	})
 
 	reg.Register(&commands.Command{
 		Name:             commands.LogFormat,
 		ShortDescription: "Gets or sets the current log format",
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return logFormatCommand(l, fs, a, w)
+		Run: func(fs any, a []string) (commands.Result, error) {
+			return runLogFormat(l, a)
 		},
+		Text: commands.Typed(textLogFormat),
 	})
 
 	reg.Register(&commands.Command{
 		Name:             commands.Version,
 		ShortDescription: "Prints the currently running version of nebula",
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return versionCommand(f, fs, a, w)
+		Run: func(fs any, a []string) (commands.Result, error) {
+			return commands.Value(versionInfo{Version: f.version}), nil
 		},
+		Text: commands.Typed(textVersion),
 	})
 
 	reg.Register(&commands.Command{
 		Name:             commands.DeviceInfo,
 		ShortDescription: "Prints information about the network device.",
-		Flags: func() (*flag.FlagSet, any) {
-			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := deviceInfoFlags{}
-			fl.BoolVar(&s.Json, "json", false, "outputs as json with more information")
-			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
-			return fl, &s
+		Run: func(fs any, a []string) (commands.Result, error) {
+			return commands.Value(runDeviceInfo(f)), nil
 		},
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return deviceInfoCommand(f, fs, w)
-		},
+		Text: commands.Typed(textDeviceInfo),
 	})
 
-	reg.Register(&commands.Command{
+	reg.Register(commands.Flagged(&commands.Command{
 		Name:             commands.PrintCert,
 		ShortDescription: "Prints the current certificate being used or the certificate for the provided vpn addr",
-		Flags: func() (*flag.FlagSet, any) {
-			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := printCertFlags{}
-			fl.BoolVar(&s.Json, "json", false, "outputs as json")
-			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
-			fl.BoolVar(&s.Raw, "raw", false, "raw prints the PEM encoded certificate, not compatible with -json or -pretty")
-			return fl, &s
-		},
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return printCertCommand(f, fs, a, w)
-		},
-	})
+		Text:             textPrintCert,
+	}, func(fl *flag.FlagSet, s *printCertFlags) {
+		fl.BoolVar(&s.Raw, "raw", false, "prints the PEM encoded certificate; with -json, an object holding it")
+	}, func(s *printCertFlags, a []string) (commands.Result, error) {
+		return runPrintCert(f, s, a)
+	}))
 
 	reg.Register(&commands.Command{
 		Name:             commands.PrintTunnel,
 		ShortDescription: "Prints json details about a tunnel for the provided vpn addr",
-		Flags: func() (*flag.FlagSet, any) {
-			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := printTunnelFlags{}
-			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json")
-			return fl, &s
+		Run: func(fs any, a []string) (commands.Result, error) {
+			return runPrintTunnel(f, a)
 		},
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return printTunnelCommand(f, fs, a, w)
-		},
+		// No Text on purpose: nothing human readable exists yet, and shipping an interim
+		// form would invite scripts against it. ssh defaults these to JSON; ctl asks.
+		JSONOnly: true,
 	})
 
 	reg.Register(&commands.Command{
 		Name:             commands.PrintRelays,
 		ShortDescription: "Prints json details about all relay info",
-		Flags: func() (*flag.FlagSet, any) {
-			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := printTunnelFlags{}
-			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json")
-			return fl, &s
+		Run: func(fs any, a []string) (commands.Result, error) {
+			return commands.Value(runPrintRelays(f)), nil
 		},
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return printRelaysCommand(f, fs, a, w)
-		},
+		// No Text on purpose; see print-tunnel.
+		JSONOnly: true,
 	})
 
-	reg.Register(&commands.Command{
+	reg.Register(commands.Flagged(&commands.Command{
 		Name:             commands.ChangeRemote,
 		ShortDescription: "Changes the remote address used in the tunnel for the provided vpn addr",
-		Flags: func() (*flag.FlagSet, any) {
-			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := changeRemoteFlags{}
-			fl.StringVar(&s.Address, "address", "", "The new remote address, ip:port")
-			return fl, &s
-		},
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return changeRemoteCommand(f, fs, a, w)
-		},
-	})
+	}, func(fl *flag.FlagSet, s *changeRemoteFlags) {
+		fl.StringVar(&s.Address, "address", "", "The new remote address, ip:port")
+	}, func(s *changeRemoteFlags, a []string) (commands.Result, error) {
+		return runChangeRemote(f, s, a)
+	}))
 
-	reg.Register(&commands.Command{
+	reg.Register(commands.Flagged(&commands.Command{
 		Name:             commands.CloseTunnel,
 		ShortDescription: "Closes a tunnel for the provided vpn addr",
-		Flags: func() (*flag.FlagSet, any) {
-			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := closeTunnelFlags{}
-			fl.BoolVar(&s.LocalOnly, "local-only", false, "Disables notifying the remote that the tunnel is shutting down")
-			return fl, &s
-		},
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return closeTunnelCommand(f, fs, a, w)
-		},
-	})
+	}, func(fl *flag.FlagSet, s *closeTunnelFlags) {
+		fl.BoolVar(&s.LocalOnly, "local-only", false, "Disables notifying the remote that the tunnel is shutting down")
+	}, func(s *closeTunnelFlags, a []string) (commands.Result, error) {
+		return runCloseTunnel(f, s, a)
+	}))
 
-	reg.Register(&commands.Command{
+	reg.Register(commands.Flagged(&commands.Command{
 		Name:             commands.CreateTunnel,
 		ShortDescription: "Creates a tunnel for the provided vpn address",
 		Help:             "The lighthouses will be queried for real addresses but you can provide one as well.",
-		Flags: func() (*flag.FlagSet, any) {
-			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := createTunnelFlags{}
-			fl.StringVar(&s.Address, "address", "", "Optionally provide a real remote address, ip:port ")
-			return fl, &s
-		},
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return createTunnelCommand(f, fs, a, w)
-		},
-	})
+	}, func(fl *flag.FlagSet, s *createTunnelFlags) {
+		fl.StringVar(&s.Address, "address", "", "Optionally provide a real remote address, ip:port ")
+	}, func(s *createTunnelFlags, a []string) (commands.Result, error) {
+		return runCreateTunnel(f, s, a)
+	}))
 
 	reg.Register(&commands.Command{
 		Name:             commands.QueryLighthouse,
 		ShortDescription: "Query the lighthouses for the provided vpn address",
 		Help:             "This command is asynchronous. Only currently known udp addresses will be printed.",
-		Callback: func(fs any, a []string, w commands.StringWriter) error {
-			return queryLighthouseCommand(f, fs, a, w)
+		Run: func(fs any, a []string) (commands.Result, error) {
+			return runQueryLighthouse(f, a)
 		},
+		// No Text on purpose; see print-tunnel.
+		JSONOnly: true,
 	})
 }
 
-func listHostMapCommand(hl controlHostLister, a any, w commands.StringWriter) error {
-	fs, ok := a.(*listHostMapFlags)
-	if !ok {
-		return fmt.Errorf("internal error: expected *listHostMapFlags but was %T", a)
-	}
-
+// runListHostMap computes the hostmap listing. Presentation is Render's job.
+func runListHostMap(hl controlHostLister, fs *listHostMapFlags) (commands.Result, error) {
 	var hm []ControlHostInfo
 	if fs.ByIndex {
 		hm = listHostMapIndexes(hl)
@@ -257,39 +257,21 @@ func listHostMapCommand(hl controlHostLister, a any, w commands.StringWriter) er
 		return hm[i].VpnAddrs[0].Compare(hm[j].VpnAddrs[0]) < 0
 	})
 
-	if fs.Json || fs.Pretty {
-		js := json.NewEncoder(w.GetWriter())
-		if fs.Pretty {
-			js.SetIndent("", "    ")
-		}
+	return commands.Value(hm), nil
+}
 
-		if err := js.Encode(hm); err != nil {
+// textListHostMap is the human rendering, shared by every surface.
+func textListHostMap(hm []ControlHostInfo, w io.Writer) error {
+	for _, h := range hm {
+		if _, err := fmt.Fprintf(w, "%s: %s\n", h.VpnAddrs, h.RemoteAddrs); err != nil {
 			return err
-		}
-
-	} else {
-		for _, v := range hm {
-			err := w.WriteLine(fmt.Sprintf("%s: %s", v.VpnAddrs, v.RemoteAddrs))
-			if err != nil {
-				return err
-			}
 		}
 	}
 
 	return nil
 }
 
-func listLighthouseAddrmapCommand(lightHouse *LightHouse, a any, w commands.StringWriter) error {
-	fs, ok := a.(*listHostMapFlags)
-	if !ok {
-		return fmt.Errorf("internal error: expected *listHostMapFlags but was %T", a)
-	}
-
-	type lighthouseInfo struct {
-		VpnAddr string    `json:"vpnAddr"`
-		Addrs   *CacheMap `json:"addrs"`
-	}
-
+func runListLighthouseMap(lightHouse *LightHouse) (commands.Result, error) {
 	lightHouse.RLock()
 	addrMap := make([]lighthouseInfo, len(lightHouse.addrMap))
 	x := 0
@@ -306,56 +288,64 @@ func listLighthouseAddrmapCommand(lightHouse *LightHouse, a any, w commands.Stri
 		return strings.Compare(addrMap[i].VpnAddr, addrMap[j].VpnAddr) < 0
 	})
 
-	if fs.Json || fs.Pretty {
-		js := json.NewEncoder(w.GetWriter())
-		if fs.Pretty {
-			js.SetIndent("", "    ")
-		}
+	return commands.Value(addrMap), nil
+}
 
-		if err := js.Encode(addrMap); err != nil {
+func textListLighthouseMap(addrMap []lighthouseInfo, w io.Writer) error {
+	for _, e := range addrMap {
+		b, err := json.Marshal(e.Addrs)
+		if err != nil {
 			return err
 		}
-
-	} else {
-		for _, v := range addrMap {
-			b, err := json.Marshal(v.Addrs)
-			if err != nil {
-				return err
-			}
-			err = w.WriteLine(fmt.Sprintf("%s: %s", v.VpnAddr, string(b)))
-			if err != nil {
-				return err
-			}
+		if _, err := fmt.Fprintf(w, "%s: %s\n", e.VpnAddr, string(b)); err != nil {
+			return err
 		}
 	}
 
 	return nil
 }
 
-// parseVpnAddr parses the vpn address a command takes as its first operand, failing to w
-// when there is none or it does not parse. noun is how the command's messages name it,
-// "vpn address" or "vpn addr", which the output golden pins per command.
-func parseVpnAddr(a []string, noun string, w commands.StringWriter) (netip.Addr, error) {
+func textVersion(vi versionInfo, w io.Writer) error {
+	_, err := fmt.Fprintf(w, "%s\n", vi.Version)
+	return err
+}
+
+// vpnAddrOperand parses the vpn address a command takes as its first operand. noun is
+// how the command's messages name it, "vpn address" or "vpn addr", which the output
+// golden pins per command. With no operand, or one that does not parse, ok is false and
+// res is the refusal to return.
+func vpnAddrOperand(a []string, noun string) (vpnAddr netip.Addr, res commands.Result, ok bool) {
 	if len(a) == 0 {
-		return netip.Addr{}, commands.Fail(w, "No vpn address was provided")
+		return netip.Addr{}, commands.Failed("No vpn address was provided"), false
 	}
 
 	vpnAddr, err := netip.ParseAddr(a[0])
 	if err != nil {
-		return netip.Addr{}, commands.Fail(w, fmt.Sprintf("The provided %s could not be parsed: %s", noun, a[0]))
+		return netip.Addr{}, commands.Failed("The provided %s could not be parsed: %s", noun, a[0]), false
 	}
 
-	return vpnAddr, nil
+	return vpnAddr, commands.Result{}, true
 }
 
-func versionCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
-	return w.WriteLine(ifce.version)
+// tunnelOperand is vpnAddrOperand followed by the lookup of the tunnel it names.
+func tunnelOperand(ifce *Interface, a []string, noun string) (*HostInfo, commands.Result, bool) {
+	vpnAddr, res, ok := vpnAddrOperand(a, noun)
+	if !ok {
+		return nil, res, false
+	}
+
+	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
+	if hostInfo == nil {
+		return nil, commands.Failed("Could not find tunnel for %s: %v", noun, a[0]), false
+	}
+
+	return hostInfo, commands.Result{}, true
 }
 
-func queryLighthouseCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
-	vpnAddr, err := parseVpnAddr(a, "vpn address", w)
-	if err != nil {
-		return err
+func runQueryLighthouse(ifce *Interface, a []string) (commands.Result, error) {
+	vpnAddr, res, ok := vpnAddrOperand(a, "vpn address")
+	if !ok {
+		return res, nil
 	}
 
 	var cm *CacheMap
@@ -363,59 +353,52 @@ func queryLighthouseCommand(ifce *Interface, fs any, a []string, w commands.Stri
 	if rl != nil {
 		cm = rl.CopyCache()
 	}
-	return json.NewEncoder(w.GetWriter()).Encode(cm)
+	return commands.Value(cm), nil
 }
 
-func closeTunnelCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
-	flags, ok := fs.(*closeTunnelFlags)
+func runCloseTunnel(ifce *Interface, flags *closeTunnelFlags, a []string) (commands.Result, error) {
+	hostInfo, res, ok := tunnelOperand(ifce, a, "vpn address")
 	if !ok {
-		return fmt.Errorf("internal error: expected *closeTunnelFlags but was %T", fs)
-	}
-
-	vpnAddr, err := parseVpnAddr(a, "vpn address", w)
-	if err != nil {
-		return err
-	}
-
-	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
-	if hostInfo == nil {
-		return commands.Fail(w, fmt.Sprintf("Could not find tunnel for vpn address: %v", a[0]))
+		return res, nil
 	}
 
 	if !flags.LocalOnly {
-		ifce.sendCloseTunnel(hostInfo)
+		ifce.send(
+			header.CloseTunnel,
+			0,
+			hostInfo.ConnectionState,
+			hostInfo,
+			[]byte{},
+			make([]byte, 12, 12),
+			make([]byte, mtu),
+		)
 	}
 
 	ifce.closeTunnel(hostInfo)
-	return w.WriteLine("Closed")
+	return commands.Did("Closed"), nil
 }
 
-func createTunnelCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
-	flags, ok := fs.(*createTunnelFlags)
+func runCreateTunnel(ifce *Interface, flags *createTunnelFlags, a []string) (commands.Result, error) {
+
+	vpnAddr, res, ok := vpnAddrOperand(a, "vpn address")
 	if !ok {
-		return fmt.Errorf("internal error: expected *createTunnelFlags but was %T", fs)
+		return res, nil
 	}
 
-	vpnAddr, err := parseVpnAddr(a, "vpn address", w)
-	if err != nil {
-		return err
+	if hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr); hostInfo != nil {
+		return commands.Failed("Tunnel already exists"), nil
 	}
 
-	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
-	if hostInfo != nil {
-		return commands.Fail(w, "Tunnel already exists")
-	}
-
-	hostInfo = ifce.handshakeManager.QueryVpnAddr(vpnAddr)
-	if hostInfo != nil {
-		return commands.Fail(w, "Tunnel already handshaking")
+	if hostInfo := ifce.handshakeManager.QueryVpnAddr(vpnAddr); hostInfo != nil {
+		return commands.Failed("Tunnel already handshaking"), nil
 	}
 
 	var addr netip.AddrPort
 	if flags.Address != "" {
+		var err error
 		addr, err = netip.ParseAddrPort(flags.Address)
 		if err != nil {
-			return commands.Fail(w, "Address could not be parsed")
+			return commands.Failed("Address could not be parsed"), nil
 		}
 	}
 
@@ -428,176 +411,141 @@ func createTunnelCommand(ifce *Interface, fs any, a []string, w commands.StringW
 		}
 	})
 
-	return w.WriteLine("Created")
+	return commands.Did("Created"), nil
 }
 
-func changeRemoteCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
-	flags, ok := fs.(*changeRemoteFlags)
-	if !ok {
-		return fmt.Errorf("internal error: expected *changeRemoteFlags but was %T", fs)
-	}
+func runChangeRemote(ifce *Interface, flags *changeRemoteFlags, a []string) (commands.Result, error) {
 
-	vpnAddr, err := parseVpnAddr(a, "vpn address", w)
-	if err != nil {
-		return err
+	if len(a) == 0 {
+		return commands.Failed("No vpn address was provided"), nil
 	}
 
 	if flags.Address == "" {
-		return commands.Fail(w, "No address was provided")
+		return commands.Failed("No address was provided"), nil
 	}
 
 	addr, err := netip.ParseAddrPort(flags.Address)
 	if err != nil {
-		return commands.Fail(w, "Address could not be parsed")
+		return commands.Failed("Address could not be parsed"), nil
 	}
 
-	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
-	if hostInfo == nil {
-		return commands.Fail(w, fmt.Sprintf("Could not find tunnel for vpn address: %v", a[0]))
+	hostInfo, res, ok := tunnelOperand(ifce, a, "vpn address")
+	if !ok {
+		return res, nil
 	}
 
 	hostInfo.SetRemote(addr)
-	return w.WriteLine("Changed")
+	return commands.Did("Changed"), nil
 }
 
-func logLevelCommand(l *slog.Logger, fs any, a []string, w commands.StringWriter) error {
+func runLogLevel(l *slog.Logger, a []string) (commands.Result, error) {
 	ctrl, ok := l.Handler().(interface {
 		GetLevel() slog.Level
 		SetLevel(slog.Level)
 	})
 	if !ok {
-		return commands.Fail(w, "Log level is not reconfigurable on this logger")
+		return commands.Failed("Log level is not reconfigurable on this logger"), nil
 	}
 
-	if len(a) == 0 {
-		return w.WriteLine(fmt.Sprintf("Log level is: %s", logging.LevelName(ctrl.GetLevel())))
+	if len(a) > 0 {
+		level, err := logging.ParseLevel(strings.ToLower(a[0]))
+		if err != nil {
+			return commands.Failed("Unknown log level %s. Possible log levels: trace, debug, info, warn, error", a), nil
+		}
+
+		ctrl.SetLevel(level)
 	}
 
-	level, err := logging.ParseLevel(strings.ToLower(a[0]))
-	if err != nil {
-		return commands.Fail(w, fmt.Sprintf("Unknown log level %s. Possible log levels: trace, debug, info, warn, error", a))
-	}
-
-	ctrl.SetLevel(level)
-	return w.WriteLine(fmt.Sprintf("Log level is: %s", logging.LevelName(ctrl.GetLevel())))
+	return commands.Value(logLevelInfo{Level: logging.LevelName(ctrl.GetLevel())}), nil
 }
 
-func logFormatCommand(l *slog.Logger, fs any, a []string, w commands.StringWriter) error {
+func textLogLevel(li logLevelInfo, w io.Writer) error {
+	_, err := fmt.Fprintf(w, "Log level is: %s\n", li.Level)
+	return err
+}
+
+func runLogFormat(l *slog.Logger, a []string) (commands.Result, error) {
 	ctrl, ok := l.Handler().(interface {
 		GetFormat() string
 		SetFormat(string) error
 	})
 	if !ok {
-		return commands.Fail(w, "Log format is not reconfigurable on this logger")
+		return commands.Failed("Log format is not reconfigurable on this logger"), nil
 	}
 
-	if len(a) == 0 {
-		return w.WriteLine(fmt.Sprintf("Log format is: %s", ctrl.GetFormat()))
+	if len(a) > 0 {
+		if err := ctrl.SetFormat(strings.ToLower(a[0])); err != nil {
+			return commands.Failed("Unable to set log format: %s", err), nil
+		}
 	}
 
-	if err := ctrl.SetFormat(strings.ToLower(a[0])); err != nil {
-		return commands.Fail(w, fmt.Sprintf("Unable to set log format: %s", err))
-	}
-	return w.WriteLine(fmt.Sprintf("Log format is: %s", ctrl.GetFormat()))
+	return commands.Value(logFormatInfo{Format: ctrl.GetFormat()}), nil
 }
 
-func printCertCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
-	args, ok := fs.(*printCertFlags)
-	if !ok {
-		return fmt.Errorf("internal error: expected *printCertFlags but was %T", fs)
-	}
+func textLogFormat(fi logFormatInfo, w io.Writer) error {
+	_, err := fmt.Fprintf(w, "Log format is: %s\n", fi.Format)
+	return err
+}
 
-	cert := ifce.pki.getCertState().GetDefaultCertificate()
+func runPrintCert(ifce *Interface, args *printCertFlags, a []string) (commands.Result, error) {
+
+	c := ifce.pki.getCertState().GetDefaultCertificate()
 	if len(a) > 0 {
-		vpnAddr, err := parseVpnAddr(a, "vpn addr", w)
-		if err != nil {
-			return err
+		hostInfo, res, ok := tunnelOperand(ifce, a, "vpn addr")
+		if !ok {
+			return res, nil
 		}
-
-		hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
-		if hostInfo == nil {
-			return commands.Fail(w, fmt.Sprintf("Could not find tunnel for vpn addr: %v", a[0]))
+		// A tunnel still handshaking, or one being torn down, has no certificate.
+		cc := hostInfo.GetCert()
+		if cc == nil {
+			return commands.Failed("Could not find tunnel for vpn addr: %v", a[0]), nil
 		}
-
-		cert = hostInfo.GetCert().Certificate
-	}
-
-	if args.Json || args.Pretty {
-		b, err := cert.MarshalJSON()
-		if err != nil {
-			return commands.Fail(w, fmt.Sprintf("Unable to marshal the certificate: %s", err))
-		}
-
-		if args.Pretty {
-			buf := new(bytes.Buffer)
-			if err := json.Indent(buf, b, "", "    "); err != nil {
-				return commands.Fail(w, fmt.Sprintf("Unable to marshal the certificate: %s", err))
-			}
-			b = buf.Bytes()
-		}
-
-		return w.WriteBytes(b)
+		c = cc.Certificate
 	}
 
 	if args.Raw {
-		b, err := cert.MarshalPEM()
+		b, err := c.MarshalPEM()
 		if err != nil {
-			return commands.Fail(w, fmt.Sprintf("Unable to marshal the certificate: %s", err))
+			return commands.Failed("Unable to marshal the certificate: %s", err), nil
 		}
-
-		return w.WriteBytes(b)
+		return commands.Value(certPEM{PEM: string(b)}), nil
 	}
 
-	return w.WriteLine(cert.String())
+	return commands.Value(c), nil
 }
 
-func printRelaysCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
-	args, ok := fs.(*printTunnelFlags)
-	if !ok {
-		return fmt.Errorf("internal error: expected *printTunnelFlags but was %T", fs)
+// textPrintCert takes the value untyped: print-cert returns a certificate or, with -raw,
+// its PEM, and those are two things to emit rather than two renderings of one.
+func textPrintCert(v any, w io.Writer) error {
+	switch c := v.(type) {
+	case certPEM:
+		_, err := io.WriteString(w, c.PEM)
+		return err
+	case cert.Certificate:
+		_, err := io.WriteString(w, c.String()+"\n")
+		return err
+	default:
+		return fmt.Errorf("expected a certificate, got %T", v)
 	}
+}
 
+func runPrintRelays(ifce *Interface) any {
 	ifce.hostMap.RLock()
 	relays := maps.Clone(ifce.hostMap.Relays)
 	ifce.hostMap.RUnlock()
 
-	type RelayFor struct {
-		Error          string `json:",omitempty"`
-		Type           string
-		State          string
-		PeerAddr       netip.Addr
-		LocalIndex     uint32
-		RemoteIndex    uint32
-		RelayedThrough []netip.Addr
-	}
-
-	type RelayOutput struct {
-		NebulaAddr    netip.Addr
-		RelayForAddrs []RelayFor
-	}
-
-	type CmdOutput struct {
-		Relays []*RelayOutput
-	}
-
-	co := CmdOutput{}
-
-	enc := json.NewEncoder(w.GetWriter())
-
-	if args.Pretty {
-		enc.SetIndent("", "    ")
-	}
+	co := relaysOutput{}
 
 	for k, v := range relays {
-		ro := RelayOutput{NebulaAddr: v.vpnAddrs[0]}
+		ro := relayOutput{NebulaAddr: v.vpnAddrs[0]}
 		co.Relays = append(co.Relays, &ro)
 		relayHI := ifce.hostMap.QueryVpnAddr(v.vpnAddrs[0])
 		if relayHI == nil {
-			ro.RelayForAddrs = append(ro.RelayForAddrs, RelayFor{Error: "could not find hostinfo"})
+			ro.RelayForAddrs = append(ro.RelayForAddrs, relayFor{Error: "could not find hostinfo"})
 			continue
 		}
 		for _, vpnAddr := range relayHI.relayState.CopyRelayForIps() {
-			rf := RelayFor{}
+			rf := relayFor{}
 			r, ok := relayHI.relayState.GetRelayForByAddr(vpnAddr)
 			if ok {
 				t := ""
@@ -610,21 +558,21 @@ func printRelaysCommand(ifce *Interface, fs any, a []string, w commands.StringWr
 					t = "unknown"
 				}
 
-				s := ""
+				st := ""
 				switch r.State {
 				case Requested:
-					s = "requested"
+					st = "requested"
 				case Established:
-					s = "established"
+					st = "established"
 				default:
-					s = "unknown"
+					st = "unknown"
 				}
 
 				rf.LocalIndex = r.LocalIndex
 				rf.RemoteIndex = r.RemoteIndex
 				rf.PeerAddr = r.PeerAddr
 				rf.Type = t
-				rf.State = s
+				rf.State = st
 				if rf.LocalIndex != k {
 					rf.Error = fmt.Sprintf("hostmap LocalIndex '%v' does not match RelayState LocalIndex", k)
 				}
@@ -637,74 +585,40 @@ func printRelaysCommand(ifce *Interface, fs any, a []string, w commands.StringWr
 			ro.RelayForAddrs = append(ro.RelayForAddrs, rf)
 		}
 	}
-	return enc.Encode(co)
+
+	return co
 }
 
-func printTunnelCommand(ifce *Interface, fs any, a []string, w commands.StringWriter) error {
-	args, ok := fs.(*printTunnelFlags)
+func runPrintTunnel(ifce *Interface, a []string) (commands.Result, error) {
+	hostInfo, res, ok := tunnelOperand(ifce, a, "vpn addr")
 	if !ok {
-		return fmt.Errorf("internal error: expected *printTunnelFlags but was %T", fs)
+		return res, nil
 	}
 
-	vpnAddr, err := parseVpnAddr(a, "vpn addr", w)
-	if err != nil {
-		return err
-	}
-
-	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
-	if hostInfo == nil {
-		return commands.Fail(w, fmt.Sprintf("Could not find tunnel for vpn addr: %v", a[0]))
-	}
-
-	enc := json.NewEncoder(w.GetWriter())
-	if args.Pretty {
-		enc.SetIndent("", "    ")
-	}
-
-	return enc.Encode(copyHostInfo(hostInfo, ifce.hostMap.GetPreferredRanges()))
+	return commands.Value(copyHostInfo(hostInfo, ifce.hostMap.GetPreferredRanges())), nil
 }
 
-func deviceInfoCommand(ifce *Interface, fs any, w commands.StringWriter) error {
-	flags, ok := fs.(*deviceInfoFlags)
-	if !ok {
-		return fmt.Errorf("internal error: expected flags to be deviceInfoFlags but was %+v", fs)
-	}
-
-	data := struct {
-		Name string         `json:"name"`
-		Cidr []netip.Prefix `json:"cidr"`
-	}{
+func runDeviceInfo(ifce *Interface) deviceInfo {
+	d := deviceInfo{
 		Name: ifce.inside.Name(),
 		Cidr: make([]netip.Prefix, len(ifce.inside.Networks())),
 	}
-
-	copy(data.Cidr, ifce.inside.Networks())
-
-	if flags.Json || flags.Pretty {
-		js := json.NewEncoder(w.GetWriter())
-		if flags.Pretty {
-			js.SetIndent("", "    ")
-		}
-
-		return js.Encode(data)
-	} else {
-		return w.WriteLine(fmt.Sprintf("name=%v cidr=%v", data.Name, data.Cidr))
-	}
+	copy(d.Cidr, ifce.inside.Networks())
+	return d
 }
 
-// reloadCommand reloads the config and writes the result to the client. It reloads even if the client has gone away
-func reloadCommand(l *slog.Logger, c *config.C, w commands.StringWriter) error {
-	writeErr := w.WriteLine("Reloading config")
+func textDeviceInfo(d deviceInfo, w io.Writer) error {
+	_, err := fmt.Fprintf(w, "name=%v cidr=%v\n", d.Name, d.Cidr)
+	return err
+}
+
+// runReload reloads the config and reports how it went. A reload that failed is a
+// refusal, exit 1 over ssh; one that merely needs a restart is not.
+func runReload(l *slog.Logger, c *config.C) commands.Result {
 	res := c.ReloadConfig()
 	res.Log(l)
-	if err := w.WriteLine(res.String()); writeErr == nil {
-		writeErr = err
-	}
-	if writeErr != nil {
-		return writeErr
-	}
 	if res.Err != nil || res.Failed {
-		return &commands.Failure{Msg: res.String()}
+		return commands.Failed("%s", res.String())
 	}
-	return nil
+	return commands.Did("%s", res.String())
 }

@@ -2,10 +2,14 @@ package nebula
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/netip"
 	"testing"
+	"time"
 
+	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/commands"
 	"github.com/slackhq/nebula/logging"
 	"github.com/slackhq/nebula/test"
@@ -13,19 +17,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestLogFormatRefusalIsShown: a format the logger does not know is reported to the user
-// as a failure, rather than returned bare, which over ssh was silence.
+// TestLogFormatRefusalIsShown: a format the logger does not know is a refusal the user
+// sees, rather than a bare error, which over ssh was silence.
 func TestLogFormatRefusalIsShown(t *testing.T) {
 	l := logging.NewLogger(io.Discard)
+
+	res, err := runLogFormat(l, []string{"bogus"})
+	require.NoError(t, err)
+	assert.False(t, res.OK)
+	assert.Equal(t, "Unable to set log format: unknown log format `bogus`. possible formats: [text json]", res.Reason)
+
+	res, err = runLogFormat(l, []string{"JSON"})
+	require.NoError(t, err)
 	out := &bytes.Buffer{}
-	w := commands.NewStringWriter(out)
-
-	var f *commands.Failure
-	require.ErrorAs(t, logFormatCommand(l, nil, []string{"bogus"}, w), &f)
-	assert.Equal(t, "Unable to set log format: unknown log format `bogus`. possible formats: [text json]\n", out.String())
-
-	out.Reset()
-	require.NoError(t, logFormatCommand(l, nil, []string{"JSON"}, w))
+	require.NoError(t, commands.Typed(textLogFormat)(res.Value, out))
 	assert.Equal(t, "Log format is: json\n", out.String())
 }
 
@@ -41,9 +46,12 @@ func TestPrintRelaysReportsErrorsAsText(t *testing.T) {
 	hm.Relays[1] = &HostInfo{vpnAddrs: []netip.Addr{relay}}
 	ifce := &Interface{hostMap: hm}
 
-	out := &bytes.Buffer{}
-	require.NoError(t, printRelaysCommand(ifce, &printTunnelFlags{}, nil, commands.NewStringWriter(out)))
-	assert.JSONEq(t, `{"Relays":[{"NebulaAddr":"10.0.0.1","RelayForAddrs":[{"Error":"could not find hostinfo","Type":"","State":"","PeerAddr":"","LocalIndex":0,"RemoteIndex":0,"RelayedThrough":null}]}]}`, out.String())
+	marshal := func() string {
+		b, err := json.Marshal(runPrintRelays(ifce))
+		require.NoError(t, err)
+		return string(b)
+	}
+	assert.JSONEq(t, `{"Relays":[{"NebulaAddr":"10.0.0.1","RelayForAddrs":[{"Error":"could not find hostinfo","Type":"","State":"","PeerAddr":"","LocalIndex":0,"RemoteIndex":0,"RelayedThrough":null}]}]}`, marshal())
 
 	// The same relay host, found, relaying for a peer whose index matches: no Error key.
 	hi := hm.Relays[1]
@@ -53,15 +61,51 @@ func TestPrintRelaysReportsErrorsAsText(t *testing.T) {
 		relayForByIdx:  map[uint32]*Relay{r.LocalIndex: r},
 	}
 	hm.Hosts[relay] = hi
-
-	out.Reset()
-	require.NoError(t, printRelaysCommand(ifce, &printTunnelFlags{}, nil, commands.NewStringWriter(out)))
-	assert.JSONEq(t, `{"Relays":[{"NebulaAddr":"10.0.0.1","RelayForAddrs":[{"Type":"forwarding","State":"established","PeerAddr":"10.0.0.2","LocalIndex":1,"RemoteIndex":2,"RelayedThrough":null}]}]}`, out.String())
+	assert.JSONEq(t, `{"Relays":[{"NebulaAddr":"10.0.0.1","RelayForAddrs":[{"Type":"forwarding","State":"established","PeerAddr":"10.0.0.2","LocalIndex":1,"RemoteIndex":2,"RelayedThrough":null}]}]}`, marshal())
 
 	// And an index mismatch names it.
 	hm.Relays[7] = hi
 	delete(hm.Relays, 1)
-	out.Reset()
-	require.NoError(t, printRelaysCommand(ifce, &printTunnelFlags{}, nil, commands.NewStringWriter(out)))
-	assert.Contains(t, out.String(), `"Error":"hostmap LocalIndex '7' does not match RelayState LocalIndex"`)
+	assert.Contains(t, marshal(), `"Error":"hostmap LocalIndex '7' does not match RelayState LocalIndex"`)
+}
+
+// tunnelFixture is an Interface with our own certificate loaded, one peer behind an
+// established tunnel and one still handshaking, which has no certificate yet.
+func tunnelFixture(t *testing.T) *Interface {
+	t.Helper()
+
+	l := test.NewLogger()
+	me := netip.MustParseAddr("10.0.0.1")
+	peer := netip.MustParsePrefix("10.0.0.2/24")
+
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	peerCert, _, _, _ := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, ca, caKey, "peer", time.Time{}, time.Time{},
+		[]netip.Prefix{peer}, nil, []string{"web", "db"})
+
+	hm := newHostMap(l)
+	hm.Hosts[peer.Addr()] = &HostInfo{
+		vpnAddrs:        []netip.Addr{peer.Addr()},
+		ConnectionState: &ConnectionState{peerCert: &cert.CachedCertificate{Certificate: peerCert}},
+	}
+	hm.Hosts[netip.MustParseAddr("10.0.0.3")] = &HostInfo{
+		vpnAddrs:        []netip.Addr{netip.MustParseAddr("10.0.0.3")},
+		ConnectionState: &ConnectionState{},
+	}
+
+	return &Interface{pki: newTestPKI(t, "me", []netip.Addr{me}), hostMap: hm}
+}
+
+// TestPrintCertOfATunnelWithoutACertificate: a tunnel still handshaking, or one being
+// torn down, has no certificate, and print-cert refuses rather than panicking.
+func TestPrintCertOfATunnelWithoutACertificate(t *testing.T) {
+	f := tunnelFixture(t)
+
+	r, err := runPrintCert(f, &printCertFlags{}, []string{"10.0.0.3"})
+	require.NoError(t, err)
+	assert.False(t, r.OK)
+	assert.Equal(t, "Could not find tunnel for vpn addr: 10.0.0.3", r.Reason)
+
+	r, err = runPrintCert(f, &printCertFlags{}, []string{"10.0.0.2"})
+	require.NoError(t, err)
+	assert.True(t, r.OK, "a tunnel with a certificate is printed")
 }

@@ -2,38 +2,22 @@ package commands
 
 import "io"
 
-// StringWriter is how a command talks back to whoever invoked it: one stream, which the
-// ssh surface points at its channel.
-type StringWriter interface {
-	WriteLine(string) error
-	Write(string) error
-	WriteBytes([]byte) error
-	GetWriter() io.Writer
+// Output is where a command line surface's text goes.
+//
+// Out and Err are distinct so a command's primary output can stay machine readable on
+// a surface that separates the two. The ssh surface points both at the same channel and
+// sees a single merged stream. The local
+// control socket does not use one at all: it invokes by named parameter and carries the
+// returned value, so there is no stream for a command to write to.
+type Output struct {
+	// Out receives what a command produces.
+	Out io.Writer
+
+	// Err receives usage text, refusals and errors.
+	Err io.Writer
 }
 
-type stringWriter struct {
-	w io.Writer
-}
-
-// NewStringWriter returns a StringWriter that writes to w.
-func NewStringWriter(w io.Writer) StringWriter {
-	return &stringWriter{w: w}
-}
-
-func (w *stringWriter) WriteLine(s string) error {
-	return w.Write(s + "\n")
-}
-
-func (w *stringWriter) Write(s string) error {
-	_, err := w.w.Write([]byte(s))
-	return err
-}
-
-func (w *stringWriter) WriteBytes(b []byte) error {
-	_, err := w.w.Write(b)
-	return err
-}
-
-func (w *stringWriter) GetWriter() io.Writer {
-	return w.w
+// MergedOutput sends output and errors to the same writer.
+func MergedOutput(w io.Writer) Output {
+	return Output{Out: w, Err: w}
 }

@@ -234,6 +234,26 @@ punchy:
   #trusted_cas:
     #- "ssh public key string"
 
+# Local APIs allow accessing running nebula state.
+#local_api:
+  # There are two types of sockets available: a control socket intended for use on the
+  # local machine, primarily for debugging, and an info socket intended to make
+  # nebula's internal state available to other consumers.
+  #
+  # The control socket is made available by default, and can be accessed via
+  # `nebula ctl <command>`. It defaults to /var/run/nebula/ctl.sock on Linux, macOS and
+  # the BSDs; on Windows it is a named pipe under \\.\pipe\ProtectedPrefix\Administrators.
+  #control:
+    # Set to false to turn the control socket off. Reloadable.
+    #enabled: true
+    # The absolute path where the control socket should live, or a full pipe name on
+    # Windows. The last directory is created if missing, and must be owned by root or by
+    # the user running nebula. It must not be writable by anyone else.
+    #socket: /var/run/nebula/ctl.sock
+    # A group (or account/group/SID on Windows) that should be allowed to access the
+    # socket.
+    #group: nebula
+
 # EXPERIMENTAL: relay support for networks that can't establish direct connections.
 relay:
   # Relays are a list of Nebula IP's that peers can use to relay packets to me.
