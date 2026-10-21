@@ -20,7 +20,7 @@ import (
 
 func TestSSHCommandSurface(t *testing.T) {
 	got := renderCommandSurface(registeredCommands(t).Schema())
-	test.Golden(t, filepath.Join("testdata", "ssh_commands.golden"), got)
+	test.Golden(t, filepath.Join("testdata", "command_surfaces.golden"), got)
 }
 
 // registeredCommands returns a registry holding every command nebula serves. The
