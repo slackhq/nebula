@@ -414,7 +414,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	}
 
 	if remote.IsValid() {
-		if multiport {
+		if multiport && udp.RawSupported(remote) {
 			rawOut = rawOut[:len(out)+udp.RawOverhead]
 			port := udpPortGetter.UDPSendPort(f.multiPort.TxPorts)
 			err = f.udpRaw.WriteTo(rawOut, port, remote)
@@ -428,7 +428,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 			)
 		}
 	} else if hr := hostinfo.GetRemote(); hr.IsValid() {
-		if multiport {
+		if multiport && udp.RawSupported(hr) {
 			rawOut = rawOut[:len(out)+udp.RawOverhead]
 			port := udpPortGetter.UDPSendPort(f.multiPort.TxPorts)
 			err = f.udpRaw.WriteTo(rawOut, port, hr)

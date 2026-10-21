@@ -76,6 +76,10 @@ func NewRawConn(l *slog.Logger, ip string, port int, basePort uint16) (*RawConn,
 // WriteTo must be called with raw leaving the first `udp.RawOverhead` bytes empty,
 // for the IP/UDP headers.
 func (u *RawConn) WriteTo(raw []byte, fromPort uint16, ip netip.AddrPort) error {
+	if !RawSupported(ip) {
+		return fmt.Errorf("raw socket does not support sending to %s", ip)
+	}
+
 	var rsa unix.RawSockaddrInet4
 	rsa.Family = unix.AF_INET
 	rsa.Addr = ip.Addr().As4()

@@ -318,7 +318,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		}
 
 		// Attempt a multiport handshake if we are past the TxHandshakeDelay attempts
-		if hm.multiPort.TxHandshake && hm.udpRaw != nil && hh.counter >= hm.multiPort.TxHandshakeDelay {
+		if hm.multiPort.TxHandshake && hm.udpRaw != nil && hh.counter >= hm.multiPort.TxHandshakeDelay && udp.RawSupported(addr) {
 			sentMultiport = true
 			// We need to re-allocate with 8 bytes at the start of SOCK_RAW
 			raw := hostinfo.HandshakePacket[0x80]
