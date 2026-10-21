@@ -83,7 +83,6 @@ func TestNewFirewall_ZeroOrNegativeTimeout(t *testing.T) {
 	}
 }
 
-
 func TestFirewall_AddRule(t *testing.T) {
 	ob := &bytes.Buffer{}
 	l := test.NewLoggerWithOutput(ob)
