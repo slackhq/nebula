@@ -33,7 +33,7 @@ func TestResolveSocketGuessedConfigNeedNotBeReadable(t *testing.T) {
 
 	p, err := socketFromConfigFile(missing, false)
 	require.NoError(t, err)
-	assert.Equal(t, localapi.DefaultSocketPath(), p)
+	assert.Equal(t, localapi.DefaultSocketPath, p)
 
 	_, err = socketFromConfigFile(missing, true)
 	require.ErrorContains(t, err, missing)
@@ -82,12 +82,12 @@ func TestResolveSocketUsesTheDefaultWithoutAnOverride(t *testing.T) {
 
 	p, err := resolveSocket("", cfg)
 	require.NoError(t, err)
-	assert.Equal(t, localapi.DefaultSocketPath(), p)
+	assert.Equal(t, localapi.DefaultSocketPath, p)
 
 	// The test binary has no config next to it.
 	p, err = resolveSocket("", "")
 	require.NoError(t, err)
-	assert.Equal(t, localapi.DefaultSocketPath(), p)
+	assert.Equal(t, localapi.DefaultSocketPath, p)
 }
 
 func TestResolveSocketFlagWins(t *testing.T) {

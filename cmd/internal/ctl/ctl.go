@@ -385,7 +385,7 @@ func socketFromConfigFile(configPath string, named bool) (string, error) {
 	if !named {
 		p, err := config.DefaultPath()
 		if err != nil {
-			return localapi.DefaultSocketPath(), nil
+			return localapi.DefaultSocketPath, nil
 		}
 		configPath = p
 	}
@@ -396,7 +396,7 @@ func socketFromConfigFile(configPath string, named bool) (string, error) {
 	c := config.NewC(slog.New(slog.DiscardHandler))
 	if err := c.Load(configPath); err != nil {
 		if !named {
-			return localapi.DefaultSocketPath(), nil
+			return localapi.DefaultSocketPath, nil
 		}
 		// The operating system's error, as it came: permission denied on a root daemon's
 		// config says what to do.

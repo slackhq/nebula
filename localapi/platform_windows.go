@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"strings"
 	"time"
@@ -33,18 +32,6 @@ const network = "pipe"
 // and no per-connection check that would read one, so the value is never consulted; it
 // exists so a Server is built the same way on every platform.
 var currentUID = func() uint32 { return 0 }
-
-// logListening is the line written when the pipe is up. It says which layer is doing
-// the access control, so nobody assumes a per-connection check that is not running:
-// there is none here, the pipe's security descriptor admits only the accounts listed in
-// ownerOnlySDDL, and the kernel enforces that at connect time.
-func logListening(l *slog.Logger, path string, acc Access) {
-	l.Info("Local control socket listening, access restricted by the pipe's security descriptor",
-		"path", path,
-		"access", acc.String(),
-		"reason", "the security descriptor built at listen time is the access check; the connecting process is not identified separately",
-	)
-}
 
 // listen creates the named pipe at path with a security descriptor that admits the user
 // nebula runs as, SYSTEM and Administrators, and the group acc names, if any, for
@@ -137,7 +124,7 @@ func sddlFor(acc Access) (string, error) {
 	}
 
 	sddl := fmt.Sprintf("D:P(A;;GA;;;%s)(A;;GA;;;SY)(A;;GA;;;BA)", user.User.Sid.String())
-	if acc.Group != nil {
+	if acc.shared() {
 		sddl += fmt.Sprintf("(A;;0x%x;;;%s)", pipeClientAccess, acc.Group.ID)
 	}
 	return sddl, nil
@@ -250,10 +237,10 @@ func describeSID(sid *windows.SID) string {
 	return domain + `\` + account
 }
 
-// defaultSocketPath is the control pipe when the config names none. It is under
+// DefaultSocketPath is the control pipe when the config names none. It is under
 // protectedPrefix, so whatever answers it was created by an administrator or SYSTEM; see
 // there.
-const defaultSocketPath = protectedPrefix + "nebula-ctl"
+const DefaultSocketPath = protectedPrefix + "nebula-ctl"
 
 // checkSocketPath refuses a configured name that is not a full pipe name. A pipe lives
 // under pipePrefix and nowhere else, so a bare name has no meaning here, and one under

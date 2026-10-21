@@ -56,7 +56,7 @@ func TestOwnerAccepted(t *testing.T) {
 // and SYSTEM can create under, which is what lets nebula ctl trust the default name
 // from its spelling alone.
 func TestDefaultPathIsProtected(t *testing.T) {
-	p := DefaultSocketPath()
+	p := DefaultSocketPath
 	assert.True(t, isProtectedPath(p), p)
 	assert.Equal(t, `\\.\pipe\ProtectedPrefix\Administrators\nebula-ctl`, p)
 }

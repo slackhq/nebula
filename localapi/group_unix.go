@@ -28,7 +28,7 @@ func lookupGroupID(name string) (string, error) {
 // gidFor returns the gid the socket is owned by under acc: the configured group's, or
 // the daemon's own effective group when none is configured.
 func gidFor(acc Access) (int, error) {
-	if acc.Group == nil {
+	if !acc.shared() {
 		return os.Getegid(), nil
 	}
 	gid, err := strconv.ParseUint(acc.Group.ID, 10, 32)

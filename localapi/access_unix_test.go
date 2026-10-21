@@ -71,12 +71,10 @@ func TestControlAccessFromConfig(t *testing.T) {
 	acc, err := load("local_api: {}\n")
 	require.NoError(t, err)
 	assert.Equal(t, ownerOnly(), acc)
-	assert.Nil(t, acc.Group)
 
 	acc, err = load("local_api:\n  control:\n    group: " + name + "\n")
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0660), acc.Mode)
-	require.NotNil(t, acc.Group)
 	assert.Equal(t, name, acc.Group.Name)
 	assert.Equal(t, gid, acc.Group.ID)
 
@@ -98,7 +96,7 @@ func TestControlSocketIsHandedToTheGroup(t *testing.T) {
 
 	s := NewServer(test.NewLogger(), basicRegistry())
 	path := testSocket(t)
-	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: 0660, Group: &Group{Name: name, ID: gid}}))
+	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: 0660, Group: Group{Name: name, ID: gid}}))
 	defer s.Stop()
 
 	fi, err := os.Lstat(path)
@@ -132,7 +130,7 @@ func TestControlSocketWithAGroupTrustsTheKernel(t *testing.T) {
 	asUID(t, me)
 
 	path := testSocket(t)
-	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: 0660, Group: &Group{Name: name, ID: gid}}))
+	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: 0660, Group: Group{Name: name, ID: gid}}))
 	defer s.Stop()
 
 	_, err := (&Client{Path: path}).Describe()
@@ -166,7 +164,7 @@ func TestRemovingTheGroupHandsTheSocketBack(t *testing.T) {
 
 	s := NewServer(test.NewLogger(), basicRegistry())
 	path := testSocket(t)
-	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: 0660, Group: &Group{Name: gid, ID: gid}}))
+	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: 0660, Group: Group{Name: gid, ID: gid}}))
 	defer s.Stop()
 	assert.Equal(t, uint32(other), socketGroup(t, path))
 

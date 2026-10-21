@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"math"
 	"net"
-	"os"
 	"runtime/debug"
 	"strconv"
 	"sync"
@@ -38,12 +37,7 @@ const (
 	defaultSlowAfter = 30 * time.Second
 )
 
-// ctlSocketMode is the control socket's mode when no group shares it: the user who ran
-// nebula, and nobody else. The mode itself is not configurable; what an operator can
-// choose is a group, CtlGroupKey, which makes it groupSocketMode.
-const ctlSocketMode os.FileMode = 0600
-
-// Server serves the read only portion of a command registry over a local socket.
+// Server serves a command registry over a local socket to the user who ran nebula.
 type Server struct {
 	l   *slog.Logger
 	src *commands.Registry
@@ -111,7 +105,7 @@ func (s *Server) Rebind(ctx context.Context, path string, acc Access) error {
 	// admits is checked against the old setting. Early is safe either way: a member
 	// arriving before a group's mode is set is refused by the kernel, and with a group
 	// being taken away the peer check applies a moment before the mode tightens.
-	prev := s.trustSocket.Swap(acc.Group != nil)
+	prev := s.trustSocket.Swap(acc.shared())
 	err := s.rebindLocked(ctx, path, acc)
 	if err != nil {
 		// Whatever was serving still is, with the access it had.
@@ -123,7 +117,7 @@ func (s *Server) Rebind(ctx context.Context, path string, acc Access) error {
 func (s *Server) rebindLocked(ctx context.Context, path string, acc Access) error {
 	reopening := false
 	if s.running && s.path == path {
-		if s.access.equal(acc) {
+		if s.access == acc {
 			return nil
 		}
 
@@ -180,7 +174,7 @@ func (s *Server) rebindLocked(ctx context.Context, path string, acc Access) erro
 		release(oldLn, oldPath)
 	}
 
-	logListening(s.l, path, acc)
+	s.l.Info("Local control socket listening", "path", path, "access", acc.String())
 
 	go func() {
 		s.accept(ln, sem)

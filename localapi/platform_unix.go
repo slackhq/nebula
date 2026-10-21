@@ -5,7 +5,6 @@ package localapi
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"os"
 	"os/user"
@@ -282,10 +281,10 @@ var umaskMu sync.Mutex
 
 func pathTooLong(path string) bool { return len(path) > maxSocketPath }
 
-// defaultSocketPath is the control socket when the config names none. It is root's to
+// DefaultSocketPath is the control socket when the config names none. It is root's to
 // create, as the tun device is root's to open; a daemon run as anyone else names a path
 // of its own with CtlSocketKey.
-const defaultSocketPath = "/var/run/" + DirName + "/ctl.sock"
+const DefaultSocketPath = "/var/run/" + DirName + "/ctl.sock"
 
 // checkSocketPath refuses a configured socket path that is relative, or too long to
 // bind. A relative path would mean a different socket to the daemon and to nebula ctl,
@@ -298,17 +297,6 @@ func checkSocketPath(key, value string) error {
 		return fmt.Errorf("%s is %d bytes, too long for this platform: %s", key, len(value), value)
 	}
 	return nil
-}
-
-// logListening is the line written when the socket is up. It says what the access
-// control is: the socket's mode plus the peer check on each connection, or, when a group
-// shares the socket, the mode and group alone.
-func logListening(l *slog.Logger, path string, acc Access) {
-	if acc.Group != nil {
-		l.Info("Local control socket listening, access decided by the socket's group", "path", path, "access", acc.String())
-		return
-	}
-	l.Info("Local control socket listening", "path", path, "access", acc.String())
 }
 
 func isSocket(fi os.FileInfo) bool { return fi.Mode()&os.ModeSocket != 0 }

@@ -71,21 +71,13 @@ func followControlConfig(ctx context.Context, l *slog.Logger, c *config.C, srv *
 
 		want, err := SocketPathFromConfig(c)
 		if err != nil {
-			if srv.Path() == "" {
-				l.Warn("Could not determine the local control socket path, control commands will not be available", "error", err)
-			} else {
-				l.Warn("Ignoring unusable local control socket path from reloaded config", "error", err)
-			}
+			warnUnusable(l, "local control socket", srv.Path(), err)
 			return
 		}
 
 		acc, err := controlAccessFrom(c)
 		if err != nil {
-			if srv.Path() == "" {
-				l.Warn("Local control socket is not available, its group is unusable", "error", err)
-			} else {
-				l.Warn("Ignoring unusable local control socket group from reloaded config, keeping the current socket", "error", err)
-			}
+			warnUnusable(l, "local control socket", srv.Path(), err)
 			return
 		}
 
@@ -105,24 +97,41 @@ func followControlConfig(ctx context.Context, l *slog.Logger, c *config.C, srv *
 	return reconcile
 }
 
+// warnUnusable logs a config the endpoint cannot follow: with nothing serving, the
+// endpoint is not available; with something serving, it is kept as it is.
+func warnUnusable(l *slog.Logger, what, current string, err error) {
+	if current == "" {
+		l.Warn("The "+what+" is not available, its config is unusable", "error", err)
+		return
+	}
+	l.Warn("Ignoring unusable "+what+" config from the reload, keeping the current endpoint", "error", err, "current", current)
+}
+
 // reportRebind logs what a Rebind did beyond the listening line the bind itself writes:
 // nothing for a server left where it was, a move with both paths, and a failure with
 // what the operator is left with. old is the path served before the call, "" for none,
 // want the one asked for, and now the path served after it: on unix a failed move keeps
 // the old socket, and now is old; on windows a change of access closes the pipe before
 // creating it again, and a failure there leaves nothing serving, so now is "".
+//
+// Nearly every failure is the operator's environment, a missing runtime directory or a
+// bad path, and a warning; a name held by another process is an error, since nothing
+// else will say that something is sitting where the daemon should be.
 func reportRebind(l *slog.Logger, old, want string, err error, now string) {
+	level := l.Warn
+	if errors.Is(err, errEndpointHeld) {
+		level = l.Error
+	}
+
 	switch {
 	case err == nil:
 		if old != "" && old != want {
 			l.Info("Moved the local control socket", "from", old, "to", want)
 		}
 	case old == "":
-		bindFailure(l, err)("Could not start the local control socket, control commands will not be available until a reload binds it", "error", err, "path", want)
+		level("Could not start the local control socket, control commands will not be available until a reload binds it", "error", err, "path", want)
 	default:
-		bindFailure(l, err)("Could not bind the local control socket at the requested path",
-			"error", err, "requested", want, "serving", now,
-		)
+		level("Could not bind the local control socket at the requested path", "error", err, "requested", want, "serving", now)
 	}
 }
 
@@ -133,14 +142,3 @@ func reportRebind(l *slog.Logger, old, want string, err error, now string) {
 // namespace by any account's; on unix a path that is still being served is an earlier
 // nebula, which clearStale reports as in use.
 var errEndpointHeld = errors.New("the local control socket's name is held by another process")
-
-// bindFailure picks the level a failed bind is logged at. Nearly every failure is the
-// operator's environment, a missing runtime directory or a bad path, and a warning; a
-// name held by another process is logged as an error, since nothing else will say that
-// something is sitting where the daemon should be.
-func bindFailure(l *slog.Logger, err error) func(msg string, args ...any) {
-	if errors.Is(err, errEndpointHeld) {
-		return l.Error
-	}
-	return l.Warn
-}

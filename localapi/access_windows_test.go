@@ -36,7 +36,7 @@ func TestSDDLAdmitsTheGroup(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, sddl, "S-1-5-32-545")
 
-	sddl, err = sddlFor(Access{Mode: groupSocketMode, Group: &Group{Name: "Users", ID: "S-1-5-32-545"}})
+	sddl, err = sddlFor(Access{Mode: groupSocketMode, Group: Group{Name: "Users", ID: "S-1-5-32-545"}})
 	require.NoError(t, err)
 	assert.Contains(t, sddl, "(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x120083;;;S-1-5-32-545)")
 	assert.Zero(t, pipeClientAccess&windows.FILE_APPEND_DATA, "FILE_APPEND_DATA is FILE_CREATE_PIPE_INSTANCE on a pipe")

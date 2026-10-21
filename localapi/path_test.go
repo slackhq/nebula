@@ -25,7 +25,7 @@ func TestSocketPathFromConfigUsesTheDefault(t *testing.T) {
 	p, err := SocketPathFromConfig(fakeConfig{})
 	require.NoError(t, err)
 	assert.Equal(t, "/var/run/nebula/ctl.sock", p)
-	assert.Equal(t, DefaultSocketPath(), p)
+	assert.Equal(t, DefaultSocketPath, p)
 }
 
 func TestSocketPathFromConfigHonoursOverride(t *testing.T) {
