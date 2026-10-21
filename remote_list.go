@@ -460,10 +460,14 @@ func (r *RemoteList) unlockedSetV4(ownerVpnIp, vpnIp netip.Addr, to []*V4AddrPor
 	// Reset the slice
 	c.reported = c.reported[:0]
 
-	// We can't take their array but we can take their pointers
-	for _, v := range to[:minInt(len(to), MaxRemotes)] {
+	// We can't take their array but we can take their pointers.
+	// Filter before capping so denied addrs do not crowd out allowed ones reported later in the list.
+	for _, v := range to {
 		if check(vpnIp, v) {
 			c.reported = append(c.reported, v)
+			if len(c.reported) == MaxRemotes {
+				break
+			}
 		}
 	}
 }
@@ -508,10 +512,14 @@ func (r *RemoteList) unlockedSetV6(ownerVpnIp, vpnIp netip.Addr, to []*V6AddrPor
 	// Reset the slice
 	c.reported = c.reported[:0]
 
-	// We can't take their array but we can take their pointers
-	for _, v := range to[:minInt(len(to), MaxRemotes)] {
+	// We can't take their array but we can take their pointers.
+	// Filter before capping so denied addrs do not crowd out allowed ones reported later in the list.
+	for _, v := range to {
 		if check(vpnIp, v) {
 			c.reported = append(c.reported, v)
+			if len(c.reported) == MaxRemotes {
+				break
+			}
 		}
 	}
 }
