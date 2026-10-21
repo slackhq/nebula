@@ -48,11 +48,11 @@ func TestIdentityOverTheInfoAPI(t *testing.T) {
 
 	// Before the tunnel is up their address is unknown to us.
 	path := infoSocket(t)
-	info := localapi.NewInfoServer(NewTestLogger(), myControl.Commands())
+	info := localapi.NewInfoServer(NewTestLogger(), myControl.InfoHandler())
 	require.NoError(t, info.Rebind(context.Background(), path, localapi.Access{Mode: 0600}))
 	t.Cleanup(info.Stop)
 
-	status, body := test.HTTPGet(t, path, "/v1/identity?address="+theirVpnIpNet[0].Addr().String())
+	status, body := test.HTTPGet(t, path, "/v1/identity/"+theirVpnIpNet[0].Addr().String())
 	assert.Equal(t, http.StatusNotFound, status)
 	assert.JSONEq(t, `{"error":"No active tunnel for vpn addr: 10.128.0.2"}`, body)
 
@@ -64,15 +64,18 @@ func TestIdentityOverTheInfoAPI(t *testing.T) {
 	assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
 
 	type identity struct {
-		Name     string         `json:"name"`
-		VpnAddrs []netip.Addr   `json:"vpnAddrs"`
-		Networks []netip.Prefix `json:"networks"`
-		Groups   []string       `json:"groups"`
-		Issuer   string         `json:"issuer"`
+		Name        string         `json:"name"`
+		VpnAddrs    []netip.Addr   `json:"vpnAddrs"`
+		Networks    []netip.Prefix `json:"networks"`
+		Groups      []string       `json:"groups"`
+		Issuer      string         `json:"issuer"`
+		Fingerprint string         `json:"fingerprint"`
 	}
 
-	// A connection's RemoteAddr, port and all, resolves to the peer.
-	status, body = test.HTTPGet(t, path, "/v1/identity?address="+netip.AddrPortFrom(theirVpnIpNet[0].Addr(), 51234).String())
+	// A connection's RemoteAddr, port and all, is the resource's path and resolves to the
+	// peer.
+	theirAddrPort := netip.AddrPortFrom(theirVpnIpNet[0].Addr(), 51234).String()
+	status, body = test.HTTPGet(t, path, "/v1/identity/"+theirAddrPort)
 	require.Equal(t, http.StatusOK, status, body)
 	var them identity
 	require.NoError(t, json.Unmarshal([]byte(body), &them))
@@ -83,29 +86,55 @@ func TestIdentityOverTheInfoAPI(t *testing.T) {
 	caFP, err := ca.Fingerprint()
 	require.NoError(t, err)
 	assert.Equal(t, caFP, them.Issuer)
+	assert.NotContains(t, body, `"pem"`, "the certificate is its own resource")
 
-	// No address is a caller that forgot the parameter, and is refused rather than handed
-	// this node's identity to authorize against; whoami is the command for that.
+	// The certificate itself is the identity's pem sub-resource, for a program that
+	// verifies it against its own CAs: the one nebula verified when the tunnel came up.
+	status, body = test.HTTPGet(t, path, "/v1/identity/"+theirAddrPort+"/pem")
+	require.Equal(t, http.StatusOK, status, body)
+	var raw struct {
+		PEM string `json:"pem"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(body), &raw))
+	theirs, _, err := cert.UnmarshalCertificateFromPEM([]byte(raw.PEM))
+	require.NoError(t, err)
+	assert.Equal(t, "them", theirs.Name())
+	fp, err := theirs.Fingerprint()
+	require.NoError(t, err)
+	assert.Equal(t, them.Fingerprint, fp, "the same certificate the identity was read from")
+
+	// The resource itself is this node, and so is its pem.
 	status, body = test.HTTPGet(t, path, "/v1/identity")
-	assert.Equal(t, http.StatusBadRequest, status, body)
-	assert.Contains(t, body, "whoami")
-
-	status, body = test.HTTPGet(t, path, "/v1/whoami")
 	require.Equal(t, http.StatusOK, status, body)
 	var me identity
 	require.NoError(t, json.Unmarshal([]byte(body), &me))
 	assert.Equal(t, "me", me.Name)
 	assert.Equal(t, []netip.Addr{myVpnIpNet[0].Addr()}, me.VpnAddrs)
 
-	// An empty address is a caller's bug, and is told so rather than handed our identity.
-	status, body = test.HTTPGet(t, path, "/v1/identity?address=")
-	assert.Equal(t, http.StatusBadRequest, status)
-	assert.JSONEq(t, `{"error":"The provided vpn addr could not be parsed: "}`, body)
+	status, body = test.HTTPGet(t, path, "/v1/identity/pem")
+	require.Equal(t, http.StatusOK, status, body)
+	require.NoError(t, json.Unmarshal([]byte(body), &raw))
+	mine, _, err := cert.UnmarshalCertificateFromPEM([]byte(raw.PEM))
+	require.NoError(t, err)
+	assert.Equal(t, "me", mine.Name())
 
-	// Nothing else nebula serves is reachable here.
+	// An empty address is a caller's bug: a program that built the path from an address
+	// it failed to fill in gets no route, never this node's identity to authorize against.
+	status, body = test.HTTPGet(t, path, "/v1/identity/")
+	assert.Equal(t, http.StatusNotFound, status)
+	assert.Contains(t, body, "no such path")
+
+	status, body = test.HTTPGet(t, path, "/v1/identity/not-an-address")
+	assert.Equal(t, http.StatusBadRequest, status)
+	assert.JSONEq(t, `{"error":"The provided vpn addr could not be parsed: not-an-address"}`, body)
+
+	// Nothing else nebula serves is reachable here: a command's name is just a path
+	// that is not served.
 	status, body = test.HTTPGet(t, path, "/v1/list-hostmap")
-	assert.Equal(t, http.StatusForbidden, status)
-	assert.Contains(t, body, "identity lookups only")
+	assert.Equal(t, http.StatusNotFound, status)
+	assert.Contains(t, body, "no such path")
+	status, _ = test.HTTPGet(t, path, "/v1/print-tunnel/"+theirAddrPort)
+	assert.Equal(t, http.StatusNotFound, status)
 
 	r.RenderHostmaps("Final hostmaps", myControl, theirControl)
 }

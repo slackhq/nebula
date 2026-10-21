@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/Microsoft/go-winio"
-	"github.com/slackhq/nebula/commands"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,7 +25,7 @@ func TestInfoIsServedOnAPipe(t *testing.T) {
 	require.NoError(t, err)
 	group := Group{Name: "Users", ID: users.String()}
 
-	s := NewInfoServer(test.NewLogger(), commands.New())
+	s := NewInfoServer(test.NewLogger(), stubInfoHandler())
 	path := pipePrefix + "nebula-info-test"
 	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: groupSocketMode, Group: group}))
 	t.Cleanup(s.Stop)
@@ -41,17 +40,17 @@ func TestInfoIsServedOnAPipe(t *testing.T) {
 			return winio.DialPipeAccess(ctx, path, pipeClientAccess)
 		},
 	}}
-	res, err := client.Get("http://nebula/v1")
+	res, err := client.Get("http://nebula/v1/whoami")
 	require.NoError(t, err)
 	defer res.Body.Close()
 	body, err := io.ReadAll(res.Body)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, res.StatusCode)
-	assert.Contains(t, string(body), `"help"`)
+	assert.Contains(t, string(body), `"me"`)
 
 	// A change of group means a new pipe under the same name, still serving.
 	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: groupSocketMode}))
-	res, err = client.Get("http://nebula/v1")
+	res, err = client.Get("http://nebula/v1/whoami")
 	require.NoError(t, err)
 	res.Body.Close()
 	assert.Equal(t, http.StatusOK, res.StatusCode)

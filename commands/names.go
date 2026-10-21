@@ -26,5 +26,4 @@ const (
 	QueryLighthouse       Name = "query-lighthouse"
 	Reload                Name = "reload"
 	Version               Name = "version"
-	Whoami                Name = "whoami"
 )

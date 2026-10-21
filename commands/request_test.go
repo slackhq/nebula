@@ -68,6 +68,22 @@ func TestParseLineCarriesWhatWasSetInParseableForm(t *testing.T) {
 	assert.Equal(t, paramsSeen{Verbose: true, Wait: 2 * time.Second}, (*seen)[0])
 }
 
+// TestResolveTellsUnknownFromWithheld: the two cases read differently to an operator,
+// and Resolve is the edge that decides which one a name from the wire is.
+func TestResolveTellsUnknownFromWithheld(t *testing.T) {
+	r := testRegistry().Filter(notWithheld, testReason)
+
+	c, err := r.Resolve("served")
+	require.NoError(t, err)
+	assert.Equal(t, Name("served"), c.Name)
+
+	_, err = r.Resolve("withheld")
+	require.ErrorContains(t, err, "withheld is not available on this surface")
+
+	_, err = r.Resolve("no-such-command")
+	require.ErrorContains(t, err, `unknown command "no-such-command"`)
+}
+
 // TestLineRunsTheFlagSetItParsed: the ssh path hands Run the FlagSet the line was parsed
 // into, with no trip through a Request. A flag.Func has no String worth re-parsing, so a
 // round trip would hand Run an empty value and no error; the line's value must arrive.

@@ -26,7 +26,7 @@ func TestWireRecoversFromBadPathAtStartup(t *testing.T) {
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(fmt.Sprintf("local_api:\n  control:\n    socket: /%s\n", strings.Repeat("x", sunPathMax))))
 
-	srv := Wire(ctx, test.NewLogger(), c, basicRegistry()).Control
+	srv := WireControl(ctx, test.NewLogger(), c, basicRegistry())
 	t.Cleanup(srv.Stop)
 	assert.Empty(t, srv.Path(), "an over-long path must not produce a socket")
 
@@ -85,7 +85,7 @@ func TestWireRetriesAFailedMoveOnPlainReload(t *testing.T) {
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(section(first)))
 
-	srv := Wire(ctx, test.NewLogger(), c, basicRegistry()).Control
+	srv := WireControl(ctx, test.NewLogger(), c, basicRegistry())
 	t.Cleanup(srv.Stop)
 	require.Equal(t, first, srv.Path())
 
@@ -122,7 +122,7 @@ func TestWireRecoversOnPlainReloadAfterBadBind(t *testing.T) {
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(cfg))
 
-	srv := Wire(ctx, test.NewLogger(), c, basicRegistry()).Control
+	srv := WireControl(ctx, test.NewLogger(), c, basicRegistry())
 	t.Cleanup(srv.Stop)
 	assert.Empty(t, srv.Path(), "listen creates one level only, so a missing runtime dir fails the bind")
 
@@ -157,9 +157,10 @@ func TestWireControlCanBeDisabled(t *testing.T) {
 
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(section(false)))
-	eps := Wire(ctx, test.NewLogger(), c, basicRegistry())
-	t.Cleanup(eps.Stop)
-	srv := eps.Control
+	srv := WireControl(ctx, test.NewLogger(), c, basicRegistry())
+	t.Cleanup(srv.Stop)
+	info := WireInfo(ctx, test.NewLogger(), c, stubInfoHandler())
+	t.Cleanup(info.Stop)
 	assert.Empty(t, srv.Path())
 	_, err := os.Lstat(path)
 	assert.True(t, os.IsNotExist(err), "no socket is bound")
@@ -176,7 +177,7 @@ func TestWireControlCanBeDisabled(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "the socket is removed")
 
 	require.NoError(t, c.ReloadConfigString(section(false)+fmt.Sprintf("  info:\n    enabled: true\n    socket: %s\n", path)).Err)
-	assert.Equal(t, path, eps.Info.Path(), "a disabled control socket does not hold its path")
+	assert.Equal(t, path, info.Path(), "a disabled control socket does not hold its path")
 }
 
 // TestWireRefusesOnePathForBothAPIs: a config that gives the control socket and the info
@@ -194,16 +195,18 @@ func TestWireRefusesOnePathForBothAPIs(t *testing.T) {
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(section(shared, shared)))
 
-	eps := Wire(ctx, test.NewLogger(), c, basicRegistry())
-	t.Cleanup(eps.Stop)
-	assert.Empty(t, eps.Control.Path(), "the control socket does not take the info API's path")
-	assert.Empty(t, eps.Info.Path(), "the info API does not take the control socket's path")
+	ctl := WireControl(ctx, test.NewLogger(), c, basicRegistry())
+	t.Cleanup(ctl.Stop)
+	info := WireInfo(ctx, test.NewLogger(), c, stubInfoHandler())
+	t.Cleanup(info.Stop)
+	assert.Empty(t, ctl.Path(), "the control socket does not take the info API's path")
+	assert.Empty(t, info.Path(), "the info API does not take the control socket's path")
 
 	// The same node spelled differently is the same node.
 	doubled := filepath.Join(filepath.Dir(shared), "") + "//" + filepath.Base(shared)
 	require.NoError(t, c.ReloadConfigString(section(shared, doubled)).Err)
-	assert.Empty(t, eps.Control.Path())
-	assert.Empty(t, eps.Info.Path())
+	assert.Empty(t, ctl.Path())
+	assert.Empty(t, info.Path())
 	_, err := os.Stat(shared)
 	assert.True(t, os.IsNotExist(err), "neither side bound the shared path")
 
@@ -211,10 +214,10 @@ func TestWireRefusesOnePathForBothAPIs(t *testing.T) {
 	// way, and the control socket keeps the one it has.
 	other := testSocket(t)
 	require.NoError(t, c.ReloadConfigString(section(other, shared)).Err)
-	require.Equal(t, other, eps.Control.Path())
-	require.Equal(t, shared, eps.Info.Path())
+	require.Equal(t, other, ctl.Path())
+	require.Equal(t, shared, info.Path())
 
 	require.NoError(t, c.ReloadConfigString(section(shared, shared)).Err)
-	assert.Equal(t, other, eps.Control.Path(), "a move onto the info API's path keeps the current socket")
-	assert.Equal(t, shared, eps.Info.Path())
+	assert.Equal(t, other, ctl.Path(), "a move onto the info API's path keeps the current socket")
+	assert.Equal(t, shared, info.Path())
 }

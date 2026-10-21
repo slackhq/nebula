@@ -101,18 +101,19 @@ func TestCommandOutput(t *testing.T) {
 		{"print-cert", []string{"10.222.0.9", "-json"}},
 		{"print-cert", []string{"10.222.0.250"}},
 		{"print-cert", []string{"not-an-address"}},
-		{"whoami", nil},
-		{"whoami", []string{"x"}},
-		// No address is a refusal that names whoami, never this node's identity.
+		// No address is this node; so is our own address, which the hostmap never holds.
 		{"identity", nil},
-		// Our own address, which the hostmap never holds, answers from our certificate.
-		{"identity", []string{"-address", "10.222.0.1"}},
-		{"identity", []string{"-address", "10.222.0.1:4242"}},
+		{"identity", []string{"-pem"}},
+		{"identity", []string{"-pem", "10.222.0.1"}},
+		{"identity", []string{"-pem", "10.222.0.9"}},
+		{"identity", []string{"10.222.0.1"}},
+		{"identity", []string{"10.222.0.1:4242"}},
 		// A pending tunnel has no certificate yet.
-		{"identity", []string{"-address", "10.222.0.9"}},
-		{"identity", []string{"-address", "not-an-address"}},
-		{"identity", []string{"-address", ""}},
 		{"identity", []string{"10.222.0.9"}},
+		{"identity", []string{"not-an-address"}},
+		// An empty address is a caller's mistake, never this node.
+		{"identity", []string{""}},
+		{"identity", []string{"10.222.0.1", "10.222.0.9"}},
 		{"print-tunnel", nil},
 		{"print-tunnel", []string{"10.222.0.9"}},
 		{"print-tunnel", []string{"10.222.0.250"}},

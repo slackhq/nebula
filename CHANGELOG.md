@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A control socket that provides access to all of the ssh debug server's commands along with support
   for running `nebula ctl <command>` as a client from the CLI.
-- An info socket that provides access to information related to identity: identity, whoami, and print-cert.
+- An info socket that serves the `identity` command over HTTP: `GET /v1/identity` for this node,
+  `GET /v1/identity/<vpn addr>` for the host owning an address, and `/pem` under either for the certificate.
 
 ### Removed
 

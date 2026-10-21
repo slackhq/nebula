@@ -45,11 +45,11 @@ help
   -pretty
     	pretty prints json, assumes -json
 identity
-  short: Prints the certificate identity of the host owning the provided vpn addr
-  help: The printed identity includes: name, vpn addrs, networks, groups, fingerprint, issuer and validity. The query address may include a port. For this node's own identity use whoami.
+  short: Prints the certificate identity of this node or of the host owning the provided vpn addr
+  help: The printed identity includes: name, vpn addrs, networks, groups, fingerprint, issuer and validity. The vpn addr may include a port; without one this node's own identity is printed. -pem prints the certificate itself instead.
   flags:
-  -address string
-    	The vpn addr to look up, optionally with a port
+  -pem
+    	prints the certificate, PEM encoded, in place of the identity; with -json, an object holding it
   -json
     	outputs as json
   -pretty
@@ -143,14 +143,6 @@ reload
 version
   short: Prints the currently running version of nebula
   help: 
-  flags:
-  -json
-    	outputs as json
-  -pretty
-    	pretty prints json, assumes -json
-whoami
-  short: Prints the certificate identity of this node
-  help: Prints the name, vpn addrs, networks, groups, fingerprint, issuer and validity for this node's certificate.
   flags:
   -json
     	outputs as json

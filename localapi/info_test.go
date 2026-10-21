@@ -5,9 +5,6 @@ package localapi
 import (
 	"bufio"
 	"context"
-	"encoding/json"
-	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -25,59 +22,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type whoamiFlags struct {
-	Name  string
-	Shout bool
-}
-
-// infoRegistry holds one identity command, whoami, whose -name selects an outcome, and
-// one command the info API must withhold.
-func infoRegistry() *commands.Registry {
-	reg := commands.New()
-	reg.Register(&commands.Command{
-		Name:             "whoami",
-		ShortDescription: "reports who a name belongs to",
-		Identity:         true,
-		Flags: func() (*flag.FlagSet, any) {
-			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := &whoamiFlags{}
-			fl.StringVar(&s.Name, "name", "", "the name to look up")
-			fl.BoolVar(&s.Shout, "shout", false, "answers in capitals")
-			return fl, s
-		},
-		Run: func(fs any, a []string) (commands.Result, error) {
-			if f := fs.(*whoamiFlags); f.Shout {
-				return commands.Value(map[string]any{"name": strings.ToUpper(f.Name)}), nil
-			}
-			switch name := fs.(*whoamiFlags).Name; name {
-			case "":
-				return commands.Value(map[string]any{"name": "me", "groups": []string{}}), nil
-			case "nobody":
-				return commands.NotFound("No active tunnel for vpn addr: %s", name), nil
-			case "bad":
-				return commands.Failed("The provided vpn addr could not be parsed: %s", name), nil
-			case "boom":
-				panic("this command is broken")
-			case "err":
-				return commands.Result{}, errors.New("an internal detail")
-			case "silent":
-				return commands.Result{}, nil
-			case "done":
-				return commands.Nothing(), nil
-			default:
-				return commands.Value(map[string]any{"name": name}), nil
-			}
-		},
-	})
-	reg.Register(echoCommand())
-	return reg
-}
-
-func serveInfo(t *testing.T, reg *commands.Registry, mode os.FileMode) (*InfoServer, string) {
+func serveInfo(t *testing.T, h http.Handler, mode os.FileMode) (*InfoServer, string) {
 	t.Helper()
 
 	path := testSocket(t)
-	s := NewInfoServer(test.NewLogger(), reg)
+	s := NewInfoServer(test.NewLogger(), h)
 	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: mode}))
 	t.Cleanup(s.Stop)
 	return s, path
@@ -85,8 +34,8 @@ func serveInfo(t *testing.T, reg *commands.Registry, mode os.FileMode) (*InfoSer
 
 // httpDo sends one request over the socket at path and returns the status, body and
 // headers. The host in the URL is a placeholder: the dialer ignores it.
-func TestInfoServesIdentityCommands(t *testing.T) {
-	_, path := serveInfo(t, infoRegistry(), 0600)
+func TestInfoServesTheHandler(t *testing.T) {
+	_, path := serveInfo(t, stubInfoHandler(), 0600)
 
 	status, body, hdr := test.HTTPDo(t, path, http.MethodGet, "/v1/whoami?name=alice")
 	assert.Equal(t, http.StatusOK, status)
@@ -95,66 +44,35 @@ func TestInfoServesIdentityCommands(t *testing.T) {
 
 	status, body = test.HTTPGet(t, path, "/v1/whoami")
 	assert.Equal(t, http.StatusOK, status)
-	assert.JSONEq(t, `{"name":"me","groups":[]}`, body, "a parameter left out is the command's default")
+	assert.JSONEq(t, `{"name":"me","groups":[]}`, body)
+
+	// The path arrives as the client wrote it: an address in brackets with a port, or
+	// with a zone, needs no escaping, and a percent-escaped segment is decoded.
+	status, body = test.HTTPGet(t, path, "/v1/whoami/[::ffff:10.0.0.2]:8")
+	assert.Equal(t, http.StatusOK, status)
+	assert.JSONEq(t, `{"name":"[::ffff:10.0.0.2]:8"}`, body)
+
+	status, body = test.HTTPGet(t, path, "/v1/whoami/fe80::1%25eth0")
+	assert.Equal(t, http.StatusOK, status)
+	assert.JSONEq(t, `{"name":"fe80::1%eth0"}`, body)
 }
 
-// TestInfoWithholdsTheRest checks the filter at the wire: a command that exists but is
-// not an identity command is refused with the reason, and a name nothing is registered
-// under is unknown, so a caller can tell a typo from a closed door.
-func TestInfoWithholdsTheRest(t *testing.T) {
-	_, path := serveInfo(t, infoRegistry(), 0600)
+// TestInfoRefusesWhatTheHandlerNeverSees: the rules every request is held to before
+// the handler: GET alone, and no path that would need cleaning, which ServeMux would
+// otherwise redirect. The misses are JSON, as the handler's own are.
+func TestInfoRefusesWhatTheHandlerNeverSees(t *testing.T) {
+	_, path := serveInfo(t, stubInfoHandler(), 0600)
 
-	status, body := test.HTTPGet(t, path, "/v1/echo?x=1")
-	assert.Equal(t, http.StatusForbidden, status)
-	assert.Contains(t, body, "echo is not available on this surface")
-	assert.Contains(t, body, "identity lookups only")
-
-	status, body = test.HTTPGet(t, path, "/v1/nope")
-	assert.Equal(t, http.StatusNotFound, status)
-	assert.Contains(t, body, `unknown command \"nope\"`)
-
-	for _, target := range []string{"/", "/v2/whoami", "/v1/", "/v1/whoami/extra", "//v1/whoami", "/v1/x/../whoami", "/v1/../v1/whoami"} {
-		status, body = test.HTTPGet(t, path, target)
+	for _, target := range []string{"//v1/whoami", "/v1/x/../whoami", "/v1/../v1/whoami"} {
+		status, body := test.HTTPGet(t, path, target)
 		assert.Equal(t, http.StatusNotFound, status, target)
-		assert.Contains(t, body, `"error"`, "%s: misses are JSON too", target)
-	}
-}
-
-func TestInfoStatusCodes(t *testing.T) {
-	_, path := serveInfo(t, infoRegistry(), 0600)
-
-	for _, tc := range []struct {
-		target string
-		status int
-		body   string
-	}{
-		{"/v1/whoami?name=nobody", http.StatusNotFound, `{"error":"No active tunnel for vpn addr: nobody"}`},
-		{"/v1/whoami?name=bad", http.StatusBadRequest, `{"error":"The provided vpn addr could not be parsed: bad"}`},
-		{"/v1/whoami?nope=1", http.StatusBadRequest, `{"error":"whoami has no parameter \"nope\""}`},
-		{"/v1/whoami?name=a&name=b", http.StatusBadRequest, `{"error":"parameter \"name\" was given more than once"}`},
-		{"/v1/whoami?pretty=maybe", http.StatusBadRequest, `{"error":"pretty: expected a boolean, got \"maybe\""}`},
-		// A pair that does not decode is a malformed request, not a request without
-		// the pair: the lenient parser would drop it and keep the rest.
-		{"/v1/whoami?name=%zz", http.StatusBadRequest, `{"error":"malformed query string: invalid URL escape \"%zz\""}`},
-		{"/v1/whoami?name=a;shout", http.StatusBadRequest, `{"error":"malformed query string: invalid semicolon separator in query"}`},
-		// A boolean parameter with no value is set, as -shout is on a command line.
-		{"/v1/whoami?name=alice&shout", http.StatusOK, `{"name":"ALICE"}`},
-		{"/v1/whoami?name=alice&shout=false", http.StatusOK, `{"name":"alice"}`},
-		// Run failed: the caller hears that it did and no more; the detail is for the log.
-		{"/v1/whoami?name=err", http.StatusInternalServerError, `{"error":"command failed"}`},
-		// A refusal with no reason, the zero Result, fails the same way rather than
-		// passing as a success with nothing to say.
-		{"/v1/whoami?name=silent", http.StatusInternalServerError, `{"error":"command failed"}`},
-	} {
-		status, body := test.HTTPGet(t, path, tc.target)
-		assert.Equal(t, tc.status, status, tc.target)
-		assert.JSONEq(t, tc.body, body, tc.target)
+		assert.JSONEq(t, `{"error":"no such path `+target+`"}`, body, target)
 	}
 
-	// A success with nothing to say is the one empty reply.
-	status, body := test.HTTPGet(t, path, "/v1/whoami?name=done")
-	assert.Equal(t, http.StatusNoContent, status)
-	assert.Empty(t, body)
+	// A path the handler does not serve is the handler's miss, in the same shape.
+	status, body := test.HTTPGet(t, path, "/v2/whoami")
+	assert.Equal(t, http.StatusNotFound, status)
+	assert.JSONEq(t, `{"error":"no such path /v2/whoami"}`, body)
 
 	status, body, hdr := test.HTTPDo(t, path, http.MethodPost, "/v1/whoami?name=alice")
 	assert.Equal(t, http.StatusMethodNotAllowed, status)
@@ -165,56 +83,18 @@ func TestInfoStatusCodes(t *testing.T) {
 	assert.Equal(t, http.StatusMethodNotAllowed, status)
 }
 
-// TestInfoPanicDoesNotKillTheDaemon: a broken command costs a request, not the overlay.
+// TestInfoPanicDoesNotKillTheDaemon: a broken handler costs a request, not the overlay.
 // This surface may be open to anyone on the host, so that holds against them too.
 func TestInfoPanicDoesNotKillTheDaemon(t *testing.T) {
-	_, path := serveInfo(t, infoRegistry(), 0600)
+	_, path := serveInfo(t, stubInfoHandler(), 0600)
 
 	status, body := test.HTTPGet(t, path, "/v1/whoami?name=boom")
 	assert.Equal(t, http.StatusInternalServerError, status)
-	assert.JSONEq(t, `{"error":"command failed"}`, body)
+	assert.JSONEq(t, `{"error":"request failed"}`, body)
 
 	status, body = test.HTTPGet(t, path, "/v1/whoami?name=alice")
 	assert.Equal(t, http.StatusOK, status)
 	assert.JSONEq(t, `{"name":"alice"}`, body)
-}
-
-func TestInfoDescribe(t *testing.T) {
-	_, path := serveInfo(t, infoRegistry(), 0600)
-
-	status, body := test.HTTPGet(t, path, "/v1")
-	require.Equal(t, http.StatusOK, status)
-
-	var schema []commands.CommandSchema
-	require.NoError(t, json.Unmarshal([]byte(body), &schema))
-
-	var names []commands.Name
-	flags := map[commands.Name][]string{}
-	for _, c := range schema {
-		names = append(names, c.Name)
-		for _, f := range c.Flags {
-			flags[c.Name] = append(flags[c.Name], f.Name)
-		}
-	}
-	assert.ElementsMatch(t, []commands.Name{"help", "whoami"}, names, "only what is served is described")
-	assert.Equal(t, []string{"name", "shout", commands.FlagJSON, commands.FlagPretty}, flags["whoami"])
-}
-
-// TestInfoPresentationFlags: the query string takes -json and -pretty as a command line
-// would. The answer is JSON either way; pretty indents it.
-func TestInfoPresentationFlags(t *testing.T) {
-	_, path := serveInfo(t, infoRegistry(), 0600)
-
-	_, compact := test.HTTPGet(t, path, "/v1/whoami?name=alice&json=true")
-	//nolint:testifylint // the exact bytes, newline included, are what is under test
-	assert.Equal(t, "{\"name\":\"alice\"}\n", compact)
-
-	_, pretty := test.HTTPGet(t, path, "/v1/whoami?name=alice&pretty")
-	//nolint:testifylint // the layout is what is under test
-	assert.Equal(t, "{\n    \"name\": \"alice\"\n}\n", pretty)
-
-	_, off := test.HTTPGet(t, path, "/v1/whoami?name=alice&pretty=false")
-	assert.Equal(t, compact, off)
 }
 
 // TestInfoModeChangeRefusesASwappedSocket: whoever can write the directory can replace
@@ -223,7 +103,7 @@ func TestInfoPresentationFlags(t *testing.T) {
 // stale check, the file is untouched, and the endpoint reports itself down, since
 // nothing of ours is reachable at the path.
 func TestInfoModeChangeRefusesASwappedSocket(t *testing.T) {
-	s, path := serveInfo(t, infoRegistry(), 0600)
+	s, path := serveInfo(t, stubInfoHandler(), 0600)
 
 	target := filepath.Join(filepath.Dir(path), "target")
 	require.NoError(t, os.WriteFile(target, nil, 0600))
@@ -302,51 +182,52 @@ func TestWireInfoFollowsConfig(t *testing.T) {
 	require.NoError(t, c.LoadString(section(false, infoPath)))
 
 	var logs lockedBuffer
-	eps := Wire(ctx, test.NewLoggerWithOutput(&logs), c, infoRegistry())
+	eps := Wire(ctx, test.NewLoggerWithOutput(&logs), c, commands.New(), stubInfoHandler())
 	t.Cleanup(eps.Stop)
-	assert.Equal(t, ctlPath, eps.Control.Path())
-	assert.Empty(t, eps.Info.Path(), "off until enabled")
+	ctl, info := eps.Control, eps.Info
+	assert.Equal(t, ctlPath, ctl.Path())
+	assert.Empty(t, info.Path(), "off until enabled")
 
 	require.NoError(t, c.ReloadConfigString(section(true, infoPath)).Err)
-	assert.Equal(t, infoPath, eps.Info.Path())
+	assert.Equal(t, infoPath, info.Path())
 	status, body := test.HTTPGet(t, infoPath, "/v1/whoami?name=alice")
 	assert.Equal(t, http.StatusOK, status)
 	assert.JSONEq(t, `{"name":"alice"}`, body)
 
 	// A reload that changes nothing leaves it where it is.
 	require.NoError(t, c.ReloadConfigString(section(true, infoPath)).Err)
-	assert.Equal(t, infoPath, eps.Info.Path())
+	assert.Equal(t, infoPath, info.Path())
 
 	// A reload that moves the socket moves it, and removes the old one.
 	moved := testSocket(t)
 	require.NoError(t, c.ReloadConfigString(section(true, moved)).Err)
-	assert.Equal(t, moved, eps.Info.Path())
+	assert.Equal(t, moved, info.Path())
 	_, err := os.Stat(infoPath)
 	assert.True(t, os.IsNotExist(err))
 	status, body = test.HTTPGet(t, moved, "/v1/whoami?name=bob")
 	assert.Equal(t, http.StatusOK, status)
 	assert.JSONEq(t, `{"name":"bob"}`, body)
 	require.NoError(t, c.ReloadConfigString(section(true, infoPath)).Err)
-	require.Equal(t, infoPath, eps.Info.Path())
+	require.Equal(t, infoPath, info.Path())
 
 	// The control socket's path is refused, and the running endpoint is kept, which is
 	// what the log says.
 	require.NoError(t, c.ReloadConfigString(section(true, ctlPath)).Err)
-	assert.Equal(t, infoPath, eps.Info.Path())
-	assert.Equal(t, ctlPath, eps.Control.Path())
+	assert.Equal(t, infoPath, info.Path())
+	assert.Equal(t, ctlPath, ctl.Path())
 	assert.Contains(t, logs.String(), "keeping the current endpoint")
 	assert.NotContains(t, logs.String(), "Local info API is not available")
 
 	require.NoError(t, c.ReloadConfigString(section(false, infoPath)).Err)
-	assert.Empty(t, eps.Info.Path())
+	assert.Empty(t, info.Path())
 	_, err = os.Stat(infoPath)
 	assert.True(t, os.IsNotExist(err))
 
 	// One Stop takes both down.
 	require.NoError(t, c.ReloadConfigString(section(true, infoPath)).Err)
 	eps.Stop()
-	assert.Empty(t, eps.Info.Path())
-	assert.Empty(t, eps.Control.Path())
+	assert.Empty(t, info.Path())
+	assert.Empty(t, ctl.Path())
 }
 
 // TestWireInfoKeepsRunningOnABadReload: a typo in the section must not cut off the
@@ -361,7 +242,7 @@ func TestWireInfoKeepsRunningOnABadReload(t *testing.T) {
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(good))
 
-	srv := wireInfo(ctx, test.NewLogger(), c, infoRegistry())
+	srv := wireInfo(ctx, test.NewLogger(), c, stubInfoHandler())
 	t.Cleanup(srv.Stop)
 	require.Equal(t, infoPath, srv.Path())
 
@@ -391,7 +272,7 @@ func TestInfoRefusesARequestBody(t *testing.T) {
 	oldHeader, oldRead := infoReadHeaderTimeout, infoReadTimeout
 	infoReadHeaderTimeout, infoReadTimeout = 200*time.Millisecond, 300*time.Millisecond
 	t.Cleanup(func() { infoReadHeaderTimeout, infoReadTimeout = oldHeader, oldRead })
-	_, path := serveInfo(t, infoRegistry(), 0600)
+	_, path := serveInfo(t, stubInfoHandler(), 0600)
 
 	start := time.Now()
 	conn := rawInfoRequest(t, path, "GET /v1/whoami HTTP/1.1\r\nHost: nebula\r\nContent-Length: 10\r\n\r\n")
@@ -416,7 +297,7 @@ func TestInfoDropsASlowClient(t *testing.T) {
 	oldHeader, oldRead := infoReadHeaderTimeout, infoReadTimeout
 	infoReadHeaderTimeout, infoReadTimeout = 200*time.Millisecond, 300*time.Millisecond
 	t.Cleanup(func() { infoReadHeaderTimeout, infoReadTimeout = oldHeader, oldRead })
-	_, path := serveInfo(t, infoRegistry(), 0600)
+	_, path := serveInfo(t, stubInfoHandler(), 0600)
 
 	// Half a request line, then silence: the header deadline ends it.
 	conn := rawInfoRequest(t, path, "GET /v1/whoami HTTP/1.1\r\nHost: neb")

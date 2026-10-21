@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/netip"
+	"strconv"
 	"testing"
 	"time"
 
@@ -81,36 +82,27 @@ func identityPKI(t *testing.T, name string, network netip.Prefix) *PKI {
 	return pki
 }
 
-// identity runs the command with -address given as address.
-func identity(t *testing.T, f *Interface, address string, operands ...string) commands.Result {
+// identity runs the command with the given operands, the vpn addr when there is one.
+func identity(t *testing.T, f *Interface, operands ...string) commands.Result {
 	t.Helper()
-	fs := &identityFlags{}
-	require.NoError(t, fs.setAddress(address))
-	r, err := runIdentity(f, fs, operands)
+	r, err := runIdentity(f, &identityFlags{}, operands)
 	require.NoError(t, err)
 	return r
 }
 
-// whoami runs the whoami command.
-func whoami(t *testing.T, f *Interface) commands.Result {
-	t.Helper()
-	r, err := runWhoami(f)
-	require.NoError(t, err)
-	return r
-}
-
-// TestWhoamiWithoutACertificateRefuses: no certificate is a refusal with the reason, as
+// TestIdentityWithoutACertificateRefuses: no certificate is a refusal with the reason, as
 // print-cert answers it, not an error a surface collapses to "command failed".
-func TestWhoamiWithoutACertificateRefuses(t *testing.T) {
-	r := whoami(t, &Interface{pki: &PKI{}})
+func TestIdentityWithoutACertificateRefuses(t *testing.T) {
+	r := identity(t, &Interface{pki: &PKI{}})
 	assert.False(t, r.OK)
 	assert.Equal(t, "No certificate is loaded", r.Reason)
 }
 
-func TestWhoamiReportsThisNode(t *testing.T) {
+// TestIdentityReportsThisNode: no address is this node, the resource itself.
+func TestIdentityReportsThisNode(t *testing.T) {
 	f, _ := identityFixture(t)
 
-	r := whoami(t, f)
+	r := identity(t, f)
 	require.True(t, r.OK)
 	id, ok := r.Value.(hostIdentity)
 	require.True(t, ok, "got %T", r.Value)
@@ -154,18 +146,16 @@ func TestIdentityRefusals(t *testing.T) {
 
 	unknown := identity(t, f, "10.0.0.9")
 	assert.False(t, unknown.OK)
-	assert.True(t, unknown.NotFound, "no tunnel is a not found")
 	assert.Equal(t, "No active tunnel for vpn addr: 10.0.0.9", unknown.Reason)
 
 	pending := identity(t, f, "10.0.0.3:1")
-	assert.True(t, pending.NotFound, "a tunnel without a certificate yet is not active")
+	assert.False(t, pending.OK, "a tunnel without a certificate yet is not active")
 	assert.Equal(t, "No active tunnel for vpn addr: 10.0.0.3", pending.Reason, "the reason names the address, not the port")
 
 	// A peer's address in a network we do not hold is answered by nothing that vouches
 	// for a sender, though the same peer's address in our network is; see hostIdentity.
 	far := identity(t, f, "9.9.9.9")
-	assert.False(t, far.OK)
-	assert.True(t, far.NotFound, "an address outside our networks is not found, with a tunnel to its holder up")
+	assert.False(t, far.OK, "an address outside our networks is not found, with a tunnel to its holder up")
 	assert.Equal(t, "No active tunnel for vpn addr: 9.9.9.9", far.Reason)
 	near := identity(t, f, "10.0.0.4")
 	require.True(t, near.OK, near.Reason)
@@ -173,33 +163,81 @@ func TestIdentityRefusals(t *testing.T) {
 
 	garbage := identity(t, f, "not-an-address")
 	assert.False(t, garbage.OK)
-	assert.False(t, garbage.NotFound, "an address that does not parse is the caller's mistake")
 	assert.Equal(t, "The provided vpn addr could not be parsed: not-an-address", garbage.Reason)
 
 	// An address that was given and is empty is a caller that failed to fill it in, and
 	// must not be answered with our own identity.
 	empty := identity(t, f, "")
 	assert.False(t, empty.OK)
-	assert.False(t, empty.NotFound)
 	assert.Equal(t, "The provided vpn addr could not be parsed: ", empty.Reason)
 
-	operand := identity(t, f, "", "10.0.0.2")
-	assert.False(t, operand.OK)
-	assert.Contains(t, operand.Reason, "identity -address 10.0.0.2")
+	two := identity(t, f, "10.0.0.2", "10.0.0.4")
+	assert.False(t, two.OK)
+	assert.Contains(t, two.Reason, "one vpn addr")
+}
 
-	// No address at all is a caller that forgot the parameter, and is pointed at whoami
-	// rather than handed this node's identity.
-	omitted, err := runIdentity(f, &identityFlags{}, nil)
+// TestIdentityPem: -pem answers with the certificate the identity would have been read
+// from, and nothing else: the PEM block as text, {"pem": ...} as JSON.
+func TestIdentityPem(t *testing.T) {
+	f, peerCert := identityFixture(t)
+
+	r, err := runIdentity(f, &identityFlags{Pem: true}, []string{"10.0.0.2"})
 	require.NoError(t, err)
-	assert.False(t, omitted.OK)
-	assert.False(t, omitted.NotFound)
-	assert.Contains(t, omitted.Reason, "-address")
-	assert.Contains(t, omitted.Reason, "whoami")
+	require.True(t, r.OK, r.Reason)
+	want, err := peerCert.MarshalPEM()
+	require.NoError(t, err)
+	assert.Equal(t, certPEM{PEM: string(want)}, r.Value)
+
+	out := &bytes.Buffer{}
+	require.NoError(t, commands.Render(&commands.Command{Name: commands.Identity, Text: textIdentityValue}, r, commands.FormatText, out))
+	assert.Equal(t, string(want), out.String(), "text is the block alone")
+
+	b, err := json.Marshal(r.Payload())
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"pem":`+strconv.Quote(string(want))+`}`, string(b))
+
+	// Our own, with no address, is our own certificate.
+	r, err = runIdentity(f, &identityFlags{Pem: true}, nil)
+	require.NoError(t, err)
+	require.True(t, r.OK, r.Reason)
+	own, err := ownCertificate(f.pki.getCertState()).MarshalPEM()
+	require.NoError(t, err)
+	assert.Equal(t, certPEM{PEM: string(own)}, r.Value)
+
+	// A lookup that fails fails the same way with -pem.
+	r, err = runIdentity(f, &identityFlags{Pem: true}, []string{"10.0.0.9"})
+	require.NoError(t, err)
+	assert.Equal(t, "No active tunnel for vpn addr: 10.0.0.9", r.Reason)
+}
+
+// TestLookupIdentityKinds: the one lookup both surfaces use tells the asking being wrong
+// from the thing asked about not being there, which is what the info API's status codes
+// are made of.
+func TestLookupIdentityKinds(t *testing.T) {
+	f, _ := identityFixture(t)
+
+	for addr, want := range map[string]lookupFailure{
+		"not-an-address": lookupBadAddress,
+		"":               lookupBadAddress,
+		"10.0.0.9":       lookupNoTunnel,
+		"10.0.0.3":       lookupNoTunnel,
+		"9.9.9.9":        lookupNoTunnel,
+	} {
+		_, _, err := lookupIdentity(f, addr, true)
+		var le *lookupError
+		require.ErrorAs(t, err, &le, addr)
+		assert.Equal(t, want, le.kind, addr)
+	}
+
+	_, _, err := lookupIdentity(&Interface{pki: &PKI{}}, "", false)
+	var le *lookupError
+	require.ErrorAs(t, err, &le)
+	assert.Equal(t, lookupNoCertificate, le.kind)
 }
 
 // TestOwnCertificatePrefersV2: with both versions loaded, the v2 certificate is the one
 // myVpnAddrsTable is built from and may carry addresses the v1 does not, so it is the one
-// whoami and an identity lookup of our own address report, whichever version handshakes
+// an identity lookup of our own address, or of none, reports, whichever version handshakes
 // are initiated with.
 func TestOwnCertificatePrefersV2(t *testing.T) {
 	v4 := netip.MustParsePrefix("10.0.0.1/24")
@@ -236,14 +274,14 @@ func TestIdentityShapes(t *testing.T) {
 	}, keys)
 
 	// Empty lists marshal as [], never null.
-	self := whoami(t, f)
+	self := identity(t, f)
 	b, err = json.Marshal(self.Payload())
 	require.NoError(t, err)
 	assert.Contains(t, string(b), `"groups":[]`)
 	assert.Contains(t, string(b), `"unsafeNetworks":[]`)
 
 	out := &bytes.Buffer{}
-	require.NoError(t, commands.Render(&commands.Command{Name: commands.Identity, Text: commands.Typed(textIdentity)}, r, commands.FormatText, out))
+	require.NoError(t, commands.Render(&commands.Command{Name: commands.Identity, Text: textIdentityValue}, r, commands.FormatText, out))
 	assert.Contains(t, out.String(), "name: peer\n")
 	assert.Contains(t, out.String(), "vpn addrs: 10.0.0.2\n")
 	assert.Contains(t, out.String(), "groups: web, db\n")

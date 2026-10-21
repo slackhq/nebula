@@ -53,7 +53,7 @@ func (p *program) Start(s service.Service) error {
 	}
 
 	// Now that we're started, stand up the local APIs.
-	p.ctl = localapi.Wire(p.control.Context(), l, c, p.control.Commands())
+	p.ctl = localapi.Wire(p.control.Context(), l, c, p.control.Commands(), p.control.InfoHandler())
 
 	// Nebula can stop itself on a fatal packet reader error, make sure to log it if it happens.
 	go func() {

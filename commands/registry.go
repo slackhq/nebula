@@ -2,7 +2,6 @@ package commands
 
 import (
 	"cmp"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -16,8 +15,9 @@ import (
 
 // Registry holds a set of commands.
 //
-// It is safe for concurrent use: the ssh server clones it per session and the control
-// socket serves it as it is, while the daemon fills it once at startup.
+// It is safe for concurrent use. Commands may be registered while surfaces are serving
+// from the registry: the ssh server clones it per session and the control socket filters
+// it per request, and either may overlap a Register.
 type Registry struct {
 	mu       sync.RWMutex
 	commands map[Name]*Command
@@ -63,16 +63,15 @@ func (r *Registry) registerHelp() {
 				return Value(r.Schema()), nil
 			}
 
-			c, err := r.Resolve(Name(args[0]))
-			if err != nil {
-				var withheld *WithheldError
-				if errors.As(err, &withheld) {
-					return Failed("%s", err), nil
-				}
-				return Failed("Command not available %s", args[0]), nil
+			if c := r.Get(Name(args[0])); c != nil {
+				return Value(r.schemaFor(c)), nil
 			}
 
-			return Value(r.SchemaFor(c)), nil
+			if err := r.unavailable(Name(args[0])); err != nil {
+				return Failed("%s", err), nil
+			}
+
+			return Failed("Command not available %s", args[0]), nil
 		},
 		Text: renderHelp,
 	})
@@ -223,9 +222,10 @@ func (r *Registry) Clone() *Registry {
 
 // Filter returns a filtered copy of the registry.
 //
-// Keep should return true for commands that should be included in the copy. reason
-// says, to an operator who names a command the copy left out, why this surface does
-// not serve it; "" leaves the registry to say only that it does not.
+// Keep should return true for commands that should be included in the copy.
+//
+// reason says, to an operator who names a command the copy left out, why this surface
+// does not serve it; "" leaves the registry to say only that it does not.
 func (r *Registry) Filter(keep func(*Command) bool, reason string) *Registry {
 	out := &Registry{commands: map[Name]*Command{}, full: r, reason: reason, DefaultFormat: r.DefaultFormat}
 
@@ -267,10 +267,9 @@ func (r *Registry) DispatchArgs(args []string, w Output) error {
 		args = []string{"help"}
 	}
 
-	c, err := r.Resolve(Name(args[0]))
-	if err != nil {
-		var withheld *WithheldError
-		if errors.As(err, &withheld) {
+	c := r.Get(Name(args[0]))
+	if c == nil {
+		if err := r.unavailable(Name(args[0])); err != nil {
 			// Saying why, rather than "did not understand", keeps the rule legible and
 			// points at a surface that will actually run the command.
 			_, _ = fmt.Fprintln(w.Err, err)
@@ -311,18 +310,12 @@ func (r *Registry) unavailable(name Name) error {
 		reason = "this surface does not serve it"
 	}
 
-	return &WithheldError{msg: fmt.Sprintf("%s is not available on this surface: %s", c.Name, reason)}
+	return fmt.Errorf("%s is not available on this surface: %s", c.Name, reason)
 }
 
-// WithheldError indicates that the command is supported by Nebula, but not via this path.
-type WithheldError struct {
-	msg string
-}
-
-func (e *WithheldError) Error() string { return e.msg }
-
-// Resolve returns the command registered under name, or says why there is none: a
-// WithheldError with the filter's reason, or unknown for a name that does not exist.
+// Resolve returns the command registered under name, or says why there is none: the
+// filter's reason for one this surface withholds, or unknown for a name that does not
+// exist.
 func (r *Registry) Resolve(name Name) (*Command, error) {
 	if c := r.Get(name); c != nil {
 		return c, nil
@@ -333,20 +326,6 @@ func (r *Registry) Resolve(name Name) (*Command, error) {
 	}
 
 	return nil, fmt.Errorf("unknown command %q", name)
-}
-
-// ParamError is what Invoke returns for a parameter the command would not take: one it
-// does not have, or a value its flag would not parse. It is the caller's mistake rather
-// than the command's failure, and a surface with status codes tells the two apart by
-// it; every other error from Invoke came out of Run.
-type ParamError struct {
-	msg string
-}
-
-func (e *ParamError) Error() string { return e.msg }
-
-func paramErrorf(format string, args ...any) error {
-	return &ParamError{msg: fmt.Sprintf(format, args...)}
 }
 
 // setParams sets each named parameter on fl, in the order of names, and stops at the
@@ -360,34 +339,27 @@ func paramErrorf(format string, args ...any) error {
 func setParams(fl *flag.FlagSet, name string, names []string, params map[string]string, own bool) error {
 	for _, k := range names {
 		if isPresentationFlag(k) {
-			return paramErrorf("%s is a command line flag, not a parameter; choose the rendering with the request's format field", k)
+			return fmt.Errorf("%s is a command line flag, not a parameter; choose the rendering with the request's format field", k)
 		}
 
 		f := fl.Lookup(k)
 		if f == nil {
 			if !own {
-				return paramErrorf("%s takes no parameters", name)
+				return fmt.Errorf("%s takes no parameters", name)
 			}
-			return paramErrorf("%s has no parameter %q", name, k)
+			return fmt.Errorf("%s has no parameter %q", name, k)
 		}
 
-		if err := setFlag(fl, f, params[k]); err != nil {
-			return err
+		v := params[k]
+		if err := fl.Set(k, v); err != nil {
+			if IsBoolFlag(f) {
+				// The flag package's own words for this are "parse error".
+				return fmt.Errorf("%s: expected a boolean, got %q", k, v)
+			}
+			return fmt.Errorf("%s: %w", k, err)
 		}
 	}
 
-	return nil
-}
-
-// setFlag applies one value to f, reporting a refusal as a ParamError in words that
-// name the value: the flag package's own words for a bad boolean are "parse error".
-func setFlag(fl *flag.FlagSet, f *flag.Flag, v string) error {
-	if err := fl.Set(f.Name, v); err != nil {
-		if IsBoolFlag(f) {
-			return paramErrorf("%s: expected a boolean, got %q", f.Name, v)
-		}
-		return paramErrorf("%s: %v", f.Name, err)
-	}
 	return nil
 }
 
@@ -397,14 +369,14 @@ func (r *Registry) Schema() []CommandSchema {
 	all := r.All()
 	out := make([]CommandSchema, 0, len(all))
 	for _, c := range all {
-		out = append(out, r.SchemaFor(c))
+		out = append(out, r.schemaFor(c))
 	}
 	return out
 }
 
-// SchemaFor describes one command. It is the one derivation, for the whole schema and
+// schemaFor describes one command. It is the one derivation, for the whole schema and
 // for `help <command>` alike.
-func (r *Registry) SchemaFor(c *Command) CommandSchema {
+func (r *Registry) schemaFor(c *Command) CommandSchema {
 	fl, _, _ := commandFlags(c)
 	return schemaOf(c, fl)
 }

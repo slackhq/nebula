@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -24,9 +25,10 @@ func (e *Endpoints) Stop() {
 	e.Control.Stop()
 }
 
-// Wire brings up the local APIs for a running nebula and keeps them following the
-// config across reloads: the control socket unless the config turns it off, and the
-// info API when the config asks for it.
+// Wire brings up the local APIs for a running nebula: WireControl with reg and WireInfo
+// with info, which are what the two sockets each need. The daemon entry points want
+// both, so this is one call and one Stop for them; an embedder that wants one socket
+// alone calls that one's function.
 //
 // Every entry point that runs nebula as a daemon calls this, so the endpoints behave the
 // same whether nebula was started from a shell or by a service manager. It deliberately
@@ -34,18 +36,31 @@ func (e *Endpoints) Stop() {
 // inside an app sandbox would have to know to turn off a socket it cannot use. Wiring it
 // at the daemon entry points means embedders get the command registry and no listener.
 //
+// Call it after Control.Start, so the listeners only exist once the interface is up.
+func Wire(ctx context.Context, l *slog.Logger, c *config.C, reg *commands.Registry, info http.Handler) *Endpoints {
+	return &Endpoints{
+		Control: WireControl(ctx, l, c, reg),
+		Info:    WireInfo(ctx, l, c, info),
+	}
+}
+
+// WireControl brings up the control socket, serving reg, and keeps it following the
+// config across reloads: pointed at the configured path, or down when the config turns
+// it off.
+//
 // Every failure below is a warning, bar one. Nebula is expected to keep forwarding
 // packets whether or not anyone can reach it; but a name that another process holds is
 // not a misconfiguration, it is a process that will be answering nebula ctl in the
 // daemon's place, and that is logged as an error.
-//
-// Call it after Control.Start, so the listeners only exist once the interface is up.
-func Wire(ctx context.Context, l *slog.Logger, c *config.C, reg *commands.Registry) *Endpoints {
-	l = l.With("subsystem", "localapi")
-	return &Endpoints{
-		Control: wireControl(ctx, l, c, reg),
-		Info:    wireInfo(ctx, l, c, reg),
-	}
+func WireControl(ctx context.Context, l *slog.Logger, c *config.C, reg *commands.Registry) *Server {
+	return wireControl(ctx, l.With("subsystem", "localapi"), c, reg)
+}
+
+// WireInfo brings up the info API when the config asks for one, serving h, the daemon's
+// handler for it (Control.InfoHandler), and keeps it following the config across
+// reloads: enabling it, disabling it, moving its socket and changing its mode.
+func WireInfo(ctx context.Context, l *slog.Logger, c *config.C, h http.Handler) *InfoServer {
+	return wireInfo(ctx, l.With("subsystem", "localapi"), c, h)
 }
 
 // sharedSocketPath reports the path the config gives to both the control socket and the
@@ -200,8 +215,8 @@ func reportRebind(l *slog.Logger, what, old, want string, err error, now string)
 // Every reload is reconciled, as the control socket's is; see controlReconciler. A
 // section that does not parse keeps whatever is running: the operator is told, and the
 // programs relying on the endpoint are not cut off by a typo.
-func wireInfo(ctx context.Context, l *slog.Logger, c *config.C, reg *commands.Registry) *InfoServer {
-	srv := NewInfoServer(l, reg)
+func wireInfo(ctx context.Context, l *slog.Logger, c *config.C, h http.Handler) *InfoServer {
+	srv := NewInfoServer(l, h)
 
 	reconcile := func(c *config.C) {
 		cfg, err := infoConfigFrom(c)

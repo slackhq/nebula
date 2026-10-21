@@ -1,26 +1,21 @@
 package localapi
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path"
 	"runtime"
 	"runtime/debug"
-	"slices"
 	"strconv"
 	"time"
 
-	"github.com/slackhq/nebula/commands"
 	"github.com/slackhq/nebula/config"
 	"golang.org/x/net/netutil"
 )
@@ -59,51 +54,32 @@ var (
 	infoReadTimeout       = 15 * time.Second
 )
 
-// servedOnInfo decides what the info API will run: the commands that report identity
-// and nothing else, which the commands declare about themselves. Filter adds help to
-// the result, so a client can ask what is served; help on a filtered registry describes
-// only that registry.
-func servedOnInfo(c *commands.Command) bool {
-	return c.Identity
-}
-
-// notServedOnInfo explains a refusal, naming the surfaces that will run the command.
-const notServedOnInfo = "the info API serves identity lookups only; the ssh debug server and nebula ctl serve the rest"
-
-// InfoServer serves the identity commands over HTTP, on a socket an operator may open to
-// other users on the host.
+// InfoServer serves the info API over HTTP, on a socket an operator may open to other
+// users on the host.
 //
 // It is the second local API, and the opposite of the control socket in who it is for.
 // The control socket is for the user who runs nebula, serves nearly everything and needs
 // no configuration. This one is for every other program on the machine, a web server
 // that wants to know who is on the other end of a connection arriving over the overlay,
 // say, and it is off until an operator names a socket and a mode for it. What it serves
-// is decided by the commands themselves, Command.Identity: the identity a certificate
+// is the handler nebula builds for it, Control.InfoHandler: the identity a certificate
 // asserts and nothing operational, so opening it to a group of services, or to everyone
-// on the host, gives away nothing the overlay did not already tell them.
-//
-// HTTP, so that no client library is needed. GET /v1/<command>?<flag>=<value> runs a
-// command with its options as the query string and answers with the command's JSON, the
-// same value the control socket and -json produce. GET /v1 describes what is served. A
-// refusal is a 4xx with {"error": reason}: 404 when the command said the thing asked
-// about does not exist (commands.NotFound), 400 for a parameter or an argument the
-// command would not take, 403 for a command this surface withholds.
+// on the host, gives away nothing the overlay did not already tell them. This server is
+// the socket, its access control, the reload, and the rules every request is held to
+// before the handler sees it: GET alone, no body, no path that would need cleaning, and
+// a panic answered rather than dropped; the handler decides the rest.
 type InfoServer struct {
 	endpoint
 
-	// reg is the identity commands this surface serves, filtered from the daemon's
-	// registry when the server was built.
-	reg *commands.Registry
+	// h is what is served: the daemon's routes, as handed to NewInfoServer.
+	h http.Handler
 }
 
-// NewInfoServer returns an InfoServer that serves the identity commands in reg. reg is
-// complete when it arrives: nebula registers every command before it wires its local
-// APIs, and nothing registers one later, so the filter is taken once here rather than
-// kept up to date against the source.
-func NewInfoServer(l *slog.Logger, reg *commands.Registry) *InfoServer {
+// NewInfoServer returns an InfoServer that serves h once Rebind brings it up.
+func NewInfoServer(l *slog.Logger, h http.Handler) *InfoServer {
 	return &InfoServer{
 		endpoint: endpoint{l: l, name: "local info API"},
-		reg:      reg.Filter(servedOnInfo, notServedOnInfo),
+		h:        h,
 	}
 }
 
@@ -150,19 +126,23 @@ func (s *InfoServer) serve(srv *http.Server, ln net.Listener) {
 	}
 }
 
-// handler builds the routes. Every answer is JSON, the misses included, so a client
-// never has to parse net/http's text for a path or method it did not expect. That
-// includes a path ServeMux would clean and redirect, /v1/../v1/x or //v1/x, which is
-// refused outright: nothing legitimate sends one, and a redirect is one more thing a
-// client would have to follow.
+// handler wraps the daemon's handler in the rules every request is held to. The misses
+// here are JSON, as the handler's are, so a client never has to parse net/http's text
+// for a method or a path it did not expect.
 func (s *InfoServer) handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1", s.handleDescribe)
-	mux.HandleFunc("GET /v1/{command}", s.handleCommand)
-	mux.HandleFunc("/v1", methodNotAllowed)
-	mux.HandleFunc("/v1/{command}", methodNotAllowed)
-	mux.HandleFunc("/", notFoundRoute)
-	return s.recovering(refuseBody(mux))
+	return s.recovering(readOnly(refuseBody(s.h)))
+}
+
+// readOnly answers any method but GET with 405 before the handler sees it: the info API
+// reports and never acts, so there is nothing another method could mean.
+func readOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // refuseBody answers a request that carries a body with 400, before any handler sees
@@ -174,18 +154,19 @@ func refuseBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.ContentLength != 0 || len(r.TransferEncoding) > 0 {
 			w.Header().Set("Connection", "close")
-			writeJSONError(w, http.StatusBadRequest, "the info API takes no request body; put the command's parameters in the query string")
+			WriteJSONError(w, http.StatusBadRequest, "the info API takes no request body; what it serves is named by the path")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-// recovering turns a panic in a command into a 500 and a log line rather than a dropped
+// recovering turns a panic in the handler into a 500 and a log line rather than a dropped
 // connection, which is all net/http would offer, and keeps the daemon up, which is what
-// matters: this surface is reachable by whoever the operator opened it to. The handlers
-// produce their whole answer before writing any of it, so a panic in Run always finds
-// the response unwritten.
+// matters: this surface is reachable by whoever the operator opened it to. The handler
+// produces its whole answer before writing any of it, so a panic always finds the
+// response unwritten. A path that would need cleaning, /v1/../v1/x or //v1/x, is refused
+// here outright rather than redirected: nothing legitimate sends one.
 func (s *InfoServer) recovering(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
@@ -196,7 +177,7 @@ func (s *InfoServer) recovering(next http.Handler) http.Handler {
 					"query", r.URL.RawQuery,
 					"stack", string(debug.Stack()),
 				)
-				writeJSONError(w, http.StatusInternalServerError, "command failed")
+				WriteJSONError(w, http.StatusInternalServerError, "request failed")
 			}
 		}()
 
@@ -208,165 +189,18 @@ func (s *InfoServer) recovering(next http.Handler) http.Handler {
 	})
 }
 
-// handleDescribe answers GET /v1 with the schema of every command served here, the same
-// document the control socket's describe returns for its own surface.
-func (s *InfoServer) handleDescribe(w http.ResponseWriter, _ *http.Request) {
-	body, err := json.Marshal(s.reg.Schema())
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, body)
-}
-
-// handleCommand answers GET /v1/<command>: the query string carries the command's
-// parameters, and the response body is the command's JSON. A request body is never
-// read. It is the control socket's serve with HTTP's vocabulary for the outcomes.
-func (s *InfoServer) handleCommand(w http.ResponseWriter, r *http.Request) {
-	name := commands.Name(r.PathValue("command"))
-
-	reg := s.reg
-	cmd, err := reg.Resolve(name)
-	if err != nil {
-		// A command this surface withholds is a different answer from one that does not
-		// exist, and Resolve says which; only the status is picked here.
-		status := http.StatusNotFound
-		var withheld *commands.WithheldError
-		if errors.As(err, &withheld) {
-			status = http.StatusForbidden
-		}
-		writeJSONError(w, status, err.Error())
-		return
-	}
-
-	// Parsed strictly: the lenient parser on the request drops a pair it cannot decode
-	// and keeps the rest, and a request that lost its address would be answered as one
-	// that never had it, which for print-cert is this node's own certificate.
-	q, err := url.ParseQuery(r.URL.RawQuery)
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "malformed query string: "+err.Error())
-		return
-	}
-	params, format, err := queryParams(q, reg.SchemaFor(cmd))
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	res, err := commands.Invoke(commands.Request{Command: cmd, Params: params})
-	if err != nil {
-		var pe *commands.ParamError
-		if errors.As(err, &pe) {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		// Run failed. The sentence is for the operator's log; the caller, who may be
-		// anyone the operator admitted, is told that it failed and no more.
-		s.l.Warn("Local info API command failed", "command", name, "error", err)
-		writeJSONError(w, http.StatusInternalServerError, "command failed")
-		return
-	}
-
-	// A command that acts does so before this surface's one reply, whose body is the
-	// outcome; see Command.Then.
-	if cmd.Then != nil && res.OK {
-		res = cmd.Then()
-	}
-
-	// A refusal is answered before an empty Result is: the zero Result is a refusal with
-	// nothing to say, which exits 1 over ssh and must not read as success here. One with
-	// no reason is the command's fault, as a Run error is, and is answered the same way.
-	if !res.OK {
-		if res.Reason == "" {
-			s.l.Warn("Local info API command refused without a reason", "command", name)
-			writeJSONError(w, http.StatusInternalServerError, "command failed")
-			return
-		}
-		status := http.StatusBadRequest
-		if res.NotFound {
-			status = http.StatusNotFound
-		}
-		writeJSONError(w, status, res.Reason)
-		return
-	}
-
-	if res.Empty() {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-
-	// The same rendering function every surface uses, so the value here is byte for
-	// byte what -json prints at an ssh prompt.
-	buf := &bytes.Buffer{}
-	if err := commands.Render(cmd, res, format, buf); err != nil {
-		s.l.Warn("Local info API could not render a result", "command", name, "error", err)
-		writeJSONError(w, http.StatusInternalServerError, "command failed")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, buf.Bytes())
-}
-
-// queryParams reads a query string as a command's parameters. Each key is a flag of the
-// command, by name, in the form the control socket takes them; one given twice is
-// refused rather than silently picking either. The presentation flags are read as a
-// command line reads them, and set apart: the answer is JSON regardless, and pretty
-// indents it.
-func queryParams(q url.Values, schema commands.CommandSchema) (map[string]string, commands.Format, error) {
-	var params, presentation map[string]string
-	for _, k := range slices.Sorted(maps.Keys(q)) {
-		vs := q[k]
-		if len(vs) > 1 {
-			return nil, commands.FormatUnset, fmt.Errorf("parameter %q was given more than once", k)
-		}
-
-		into := &params
-		if k == commands.FlagJSON || k == commands.FlagPretty {
-			into = &presentation
-		}
-		if *into == nil {
-			*into = map[string]string{}
-		}
-		v := vs[0]
-		// ?raw is ?raw=true, as -raw is -raw=true on a command line.
-		if v == "" && isBoolParam(schema, k) {
-			v = "true"
-		}
-		(*into)[k] = v
-	}
-
-	format, err := commands.PresentationFormat(presentation)
-	if err != nil {
-		return nil, commands.FormatUnset, err
-	}
-	if format == commands.FormatUnset {
-		format = commands.FormatJSON
-	}
-
-	return params, format, nil
-}
-
-// isBoolParam reports whether name is one of the command's boolean flags.
-func isBoolParam(schema commands.CommandSchema, name string) bool {
-	for _, f := range schema.Flags {
-		if f.Name == name {
-			return f.Bool
-		}
-	}
-	return false
-}
-
 func methodNotAllowed(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Allow", http.MethodGet)
-	writeJSONError(w, http.StatusMethodNotAllowed, fmt.Sprintf("%s is not allowed; the info API is read only, use GET", r.Method))
+	WriteJSONError(w, http.StatusMethodNotAllowed, fmt.Sprintf("%s is not allowed; the info API is read only, use GET", r.Method))
 }
 
 func notFoundRoute(w http.ResponseWriter, r *http.Request) {
-	writeJSONError(w, http.StatusNotFound, fmt.Sprintf("no such path %s; GET /v1 lists the commands and GET /v1/<command> runs one", r.URL.Path))
+	WriteJSONError(w, http.StatusNotFound, fmt.Sprintf("no such path %s", r.URL.Path))
 }
 
-func writeJSON(w http.ResponseWriter, status int, body []byte) {
+// WriteJSON writes body as the JSON answer with status. The handler nebula serves here
+// uses it too, so every answer on this surface has one shape.
+func WriteJSON(w http.ResponseWriter, status int, body []byte) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
@@ -374,9 +208,10 @@ func writeJSON(w http.ResponseWriter, status int, body []byte) {
 	_, _ = w.Write(body)
 }
 
-func writeJSONError(w http.ResponseWriter, status int, msg string) {
+// WriteJSONError writes {"error": msg} with status, the one shape of a miss here.
+func WriteJSONError(w http.ResponseWriter, status int, msg string) {
 	body, _ := json.Marshal(map[string]string{"error": msg})
-	writeJSON(w, status, append(body, '\n'))
+	WriteJSON(w, status, append(body, '\n'))
 }
 
 // infoConfig is the info API section of a config, read and checked.

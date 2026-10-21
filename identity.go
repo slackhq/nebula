@@ -12,23 +12,10 @@ import (
 )
 
 type identityFlags struct {
-	Address string
-
-	// addressSet records that -address was given at all, so a line that left it out is
-	// told to pass it and one that passed it empty is told the value did not parse. Neither
-	// is answered with this node's identity, which is whoami's to report: a program
-	// passing a connection's remote address through must get an error for a value it
-	// failed to fill in, not the daemon's own identity to authorize against.
-	addressSet bool
-}
-
-// setAddress is -address's setter. flag.Func rather than StringVar so that presence is
-// known; its String is empty, which is what a client building a line from the schema
-// sees as the default.
-func (f *identityFlags) setAddress(v string) error {
-	f.Address = v
-	f.addressSet = true
-	return nil
+	// Pem answers with the certificate itself, PEM encoded, in place of the fields read
+	// from it, for a program that verifies it against its own CAs. The info API serves
+	// the same thing as the identity's pem sub-resource.
+	Pem bool
 }
 
 // hostIdentity is what identity reports: the identity a certificate asserts for a host,
@@ -60,30 +47,32 @@ type hostIdentity struct {
 	CertVersion    int            `json:"certVersion"`
 }
 
-// runIdentity answers for whoever owns the address: this node, when it is one of ours, or
-// the peer behind an established tunnel. The address is required. This node's own
-// identity is whoami's to report, so a caller that failed to pass an address is told so
-// rather than handed an identity it could mistake for its peer's.
+// runIdentity answers for whoever owns the address: this node, when it is one of ours or
+// no address was given, or the peer behind an established tunnel. The address is an
+// operand, as print-cert takes it. An address that is present and empty is a caller
+// that failed to fill it in, and is refused rather than answered with this node's
+// identity, which it could mistake for its peer's. With -pem the answer is the
+// certificate the identity would have been read from, and nothing else.
 func runIdentity(ifce *Interface, args *identityFlags, a []string) (commands.Result, error) {
-	// print-cert takes its address as an operand; this takes a flag, because the query
-	// string of the info API names its parameters and an operand has no name there. One
-	// spelling on every surface, so the mistake is named rather than ignored.
-	if len(a) > 0 {
-		return commands.Failed("identity takes the vpn addr as -address, not as an operand: identity -address %s", a[0]), nil
+	if len(a) > 1 {
+		return commands.Failed("identity takes one vpn addr: identity [-pem] [<vpn addr>[:port]]"), nil
 	}
 
-	if !args.addressSet {
-		return commands.Failed("No vpn addr was provided, use -address <vpn addr>[:port]; whoami prints this node's own identity"), nil
+	var addr string
+	if len(a) == 1 {
+		addr = a[0]
 	}
-
-	vpnAddr, err := parseVpnAddrWithOptionalPort(args.Address)
+	crt, fingerprint, err := lookupIdentity(ifce, addr, len(a) == 1)
 	if err != nil {
-		return commands.Failed("The provided vpn addr could not be parsed: %s", args.Address), nil
+		return commands.Failed("%s", err), nil
 	}
 
-	crt, fingerprint := findCertificateForVpnAddr(ifce.pki.getCertState(), ifce.hostMap, vpnAddr)
-	if crt == nil {
-		return commands.NotFound("No active tunnel for vpn addr: %s", vpnAddr), nil
+	if args.Pem {
+		b, err := crt.MarshalPEM()
+		if err != nil {
+			return commands.Failed("Unable to marshal the certificate: %s", err), nil
+		}
+		return commands.Value(certPEM{PEM: string(b)}), nil
 	}
 
 	id, err := newHostIdentity(crt, fingerprint)
@@ -94,19 +83,65 @@ func runIdentity(ifce *Interface, args *identityFlags, a []string) (commands.Res
 	return commands.Value(id), nil
 }
 
-// runWhoami answers with this node's own identity, from its own certificate.
-func runWhoami(ifce *Interface) (commands.Result, error) {
-	crt := ownCertificate(ifce.pki.getCertState())
-	if crt == nil {
-		return commands.Failed("No certificate is loaded"), nil
+// lookupIdentity is where identity's surfaces meet: the command and the info API both
+// resolve an address, or none, to a certificate through it, so they cannot disagree
+// about whose address it is. given says whether an address was passed at all: none is
+// this node, while one that is empty is a caller's mistake and fails to parse. The
+// error is a *lookupError, whose kind tells a surface with status codes whether the
+// thing asked about was not there or the asking was wrong.
+func lookupIdentity(ifce *Interface, addr string, given bool) (crt cert.Certificate, fingerprint string, err error) {
+	cs := ifce.pki.getCertState()
+	if !given {
+		if crt = ownCertificate(cs); crt == nil {
+			return nil, "", &lookupError{kind: lookupNoCertificate, msg: "No certificate is loaded"}
+		}
+		return crt, "", nil
 	}
 
-	id, err := newHostIdentity(crt, "")
-	if err != nil {
-		return commands.Result{}, err
+	vpnAddr, perr := parseVpnAddrWithOptionalPort(addr)
+	if perr != nil {
+		return nil, "", &lookupError{kind: lookupBadAddress, msg: "The provided vpn addr could not be parsed: " + addr}
 	}
+	if crt, fingerprint = findCertificateForVpnAddr(cs, ifce.hostMap, vpnAddr); crt == nil {
+		return nil, "", &lookupError{kind: lookupNoTunnel, msg: "No active tunnel for vpn addr: " + vpnAddr.String()}
+	}
+	return crt, fingerprint, nil
+}
 
-	return commands.Value(id), nil
+// lookupError is why lookupIdentity found no certificate, in words for the asker and a
+// kind for the surface.
+type lookupError struct {
+	kind lookupFailure
+	msg  string
+}
+
+func (e *lookupError) Error() string { return e.msg }
+
+type lookupFailure int
+
+const (
+	// lookupBadAddress: the address did not parse; the asking was wrong.
+	lookupBadAddress lookupFailure = iota
+	// lookupNoTunnel: no established tunnel is behind the address, or it is in a network
+	// this node does not hold; the thing asked about is not there.
+	lookupNoTunnel
+	// lookupNoCertificate: this node has no certificate loaded, which a running nebula
+	// never has; the fault is nobody's who asked.
+	lookupNoCertificate
+)
+
+// textIdentityValue renders what identity reports for a person: the identity, or with
+// -pem the certificate block alone, as print-cert -raw prints it.
+func textIdentityValue(v any, w io.Writer) error {
+	switch x := v.(type) {
+	case hostIdentity:
+		return textIdentity(x, w)
+	case certPEM:
+		_, err := io.WriteString(w, x.PEM)
+		return err
+	default:
+		return fmt.Errorf("expected an identity, got %T", v)
+	}
 }
 
 // textIdentity is the human rendering, shared by every surface.
@@ -192,8 +227,8 @@ func ownCertificate(cs *CertState) cert.Certificate {
 // wrong node; see hostIdentity. The certificate is nil for an address outside our
 // networks, when the address is unknown, when the tunnel is still pending and when it
 // is mid teardown. A peer's comes with the fingerprint nebula computed when it verified
-// the certificate; our own comes with "", since none is kept for it. identity and
-// print-cert go through it. The lighthouse's DNS TXT lookup goes through the two halves
+// the certificate; our own comes with "", since none is kept for it. identity goes
+// through it. The lighthouse's DNS TXT lookup goes through the two halves
 // without the networks limit, since a TXT record describes a certificate rather than
 // vouching for a sender, and keeps answering with the certificate handshakes start with.
 func findCertificateForVpnAddr(cs *CertState, hostMap *HostMap, ip netip.Addr) (crt cert.Certificate, fingerprint string) {

@@ -103,7 +103,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		ctl := localapi.Wire(ctrl.Context(), l, c, ctrl.Commands())
+		ctl := localapi.Wire(ctrl.Context(), l, c, ctrl.Commands(), ctrl.InfoHandler())
 
 		go ctrl.ShutdownBlock()
 		notifyReady(l)

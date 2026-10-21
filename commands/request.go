@@ -80,31 +80,6 @@ func presentationFormat(fl *flag.FlagSet) Format {
 	}
 }
 
-// PresentationFormat is presentationFormat for a surface that takes a command's options
-// by name rather than from a line: the info API's query string. Only the two presentation
-// flags are read from params; the command's own parameters are the caller's to pass to
-// Invoke, which refuses these two among them. A flag given with no value counts as set,
-// as -pretty does on a line, and one that is not a boolean is a ParamError.
-func PresentationFormat(params map[string]string) (Format, error) {
-	fl := flag.NewFlagSet("", flag.ContinueOnError)
-	addPresentationFlags(fl)
-
-	for _, k := range []string{FlagJSON, FlagPretty} {
-		v, ok := params[k]
-		if !ok {
-			continue
-		}
-		if v == "" {
-			v = "true"
-		}
-		if err := setFlag(fl, fl.Lookup(k), v); err != nil {
-			return FormatUnset, err
-		}
-	}
-
-	return presentationFormat(fl), nil
-}
-
 // flagIsTrue reports whether a bool flag was set to true. The flag package's bool value
 // is a flag.Getter whose Get returns the bool, so this never falls back to parsing text.
 func flagIsTrue(f *flag.Flag) bool {
@@ -133,9 +108,10 @@ func flagIsTrue(f *flag.Flag) bool {
 // parameters is refused rather than read as a preference.
 func Invoke(req Request) (Result, error) {
 	c := req.Command
+	names := slices.Sorted(maps.Keys(req.Params))
 
 	fl, fs, own := commandFlags(c)
-	if err := setParams(fl, string(c.Name), slices.Sorted(maps.Keys(req.Params)), req.Params, own); err != nil {
+	if err := setParams(fl, string(c.Name), names, req.Params, own); err != nil {
 		return Result{}, err
 	}
 

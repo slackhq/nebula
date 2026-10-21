@@ -259,13 +259,15 @@ punchy:
   # internal state available over HTTP.
   #
   # The currently supported HTTP requests are:
-  #   GET /v1/identity?address=<vpn addr>[:port]  the host owning the address; the port
+  #   GET /v1/identity                            this node's identity
+  #   GET /v1/identity/<vpn addr>[:port]          the host owning the address; the port
   #                                               is ignored. 404 when no tunnel is
   #                                               up or the address is outside this
-  #                                               node's networks, 400 when no address
-  #                                               is given.
-  #   GET /v1/whoami                              this node's identity
-  #   GET /v1                                     describes what is served
+  #                                               node's networks.
+  #   GET /v1/identity/<vpn addr>[:port]/pem      that host's certificate, PEM encoded,
+  #                                               as {"pem": ...}; GET /v1/identity/pem
+  #                                               is this node's.
+  #   Add ?pretty to any of them to indent the JSON.
   #
   # NB: unless a connection arrived on the nebula interface, there's no guarantee
   # that the identity returned belongs to the sender. An address in an overlay network
