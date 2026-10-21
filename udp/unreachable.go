@@ -17,6 +17,5 @@ func IsUnreachable(err error) bool {
 	return errors.Is(err, syscall.ENETUNREACH) ||
 		errors.Is(err, syscall.EHOSTUNREACH) ||
 		errors.Is(err, syscall.EADDRNOTAVAIL) ||
-		errors.Is(err, syscall.EAFNOSUPPORT) ||
 		errors.Is(err, ErrInvalidIPv6RemoteForSocket)
 }
