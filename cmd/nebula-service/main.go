@@ -117,7 +117,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		ctl := localapi.Wire(ctrl.Context(), l, c, ctrl.Commands(), ctrl.InfoHandler())
+		local := localapi.Wire(ctrl.Context(), l, c, ctrl.Commands(), ctrl.InfoHandler())
 
 		go ctrl.ShutdownBlock()
 
@@ -125,7 +125,7 @@ func main() {
 
 		// os.Exit skips deferred calls, so the sockets are removed here, before either
 		// exit below, rather than left to a deferred Stop that would never run.
-		ctl.Stop()
+		local.Stop()
 
 		if err != nil {
 			l.Error("Nebula stopped due to fatal error", "error", err)
