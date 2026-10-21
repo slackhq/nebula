@@ -48,19 +48,16 @@ func LogoutCommand(end func()) *commands.Command {
 }
 
 // DefaultFormat is what an ssh session renders when the operator gave neither -json nor
-// -pretty. It encodes what every command printed before rendering was shared: text
-// where a command has a human form, and compact JSON for the ones that never did
-// (print-tunnel, print-relays, query-lighthouse). It is ssh's policy, exported so a test
+// -pretty: text where a command has a human form, and compact JSON for the ones that
+// have none (print-tunnel, print-relays, query-lighthouse). It is ssh's policy, exported so a test
 // can dispatch through the same choice, and ssh's to change.
 func DefaultFormat(c *commands.Command, r commands.Result) commands.Format {
 	if !c.JSONOnly {
 		return commands.FormatText
 	}
 
-	// Backwards compatibility. The JSON-only commands always printed their refusals as
-	// a plain sentence ("No vpn address was provided") even though their data is JSON,
-	// so an outcome keeps rendering as text here. Drop this branch to make ssh's default
-	// apply uniformly; the output golden will show exactly which lines change.
+	// A JSON-only command's refusal ("No vpn address was provided") is a sentence for a
+	// person, so an outcome renders as text here; ssh users and scripts expect it.
 	if r.Value == nil {
 		return commands.FormatText
 	}

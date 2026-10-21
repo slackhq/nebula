@@ -111,8 +111,8 @@ func TestServeAllowedCommand(t *testing.T) {
 	assert.Empty(t, errOut, "a command that worked reports no error")
 }
 
-// TestPanicInCommandDoesNotKillTheDaemon is ADR 003's requirement: a broken command
-// costs a connection, not the overlay.
+// TestPanicInCommandDoesNotKillTheDaemon: a broken command costs a connection, not the
+// overlay.
 func TestPanicInCommandDoesNotKillTheDaemon(t *testing.T) {
 	_, path := serve(t, basicRegistry())
 

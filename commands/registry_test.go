@@ -184,12 +184,8 @@ func TestDispatchReportsUnparseableLine(t *testing.T) {
 	assert.Contains(t, errOut.String(), "could not parse the command line")
 }
 
-// TestRegisterRejectsReservedFlags pins the contract that -json and -pretty belong to the
-// registry, not the command. commandFlags defines them on every command's FlagSet, so a
-// command that declared one itself would panic with "flag redefined" the first time an
-// operator ran it, on a goroutine with no recover. Better to hear about it at Register.
-// -config and -socket are nebula ctl's, taken off its line wherever they appear, so a
-// command that declared one would never see it from that surface.
+// TestRegisterRejectsReservedFlags: a command that declares a reserved flag is refused
+// at Register rather than when an operator first runs it; see reservedFlags.
 func TestRegisterRejectsReservedFlags(t *testing.T) {
 	for _, name := range []string{"json", "pretty", "h", "help", "config", "socket"} {
 		t.Run(name, func(t *testing.T) {

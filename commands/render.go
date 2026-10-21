@@ -41,10 +41,8 @@ const (
 	FlagPretty = "pretty"
 )
 
-// Flag names nebula ctl takes for itself, anywhere on its line: -config and -socket say
-// which daemon to talk to, and the client picks them out before it knows which command
-// the line names, let alone that command's flags. A command that declared either would
-// never receive it over that surface, so both are reserved.
+// Flag names nebula ctl takes for itself, anywhere on its line, to say which daemon to
+// talk to; see reservedFlags.
 const (
 	FlagConfig = "config"
 	FlagSocket = "socket"
@@ -55,14 +53,13 @@ const (
 // -pretty are added to every command's FlagSet by commandFlags, on every surface, so a
 // command that defined either would make that definition panic with "flag redefined"
 // on whichever goroutine ran the command; and -config and -socket are nebula ctl's own,
-// taken off the line before the command is parsed.
+// taken off the line before the client knows which command it names, so a command
+// that declared either would never receive it there.
 var reservedFlags = []string{"h", "help", FlagJSON, FlagPretty, FlagConfig, FlagSocket}
 
-// Render writes r in the requested format.
-//
-// This is the function ADR 004 means by "the same rendering functions": every surface
-// calls it, so a hostmap looks the same over ssh as it does through the control socket,
-// and a change to either rendering happens once.
+// Render writes r in the requested format. Every surface calls it, so a hostmap looks
+// the same over ssh as it does through the control socket, and a change to either
+// rendering happens once.
 func Render(c *Command, r Result, f Format, w io.Writer) error {
 	switch f {
 	case FormatJSON:
@@ -158,8 +155,8 @@ func (r Result) Empty() bool {
 }
 
 // Payload is what a program receives: the Value when there is one, otherwise the
-// Outcome. Neither surface ever sends the envelope itself, so print-tunnel -json emits
-// the tunnel and close-tunnel -json emits {ok, reason}, as both always have.
+// Outcome. No surface sends the envelope itself, so print-tunnel -json emits the tunnel
+// and close-tunnel -json emits {ok, reason}.
 func (r Result) Payload() any {
 	if r.Value != nil {
 		return r.Value

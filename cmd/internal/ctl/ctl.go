@@ -297,7 +297,7 @@ func parseCommand(schema []commands.CommandSchema, argv []string) (req ctlReques
 // and then remembers which daemon they meant does not have to retype the line.
 //
 // Before the command word every flag is the client's, whatever it is, so an unknown one
-// is reported by fs as it always was, and -h is the client's usage. After it only the
+// is reported by fs, and -h is the client's usage. After it only the
 // flags fs defines are lifted out, and only those: the command's own flags are unknown
 // here, since they come from the daemon the line has yet to name, and -h after the
 // command asks for that command's help. Which command flags take a value is unknown too,

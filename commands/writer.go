@@ -5,8 +5,8 @@ import "io"
 // Output is where a command line surface's text goes.
 //
 // Out and Err are distinct so a command's primary output can stay machine readable on
-// a surface that separates the two. The ssh surface points both at the same channel,
-// which is why it sees a single merged stream exactly as it always has. The local
+// a surface that separates the two. The ssh surface points both at the same channel and
+// sees a single merged stream. The local
 // control socket does not use one at all: it invokes by named parameter and carries the
 // returned value, so there is no stream for a command to write to.
 type Output struct {

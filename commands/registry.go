@@ -118,8 +118,8 @@ func WriteCommandHelp(c CommandSchema, w io.Writer) error {
 		}
 	}
 
-	// Same layout as flag.PrintDefaults, which is what this used to be, including its
-	// habit of leaving out a default that is the zero value.
+	// Same layout as flag.PrintDefaults, including its habit of leaving out a default
+	// that is the zero value.
 	for _, f := range c.Flags {
 		kind := ""
 		if !f.Bool {
@@ -313,11 +313,9 @@ func (r *Registry) unavailable(name Name) error {
 	return fmt.Errorf("%s is not available on this surface: %s", c.Name, reason)
 }
 
-// Resolve returns the command registered under name, or says why there is none. A
-// command this surface withholds is reported with the filter's reason, and one that
-// does not exist at all as unknown, so a client that misspells and one that asks for a
-// real command it cannot have here are told different things. It is the edge where a
-// name from the wire becomes a Command for a Request.
+// Resolve returns the command registered under name, or says why there is none: the
+// filter's reason for one this surface withholds, or unknown for a name that does not
+// exist.
 func (r *Registry) Resolve(name Name) (*Command, error) {
 	if c := r.Get(name); c != nil {
 		return c, nil

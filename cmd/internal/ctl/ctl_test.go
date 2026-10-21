@@ -96,9 +96,9 @@ func TestResolveSocketFlagWins(t *testing.T) {
 	assert.Equal(t, "/explicit.sock", p)
 }
 
-// TestParseCommandReportsWhatFlagSaid covers the three ways a flag line goes wrong. They
-// are different mistakes, and the old blanket "does not take" was wrong for two of them:
-// a valid flag with a missing value, and a valid flag with a value it cannot parse.
+// TestParseCommandReportsWhatFlagSaid covers the three ways a flag line goes wrong, which
+// are different mistakes: an unknown flag, a valid flag with a missing value, and a
+// valid flag with a value it cannot parse.
 func TestParseCommandReportsWhatFlagSaid(t *testing.T) {
 	schema := []commands.CommandSchema{{
 		Name: "change-remote",

@@ -60,8 +60,8 @@ type certPEM struct {
 	PEM string `json:"pem"`
 }
 
-// Result shapes for print-relays. Field names are the JSON keys and predate this
-// refactor; changing them would change the output.
+// Result shapes for print-relays. Field names are the JSON keys; changing them would
+// change the output.
 type relayFor struct {
 	Error          string `json:",omitempty"`
 	Type           string
@@ -127,8 +127,8 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 	reg.Register(&commands.Command{
 		Name:             commands.Reload,
 		ShortDescription: "Reloads configuration from disk, same as sending HUP to the process",
-		// The line goes out before the reload, as it always has: a reload that restarts
-		// the ssh server ends the session that asked, and this is what it sees.
+		// The line goes out before the reload: a reload that restarts the ssh server ends
+		// the session that asked, and this is what it sees.
 		Run: func(fs any, a []string) (commands.Result, error) {
 			return commands.Did("Reloading config"), nil
 		},

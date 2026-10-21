@@ -10,12 +10,9 @@ import (
 // options by name in the form their flags parse, its operands, and the rendering the
 // line asked for, if any.
 //
-// It is where the wire meets the daemon. nebula ctl parses its line against the schema
-// and ParseLine turns what was set into one of these, which travels as a JSON object
-// and becomes a Request again on the control socket. An ssh line never becomes one: it
-// is parsed straight into the command's own FlagSet, which Run then reads, so there is
-// nothing to carry. Both surfaces drive Run through the FlagSet commandFlags builds,
-// ssh by Parse and the socket by Set, and the flag package keeps those two in step.
+// nebula ctl builds one with ParseLine and it travels as a JSON object to the control
+// socket. An ssh line never becomes one: it is parsed straight into the command's own
+// FlagSet; see execLine.
 type Request struct {
 	// Command is the command to run, resolved by the surface at its edge. See
 	// Registry.Resolve for the one that tells an unknown name from a withheld one.

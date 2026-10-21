@@ -137,12 +137,10 @@ func isPresentationFlag(name string) bool {
 	return name == FlagJSON || name == FlagPretty
 }
 
-// execLine runs a command line against c, reporting problems to w. It is the path from
-// an ssh line to output: the line is parsed against the command's own FlagSet and Run
-// reads that FlagSet's struct directly. Nothing is serialised and parsed again on the
-// way, so a flag.Value whose String does not re-parse, flag.Func above all, is applied
-// as the line said and not as its String says. The control socket fills the same
-// FlagSet through Set in Invoke; Parse and Set are the flag package's one parser.
+// execLine runs an ssh command line against c, reporting problems to w. The line is
+// parsed into the command's own FlagSet and Run reads it directly, so a flag.Value whose
+// String does not re-parse, flag.Func above all, arrives as the line said. Invoke fills
+// the same FlagSet through Set.
 func (r *Registry) execLine(c *Command, args []string, w Output) error {
 	fl, fs, _ := commandFlags(c)
 
@@ -189,8 +187,7 @@ func (r *Registry) execLine(c *Command, args []string, w Output) error {
 
 // formatFor is the format a Result is rendered in. The line wins when it asked for one;
 // otherwise the surface that owns the registry decides, from the command and its
-// Result, which is how ssh keeps printing what it always has while another surface can
-// choose differently.
+// Result, so each surface can keep its own default.
 func (r *Registry) formatFor(c *Command, res Result, format Format) Format {
 	if format == FormatUnset {
 		return r.defaultFormatFor(c, res)

@@ -49,13 +49,15 @@ var currentUID = func() uint32 { return uint32(os.Geteuid()) }
 // looser than and which are set after bind, together with the peer check the server
 // applies on accept unless a group shares the socket, in which case the kernel's check
 // is the whole of it: connect(2) needs write permission on the socket file on every
-// unix we build for. The directory is not part of that, and is never chmoded: a
-// directory a service manager made for us is served from at whatever mode it came
-// with (systemd's RuntimeDirectoryMode= is 0755 by default), and one an operator
-// pointed us into keeps whatever else it holds readable. The one we make ourselves is
-// 0755, searchable by everyone, so that a nebula ctl run as another user reaches the
-// socket and gets the kernel's answer, which for a member of the configured group is
-// a connection and for anyone else is permission denied.
+// unix we build for.
+//
+// The directory is not part of that, and is never chmoded: a directory a service
+// manager made for us is served from at whatever mode it came with (systemd's
+// RuntimeDirectoryMode= is 0755 by default), and one an operator pointed us into keeps
+// whatever else it holds readable. The one we make ourselves is 0755, searchable by
+// everyone, so that a nebula ctl run as another user reaches the socket and gets the
+// kernel's answer, which for a member of the configured group is a connection and for
+// anyone else is permission denied.
 func listen(path string, acc Access) (net.Listener, error) {
 	// The kernel silently truncates an over long sun_path and bind then fails with
 	// "invalid argument", which tells an operator nothing. Say what is actually wrong.
@@ -69,11 +71,8 @@ func listen(path string, acc Access) (net.Listener, error) {
 	// exists, and an operator who names a deeper path creates it; a missing parent is a
 	// mistake to report, not a tree to build. A directory made here stays when the
 	// socket goes: an empty one costs nothing, and the next start wants it again.
-	//
-	// 0755 gives nothing away: the socket's own mode is the access control. What it
-	// gives is a directory others can look into, which is what a client that is not the
-	// daemon's user needs to reach the socket. Mkdir applies the umask, so the mode is
-	// pinned afterwards, as the socket's is; only on a directory this call created.
+	// Mkdir applies the umask, so the 0755 is pinned afterwards, as the socket's mode
+	// is; only on a directory this call created.
 	switch err := os.Mkdir(dir, 0755); {
 	case err == nil:
 		if err := os.Chmod(dir, 0755); err != nil {

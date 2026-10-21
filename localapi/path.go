@@ -26,9 +26,7 @@ const CtlSocketKey = "local_api.control.socket"
 // CtlGroupKey is the optional config key naming a group that shares the control socket.
 // Unset, the socket admits the account nebula runs as and nobody else. Set, the socket
 // is handed to the group, 0660 on unix and an entry in the pipe's security descriptor on
-// windows, and the kernel's check on connect is the access control, as dockerd's -G
-// works; the daemon's own peer check stands aside, since on unix it could not tell a
-// member of the group from anyone else.
+// windows; see Access and Server.trustSocket.
 const CtlGroupKey = "local_api.control.group"
 
 // controlAccessFrom returns the control socket's access a config implies: the group

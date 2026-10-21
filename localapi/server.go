@@ -331,9 +331,8 @@ func (s *Server) handle(conn net.Conn) {
 		}
 	}()
 
-	// Where the platform can identify the caller, check it. Where it cannot, or where a
-	// group shares the socket, the endpoint is protected by the socket's mode and group
-	// or the pipe's security descriptor, which listen() set before serving.
+	// Where the platform can identify the caller, check it, unless a group shares the
+	// socket; see trustSocket. Otherwise listen's mode or security descriptor stands.
 	if peerCheckSupported && !s.trustSocket.Load() {
 		uid, err := peerUID(conn)
 		if err != nil {
@@ -453,10 +452,8 @@ func (s *Server) serve(req *Request) *Response {
 	return render(res, cmd, r, format, preface)
 }
 
-// render turns a command's Result into the response, in the format the caller asked for.
-// Both formats come from commands.Render, which is where ssh and the control socket
-// meet: the JSON a program reads here is byte for byte what -json prints at an ssh
-// prompt, and the text is the command's own rendering, which only the daemon can run.
+// render turns a command's Result into the response, in the format the caller asked for,
+// through commands.Render, so the JSON is byte for byte what -json prints over ssh.
 func render(res *Response, cmd *commands.Command, r commands.Result, format commands.Format, preface []byte) *Response {
 	buf := &bytes.Buffer{}
 	if err := commands.Render(cmd, r, format, buf); err != nil {
