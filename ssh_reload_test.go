@@ -3,7 +3,6 @@ package nebula
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/slackhq/nebula/config"
@@ -32,10 +31,9 @@ func TestReloadCommandReportsTheResult(t *testing.T) {
 	// reload reports what happened. A reload that failed is a refusal, exit 1 over ssh;
 	// one that merely needs a restart is not.
 	reload := func(failed bool) string {
-		res, err := runReload(l, c)
-		require.NoError(t, err)
+		res := runReload(l, c)
 		assert.Equal(t, !failed, res.OK)
-		return strings.TrimPrefix(res.Reason, "Reloading config\n")
+		return res.Reason
 	}
 
 	write("a: 2\nb: 1")

@@ -127,7 +127,12 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 	reg.Register(&commands.Command{
 		Name:             commands.Reload,
 		ShortDescription: "Reloads configuration from disk, same as sending HUP to the process",
+		// The line goes out before the reload, as it always has: a reload that restarts
+		// the ssh server ends the session that asked, and this is what it sees.
 		Run: func(fs any, a []string) (commands.Result, error) {
+			return commands.Did("Reloading config"), nil
+		},
+		Then: func() commands.Result {
 			return runReload(l, c)
 		},
 	})
@@ -607,14 +612,13 @@ func textDeviceInfo(d deviceInfo, w io.Writer) error {
 	return err
 }
 
-// runReload reloads the config and reports how it went, under the "Reloading config"
-// line the command has always printed first. A reload that failed is a refusal, exit 1
-// over ssh; one that merely needs a restart is not.
-func runReload(l *slog.Logger, c *config.C) (commands.Result, error) {
+// runReload reloads the config and reports how it went. A reload that failed is a
+// refusal, exit 1 over ssh; one that merely needs a restart is not.
+func runReload(l *slog.Logger, c *config.C) commands.Result {
 	res := c.ReloadConfig()
 	res.Log(l)
 	if res.Err != nil || res.Failed {
-		return commands.Failed("Reloading config\n%s", res.String()), nil
+		return commands.Failed("%s", res.String())
 	}
-	return commands.Did("Reloading config\n%s", res.String()), nil
+	return commands.Did("%s", res.String())
 }

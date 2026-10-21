@@ -370,11 +370,13 @@ func TestCloneHelpSeesCloneCommands(t *testing.T) {
 	assert.Contains(t, out.String(), "logout")
 }
 
-// TestAfterReplyRunsAfterTheReply pins the order AfterReply exists for: the reply is on
-// the writer before the action begins.
-func TestAfterReplyRunsAfterTheReply(t *testing.T) {
+// TestThenRunsAfterTheReply pins the order Then exists for: Run's line is on the writer
+// before the action begins, Then's Result follows it, and Then's outcome is the
+// command's.
+func TestThenRunsAfterTheReply(t *testing.T) {
 	out := &bytes.Buffer{}
 	seen := "never ran"
+	outcome := Did("acted")
 
 	r := New()
 	r.Register(&Command{
@@ -383,12 +385,48 @@ func TestAfterReplyRunsAfterTheReply(t *testing.T) {
 		Run: func(fs any, a []string) (Result, error) {
 			return Did("about to act"), nil
 		},
-		AfterReply: func() { seen = out.String() },
+		Then: func() Result {
+			seen = out.String()
+			return outcome
+		},
 	})
 
 	require.NoError(t, r.DispatchArgs([]string{"act"}, MergedOutput(out)))
-	assert.Contains(t, seen, "about to act")
-	assert.Equal(t, out.String(), seen)
+	assert.Equal(t, "about to act\n", seen, "the line was written before the action")
+	assert.Equal(t, "about to act\nacted\n", out.String())
+
+	out.Reset()
+	outcome = Failed("could not act")
+	var f *Failure
+	require.ErrorAs(t, r.DispatchArgs([]string{"act"}, MergedOutput(out)), &f)
+	assert.Equal(t, "about to act\ncould not act\n", out.String())
+
+	// In JSON only the outcome travels: one document for the program that asked.
+	out.Reset()
+	require.ErrorAs(t, r.DispatchArgs([]string{"act", "-json"}, MergedOutput(out)), &f)
+	assert.JSONEq(t, `{"ok":false,"reason":"could not act"}`, out.String())
+
+	// A Run that refused is the outcome; the action does not happen.
+	ran := false
+	r.Register(&Command{
+		Name:             "refuse",
+		ShortDescription: "refuses, so never acts",
+		Run: func(fs any, a []string) (Result, error) {
+			return Failed("not like that"), nil
+		},
+		Then: func() Result {
+			ran = true
+			return Did("acted anyway")
+		},
+	})
+	out.Reset()
+	require.ErrorAs(t, r.DispatchArgs([]string{"refuse"}, MergedOutput(out)), &f)
+	assert.Equal(t, "not like that\n", out.String())
+	assert.False(t, ran)
+	out.Reset()
+	require.ErrorAs(t, r.DispatchArgs([]string{"refuse", "-json"}, MergedOutput(out)), &f)
+	assert.JSONEq(t, `{"ok":false,"reason":"not like that"}`, out.String())
+	assert.False(t, ran)
 }
 
 // TestWriteCommandHelpIsTheOneRendering pins the layout both `help <command>` on the

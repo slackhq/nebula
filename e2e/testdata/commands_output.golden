@@ -1098,13 +1098,13 @@ Config reload failed, the new config did not load: no config files found at
 exit status 1
 
 $ reload -json
-{"ok":false,"reason":"Reloading config\nConfig reload failed, the new config did not load: no config files found at "}
+{"ok":false,"reason":"Config reload failed, the new config did not load: no config files found at "}
 exit status 1
 
 $ reload -pretty
 {
     "ok": false,
-    "reason": "Reloading config\nConfig reload failed, the new config did not load: no config files found at "
+    "reason": "Config reload failed, the new config did not load: no config files found at "
 }
 exit status 1
 

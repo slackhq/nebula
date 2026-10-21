@@ -858,42 +858,52 @@ func TestCommandRegisteredAfterStartIsServed(t *testing.T) {
 	assert.JSONEq(t, `"late"`, string(res.Result))
 }
 
-// TestAfterReplyRunsOnceTheResponseIsOut: the hook blocks until the test releases it, so
-// the only way a response can arrive is if it was written before the hook began.
-func TestAfterReplyRunsOnceTheResponseIsOut(t *testing.T) {
-	release := make(chan struct{})
-	acted := make(chan struct{})
-
+// TestThenIsAnsweredInTheOneReply: this surface answers in one piece, so a command that
+// acts does so before the reply, and the reply carries Run's line and Then's outcome in
+// text, and the outcome alone in JSON.
+func TestThenIsAnsweredInTheOneReply(t *testing.T) {
 	reg := commands.New()
+	acted := false
 	reg.Register(&commands.Command{
 		Name:             "act",
 		ShortDescription: "replies, then acts",
 		Run: func(fs any, a []string) (commands.Result, error) {
 			return commands.Did("about to act"), nil
 		},
-		AfterReply: func() {
-			<-release
-			close(acted)
+		Then: func() commands.Result {
+			acted = true
+			return commands.Did("acted")
 		},
 	})
 	_, path := serve(t, reg)
 
-	res, err := (&Client{Path: path}).Invoke("act", nil, nil, "")
+	res, err := (&Client{Path: path}).Invoke("act", nil, nil, "text")
 	require.NoError(t, err)
-	require.Empty(t, res.Error)
+	assert.True(t, acted)
+	assert.Empty(t, res.Error)
+	assert.Equal(t, "about to act\nacted\n", string(res.Text))
 
-	select {
-	case <-acted:
-		t.Fatal("AfterReply ran before the response was delivered")
-	default:
-	}
+	res, err = (&Client{Path: path}).Invoke("act", nil, nil, "")
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"ok":true,"reason":"acted"}`, string(res.Result))
 
-	close(release)
-	select {
-	case <-acted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("AfterReply never ran")
-	}
+	// A Run that refused is the outcome, and Then does not run.
+	acted = false
+	reg.Register(&commands.Command{
+		Name:             "refuse",
+		ShortDescription: "refuses, so never acts",
+		Run: func(fs any, a []string) (commands.Result, error) {
+			return commands.Failed("not like that"), nil
+		},
+		Then: func() commands.Result {
+			acted = true
+			return commands.Did("acted anyway")
+		},
+	})
+	res, err = (&Client{Path: path}).Invoke("refuse", nil, nil, "text")
+	require.NoError(t, err)
+	assert.Equal(t, "not like that\n", res.Error)
+	assert.False(t, acted)
 }
 
 // TestRebindRefusesDuringShutdown: a reload that lands after the daemon's context is

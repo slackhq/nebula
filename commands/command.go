@@ -55,11 +55,15 @@ type Command struct {
 	// rendered as a sentence, since that always has a human form.
 	JSONOnly bool
 
-	// AfterReply runs once the surface has delivered Run's result, and only then. It is
-	// for a command whose action would cut off its own reply: reload restarts the ssh
-	// server, which ends the session that asked, so the sentence Run returns has to be
-	// on the wire before the reload begins. Run promises; AfterReply acts.
-	AfterReply func()
+	// Then, when set, is the second half of a command that acts: Run says what is about
+	// to happen and Then does it and says how it went, with its Result rendered after
+	// Run's and deciding the outcome. A Run that refused is the outcome, and Then does
+	// not run. It exists for a command whose action can cut off
+	// its own reply: reload restarts the ssh server when the sshd keys changed, which
+	// ends the session that asked, so Run's line has to be on the wire before the reload
+	// begins. A surface that answers in one piece, the control socket, runs Then before
+	// it answers and carries both.
+	Then func() Result
 }
 
 // Failure is the error a surface gets for a refusal the person has already been shown:
@@ -164,39 +168,52 @@ func (r *Registry) execLine(c *Command, args []string, w Output) error {
 		return err
 	}
 
-	if res.Empty() {
-		runAfterReply(c)
-		return nil
-	}
-
-	// The line wins when it asked for a format. Otherwise the surface that owns the
-	// registry decides, from the command and its Result, which is how ssh keeps printing
-	// what it always has while another surface can choose differently.
-	f := format
-	if f == FormatUnset {
-		f = r.defaultFormatFor(c, res)
-	}
-
-	if err := Render(c, res, f, w.Out); err != nil {
-		if errors.Is(err, ErrNoTextRendering) {
-			_, _ = fmt.Fprintln(w.Err, err.Error())
+	// Run's reply goes out first, and then the action, if the command has one and Run
+	// did not refuse, whose Result is the outcome. In JSON only the outcome travels:
+	// the promise is for a person to read, and a program expects one document.
+	if c.Then == nil || !res.OK || r.formatFor(c, res, format) == FormatText {
+		if err := r.renderLine(c, res, format, w); err != nil {
+			return err
 		}
-		return err
+	}
+	if c.Then != nil && res.OK {
+		res = c.Then()
+		if err := r.renderLine(c, res, format, w); err != nil {
+			return err
+		}
 	}
 
-	runAfterReply(c)
 	if !res.OK {
 		return &Failure{Msg: res.Reason}
 	}
 	return nil
 }
 
-// runAfterReply performs the command's deferred action, if it has one. It is called only
-// once the reply has been written, which is the whole point of AfterReply.
-func runAfterReply(c *Command) {
-	if c.AfterReply != nil {
-		c.AfterReply()
+// formatFor is the format a Result is rendered in. The line wins when it asked for one;
+// otherwise the surface that owns the registry decides, from the command and its
+// Result, which is how ssh keeps printing what it always has while another surface can
+// choose differently.
+func (r *Registry) formatFor(c *Command, res Result, format Format) Format {
+	if format == FormatUnset {
+		return r.defaultFormatFor(c, res)
 	}
+	return format
+}
+
+// renderLine writes one Result of a command line to w; see formatFor. An empty Result
+// writes nothing.
+func (r *Registry) renderLine(c *Command, res Result, format Format, w Output) error {
+	if res.Empty() {
+		return nil
+	}
+
+	if err := Render(c, res, r.formatFor(c, res, format), w.Out); err != nil {
+		if errors.Is(err, ErrNoTextRendering) {
+			_, _ = fmt.Fprintln(w.Err, err.Error())
+		}
+		return err
+	}
+	return nil
 }
 
 // ParseArgs parses args with fl and returns the operands.
