@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `nebula-cert keygen` refuses to overwrite an existing `-out-key` or `-out-pub` file, matching `ca` and `sign`.
+  Overwriting kept the old file's mode, so a key written over a world-readable file stayed world-readable.
+
 ### Removed
 
 - The SSH debug server's `start-cpu-profile`, `stop-cpu-profile`, `save-heap-profile`, `save-mutex-profile`, and
