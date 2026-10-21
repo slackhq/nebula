@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -400,6 +401,46 @@ func TestDnsServer_QueryCert_returnsOwnCert(t *testing.T) {
 
 	other := netip.MustParseAddr("10.0.0.99")
 	assert.Empty(t, ds.QueryCert(other.String()+"."), "unknown peer IP should return nothing")
+}
+
+// TestDnsServer_QueryCert_answersWithTheInitiatingCertificate: with both versions loaded
+// the TXT record carries the certificate handshakes start with, as it always has, where
+// identity and print-cert report the v2.
+func TestDnsServer_QueryCert_answersWithTheInitiatingCertificate(t *testing.T) {
+	ds, _ := newTestDnsServer(t)
+	me := netip.MustParseAddr("10.0.0.1")
+	network := netip.PrefixFrom(me, 24)
+	ca1, _, caKey1, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	v1, _, _, _ := cert_test.NewTestCert(cert.Version1, cert.Curve_CURVE25519, ca1, caKey1, "lighthouse", time.Time{}, time.Time{}, []netip.Prefix{network}, nil, nil)
+	ca2, _, caKey2, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	v2, _, _, _ := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, ca2, caKey2, "lighthouse", time.Time{}, time.Time{}, []netip.Prefix{network}, nil, nil)
+
+	addrsTable := new(bart.Lite)
+	addrsTable.Insert(netip.PrefixFrom(me, me.BitLen()))
+	cs := &CertState{v1Cert: v1, v2Cert: v2, initiatingVersion: cert.Version1, myVpnAddrs: []netip.Addr{me}, myVpnAddrsTable: addrsTable}
+	ds.pki = &PKI{}
+	ds.pki.cs.Store(cs)
+
+	var got struct {
+		Version cert.Version `json:"version"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(ds.QueryCert(me.String()+".")), &got))
+	assert.Equal(t, cert.Version1, got.Version)
+	assert.Equal(t, v2, ownCertificate(cs), "identity reports the v2 from the same state")
+}
+
+// TestDnsServer_QueryCert_answersOutsideOurNetworks: the TXT record describes a
+// certificate for whoever asks about an address, so a peer's address in a network the
+// lighthouse does not hold is still answered, where identity refuses it.
+func TestDnsServer_QueryCert_answersOutsideOurNetworks(t *testing.T) {
+	ds, _ := newTestDnsServer(t)
+	ds.pki = newTestPKI(t, "lighthouse", []netip.Addr{netip.MustParseAddr("10.0.0.1")})
+	f, _ := identityFixture(t)
+	ds.hostMap = f.hostMap
+
+	far := netip.MustParseAddr("9.9.9.9")
+	assert.NotEmpty(t, ds.QueryCert(far.String()+"."), "the TXT lookup is not limited to our networks")
+	assert.False(t, identity(t, f, far.String()).OK, "identity is")
 }
 
 func TestDnsServer_reload_disable_stopsRunningServer(t *testing.T) {
