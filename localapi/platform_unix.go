@@ -5,6 +5,7 @@ package localapi
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/user"
@@ -322,9 +323,18 @@ func pathTooLong(path string) bool { return len(path) > maxSocketPath }
 // of its own with CtlSocketKey.
 const DefaultSocketPath = "/var/run/" + DirName + "/ctl.sock"
 
-// unprotectedNameWarning is for windows pipe names; a unix socket's directory is
-// checked instead.
-func unprotectedNameWarning(string) string { return "" }
+// warnUnprotectedName is for windows pipe names; a unix socket's directory is checked
+// instead.
+func warnUnprotectedName(*slog.Logger, string) {}
+
+// samePath reports whether two configured socket paths name one node: cleaned, so a
+// doubled separator or a trailing one does not hide the match, and otherwise exact,
+// since a unix path is case-sensitive.
+func samePath(a, b string) bool { return filepath.Clean(a) == filepath.Clean(b) }
+
+// accessChanged reports whether acc differs from the access a socket was bound with.
+// Both the mode and the group are the node's, so both count.
+func accessChanged(old, acc Access) bool { return old != acc }
 
 // checkSocketPath refuses a configured socket path that is relative, or too long to
 // bind. A relative path would mean a different socket to the daemon and to nebula ctl,

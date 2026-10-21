@@ -460,3 +460,19 @@ func TestChmodSocketRefusesWhatIsNotOurSocket(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0660), fi.Mode().Perm())
 }
+
+// TestSamePathIsExactOnceCleaned: a unix path is case-sensitive, so only a spelling the
+// kernel would resolve to the same node, a doubled or trailing separator, is the same.
+func TestSamePathIsExactOnceCleaned(t *testing.T) {
+	assert.True(t, samePath("/run/nebula//info.sock", "/run/nebula/info.sock/"))
+	assert.False(t, samePath("/run/nebula/Info.sock", "/run/nebula/info.sock"))
+	assert.False(t, samePath("/var/run/nebula/info.sock", "/run/nebula/info.sock"), "no symlinks are resolved")
+}
+
+// TestAccessChangedCountsTheMode: both the mode and the group are the socket node's.
+func TestAccessChangedCountsTheMode(t *testing.T) {
+	g := Group{Name: "nebula", ID: "1234"}
+	assert.True(t, accessChanged(Access{Mode: 0660, Group: g}, Access{Mode: 0666, Group: g}))
+	assert.True(t, accessChanged(Access{Mode: 0660, Group: g}, Access{Mode: 0660}))
+	assert.False(t, accessChanged(Access{Mode: 0660, Group: g}, Access{Mode: 0660, Group: g}))
+}

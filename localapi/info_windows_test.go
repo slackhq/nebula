@@ -3,6 +3,7 @@
 package localapi
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net"
@@ -25,7 +26,8 @@ func TestInfoIsServedOnAPipe(t *testing.T) {
 	require.NoError(t, err)
 	group := Group{Name: "Users", ID: users.String()}
 
-	s := NewInfoServer(test.NewLogger(), stubInfoHandler())
+	logs := &bytes.Buffer{}
+	s := NewInfoServer(test.NewLoggerWithOutput(logs), stubInfoHandler())
 	path := pipePrefix + "nebula-info-test"
 	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: groupSocketMode, Group: group}))
 	t.Cleanup(s.Stop)
@@ -48,10 +50,26 @@ func TestInfoIsServedOnAPipe(t *testing.T) {
 	assert.Equal(t, http.StatusOK, res.StatusCode)
 	assert.Contains(t, string(body), `"me"`)
 
-	// A change of group means a new pipe under the same name, still serving.
+	// The mode means nothing to a pipe, so a change to it alone is no change at all.
+	logs.Reset()
+	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: 0666, Group: group}))
+	assert.NotContains(t, logs.String(), "restart nebula")
+
+	// A pipe's access is fixed when it is created. Taking the group away would leave the
+	// pipe admitting a group the config no longer names, so the pipe is stopped instead.
 	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: groupSocketMode}))
-	res, err = client.Get("http://nebula/v1/whoami")
-	require.NoError(t, err)
-	res.Body.Close()
-	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Contains(t, logs.String(), "cannot be narrowed")
+	assert.Empty(t, s.Path())
+	client.CloseIdleConnections()
+	_, err = client.Get("http://nebula/v1/whoami")
+	require.Error(t, err, "the pipe is gone")
+
+	// Once no client holds the name, a reload creates the pipe again as configured.
+	// Adding the group back then waits for a restart, since nobody served loses anything.
+	logs.Reset()
+	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: ownerOnlyMode}))
+	assert.Equal(t, path, s.Path())
+	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: groupSocketMode, Group: group}))
+	assert.Contains(t, logs.String(), "restart nebula to apply it")
+	assert.Equal(t, path, s.Path(), "still served, with the access it had")
 }

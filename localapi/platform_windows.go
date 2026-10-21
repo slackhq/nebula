@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"strings"
 	"time"
@@ -74,7 +75,7 @@ func listen(path string, acc Access) (net.Listener, error) {
 // means held.
 func listenRefused(path string, admin bool, err error) error {
 	if errors.Is(err, windows.ERROR_ACCESS_DENIED) && isProtectedPath(path) && !admin {
-		return fmt.Errorf("creating %s requires an administrator, as only administrators may create pipes under %s; run nebula elevated, or set %s to a pipe name outside it: %w", path, protectedPrefix, CtlSocketKey, err)
+		return fmt.Errorf("creating %s requires an administrator; run nebula elevated, or configure a pipe name outside of %s: %w", path, protectedPrefix, err)
 	}
 	if errors.Is(err, windows.ERROR_ALREADY_EXISTS) || errors.Is(err, windows.ERROR_ACCESS_DENIED) {
 		return fmt.Errorf("%w: %s: %w", errEndpointHeld, path, err)
@@ -86,6 +87,18 @@ func listenRefused(path string, admin bool, err error) error {
 // case insensitive, so the comparison is too.
 func isProtectedPath(path string) bool {
 	return len(path) > len(protectedPrefix) && strings.EqualFold(path[:len(protectedPrefix)], protectedPrefix)
+}
+
+// warnUnprotectedName warns that a pipe name outside protectedPrefix is one any local
+// account could have created first and be answering on. A program reading the info API
+// opens the pipe by name and has no owner check of its own; the daemon refuses to serve
+// a held name and logs it, but the program cannot tell.
+func warnUnprotectedName(l *slog.Logger, path string) {
+	if isProtectedPath(path) {
+		return
+	}
+	l.Warn("Local info API is served on a pipe name any local account could create first and answer in the daemon's place; name it under the protected prefix",
+		"path", path, "prefix", protectedPrefix)
 }
 
 // isAdministrator says whether this process holds Administrators as an enabled group,
@@ -150,9 +163,22 @@ func removeSocket(path string, id socketID) {}
 // removed from under the daemon, so an endpoint on its path is always still there.
 func identifySocket(path string) (socketID, bool) { return socketID{}, true }
 
-// applyAccess cannot change a pipe's access in place: its security descriptor is fixed
-// when it is created, so a change means creating it again, which the caller does.
-func applyAccess(path string, acc Access) error { return errReopenForAccess }
+// applyAccess cannot change a pipe's access in place: the security descriptor belongs
+// to the name, is fixed when its first instance is created, and lives for as long as
+// any handle to the name is open, a client's included. The caller keeps the pipe when
+// the change widens its access and stops it when the change narrows it; see
+// endpoint.rebindLocked.
+func applyAccess(path string, acc Access) error { return errAccessFixed }
+
+// accessChanged reports whether acc differs from the access a pipe was created with.
+// Only the group is in the pipe's security descriptor; the mode means nothing to a
+// pipe, so a change to it alone is no change.
+func accessChanged(old, acc Access) bool { return old.Group != acc.Group }
+
+// samePath reports whether two configured pipe names name one pipe: compared without
+// case, which is how the kernel compares them. The spelling is otherwise what the
+// kernel sees, since checkSocketPath refuses a name it would rewrite.
+func samePath(a, b string) bool { return strings.EqualFold(a, b) }
 
 // dial connects to the pipe and, before the connection carries anything, checks who
 // serves it. The request names a command and its arguments, so it must not reach a
@@ -251,22 +277,24 @@ const DefaultSocketPath = protectedPrefix + "nebula-ctl"
 // pipePrefix is used as given. An override outside protectedPrefix is a name any
 // account could have created first; the owner check in dial is what protects a client
 // of one.
-// unprotectedNameWarning says what a pipe name outside protectedPrefix costs, or "" for
-// one under it. A program reading the info API opens the pipe by name and has no owner
-// check of its own, so for a name any local user could create first, whoever did
-// would be answering its queries; the daemon refuses to serve a held name and logs it,
-// but the program cannot tell. The default control pipe is under the prefix; an info
-// pipe is wherever the operator put it.
-func unprotectedNameWarning(path string) string {
-	if isProtectedPath(path) {
-		return ""
-	}
-	return "any local user can create a pipe by this name ahead of the daemon and answer in its place; name it under " + protectedPrefix
-}
-
+//
+// The name is also refused when it is not spelled the way the kernel will see it. A
+// \\.\ path is normalized before it reaches the pipe filesystem: a forward slash
+// becomes a backslash and a . or .. component is folded away, so a name spelled under
+// protectedPrefix could be created outside it, where any account can hold it, with
+// isProtectedPath and the warning built on it none the wiser. No pipe needs such a
+// name, so the spelling is the error.
 func checkSocketPath(key, value string) error {
 	if len(value) <= len(pipePrefix) || !strings.EqualFold(value[:len(pipePrefix)], pipePrefix) {
 		return fmt.Errorf(`%s must be a full pipe name under %s, got %q`, key, pipePrefix, value)
+	}
+	if strings.Contains(value, "/") {
+		return fmt.Errorf(`%s must not contain a forward slash, which the kernel reads as a backslash; got %q`, key, value)
+	}
+	for _, part := range strings.Split(value[len(pipePrefix):], `\`) {
+		if part == "" || part == "." || part == ".." {
+			return fmt.Errorf(`%s must be spelled as the kernel will see it, with no empty, . or .. component; got %q`, key, value)
+		}
 	}
 	return nil
 }

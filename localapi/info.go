@@ -103,9 +103,7 @@ func (s *InfoServer) Rebind(ctx context.Context, path string, acc Access) error 
 		}
 
 		s.l.Info("Local info API listening", "path", path, "access", acc.String())
-		if w := unprotectedNameWarning(path); w != "" {
-			s.l.Warn("Local info API is served on a pipe name that is not protected", "path", path, "risk", w)
-		}
+		warnUnprotectedName(s.l, path)
 		go s.serve(srv, ln)
 
 		// Closing the server closes the listener Serve was handed, and a Serve that has
@@ -252,7 +250,7 @@ func infoConfigFrom(c *config.C) (infoConfig, error) {
 		def = groupSocketMode
 	}
 
-	mode, err := parseSocketMode(c.Get(InfoModeKey), def)
+	mode, err := parseFileMode(c.Get(InfoModeKey), def)
 	if err != nil {
 		return cfg, fmt.Errorf("%s: %w", InfoModeKey, err)
 	}
@@ -267,11 +265,11 @@ func infoConfigFrom(c *config.C) (infoConfig, error) {
 	return cfg, nil
 }
 
-// parseSocketMode reads an octal mode written as a string. A bare 0660 in yaml is an
+// parseFileMode reads an octal mode written as a string. A bare 0660 in yaml is an
 // integer, and which integer depends on the parser (octal 432 under YAML 1.1, decimal
 // 660 under 1.2), so a number is refused with the fix rather than quietly applied as
 // whichever mode its digits happen to spell in octal.
-func parseSocketMode(raw any, def os.FileMode) (os.FileMode, error) {
+func parseFileMode(raw any, def os.FileMode) (os.FileMode, error) {
 	switch v := raw.(type) {
 	case nil:
 		return def, nil

@@ -3,8 +3,10 @@
 package localapi
 
 import (
+	"bytes"
 	"testing"
 
+	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/windows"
@@ -43,10 +45,14 @@ func TestSDDLAdmitsTheGroup(t *testing.T) {
 	assert.Zero(t, pipeClientAccess&(windows.GENERIC_READ|windows.GENERIC_WRITE|windows.GENERIC_ALL))
 }
 
-// TestUnprotectedNameWarning: a pipe outside the protected namespace is warned about,
+// TestWarnUnprotectedName: a pipe outside the protected namespace is warned about,
 // since anyone could have created the name first; one under it, however spelled, is not.
-func TestUnprotectedNameWarning(t *testing.T) {
-	assert.Empty(t, unprotectedNameWarning(DefaultSocketPath))
-	assert.Empty(t, unprotectedNameWarning(`\\.\PIPE\protectedprefix\administrators\nebula-info`))
-	assert.Contains(t, unprotectedNameWarning(`\\.\pipe\nebula-info`), protectedPrefix)
+func TestWarnUnprotectedName(t *testing.T) {
+	logs := &bytes.Buffer{}
+	l := test.NewLoggerWithOutput(logs)
+	warnUnprotectedName(l, DefaultSocketPath)
+	warnUnprotectedName(l, `\\.\PIPE\protectedprefix\administrators\nebula-info`)
+	assert.Empty(t, logs.String())
+	warnUnprotectedName(l, `\\.\pipe\nebula-info`)
+	assert.Contains(t, logs.String(), protectedPrefix)
 }

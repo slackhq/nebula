@@ -5,9 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"path/filepath"
-	"runtime"
-	"strings"
 
 	"github.com/slackhq/nebula/commands"
 	"github.com/slackhq/nebula/config"
@@ -85,17 +82,6 @@ func sharedSocketPath(c *config.C) (string, bool) {
 	}
 
 	return ctl, true
-}
-
-// samePath reports whether two configured socket paths name one node: cleaned, so a
-// doubled separator or a trailing one does not hide the match, and on windows, where
-// pipe names are case-insensitive, compared without case.
-func samePath(a, b string) bool {
-	a, b = filepath.Clean(a), filepath.Clean(b)
-	if runtime.GOOS == "windows" {
-		return strings.EqualFold(a, b)
-	}
-	return a == b
 }
 
 // wireControl brings up the control socket and keeps it pointed at the configured path.
@@ -184,9 +170,8 @@ func warnUnusable(l *slog.Logger, what, current string, err error) {
 // reportRebind logs what a Rebind did beyond the listening line the bind itself writes:
 // nothing for an endpoint left where it was, a move with both paths, and a failure with
 // what the operator is left with. old is the path served before the call, "" for none,
-// want the one asked for, and now the path served after it: on unix a failed move keeps
-// the old socket, and now is old; on windows a change of access closes the pipe before
-// creating it again, and a failure there leaves nothing serving, so now is "".
+// want the one asked for, and now the path served after it, which after a failed move
+// is still old.
 //
 // Nearly every failure is the operator's environment, a missing runtime directory or a
 // bad path, and a warning; a name held by another process is an error, since nothing
@@ -199,7 +184,7 @@ func reportRebind(l *slog.Logger, what, old, want string, err error, now string)
 
 	switch {
 	case err == nil:
-		if old != "" && old != want {
+		if old != "" && !samePath(old, want) {
 			l.Info("Moved the "+what, "from", old, "to", want)
 		}
 	case old == "":

@@ -81,7 +81,7 @@ func (s *Server) Rebind(ctx context.Context, path string, acc Access) error {
 	// admits is checked against the old setting. Early is safe either way: a member
 	// arriving before a group's mode is set is refused by the kernel, and with a group
 	// being taken away the peer check applies a moment before the mode tightens.
-	prev := s.trustSocket.Swap(acc.shared())
+	s.trustSocket.Store(acc.shared())
 	err := s.rebindLocked(ctx, path, acc, func(ln net.Listener) io.Closer {
 		s.l.Info("Local control socket listening", "path", path, "access", acc.String())
 		// Closing the listener, when it is given up, ends the accept loop on the
@@ -90,10 +90,9 @@ func (s *Server) Rebind(ctx context.Context, path string, acc Access) error {
 		go s.accept(ln, s.semaphore())
 		return ln
 	})
-	if err != nil {
-		// Whatever was serving still is, with the access it had.
-		s.trustSocket.Store(prev)
-	}
+	// Whatever is serving now, the new socket, the old one after a failed bind, or the
+	// old one with an access the platform could not change, decides the check.
+	s.trustSocket.Store(s.access.shared())
 	return err
 }
 

@@ -22,10 +22,10 @@ type endpoint struct {
 
 	// closer stops the serving when closed: the listener itself, or the server that owns
 	// it. It is nil while the endpoint is stopped, which is what stopped means here.
-	closer  io.Closer
-	path    string
-	access  Access
-	unwatch func() bool
+	closer     io.Closer
+	path       string
+	access     Access
+	cancelStop func() bool
 
 	// id identifies the node listen created at path, so a reload can tell whether the
 	// socket is still there and Stop whether the node it would unlink is still ours.
@@ -46,25 +46,14 @@ func (e *endpoint) Path() string {
 	return e.path
 }
 
-// rebindLocked brings the endpoint up at path with acc, moves it there, or, when it is
-// already there, applies a changed access; with nothing changed it does nothing, which
-// is what lets Wire's first attempt and its reload callback be the same call.
-//
-// The new socket is bound before the old one is given up: a bad path in a reloaded
-// config leaves the operator with the endpoint they already had rather than none. serve
-// is handed the new listener once it is certain to be kept and returns what to close to
-// stop serving it; what becomes of the old socket's connections is that closer's.
-//
-// The caller holds e.mu for the whole operation, bind included. Releasing it around
-// listen would let a Stop land in between, and this would then install a fresh socket on
-// an endpoint that had just shut down, leaving a live socket on disk until the process
-// exits. listen does not take e.mu, so holding it costs the other methods one bind's
-// wait, at most the stale socket probe, once per reload.
+// rebindLocked brings the endpoint into the state the config asks for: serving at path
+// with acc. It works from any starting state, and a failure leaves the endpoint as it
+// was. serve starts serving on the new listener and returns what to close to stop. The
+// caller must hold e.mu.
 func (e *endpoint) rebindLocked(ctx context.Context, path string, acc Access, serve func(net.Listener) io.Closer) error {
-	reopening := false
-	if e.closer != nil && e.path == path {
+	if e.closer != nil && samePath(e.path, path) {
 		if cur, ok := identifySocket(path); ok && cur == e.id {
-			if e.access == acc {
+			if !accessChanged(e.access, acc) {
 				return nil
 			}
 			err := applyAccess(path, acc)
@@ -73,47 +62,42 @@ func (e *endpoint) rebindLocked(ctx context.Context, path string, acc Access, se
 				e.l.Info("Changed the "+e.name+"'s socket access", "path", path, "access", acc.String())
 				return nil
 			}
-			if !errors.Is(err, errReopenForAccess) {
-				return fmt.Errorf("could not change the access of %s: %w", path, err)
+			if errors.Is(err, errAccessFixed) {
+				if e.access.narrowedBy(acc) {
+					// Keeping the endpoint would keep admitting who the config no longer
+					// names, so it is stopped instead. A restart serves it as configured; so
+					// does a reload once every client has let go of the name.
+					e.l.Error("Stopped the "+e.name+", its access cannot be narrowed while it is served; restart nebula to serve it as configured",
+						"path", path, "served", e.access.String(), "configured", acc.String())
+					e.stopLocked()
+					return nil
+				}
+				e.l.Warn("The "+e.name+"'s access cannot be widened while it is served; restart nebula to apply it",
+					"path", path, "serving", e.access.String(), "configured", acc.String())
+				return nil
 			}
-
-			// The platform fixes access when the endpoint is created, so it is created
-			// again. The name cannot be held twice, so the old one goes first, and a bind
-			// that then fails leaves the endpoint down rather than on the old access the
-			// operator asked to change; that is reported below.
-			reopening = true
-			old := e.closer
-			e.forgetLocked()
-			_ = old.Close()
+			return fmt.Errorf("could not change the access of %s: %w", path, err)
 		} else {
-			// The node at the path is not the one this endpoint bound: something outside
-			// nebula removed it, logind clearing /run/user/<uid> on logout or a unit
-			// cleaning a RuntimeDirectory= it shares, or replaced it. The listener is still
-			// open and nothing can reach it, so it is given up now and the path is bound
-			// afresh below; listen's stale check decides whether whatever is there now may
-			// be cleared. Given up first, rather than after a successful bind as a move
-			// does, so that a bind that fails leaves the endpoint reported as down, which
-			// it is, instead of serving a path nothing can reach.
+			// The node at path is not the one this endpoint bound: something outside nebula
+			// removed or replaced it, logind clearing /run/user/<uid> on logout, say. The old
+			// listener is unreachable, so the endpoint is stopped before the path is bound
+			// again below. Stopping first, rather than after a successful bind as a move
+			// does, means a bind that fails leaves the endpoint reported as down, which it
+			// is, rather than as serving a path nothing can reach.
 			e.l.Warn("The "+e.name+"'s socket is no longer at its path, binding it again", "path", path)
-			old := e.closer
-			e.forgetLocked()
-			_ = old.Close()
+			e.stopLocked()
 		}
 	}
 
 	ln, err := listen(path, acc)
 	if err != nil {
-		if reopening {
-			return fmt.Errorf("the %s was closed to change its access and could not be created again: %w", e.name, err)
-		}
 		return err
 	}
 	id, _ := identifySocket(path)
 
 	// A reload that arrives during shutdown must not bring the endpoint back. Stop is
-	// not terminal (a Rebind after Stop is allowed, and is how an endpoint whose first
-	// bind failed comes up), so whether it is running is no guide; the context is what
-	// shutdown cancels, and it is checked here, while nothing else can change the state.
+	// not terminal (a Rebind after Stop is how an endpoint whose first bind failed
+	// comes up).
 	if err := ctx.Err(); err != nil {
 		release(ln, path, id)
 		return fmt.Errorf("not starting the %s, nebula is shutting down: %w", e.name, err)
@@ -124,33 +108,25 @@ func (e *endpoint) rebindLocked(ctx context.Context, path string, acc Access, se
 	e.path = path
 	e.access = acc
 	e.id = id
-	e.watchLocked(ctx)
+	e.stopOnCancelLocked(ctx)
 
-	// Stop serving the old socket. When it was on this same path its node is already
-	// gone, and the node there now is the new socket's, so only the closer goes.
+	// Stop serving the old socket, which the checks above leave only on another path.
 	if old != nil {
-		if oldPath == path {
-			_ = old.Close()
-		} else {
-			release(old, oldPath, oldID)
-		}
+		release(old, oldPath, oldID)
 	}
 
 	return nil
 }
 
-// watchLocked stops the endpoint when ctx is cancelled. One watcher covers a run of the
-// endpoint, from the first bind that succeeds until Stop: a daemon whose initial listen
-// failed and which later Rebinds onto a good path from a reloaded config still needs its
-// socket removed on shutdown, and a Rebind on a running endpoint must not stack a second
-// watcher on the same ctx. Stop detaches the watcher, so an endpoint started again
-// afterwards is watched on the ctx that started it, and the ctx of an earlier run no
-// longer reaches it whenever that one ends. Callers hold e.mu.
-func (e *endpoint) watchLocked(ctx context.Context) {
-	if e.unwatch != nil {
+// stopOnCancelLocked arranges for the endpoint to stop when ctx is cancelled. It is
+// armed once per run of the endpoint, from a successful bind until Stop, so a Rebind on
+// a running endpoint does not arm it twice, and a later run is tied to the ctx that
+// started it rather than an earlier one. Callers hold e.mu.
+func (e *endpoint) stopOnCancelLocked(ctx context.Context) {
+	if e.cancelStop != nil {
 		return
 	}
-	e.unwatch = context.AfterFunc(ctx, e.Stop)
+	e.cancelStop = context.AfterFunc(ctx, e.Stop)
 }
 
 // Stop closes the endpoint and removes its socket. Work in flight is the closer's
@@ -163,24 +139,20 @@ func (e *endpoint) watchLocked(ctx context.Context) {
 func (e *endpoint) Stop() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.stopLocked()
+}
 
+// stopLocked is Stop for a caller that holds e.mu. It leaves the endpoint as a fresh
+// one, so the next bind starts a new run.
+func (e *endpoint) stopLocked() {
 	if e.closer == nil {
 		return
 	}
-
 	release(e.closer, e.path, e.id)
-	e.forgetLocked()
-}
-
-// forgetLocked drops the state of a run once its socket has been given up, the watcher
-// with it: one watcher covers one run, and a bind that follows starts a new one on the
-// ctx it was given. The watcher is set whenever closer is; when the Stop that got here
-// is the watcher's own, stopping one that has already fired is a no-op.
-func (e *endpoint) forgetLocked() {
 	e.closer, e.path, e.access, e.id = nil, "", Access{}, socketID{}
-	if e.unwatch != nil {
-		e.unwatch()
-		e.unwatch = nil
+	if e.cancelStop != nil {
+		e.cancelStop()
+		e.cancelStop = nil
 	}
 }
 
