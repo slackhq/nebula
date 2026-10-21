@@ -1,10 +1,11 @@
 // Package localapi serves the nebula command registry over a local IPC endpoint so the
 // user who ran nebula can inspect and control it from a CLI on the same machine.
 //
-// Access is restricted by the filesystem (a 0600 socket) and by a peer credential check
-// on every connection. Which commands are served is decided by the caller that builds
-// the Server, and the filtering happens here, on the serving side, rather than in the
-// client.
+// Access is the socket's own: without a group it is 0600 to the user who ran nebula,
+// and the server checks the peer's credentials on every connection besides; with a
+// group configured it is 0660 to that group, and the kernel's check on connect is the
+// whole of it, so a member has the same control of the daemon as its user. Every
+// command in the registry is served; nothing is filtered on either side.
 //
 // # Protocol
 //
