@@ -155,6 +155,10 @@ func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error)
 	return written, nil
 }
 
+func (u *StdConn) IPv4Only() bool {
+	return u.isV4
+}
+
 func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 	a := u.UDPConn.LocalAddr()
 

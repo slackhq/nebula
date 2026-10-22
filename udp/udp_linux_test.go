@@ -252,3 +252,24 @@ func TestListenOutShutdown_BusyReader(t *testing.T) {
 		t.Fatalf("delivered %d packets after Shutdown, more than the one batch in flight", n)
 	}
 }
+
+func TestStdConnIPv4Only(t *testing.T) {
+	for _, tc := range []struct {
+		listen string
+		v4Only bool
+	}{
+		{"127.0.0.1:0", true},
+		{"0.0.0.0:0", true},
+		{"[::1]:0", false},
+		{"[::]:0", false},
+	} {
+		c, err := NewListener(testLogger(), Settings{Listen: netip.MustParseAddrPort(tc.listen), Batch: 1})
+		if err != nil {
+			t.Fatalf("NewListener %s: %v", tc.listen, err)
+		}
+		if got := c.IPv4Only(); got != tc.v4Only {
+			t.Errorf("IPv4Only() on %s = %v, want %v", tc.listen, got, tc.v4Only)
+		}
+		_ = c.Close()
+	}
+}

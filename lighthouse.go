@@ -40,6 +40,9 @@ type LightHouse struct {
 	myVpnAddrsTable *bart.Lite
 	punchy          *Punchy
 
+	// v4Only is set when our udp socket is IPv4, which cannot send to IPv6 remotes
+	v4Only bool
+
 	// localAddrsFn enumerates the underlay addresses we advertise. It is a field so tests can supply simulated
 	// addresses rather than whatever this machine's NICs happen to be. Set it before Start.
 	localAddrsFn func(*LocalAllowList) []netip.Addr
@@ -118,6 +121,7 @@ func NewLightHouseFromConfig(ctx context.Context, l *slog.Logger, c *config.C, c
 		addrMap:            make(map[netip.Addr]*RemoteList),
 		nebulaPort:         nebulaPort,
 		punchy:             p,
+		v4Only:             pc != nil && pc.IPv4Only(),
 		updateTrigger:      make(chan struct{}, 1),
 		queryChan:          make(chan netip.Addr, c.GetUint32("handshakes.query_buffer", 1024)),
 		queryDropped:       metrics.GetOrRegisterCounter("lighthouse.query.dropped", nil),
@@ -719,6 +723,7 @@ func (lh *LightHouse) unlockedGetRemoteList(allAddrs []netip.Addr) *RemoteList {
 	}
 
 	am := NewRemoteList(allAddrs, lh.shouldAdd)
+	am.v4Only = lh.v4Only
 	for _, addr := range allAddrs {
 		lh.addrMap[addr] = am
 	}
@@ -1506,7 +1511,7 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpn
 	}
 
 	for _, a := range n.Details.V6AddrPorts {
-		if a == nil {
+		if a == nil || lhh.lh.v4Only {
 			continue
 		}
 		b := protoV6AddrPortToNetAddrPort(a)
