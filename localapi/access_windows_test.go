@@ -3,8 +3,10 @@
 package localapi
 
 import (
+	"bytes"
 	"testing"
 
+	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/windows"
@@ -41,4 +43,16 @@ func TestSDDLAdmitsTheGroup(t *testing.T) {
 	assert.Contains(t, sddl, "(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x120083;;;S-1-5-32-545)")
 	assert.Zero(t, pipeClientAccess&windows.FILE_APPEND_DATA, "FILE_APPEND_DATA is FILE_CREATE_PIPE_INSTANCE on a pipe")
 	assert.Zero(t, pipeClientAccess&(windows.GENERIC_READ|windows.GENERIC_WRITE|windows.GENERIC_ALL))
+}
+
+// TestWarnUnprotectedName: a pipe outside the protected namespace is warned about,
+// since anyone could have created the name first; one under it, however spelled, is not.
+func TestWarnUnprotectedName(t *testing.T) {
+	logs := &bytes.Buffer{}
+	l := test.NewLoggerWithOutput(logs)
+	warnUnprotectedName(l, DefaultSocketPath)
+	warnUnprotectedName(l, `\\.\PIPE\protectedprefix\administrators\nebula-info`)
+	assert.Empty(t, logs.String())
+	warnUnprotectedName(l, `\\.\pipe\nebula-info`)
+	assert.Contains(t, logs.String(), protectedPrefix)
 }

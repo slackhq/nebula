@@ -38,9 +38,11 @@ const (
 	groupSocketMode os.FileMode = 0660
 )
 
-// errReopenForAccess is returned by applyAccess on a platform whose access control is
-// fixed when the endpoint is created, so a change means creating it again.
-var errReopenForAccess = errors.New("access is fixed at listen time")
+// errAccessFixed is returned by applyAccess on a platform whose access control is fixed
+// when the endpoint is created and cannot be changed while it is served. A change that
+// widens the access waits for a restart; one that narrows it stops the endpoint until
+// then; see endpoint.rebindLocked.
+var errAccessFixed = errors.New("permissions/group cannot be changed on reconfig")
 
 // ownerOnly is the control socket's access when no group is configured. The mode
 // itself is not configurable there; what an operator can choose is a group,
@@ -49,6 +51,10 @@ func ownerOnly() Access { return Access{Mode: ownerOnlyMode} }
 
 // shared reports whether a group shares the socket.
 func (a Access) shared() bool { return a.Group.ID != "" }
+
+// narrowedBy reports whether acc takes away access a grants: a group a admits that acc
+// does not. A group acc adds is a widening, which costs nobody served anything.
+func (a Access) narrowedBy(acc Access) bool { return a.shared() && a.Group != acc.Group }
 
 // String renders the access for a log line.
 func (a Access) String() string {

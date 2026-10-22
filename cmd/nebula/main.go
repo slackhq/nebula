@@ -103,15 +103,15 @@ func main() {
 			os.Exit(1)
 		}
 
-		ctl := localapi.Wire(ctrl.Context(), l, c, ctrl.Commands())
+		ctl := localapi.Wire(ctrl.Context(), l, c, ctrl.Commands(), ctrl.InfoHandler())
 
 		go ctrl.ShutdownBlock()
 		notifyReady(l)
 
 		err := ctrl.Wait()
 
-		// os.Exit skips deferred calls, so the socket is removed here, before either exit
-		// below, rather than left to a deferred Stop that would never run.
+		// os.Exit skips deferred calls, so the sockets are removed here, before either
+		// exit below, rather than left to a deferred Stop that would never run.
 		ctl.Stop()
 
 		if err != nil {

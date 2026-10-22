@@ -81,6 +81,7 @@ func TestLocalSocketSurface(t *testing.T) {
 
 	assert.ElementsMatch(t, []commands.Name{
 		commands.Help,
+		commands.Identity,
 		commands.ListHostmap,
 		commands.ListPendingHostmap,
 		commands.ListLighthouseAddrmap,

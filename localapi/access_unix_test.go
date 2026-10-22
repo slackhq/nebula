@@ -85,7 +85,7 @@ func TestControlAccessFromConfig(t *testing.T) {
 
 // TestControlSocketIsHandedToTheGroup: the socket is created with the group's gid and
 // 0660, whatever the umask, and a reload that takes the group away tightens the socket
-// in place, without moving it.
+// in place, without moving it. The endpoint is shared, so this covers the info API too.
 func TestControlSocketIsHandedToTheGroup(t *testing.T) {
 	old := unix.Umask(0077)
 	defer unix.Umask(old)
@@ -140,6 +140,38 @@ func TestControlSocketWithAGroupTrustsTheKernel(t *testing.T) {
 	require.NoError(t, s.Rebind(context.Background(), path, ownerOnly()))
 	_, err = (&Client{Path: path}).Describe()
 	require.ErrorContains(t, err, "not permitted")
+}
+
+// TestInfoAccessFromConfig: a group with no mode is 0660; a mode that gives the group
+// nothing is refused, with the mode that would; an explicit mode with group bits is
+// kept as given.
+func TestInfoAccessFromConfig(t *testing.T) {
+	name, gid := ownGroup(t)
+	load := func(body string) (infoConfig, error) {
+		c := config.NewC(test.NewLogger())
+		require.NoError(t, c.LoadString(body))
+		return infoConfigFrom(c)
+	}
+	section := func(extra string) string {
+		return "local_api:\n  info:\n    enabled: true\n    socket: /run/nebula/info.sock\n" + extra
+	}
+
+	cfg, err := load(section("    group: " + name + "\n"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0660), cfg.Access.Mode)
+	assert.Equal(t, gid, cfg.Access.Group.ID)
+
+	cfg, err = load(section("    group: " + name + "\n    socket_mode: \"0664\"\n"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0664), cfg.Access.Mode)
+
+	_, err = load(section("    group: " + name + "\n    socket_mode: \"0600\"\n"))
+	require.ErrorContains(t, err, "gives group "+name+" no access")
+	require.ErrorContains(t, err, `"0660"`)
+
+	cfg, err = load(section(""))
+	require.NoError(t, err)
+	assert.Equal(t, ownerOnly(), cfg.Access)
 }
 
 // TestRemovingTheGroupHandsTheSocketBack: a reload that drops the group key leaves the

@@ -52,6 +52,49 @@ func TestOwnerAccepted(t *testing.T) {
 	}
 }
 
+// TestCheckSocketPathRefusesASpellingTheKernelWouldRewrite: a \\.\ path is normalized
+// before the pipe filesystem sees it, so a name with a forward slash or a . or ..
+// component would be created somewhere other than where its spelling says, and the
+// protected-prefix check would judge the spelling. Such a name is a config error.
+func TestCheckSocketPathRefusesASpellingTheKernelWouldRewrite(t *testing.T) {
+	for _, ok := range []string{
+		DefaultSocketPath,
+		`\\.\pipe\nebula-info`,
+		`\\.\pipe\ProtectedPrefix\Administrators\nebula-info`,
+		`\\.\pipe\with.dots\and..more`,
+	} {
+		assert.NoError(t, checkSocketPath(InfoSocketKey, ok), ok)
+	}
+	for _, bad := range []string{
+		`\\.\pipe\ProtectedPrefix\Administrators\..\..\nebula-info`,
+		`\\.\pipe\ProtectedPrefix/Administrators/nebula-info`,
+		`\\.\pipe\.\nebula-info`,
+		`\\.\pipe\\nebula-info`,
+		`\\.\pipe\nebula-info\`,
+		`\\.\pipe\`,
+		`/var/run/nebula/info.sock`,
+	} {
+		err := checkSocketPath(InfoSocketKey, bad)
+		require.Error(t, err, bad)
+		assert.Contains(t, err.Error(), InfoSocketKey, bad)
+	}
+}
+
+// TestSamePathIgnoresCase: pipe names are case-insensitive to the kernel, so a reload
+// that only respells one is not a move.
+func TestSamePathIgnoresCase(t *testing.T) {
+	assert.True(t, samePath(`\\.\pipe\Nebula-Info`, `\\.\pipe\nebula-info`))
+	assert.False(t, samePath(`\\.\pipe\nebula-info`, `\\.\pipe\nebula-ctl`))
+}
+
+// TestAccessChangedIgnoresTheMode: only the group is in a pipe's security descriptor.
+func TestAccessChangedIgnoresTheMode(t *testing.T) {
+	g := Group{Name: "Users", ID: "S-1-5-32-545"}
+	assert.False(t, accessChanged(Access{Mode: 0660, Group: g}, Access{Mode: 0666, Group: g}))
+	assert.True(t, accessChanged(Access{Mode: 0660, Group: g}, Access{Mode: 0660}))
+	assert.True(t, accessChanged(Access{Mode: 0600}, Access{Mode: 0600, Group: g}))
+}
+
 // TestDefaultPathIsProtected pins the default name to the namespace only administrators
 // and SYSTEM can create under, which is what lets nebula ctl trust the default name
 // from its spelling alone.
@@ -104,7 +147,7 @@ func TestListenRefused(t *testing.T) {
 	assert.NotErrorIs(t, err, errEndpointHeld)
 	assert.ErrorIs(t, err, windows.ERROR_ACCESS_DENIED)
 	assert.Contains(t, err.Error(), "requires an administrator")
-	assert.Contains(t, err.Error(), CtlSocketKey)
+	assert.Contains(t, err.Error(), protectedPrefix)
 
 	assert.ErrorIs(t, listenRefused(protected, true, windows.ERROR_ACCESS_DENIED), errEndpointHeld)
 	assert.ErrorIs(t, listenRefused(plain, false, windows.ERROR_ACCESS_DENIED), errEndpointHeld)

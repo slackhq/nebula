@@ -183,6 +183,17 @@ func attachCommands(l *slog.Logger, c *config.C, reg *commands.Registry, f *Inte
 		return runPrintCert(f, s, a)
 	}))
 
+	reg.Register(commands.Flagged(&commands.Command{
+		Name:             commands.Identity,
+		ShortDescription: "Prints the certificate identity of this node or of the host owning the provided vpn addr",
+		Help:             "The printed identity includes: name, vpn addrs, networks, groups, fingerprint, issuer and validity. The vpn addr may include a port; without one this node's own identity is printed. -pem prints the certificate itself instead.",
+		Text:             textIdentityValue,
+	}, func(fl *flag.FlagSet, s *identityFlags) {
+		fl.BoolVar(&s.Pem, "pem", false, "prints the certificate, PEM encoded, in place of the identity; with -json, an object holding it")
+	}, func(s *identityFlags, a []string) (commands.Result, error) {
+		return runIdentity(f, s, a)
+	}))
+
 	reg.Register(&commands.Command{
 		Name:             commands.PrintTunnel,
 		ShortDescription: "Prints json details about a tunnel for the provided vpn addr",

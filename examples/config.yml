@@ -252,8 +252,44 @@ punchy:
     # the user running nebula. It must not be writable by anyone else.
     #socket: /var/run/nebula/ctl.sock
     # A group (or account/group/SID on Windows) that should be allowed to access the
-    # socket.
+    # socket. On Windows a group cannot be changed while the socket is served: a group
+    # added takes effect after a restart, and one removed or changed stops the socket
+    # until nebula is restarted.
     #group: nebula
+
+  # The info socket is not made available by default. If you enable it, it makes some
+  # internal state available over HTTP.
+  #
+  # The currently supported HTTP requests are:
+  #   GET /v1/identity                            this node's identity
+  #   GET /v1/identity/<vpn addr>[:port]          the host owning the address; the port
+  #                                               is ignored. 404 when no tunnel is
+  #                                               up or the address is outside this
+  #                                               node's networks.
+  #   GET /v1/identity/<vpn addr>[:port]/pem      that host's certificate, PEM encoded,
+  #                                               as {"pem": ...}; GET /v1/identity/pem
+  #                                               is this node's.
+  #   Add ?pretty to any of them to indent the JSON.
+  #
+  # NB: unless a connection arrived on the nebula interface, there's no guarantee
+  # that the identity returned belongs to the sender. An address in an overlay network
+  # this node does not hold is never answered, since nebula cannot make that guarantee
+  # for it, even with a tunnel to its holder up.
+  #
+  #info:
+    #enabled: false
+    # The absolute path to listen on, or a full pipe name on Windows. Name a pipe under
+    # \\.\pipe\ProtectedPrefix\Administrators\.
+    #socket: /var/run/nebula/info.sock
+    # A group (or account/group/SID on Windows) that should be allowed to access the
+    # socket. On Windows a group cannot be changed while the socket is served: a group
+    # added takes effect after a restart, and one removed or changed stops the socket
+    # until nebula is restarted.
+    #group: nebula-info
+    # Octal mode for the socket, as a quoted string. Defaults to "0600" unless a
+    # group is set, in which case it defaults to "0660". On Windows a pipe has no
+    # mode and this is ignored.
+    #socket_mode: "0660"
 
 # EXPERIMENTAL: relay support for networks that can't establish direct connections.
 relay:
