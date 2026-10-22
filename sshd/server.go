@@ -184,19 +184,34 @@ func (s *SSHServer) AddAuthorizedKey(user, pubKey string) error {
 // from the constructor-supplied ctx so a Stop+Run sequence (used by config reload) starts clean
 // rather than carrying a permanently-cancelled context across runs.
 func (s *SSHServer) Run(addr string) error {
-	if s.ctx.Err() != nil {
-		return s.ctx.Err()
-	}
-
-	listener, err := net.Listen("tcp", addr)
+	listener, err := s.Listen(addr)
 	if err != nil {
 		return err
+	}
+	s.Serve(listener)
+	return nil
+}
+
+// Listen binds addr for Serve, so a caller can tell the bind failed before serving in the background. Stop can close
+// the listener from here on, Serve then returns as soon as it starts.
+func (s *SSHServer) Listen(addr string) (net.Listener, error) {
+	if s.ctx.Err() != nil {
+		return nil, s.ctx.Err()
+	}
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
 	}
 	// s.listener is the public handle Stop uses to interrupt the active run; listener (the local) is what
 	// this run owns. They start equal but a fast reload may overwrite s.listener with the next run's
 	// listener before this run's watcher fires, so each run must close its own listener via the local
 	// reference.
 	s.listener.Store(&listener)
+	return listener, nil
+}
+
+// Serve accepts connections on a listener from Listen until Stop, or the context passed to NewSSHServer, ends it.
+func (s *SSHServer) Serve(listener net.Listener) {
 	s.runs.Add(1)
 	bound := listener.Addr()
 	s.addr.Store(&bound)
@@ -224,8 +239,6 @@ func (s *SSHServer) Run(addr string) error {
 	s.run(runCtx, listener)
 
 	s.l.Info("SSH server stopped listening")
-	// We don't return an error because run logs for us
-	return nil
 }
 
 func (s *SSHServer) run(ctx context.Context, listener net.Listener) {
