@@ -165,20 +165,24 @@ func (p *Punchy) scheduleJob(job holepunchJob, delay time.Duration) {
 // SendPunch sends an immediate keepalive punch for an idle hostinfo.
 // The configured punchy.target_all_remotes mode picks the targets. Gated on punchy.punch and the lighthouse-skip rule
 // (lighthouses don't get keepalive punches because the regular update interval keeps their NAT state warm).
-func (p *Punchy) SendPunch(hostinfo *HostInfo) {
+// Returns the hostinfo's current remote and the error from punching it, an invalid remote if it was not punched.
+func (p *Punchy) SendPunch(hostinfo *HostInfo) (netip.AddrPort, error) {
 	if !p.punch.Load() {
-		return
+		return netip.AddrPort{}, nil
 	}
 	if p.lh.IsAnyLighthouseAddr(hostinfo.vpnAddrs) {
-		return
+		return netip.AddrPort{}, nil
 	}
 
+	hr := hostinfo.GetRemote()
 	if p.punchEverything.Load() {
-		p.sendPunchToAllRemotes(hostinfo)
-	} else if hr := hostinfo.GetRemote(); hr.IsValid() {
-		p.metricPunchyTx.Inc(1)
-		p.punchConn.WriteTo([]byte{1}, hr)
+		return hr, p.sendPunchToAllRemotes(hostinfo, hr)
 	}
+	if !hr.IsValid() {
+		return hr, nil
+	}
+	p.metricPunchyTx.Inc(1)
+	return hr, p.punchConn.WriteTo([]byte{1}, hr)
 }
 
 // SendPunchToAll punches every known remote for hostinfo, but only when punchy.target_all_remotes is enabled.
@@ -195,14 +199,19 @@ func (p *Punchy) SendPunchToAll(hostinfo *HostInfo) {
 	if p.lh.IsAnyLighthouseAddr(hostinfo.vpnAddrs) {
 		return
 	}
-	p.sendPunchToAllRemotes(hostinfo)
+	p.sendPunchToAllRemotes(hostinfo, netip.AddrPort{})
 }
 
-func (p *Punchy) sendPunchToAllRemotes(hostinfo *HostInfo) {
+// sendPunchToAllRemotes punches every known remote for hostinfo and returns the error from punching current
+func (p *Punchy) sendPunchToAllRemotes(hostinfo *HostInfo, current netip.AddrPort) error {
+	var currentErr error
 	hostinfo.remotes.ForEach(p.hm.GetPreferredRanges(), func(addr netip.AddrPort, preferred bool) {
 		p.metricPunchyTx.Inc(1)
-		p.punchConn.WriteTo([]byte{1}, addr)
+		if err := p.punchConn.WriteTo([]byte{1}, addr); addr == current {
+			currentErr = err
+		}
 	})
+	return currentErr
 }
 
 // Start wires the runtime dependencies and spawns the scheduler worker.

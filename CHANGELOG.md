@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A control socket that provides access to all of the ssh debug server's commands along with support
   for running `nebula ctl <command>` as a client from the CLI.
 
+### Changed
+
+- A tunnel whose remote becomes unreachable, such as an IPv6 remote after moving to a network without IPv6, now
+  moves to another of the peer's addresses within a round trip or two instead of waiting 20-35s to be torn down
+  and rehandshaked. When a send fails because there is no route to the remote, the tunnel sends a test packet to
+  every other address it knows for the peer and asks the lighthouse to have the peer punch its new address.
+  Whichever path answers carries the tunnel. With `punchy.punch` enabled, idle tunnels notice on their next
+  keepalive punch. An idle tunnel whose remote is unreachable and none of whose other addresses answer is now
+  torn down by the connection manager rather than left in place. Not yet effective for relayed traffic or on
+  Windows with the default RIO backend.
+
 ### Removed
 
 - The SSH debug server's `start-cpu-profile`, `stop-cpu-profile`, `save-heap-profile`, `save-mutex-profile`, and

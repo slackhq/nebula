@@ -264,6 +264,9 @@ type HostInfo struct {
 	// This is used to limit lighthouse re-queries in chatty clients
 	nextLHQuery atomic.Int64
 
+	// nextUnreachableProbe is the earliest we will probe our other remotes again after failing to reach the current one
+	nextUnreachableProbe atomic.Int64
+
 	// lastHandshakeTime records the time the remote side told us about at the stage when the handshake was completed locally
 	// Stage 1 packet will contain it if I am a responder, stage 2 packet if I am an initiator
 	// This is used to avoid an attack where a handshake packet is replayed after some time
@@ -764,6 +767,65 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []netip.Prefix, ifce *Interfac
 		i.nextLHQuery.Store(now + ifce.reQueryWait.Load())
 		ifce.lightHouse.QueryServer(i.vpnAddrs[0])
 	}
+}
+
+// unreachableProbeInterval bounds how often a tunnel whose remote we cannot reach probes its other remotes
+const unreachableProbeInterval = time.Second
+
+// remoteUnreachable is called when a send to our current remote failed because we have no route to it, typically
+// after moving to a network without that address family. Sends a test packet to every other remote we know for this
+// host: the first one that arrives roams the peer over to wherever we are now, and its reply roams us onto that path.
+//
+// A peer behind a NAT drops a test from an address it has never sent to, so every probe also asks the lighthouse
+// about the peer. The lighthouse tells the peer where we are now, the peer punches us, and the next probe gets in.
+func (i *HostInfo) remoteUnreachable(ifce *Interface, dead netip.AddrPort) {
+	if i.remotes == nil || i.ConnectionState == nil || i.GetRemote() != dead {
+		// Nothing to probe with, or we already moved on from the remote that failed
+		return
+	}
+	if ifce.lightHouse == nil || ifce.lightHouse.amLighthouse {
+		// A lighthouse hands out the address it reaches a client on, it must not go roaming its clients itself
+		return
+	}
+
+	now := time.Now().UnixNano()
+	next := i.nextUnreachableProbe.Load()
+	if now < next || !i.nextUnreachableProbe.CompareAndSwap(next, now+int64(unreachableProbeInterval)) {
+		return
+	}
+
+	nb := make([]byte, 12)
+	out := make([]byte, mtu)
+	probed := 0
+	i.remotes.ForEach(ifce.hostMap.GetPreferredRanges(), func(addr netip.AddrPort, _ bool) {
+		if addr == dead {
+			return
+		}
+		probed++
+		ifce.sendTo(header.Test, header.TestRequest, i.ConnectionState, i, addr, []byte(""), nb, out)
+	})
+
+	if ifce.l.Enabled(context.Background(), slog.LevelDebug) {
+		i.logger(ifce.l).Debug("Remote unreachable, probing other remotes",
+			"udpAddr", dead,
+			"probed", probed,
+		)
+	}
+
+	if probed == 0 {
+		// With nothing else to try, the lighthouse is our only way to learn of another remote. The peer may not have
+		// one, so ask on the usual requery schedule rather than every probe for as long as the tunnel sits here.
+		if now < i.nextLHQuery.Load() {
+			return
+		}
+		i.nextLHQuery.Store(now + ifce.reQueryWait.Load())
+	}
+
+	// With other remotes to probe we ask on every probe, without backing off. A repeat re-sends the peer its punch
+	// notification in case the last one or its punches were lost. If the tunnel stays up on inbound traffic while
+	// our sends to its remote keep failing (only one direction broken), this continues once a second for as long as
+	// that lasts. That is a bounded cost for a rare state, and the probe that would clear it has to keep running.
+	ifce.lightHouse.QueryServer(i.vpnAddrs[0])
 }
 
 // Bits within HostInfo.state, everything above stateEpochShift is the epoch

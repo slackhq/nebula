@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"bytes"
 	"context"
 	"crypto/fips140"
 	"errors"
@@ -501,7 +502,8 @@ func (f *Interface) listenIn(queue tio.Queue, i int) {
 
 // flushSendBatch drains sb to the underlay and accounts for anything it could not deliver. A shortfall means
 // specific destinations were undeliverable (a stale remote, a reject rule), which the backend logs per peer at
-// debug; here it is only a counter, so one unreachable peer cannot spam a log line per batch.
+// debug; here it is only a counter, so one unreachable peer cannot spam a log line per batch. Tunnels whose remote
+// we no longer have a route to go looking for another path.
 func (f *Interface) flushSendBatch(sb *batch.SendBatch, q int) {
 	queued := sb.Len()
 	written, err := sb.Flush()
@@ -510,6 +512,44 @@ func (f *Interface) flushSendBatch(sb *batch.SendBatch, q int) {
 	}
 	if dropped := queued - written; dropped > 0 {
 		f.metricTxDropped.Inc(int64(dropped))
+	}
+
+	if f.lightHouse == nil || f.lightHouse.amLighthouse {
+		// Lighthouses never probe, see remoteUnreachable, so skip finding the tunnels
+		return
+	}
+
+	// A tunnel's packets tend to fail together, so skip straight past a repeat of the one before. The first 8 bytes
+	// of a header say whose packet it is, the counter after them changes with every packet.
+	var last batch.Failure
+	for i, fail := range sb.Failures() {
+		if i > 0 && fail.Dst == last.Dst && bytes.Equal(fail.Head[:8], last.Head[:8]) {
+			continue
+		}
+		last = fail
+
+		if udp.IsUnreachable(fail.Err) {
+			f.sendUnreachable(fail.Head[:], fail.Dst)
+		}
+	}
+}
+
+// sendUnreachable finds the tunnel a packet we had no route for was sent on, from the start of the packet, and has it
+// look for another path to its peer.
+func (f *Interface) sendUnreachable(head []byte, dst netip.AddrPort) {
+	var h header.H
+	if h.Parse(head) != nil {
+		return
+	}
+
+	if h.Type == header.Message && h.Subtype == header.MessageRelay {
+		// TODO: a relayed packet's header carries the relay session's index, not the relay tunnel's, so it does not
+		// lead us to the tunnel whose remote failed. The relay tunnel's own traffic finds out soon enough.
+		return
+	}
+
+	if hostinfo := f.hostMap.QueryReverseIndex(h.RemoteIndex); hostinfo != nil {
+		hostinfo.remoteUnreachable(f, dst)
 	}
 }
 

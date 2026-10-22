@@ -41,8 +41,9 @@ type Conn interface {
 	//
 	// Returns the number of packets successfully written. A destination the kernel rejects costs only
 	// its own packet, so a short count means some peers were undeliverable, not that the batch failed.
+	// failed, when not nil, is called with the index of every packet a destination cost us and why.
 	// Not safe for concurrent use on the same Conn.
-	WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error)
+	WriteBatch(bufs [][]byte, addrs []netip.AddrPort, failed func(i int, err error)) (int, error)
 	// ReloadConfig applies the listen settings that can change, r is nil at startup
 	ReloadConfig(c *config.C, r *config.Reload)
 	SupportsMultipleReaders() bool
@@ -66,7 +67,7 @@ func (NoopConn) SupportsMultipleReaders() bool {
 func (NoopConn) WriteTo(_ []byte, _ netip.AddrPort) error {
 	return nil
 }
-func (NoopConn) WriteBatch(bufs [][]byte, _ []netip.AddrPort) (int, error) {
+func (NoopConn) WriteBatch(bufs [][]byte, _ []netip.AddrPort, _ func(int, error)) (int, error) {
 	return len(bufs), nil
 }
 func (NoopConn) ReloadConfig(_ *config.C, _ *config.Reload) {

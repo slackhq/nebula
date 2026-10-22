@@ -15,6 +15,7 @@ import (
 	"github.com/slackhq/nebula/overlay/batch"
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
+	"github.com/slackhq/nebula/udp"
 )
 
 func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.ParsedPacket, nb []byte, sendBatch *batch.SendBatch, rejectBuf []byte, q int, localCache firewall.ConntrackCache) {
@@ -610,6 +611,10 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 					"error", err,
 					"udpAddr", hr,
 				)
+			}
+			// A closing tunnel is about to be torn down, there is no point looking for another path for it
+			if t != header.CloseTunnel && udp.IsUnreachable(err) {
+				hostinfo.remoteUnreachable(f, hr)
 			}
 		}
 	} else {
