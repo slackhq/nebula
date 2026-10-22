@@ -1107,3 +1107,25 @@ func TestLighthouse_V4OnlySkipsIPv6PunchTargets(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	assert.Equal(t, []netip.AddrPort{v4}, pc.written())
 }
+
+func TestLighthouse_V4OnlyDoesNotAdvertiseIPv6LocalAddrs(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	c.Settings["listen"] = map[string]any{"port": 4242}
+	c.Settings["lighthouse"] = map[string]any{"advertise_addrs": []any{"[2001::5]:4242"}}
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, testCertState(netip.MustParsePrefix("10.128.0.1/24")), &recordingConn{v4Only: true}, nil)
+	require.NoError(t, err)
+
+	lh.localAddrsFn = func(*LocalAllowList) []netip.Addr {
+		return []netip.Addr{netip.MustParseAddr("192.168.0.1"), netip.MustParseAddr("fd00::1")}
+	}
+	lh.lighthouses.Store(&[]netip.Addr{netip.MustParseAddr("10.128.0.100")})
+	w := &testEncWriter{protocolVersion: cert.Version2}
+	lh.ifce = w
+
+	lh.SendUpdate()
+	require.NotNil(t, w.lastReply.msg)
+	assertIp4InArray(t, w.lastReply.msg.Details.V4AddrPorts, netip.MustParseAddrPort("192.168.0.1:4242"))
+	require.Len(t, w.lastReply.msg.Details.V6AddrPorts, 1)
+	assert.Equal(t, netip.MustParseAddrPort("[2001::5]:4242"), protoV6AddrPortToNetAddrPort(w.lastReply.msg.Details.V6AddrPorts[0]))
+}

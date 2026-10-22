@@ -995,7 +995,8 @@ func (lh *LightHouse) SendUpdate() {
 		// Only add addrs that aren't my VPN/tun networks
 		if e.Is4() {
 			v4 = append(v4, netAddrToProtoV4AddrPort(e, uint16(lh.nebulaPort)))
-		} else {
+		} else if !lh.v4Only {
+			// An IPv4 socket never receives on our IPv6 addrs, advertise_addrs are left to the operator
 			v6 = append(v6, netAddrToProtoV6AddrPort(e, uint16(lh.nebulaPort)))
 		}
 	}
