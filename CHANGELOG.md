@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   down with it. A hostinfo returned by StartHandshake had no RemoteList until the handshake loop's first
   pass attached one, and `create-tunnel -address` set the remote before that. The list is now attached when
   the handshake starts, so a pending hostinfo never exists without one.
+- A firewall rule with `group: []`, `groups:` with no value, or a `groups` entry that isn't a string, such as
+  `groups: [1, 2]`, no longer crashes Nebula on startup or reload. A null `group` or `groups` means none was
+  provided. An unquoted int or bool group, such as `group: 7`, is still read as a string but logs a warning to
+  quote it, since YAML has already turned a value like `007` into `7`. A float, a date, an empty array, a null
+  entry, a nested array, or a map is rejected with an error.
 
 ## [1.11.1] - 2026-08-21
 
