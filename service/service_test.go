@@ -25,7 +25,13 @@ import (
 type m = map[string]any
 
 func newSimpleService(caCrt cert.Certificate, caKey []byte, name string, udpIp netip.Addr, overrides m) *Service {
-	_, _, myPrivKey, myPEM := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, caCrt, caKey, "a", time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{netip.PrefixFrom(udpIp, 24)}, nil, []string{})
+	return newService(caCrt, caKey, name, []netip.Prefix{netip.PrefixFrom(udpIp, 24)}, overrides)
+}
+
+// newService is newSimpleService with an arbitrary set of cert networks, for
+// IPv6 and dual-stack hosts.
+func newService(caCrt cert.Certificate, caKey []byte, name string, networks []netip.Prefix, overrides m) *Service {
+	_, _, myPrivKey, myPEM := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, caCrt, caKey, name, time.Now(), time.Now().Add(5*time.Minute), networks, nil, []string{})
 	caB, err := caCrt.MarshalPEM()
 	if err != nil {
 		panic(err)
@@ -186,6 +192,110 @@ func TestService(t *testing.T) {
 
 	if err := eg.Wait(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TCP between two services must work over an IPv6 overlay, with IPv6-only and
+// dual-stack certs, and IPv4 must keep working on a dual-stack cert.
+func TestServiceIPv6(t *testing.T) {
+	v6a := netip.MustParsePrefix("fd00::1/64")
+	v6b := netip.MustParsePrefix("fd00::2/64")
+	v4a := netip.MustParsePrefix("10.0.0.1/24")
+	v4b := netip.MustParsePrefix("10.0.0.2/24")
+
+	tests := []struct {
+		name   string
+		aNets  []netip.Prefix
+		bNets  []netip.Prefix
+		dialTo string
+	}{
+		{"ipv6 only", []netip.Prefix{v6a}, []netip.Prefix{v6b}, "[fd00::1]:1234"},
+		{"dual stack over ipv6", []netip.Prefix{v6a, v4a}, []netip.Prefix{v6b, v4b}, "[fd00::1]:1234"},
+		{"dual stack over ipv4", []netip.Prefix{v6a, v4a}, []netip.Prefix{v6b, v4b}, "10.0.0.1:1234"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lighthousePort := ephemeralUDPPort(t)
+			// The lighthouse is addressed by the family being dialed, so b already
+			// knows the underlay address and needs no lighthouse query
+			lighthouseIP := netip.MustParseAddrPort(tt.dialTo).Addr().String()
+
+			ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+			a := newService(ca, caKey, "a", tt.aNets, m{
+				"static_host_map": m{},
+				"lighthouse": m{
+					"am_lighthouse": true,
+				},
+				"listen": m{
+					"host": "127.0.0.1",
+					"port": lighthousePort,
+				},
+			})
+			t.Cleanup(func() { _ = a.Close() })
+			b := newService(ca, caKey, "b", tt.bNets, m{
+				"static_host_map": m{
+					lighthouseIP: []string{fmt.Sprintf("127.0.0.1:%d", lighthousePort)},
+				},
+				"lighthouse": m{
+					"hosts":    []string{lighthouseIP},
+					"interval": 1,
+				},
+			})
+			t.Cleanup(func() { _ = b.Close() })
+
+			ln, err := a.Listen("tcp", ":1234")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var eg errgroup.Group
+			eg.Go(func() error {
+				conn, err := ln.Accept()
+				if err != nil {
+					return err
+				}
+				defer conn.Close()
+
+				if _, err := conn.Write([]byte("server msg")); err != nil {
+					return err
+				}
+				data := make([]byte, 100)
+				n, err := conn.Read(data)
+				if err != nil {
+					return err
+				}
+				if !bytes.Equal(data[:n], []byte("client msg")) {
+					return errors.New("got invalid message from client")
+				}
+				return conn.Close()
+			})
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			c, err := b.DialContext(ctx, "tcp", tt.dialTo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.Write([]byte("client msg")); err != nil {
+				t.Fatal(err)
+			}
+
+			data := make([]byte, 100)
+			n, err := c.Read(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(data[:n], []byte("server msg")) {
+				t.Fatal("got invalid message from server")
+			}
+
+			if err := c.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := eg.Wait(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
