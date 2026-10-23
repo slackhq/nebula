@@ -5,6 +5,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"strings"
 
 	"golang.org/x/crypto/ed25519"
 )
@@ -101,7 +102,8 @@ func UnmarshalCertificateFromPEM(b []byte) (Certificate, []byte, error) {
 }
 
 // unmarshalCertificateBlock decodes a single PEM block into a certificate.
-// It expects a Nebula certificate banner and returns ErrInvalidPEMCertificateBanner otherwise.
+// It returns ErrUnknownVersion for a "NEBULA CERTIFICATE V" banner it does not know, a newer version most likely, and
+// ErrInvalidPEMCertificateBanner for anything else.
 func unmarshalCertificateBlock(block *pem.Block) (Certificate, error) {
 	switch block.Type {
 	// Implementations must validate the resulting certificate contains valid information
@@ -110,8 +112,21 @@ func unmarshalCertificateBlock(block *pem.Block) (Certificate, error) {
 	case CertificateV2Banner:
 		return unmarshalCertificateV2(block.Bytes, nil, Curve_CURVE25519)
 	default:
-		return nil, ErrInvalidPEMCertificateBanner
+		if strings.HasPrefix(block.Type, CertificateBanner+" V") {
+			return nil, fmt.Errorf("%w: %s", ErrUnknownVersion, quoteBanner(block.Type))
+		}
+		return nil, fmt.Errorf("%w: %s", ErrInvalidPEMCertificateBanner, quoteBanner(block.Type))
 	}
+}
+
+// maxBannerLen caps how much of an unrecognized PEM banner goes into an error, the input may not be trusted.
+const maxBannerLen = 64
+
+func quoteBanner(banner string) string {
+	if len(banner) > maxBannerLen {
+		return fmt.Sprintf("%q...", banner[:maxBannerLen])
+	}
+	return fmt.Sprintf("%q", banner)
 }
 
 func marshalCertPublicKeyToPEM(c Certificate) []byte {

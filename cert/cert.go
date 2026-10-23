@@ -185,3 +185,8 @@ func CalculateAlternateFingerprint(c Certificate) (string, error) {
 	}
 	return nc.Fingerprint()
 }
+
+// Known is false for curves this version of nebula can not use, likely ones a newer version added.
+func (c Curve) Known() bool {
+	return c == Curve_CURVE25519 || c == Curve_P256
+}

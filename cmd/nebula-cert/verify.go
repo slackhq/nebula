@@ -54,8 +54,11 @@ func verify(args []string, out io.Writer, errOut io.Writer) error {
 	defer caReader.Close()
 
 	caPool, err := cert.NewCAPoolFromPEMReader(caReader)
-	if err != nil && !errors.Is(err, cert.ErrExpired) {
+	if caPool == nil {
 		return fmt.Errorf("error while adding ca cert to pool: %w", err)
+	}
+	for _, e := range cert.SkippedCertificates(err) {
+		fmt.Fprintf(errOut, "skipping ca: %s\n", e)
 	}
 
 	rawCert, err := readInput("crt", *vf.certPath, &claims)

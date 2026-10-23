@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/pem"
 	"os"
 	"testing"
 	"time"
@@ -122,6 +123,24 @@ func Test_verify(t *testing.T) {
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
 	require.NoError(t, err)
+
+	// a ca bundle with a certificate version we don't know still verifies, with a warning about the skipped one
+	caFile.Write(pem.EncodeToMemory(&pem.Block{Type: "NEBULA CERTIFICATE V9", Bytes: []byte{0x30, 0x00}}))
+	err = verify([]string{"-ca", caFile.Name(), "-crt", certFile.Name()}, ob, eb)
+	assert.Empty(t, ob.String())
+	assert.Equal(t, "skipping ca: certificate version unrecognized: \"NEBULA CERTIFICATE V9\"\n", eb.String())
+	require.NoError(t, err)
+
+	// a ca bundle with nothing we can use has nothing to verify against
+	ob.Reset()
+	eb.Reset()
+	caFile.Truncate(0)
+	caFile.Seek(0, 0)
+	caFile.Write(pem.EncodeToMemory(&pem.Block{Type: "NEBULA CERTIFICATE V9", Bytes: []byte{0x30, 0x00}}))
+	err = verify([]string{"-ca", caFile.Name(), "-crt", certFile.Name()}, ob, eb)
+	assert.Empty(t, ob.String())
+	assert.Equal(t, "skipping ca: certificate version unrecognized: \"NEBULA CERTIFICATE V9\"\n", eb.String())
+	require.ErrorIs(t, err, cert.ErrCaNotFound)
 }
 
 func Test_verify_stdio(t *testing.T) {
