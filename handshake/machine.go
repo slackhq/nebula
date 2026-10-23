@@ -63,7 +63,7 @@ type Machine struct {
 	msgs           []msgFlags
 	myVersion      cert.Version
 	subtype        header.MessageSubType
-	hybrid         bool
+	curveOK        func(cert.Curve) bool
 	indexAllocated bool
 	remoteCertSet  bool
 	payloadSet     bool
@@ -91,9 +91,8 @@ func NewMachine(
 	if cred == nil {
 		return nil, fmt.Errorf("%w: %v", ErrNoCredential, version)
 	}
-	// Certificates on the hybrid curve go with hybrid patterns and nothing else.
-	hybrid := info.kem != nil
-	if err := checkCurve(hybrid, cred.Cert.Curve()); err != nil {
+	// Each pattern goes with its own curves: the classical ones, the hybrid one or the post-quantum one.
+	if err := checkCurve(info.curve, cred.Cert.Curve()); err != nil {
 		return nil, err
 	}
 
@@ -106,7 +105,7 @@ func NewMachine(
 		hs:         hs,
 		subtype:    subtype,
 		msgs:       info.msgs,
-		hybrid:     hybrid,
+		curveOK:    info.curve,
 		getCred:    getCred,
 		allocIndex: allocIndex,
 		verifier:   verifier,
@@ -358,10 +357,13 @@ func (m *Machine) processPayload(msg []byte, flags msgFlags) error {
 	return nil
 }
 
-// checkCurve checks that a certificate is on the hybrid curve exactly when the
-// pattern is hybrid.
-func checkCurve(hybrid bool, curve cert.Curve) error {
-	if hybrid != (curve == cert.Curve_P384_MLKEM1024_MLDSA87) {
+// checkCurve checks that a certificate is on a curve the pattern goes with, a
+// classical one for a pattern that does not say.
+func checkCurve(ok func(cert.Curve) bool, curve cert.Curve) error {
+	if ok == nil {
+		ok = onClassicalCurve
+	}
+	if !ok(curve) {
 		return fmt.Errorf("%w: %s", ErrCurveMismatch, cert.CurveName(curve))
 	}
 	return nil
@@ -373,7 +375,7 @@ func (m *Machine) validateCert(payload Payload) error {
 		m.failed = true
 		return fmt.Errorf("%w: %v", ErrNoCredential, m.myVersion)
 	}
-	// PeerStatic builds a fresh composite key on every call for hybrid patterns.
+	// PeerStatic builds a fresh composite key on every call for post-quantum patterns.
 	peerStatic := m.hs.PeerStatic()
 	rc, err := cert.Recombine(
 		cert.Version(payload.CertVersion),
@@ -391,9 +393,9 @@ func (m *Machine) validateCert(payload Payload) error {
 		return ErrPublicKeyMismatch
 	}
 
-	// A certificate on the hybrid curve only ever comes with a hybrid pattern,
-	// and a hybrid pattern only ever with one.
-	if err := checkCurve(m.hybrid, rc.Curve()); err != nil {
+	// A certificate on a post-quantum curve only ever comes with that curve's
+	// pattern, and a pattern only ever with its curves.
+	if err := checkCurve(m.curveOK, rc.Curve()); err != nil {
 		m.failed = true
 		return err
 	}
