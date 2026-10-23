@@ -232,15 +232,21 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		messageMetrics = newMessageMetricsOnlyRecvError()
 	}
 
+	fragmentCfg, err := fragmentConfigFrom(c)
+	if err != nil {
+		return nil, util.ContextualizeIfNeeded("Failed to load handshake fragment settings", err)
+	}
 	handshakeConfig := HandshakeConfig{
 		tryInterval:    c.GetDuration("handshakes.try_interval", DefaultHandshakeTryInterval),
 		retries:        int64(c.GetInt("handshakes.retries", DefaultHandshakeRetries)),
 		triggerBuffer:  c.GetInt("handshakes.trigger_buffer", DefaultHandshakeTriggerBuffer),
+		fragment:       fragmentCfg,
 		messageMetrics: messageMetrics,
 	}
 
 	handshakeManager := NewHandshakeManager(l, hostMap, lightHouse, udpConns[0], handshakeConfig)
 	lightHouse.handshakeTrigger = handshakeManager.trigger
+	c.RegisterReloadCallback(handshakeManager.reloadFragment)
 
 	ds, err := newDnsServerFromConfig(ctx, l, pki, hostMap, c)
 	if err != nil {

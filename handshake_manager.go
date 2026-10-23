@@ -6,10 +6,13 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"github.com/slackhq/nebula/handshake/fragment"
+	"github.com/slackhq/nebula/ratelimit"
 	"log/slog"
 	"net/netip"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -42,6 +45,7 @@ var (
 		tryInterval:   DefaultHandshakeTryInterval,
 		retries:       DefaultHandshakeRetries,
 		triggerBuffer: DefaultHandshakeTriggerBuffer,
+		fragment:      fragmentConfig{repairDelay: DefaultHandshakeRepairDelay},
 	}
 )
 
@@ -49,6 +53,7 @@ type HandshakeConfig struct {
 	tryInterval   time.Duration
 	retries       int64
 	triggerBuffer int
+	fragment      fragmentConfig
 
 	messageMetrics *MessageMetrics
 }
@@ -75,6 +80,15 @@ type HandshakeManager struct {
 
 	// can be used to trigger outbound handshake for the given vpnIp
 	trigger chan netip.Addr
+
+	// frag holds the fragment settings, swapped on reload.
+	frag atomic.Pointer[fragmentConfig]
+	// fragTable reassembles msg1 fragments from senders not yet authenticated, answered remembers the msg1s already
+	// answered, and cookies and cookieLimiter ask senders to validate their address under load or before a big answer.
+	fragTable     *fragment.Table[fragKey, fragSource]
+	answered      *fragAnswered
+	cookies       *fragCookies
+	cookieLimiter *ratelimit.Limiter
 }
 
 type HandshakeHostInfo struct {
@@ -90,6 +104,10 @@ type HandshakeHostInfo struct {
 
 	hostinfo *HostInfo
 	machine  *handshake.Machine // The handshake state machine, set during stage 0 (initiator) or beginHandshake (responder multi-message)
+
+	sender         *fragment.Sender        // msg1 as fragments, when it travels so
+	msg2           [fragMsg2Slots]msg2Slot // msg2 fragments being reassembled, per responder; an array, one slot is used nearly always
+	cookieResendAt time.Time               // last resend prompted by a cookie reply
 }
 
 func (hh *HandshakeHostInfo) cachePacket(l *slog.Logger, t header.MessageType, st header.MessageSubType, packet []byte, f packetCallback, m *cachedPacketMetrics) {
@@ -118,7 +136,7 @@ func (hh *HandshakeHostInfo) cachePacket(l *slog.Logger, t header.MessageType, s
 }
 
 func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *LightHouse, outside udp.Conn, config HandshakeConfig) *HandshakeManager {
-	return &HandshakeManager{
+	hm := &HandshakeManager{
 		vpnIps:                    map[netip.Addr]*HandshakeHostInfo{},
 		indexes:                   map[uint32]*HandshakeHostInfo{},
 		mainHostMap:               mainHostMap,
@@ -133,6 +151,17 @@ func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *Light
 		metricRejectedBlocklisted: metrics.GetOrRegisterCounter("handshake_manager.rejected.blocklisted", nil),
 		l:                         l,
 	}
+	frag := config.fragment
+	hm.frag.Store(&frag)
+	// A retrying initiator is answered again at most once per retry interval on each path its msg1 arrives by.
+	tableCfg := fragTableConfig
+	tableCfg.RepeatInterval = config.tryInterval
+	hm.fragTable = fragment.NewTable[fragKey, fragSource](tableCfg)
+	hm.answered = newFragAnswered(hsTimeout(config.retries, config.tryInterval))
+	hm.cookies = newFragCookies(time.Now())
+	// Cookie replies are tiny, but a flood of spoofed fragments must not turn into a flood of replies.
+	hm.cookieLimiter, _ = ratelimit.New(256, time.Millisecond)
+	return hm
 }
 
 func (hm *HandshakeManager) Run(ctx context.Context) {
@@ -147,6 +176,8 @@ func (hm *HandshakeManager) Run(ctx context.Context) {
 			hm.handleOutbound(vpnIP, true)
 		case now := <-clockSource.C:
 			hm.NextOutboundHandshakeTimerTick(now)
+			hm.fragTable.Expire(now)
+			hm.answered.expire(now)
 		}
 	}
 }
@@ -155,9 +186,9 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 	// Gate on known handshake subtypes. Unknown subtypes (or future ones we
 	// don't yet support) are dropped here rather than silently routed through
 	// the IX path. Add a case when introducing a new pattern.
-	switch h.Subtype {
+	switch header.HandshakePattern(h.Subtype) {
 	case header.HandshakeIXPSK0:
-		// supported
+		// supported, fragmented or not
 	default:
 		hm.l.Debug("dropping handshake with unsupported subtype",
 			"from", via, "subtype", h.Subtype)
@@ -172,6 +203,11 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 		}
 	}
 
+	if header.IsFragmented(h.Subtype) {
+		hm.handleFragment(via, packet, h)
+		return
+	}
+
 	// First message of a new handshake. The wire format requires RemoteIndex
 	// to be zero here (the initiator has no responder index to fill in yet),
 	// and generateIndex never allocates 0, so any non-zero RemoteIndex on a
@@ -183,7 +219,7 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 				"from", via, "remoteIndex", h.RemoteIndex)
 			return
 		}
-		hm.beginHandshake(via, packet, h)
+		hm.beginHandshake(via, packet, h, msg1Info{validated: via.IsRelayed, received: len(packet)})
 		return
 	}
 
@@ -256,10 +292,21 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 	// HandshakeHostInfo tracking a single "currentOutbound" packet (bytes +
 	// header metadata) that gets replaced as the handshake progresses,
 	// instead of indexing into HandshakePacket.
-	stage0 := hostinfo.HandshakePacket[handshakePacketStage0]
+	//
+	// msg1 as fragments offers fresh symbols every attempt: now goes out at once, later after the repair delay.
+	now, later, err := hh.stage0Packets()
+	if err != nil {
+		hostinfo.logger(hm.l).Error("Failed to fragment handshake", "error", err)
+		hm.OutboundHandshakeTimer.Add(vpnIp, hm.config.tryInterval*time.Duration(hh.counter))
+		return
+	}
+	subtype := hh.machine.Subtype()
+	if hh.sender != nil {
+		subtype |= header.HandshakeFragmented
+	}
 	hsFields := m{
 		"stage": uint64(hh.machine.MessageIndex()),
-		"style": header.SubTypeName(header.Handshake, hh.machine.Subtype()),
+		"style": header.SubTypeName(header.Handshake, subtype),
 	}
 
 	remotes := hostinfo.remotes.CopyAddrs(hm.mainHostMap.GetPreferredRanges())
@@ -287,8 +334,10 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 	// Send the handshake to all known ips, stage 2 takes care of assigning the hostinfo.remote based on the first to reply
 	var sentTo []netip.AddrPort
 	hostinfo.remotes.ForEach(hm.mainHostMap.GetPreferredRanges(), func(addr netip.AddrPort, _ bool) {
-		hm.messageMetrics.Tx(header.Handshake, hh.machine.Subtype(), 1)
-		err := hm.outside.WriteTo(stage0, addr)
+		hm.messageMetrics.Tx(header.Handshake, subtype, int64(len(now)+len(later)))
+		err := hm.sendFragmented(now, later, func(p []byte) error {
+			return hm.outside.WriteTo(p, addr)
+		})
 		if err != nil {
 			// These repeat every attempt, so match the success log below and only shout when the remotes changed
 			level := slog.LevelDebug
@@ -324,7 +373,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		)
 	}
 
-	hm.f.relayManager.StartRelays(hm.f, vpnIp, hh, stage0)
+	hm.f.relayManager.StartRelays(hm.f, vpnIp, hh, now, later)
 
 	// If a lighthouse triggered this attempt then we are still in the timer wheel and do not need to re-add
 	if !lighthouseTriggered {
@@ -686,6 +735,12 @@ func (hm *HandshakeManager) buildStage0Packet(hh *HandshakeHostInfo) bool {
 		return false
 	}
 
+	if err := hm.fragmentStage0(hh, msg); err != nil {
+		hm.f.l.Error("Failed to fragment handshake",
+			"vpnAddrs", hh.hostinfo.vpnAddrs, "error", err)
+		return false
+	}
+
 	// hostinfo.ConnectionState stays nil until the handshake completes in
 	// continueHandshake. Pre-completion control surfaces guard with nil
 	// checks; the data plane never observes a pending hostinfo.
@@ -697,8 +752,8 @@ func (hm *HandshakeManager) buildStage0Packet(hh *HandshakeHostInfo) bool {
 
 // beginHandshake handles an incoming handshake packet that doesn't match any
 // existing pending handshake. It creates a new responder Machine and processes
-// the first message.
-func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *header.H) {
+// the first message. in says how it arrived, which decides how it is answered.
+func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *header.H, in msg1Info) {
 	f := hm.f
 	cs := f.pki.getCertState()
 
@@ -807,11 +862,11 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 
 	existing, err := hm.CheckAndComplete(hostinfo, handshakePacketStage0, f)
 	if err != nil {
-		hm.handleCheckAndCompleteError(err, existing, hostinfo, via)
+		hm.handleCheckAndCompleteError(err, existing, hostinfo, via, in)
 		return
 	}
 
-	hm.sendHandshakeResponse(via, response, hostinfo, false)
+	hm.sendHandshakeResponse(via, response, hostinfo, false, in)
 	hostinfo.remotes.RefreshFromHandshake(vpnAddrs)
 
 	// Don't wait for UpdateWorker
@@ -874,7 +929,7 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	}
 
 	if response != nil {
-		hm.sendHandshakeResponse(via, response, hostinfo, false)
+		hm.sendHandshakeResponse(via, response, hostinfo, false, msg1Info{validated: true})
 	}
 
 	if result == nil {
@@ -1065,21 +1120,24 @@ func (hm *HandshakeManager) validatePeerCert(via ViaSender, remoteCert *cert.Cac
 // sendHandshakeResponse sends a handshake response via the appropriate transport.
 // cached is true when msg is a stored response being retransmitted because
 // the peer's stage-1 retransmit landed (the ErrAlreadySeen path); false on a
-// fresh response.
-func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hostinfo *HostInfo, cached bool) {
+// fresh response. in describes the msg1 it answers: a response that should
+// travel as fragments but is more than the msg1's amplification budget allows
+// becomes a cookie reply, and the initiator's fragmented retry with the cookie
+// gets the response.
+func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hostinfo *HostInfo, cached bool, in msg1Info) {
 	if msg == nil {
 		return
 	}
 
 	f := hm.f
-	f.messageMetrics.Tx(header.Handshake, header.MessageSubType(msg[1]), 1)
+	subtype := header.MessageSubType(msg[1])
 
 	// Common log fields. peerCert may be nil during intermediate
 	// multi-message flows (handshake hasn't completed yet); skip the cert
 	// block if so.
 	logFields := []any{
 		"vpnAddrs", hostinfo.vpnAddrs,
-		"handshake", m{"stage": uint64(2), "style": header.SubTypeName(header.Handshake, header.HandshakeIXPSK0)},
+		"handshake", m{"stage": uint64(2), "style": header.SubTypeName(header.Handshake, subtype)},
 		"cached", cached,
 		"initiatorIndex", hostinfo.remoteIndexId,
 		"responderIndex", hostinfo.localIndexId,
@@ -1093,6 +1151,27 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 		)
 	}
 
+	if hm.shouldFragment(len(msg), in.fragmented) {
+		fields := append(logFields, "from", via)
+		// A repeat of this msg1 is answered from here on without redoing the handshake.
+		if !cached {
+			hm.answered.add(hostinfo.HandshakePacket[handshakePacketStage0], hostinfo, time.Now())
+		}
+		err := hm.sendFragmentedResponse(via, msg, hostinfo, in.budget())
+		switch {
+		case errors.Is(err, errOverBudget):
+			key, _ := fragKeyFor(via, hostinfo.remoteIndexId)
+			hm.sendCookie(via, subtype, hostinfo.remoteIndexId, key, in.received, time.Now())
+			f.l.Debug("Handshake response exceeds the amplification budget, asking the initiator to show its address", fields...)
+		case err != nil:
+			f.l.Debug("Did not send handshake message", append(fields, "error", err)...)
+		default:
+			f.l.Info("Handshake message sent", fields...)
+		}
+		return
+	}
+
+	f.messageMetrics.Tx(header.Handshake, subtype, 1)
 	if !via.IsRelayed {
 		fields := append(logFields, "from", via)
 		err := f.outside.WriteTo(msg, via.UdpAddr)
@@ -1110,7 +1189,7 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 		// We received a valid handshake on this relay, so make sure the relay
 		// state reflects that, in case it had been marked Disestablished.
 		via.relayHI.relayState.UpdateRelayForByIdxState(via.relay.LocalIndex, Established)
-		f.SendVia(via.relayHI, via.relay, msg, make([]byte, 12), make([]byte, mtu), false, 0)
+		f.sendHandshakeVia(via.relayHI, via.relay, msg)
 		f.l.Info("Handshake message sent", append(logFields, "relay", via.relayHI.vpnAddrs[0])...)
 	}
 }
@@ -1119,7 +1198,7 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 // This only fires from the responder-side beginHandshake path, after the
 // peer cert has been validated and ConnectionState populated, so peerCert
 // is always non-nil for the cases that log it.
-func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hostinfo *HostInfo, via ViaSender) {
+func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hostinfo *HostInfo, via ViaSender, in msg1Info) {
 	f := hm.f
 	peerCert := hostinfo.ConnectionState.peerCert
 	hsFields := m{"stage": uint64(1), "style": header.SubTypeName(header.Handshake, header.HandshakeIXPSK0)}
@@ -1133,7 +1212,7 @@ func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hos
 		// ephemeral keys; a freshly-built one would have different keys and break
 		// the tunnel even though both sides "completed" the handshake.
 		if msg := existing.HandshakePacket[handshakePacketStage2]; msg != nil {
-			hm.sendHandshakeResponse(via, msg, existing, true)
+			hm.sendHandshakeResponse(via, msg, existing, true, in)
 		}
 
 	case ErrExistingHostInfo:

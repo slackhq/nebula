@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Fragmented handshakes: a handshake message too big for one packet, from a certificate with many groups, names or
+  networks, is sent as Reed-Solomon coded fragments that each fit the IPv6 minimum MTU, rather than relying on IP
+  fragmentation. `handshakes.fragment` (`auto`, `always`, `never`) chooses when, and `handshakes.repair_delay` how
+  long repair fragments trail. Every node reassembles fragments; an older peer can not, but the oversized packet it
+  could have read needed IP fragmentation to arrive. See `docs/fragmented-handshakes.md`.
+
 - A control socket that provides access to all of the ssh debug server's commands along with support
   for running `nebula ctl <command>` as a client from the CLI.
 - An info socket that serves the `identity` command over HTTP: `GET /v1/identity` for this node,
