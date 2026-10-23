@@ -1,7 +1,6 @@
 package nebula
 
 import (
-	"crypto/sha256"
 	"math/rand/v2"
 	"net/netip"
 	"sync"
@@ -206,14 +205,32 @@ func TestFragmentResponse(t *testing.T) {
 }
 
 // A response that should go as fragments but is more than its msg1's amplification budget allows is held back for a
-// cookie reply naming the initiator, and the msg1 is remembered, so the initiator's retry with the cookie is answered
-// without redoing the handshake.
+// cookie reply naming the initiator. The msg1's quiet period ends, so the initiator's resend with the cookie is
+// reassembled at once rather than after it.
 func TestResponseOverBudgetAsksForCookie(t *testing.T) {
 	hm, conn := newFragTestManager(t)
 	via := ViaSender{UdpAddr: netip.MustParseAddrPort("192.0.2.1:4242")}
 	msg1 := []byte("a small msg1")
 	hostinfo := &HostInfo{localIndexId: 77, remoteIndexId: 1234, HandshakePacket: map[uint8][]byte{handshakePacketStage0: msg1}, ConnectionState: &ConnectionState{}}
 	msg2 := testMsg2(4000, 2)
+
+	// The msg1 came as one fragment, which completed it and quieted its key.
+	key, src := fragKeyFor(via, hostinfo.remoteIndexId)
+	s, err := fragment.NewSender(testMsg1(msg1), hostinfo.remoteIndexId)
+	require.NoError(t, err)
+	addMsg1 := func() *fragment.Result {
+		t.Helper()
+		pkts, _, err := s.Attempt(0)
+		require.NoError(t, err)
+		require.Len(t, pkts, 1)
+		fh, sym, err := fragment.Parse(pkts[0][header.Len:])
+		require.NoError(t, err)
+		res, err := hm.fragTable.Add(key, src, time.Now(), fh, sym)
+		require.NoError(t, err)
+		return res
+	}
+	require.NotNil(t, addMsg1())
+	require.Nil(t, addMsg1(), "the key is quiet")
 
 	hm.sendHandshakeResponse(via, msg2, hostinfo, false, msg1Info{received: 300})
 	sent := conn.take()
@@ -224,7 +241,7 @@ func TestResponseOverBudgetAsksForCookie(t *testing.T) {
 	assert.Equal(t, ixFragmented, h.Subtype)
 	assert.Equal(t, uint64(fragCookieCounter), h.MessageCounter)
 	assert.Equal(t, uint32(1234), h.RemoteIndex, "the reply names the initiator by its index")
-	assert.Same(t, hostinfo, hm.answered.lookup(sha256.Sum256(msg1), time.Now()))
+	assert.NotNil(t, addMsg1(), "the resend with the cookie is reassembled at once")
 
 	// The cookie validates the address, so the retry gets the whole response.
 	hm.sendHandshakeResponse(via, msg2, hostinfo, true, msg1Info{fragmented: true, validated: true, received: 300})
@@ -236,26 +253,6 @@ func TestResponseOverBudgetAsksForCookie(t *testing.T) {
 	sent = conn.take()
 	require.Len(t, sent, 1)
 	assert.Equal(t, small, sent[0])
-}
-
-func TestFragAnswered(t *testing.T) {
-	now := time.Unix(1000, 0)
-	a := newFragAnswered(5 * time.Second)
-	hi := &HostInfo{}
-
-	assert.Nil(t, a.lookup(sha256.Sum256([]byte("msg1")), now))
-	a.add([]byte("msg1"), hi, now)
-	assert.Same(t, hi, a.lookup(sha256.Sum256([]byte("msg1")), now.Add(time.Second)))
-	assert.Nil(t, a.lookup(sha256.Sum256([]byte("other")), now))
-	assert.Nil(t, a.lookup(sha256.Sum256([]byte("msg1")), now.Add(6*time.Second)), "stale entries are not answered")
-
-	a.expire(now.Add(6 * time.Second))
-	assert.Empty(t, a.entries)
-
-	for i := range fragAnsweredMax + 10 {
-		a.add([]byte{byte(i), byte(i >> 8)}, hi, now)
-	}
-	assert.Len(t, a.entries, fragAnsweredMax)
 }
 
 func TestFragKeyFor(t *testing.T) {
@@ -610,44 +607,4 @@ func TestMsg2Slots(t *testing.T) {
 		n, _ := slotsUsed(hh)
 		assert.Zero(t, n)
 	})
-}
-
-// A repeated msg1 is answered with the msg2 already sent only while the responder that sent it still holds its index.
-// Once that responder is gone the msg2 would lead the initiator into a tunnel no one holds, so it is forgotten and the
-// msg1 handled afresh.
-func TestFragAnsweredForgottenResponder(t *testing.T) {
-	hm, conn := newFragTestManager(t)
-	r := rand.New(rand.NewPCG(2, 2))
-	msg1 := make([]byte, 500)
-	for i := range msg1 {
-		msg1[i] = byte(r.Uint32())
-	}
-	// Small enough that the 3x amplification budget of a 500 byte msg1 covers it.
-	msg2 := testMsg2(300, 4)
-	repeat := func(fragID uint32, port uint16) {
-		t.Helper()
-		s, err := fragment.NewSender(testMsg1(msg1), fragID)
-		require.NoError(t, err)
-		pkts, _, err := s.Attempt(0)
-		require.NoError(t, err)
-		require.Len(t, pkts, 1, "one fragment holds the whole msg1")
-		var h header.H
-		require.NoError(t, h.Parse(pkts[0]))
-		hm.handleFragment(ViaSender{UdpAddr: netip.AddrPortFrom(netip.MustParseAddr("192.0.2.1"), port)}, pkts[0], &h)
-	}
-	hash := sha256.Sum256(msg1)
-
-	gone := &HostInfo{localIndexId: 4242, HandshakePacket: map[uint8][]byte{handshakePacketStage2: msg2}, ConnectionState: &ConnectionState{}}
-	hm.answered.add(msg1, gone, time.Now())
-	repeat(1, 4242)
-	assert.Empty(t, conn.take(), "no msg2 from a responder that is gone")
-	assert.Nil(t, hm.answered.lookup(hash, time.Now()), "and its entry is forgotten")
-
-	live := &HostInfo{localIndexId: 4343, HandshakePacket: map[uint8][]byte{handshakePacketStage2: msg2}, ConnectionState: &ConnectionState{}}
-	hm.mainHostMap.Lock()
-	hm.mainHostMap.Indexes[live.localIndexId] = live
-	hm.mainHostMap.Unlock()
-	hm.answered.add(msg1, live, time.Now())
-	repeat(2, 4343)
-	assert.NotEmpty(t, conn.take(), "the live responder's msg2 is resent")
 }

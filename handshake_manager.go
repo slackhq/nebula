@@ -83,10 +83,9 @@ type HandshakeManager struct {
 
 	// frag holds the fragment settings, swapped on reload.
 	frag atomic.Pointer[fragmentConfig]
-	// fragTable reassembles msg1 fragments from senders not yet authenticated, answered remembers the msg1s already
-	// answered, and cookies and cookieLimiter ask senders to validate their address under load or before a big answer.
+	// fragTable reassembles msg1 fragments from senders not yet authenticated, and cookies and cookieLimiter ask
+	// senders to validate their address under load or before a big answer.
 	fragTable     *fragment.Table[fragKey, fragSource]
-	answered      *fragAnswered
 	cookies       *fragCookies
 	cookieLimiter *ratelimit.Limiter
 }
@@ -153,11 +152,11 @@ func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *Light
 	}
 	frag := config.fragment
 	hm.frag.Store(&frag)
-	// A retrying initiator is answered again at most once per retry interval on each path its msg1 arrives by.
+	// A completed msg1 drops the repair fragments trailing its attempt, which arrive within the repair delay, and is
+	// over before the initiator's retry, which comes a retry interval later.
 	tableCfg := fragTableConfig
-	tableCfg.RepeatInterval = config.tryInterval
+	tableCfg.Quiet = config.tryInterval / 2
 	hm.fragTable = fragment.NewTable[fragKey, fragSource](tableCfg)
-	hm.answered = newFragAnswered(hsTimeout(config.retries, config.tryInterval))
 	hm.cookies = newFragCookies(time.Now())
 	// Cookie replies are tiny, but a flood of spoofed fragments must not turn into a flood of replies.
 	hm.cookieLimiter, _ = ratelimit.New(256, time.Millisecond)
@@ -177,7 +176,6 @@ func (hm *HandshakeManager) Run(ctx context.Context) {
 		case now := <-clockSource.C:
 			hm.NextOutboundHandshakeTimerTick(now)
 			hm.fragTable.Expire(now)
-			hm.answered.expire(now)
 		}
 	}
 }
@@ -1168,13 +1166,12 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 
 	now, later := [][]byte{msg}, [][]byte(nil)
 	if hm.shouldFragment(len(msg), in.fragmented) {
-		// A repeat of this msg1 is answered from here on without redoing the handshake.
-		if !cached {
-			hm.answered.add(hostinfo.HandshakePacket[handshakePacketStage0], hostinfo, time.Now())
-		}
 		now, later, err = fragmentResponse(msg, hostinfo, in.budget())
 		if errors.Is(err, errOverBudget) {
 			key, _ := fragKeyFor(via, hostinfo.remoteIndexId)
+			// The initiator resends msg1 with the cookie as soon as it has it, so let that through the quiet period
+			// the msg1 just started; it is answered with this response, cached.
+			hm.fragTable.Reopen(key)
 			hm.sendCookie(via, subtype, hostinfo.remoteIndexId, key, in.received, time.Now())
 			f.l.Debug("Handshake response exceeds the amplification budget, asking the initiator to show its address", logFields...)
 			return

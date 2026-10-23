@@ -105,14 +105,12 @@ Implemented in `handshake/fragment` (`Sender`, `Assembly`, and the capped `Table
 - When K symbols are present the message is decoded and handed to the handshake `Machine` as a
   synthetic `[header | message]`, with the fragmented flag cleared. The Machine never sees
   fragments.
-- A completed msg1 the responder answered is remembered without its symbols, outside the memory
-  and per-source caps, for the idle timeout: which symbol indexes it has seen, and its hash.
-  Fragments still trailing the attempt that completed it are counted and dropped. Once as many
-  new symbols as it has data symbols arrive, which only a retry offers, it is reported as a
-  repeat and the cached response is resent, as long as the tunnel it answered still exists.
-  Without this, the repair fragments trailing a msg1 whose data fragments already completed it
-  open an entry that can never complete, and back to back handshakes from one source run into
-  its quota.
+- Once a msg1 completes, its key goes quiet for half the retry interval: every fragment for it
+  is dropped, outside the memory and per-source caps. That covers the repair fragments trailing
+  the attempt whose data fragments completed it, which would otherwise complete it again or open
+  an entry that can never complete and hold the source's quota. The initiator's retry comes a
+  retry interval later, after the quiet period, and is reassembled like the first attempt; a
+  straggler that comes after it opens an entry the retry completes.
 - If the handshake rejects a decoded message, the entry is discarded and the next attempt
   supplies fresh symbols.
 - msg1 entries, from senders not yet authenticated, live in a table keyed by (source address or
@@ -128,19 +126,19 @@ Implemented in `handshake/fragment` (`Sender`, `Assembly`, and the capped `Table
 ## Retransmission and amplification
 
 - Only timers cause transmission, with one reactive exception: the responder resends its cached
-  msg2 when a copy of msg1 completes again. An initiator sends msg1 to every address it knows and
-  through its relays, the responder reassembles each path separately, and each path's first
-  completion is answered on that path at once. A path that only works one way is then covered by
-  the others in the same attempt. After that a path is answered again at most once per retry
-  interval, and only once K symbols not seen before on it arrive.
-- Duplicate msg1 detection compares the decoded message to the cached one **before** running
-  Noise or certificate verification.
+  msg2 when a copy of msg1 completes again. A reassembled retry is handled as an unfragmented one
+  is: the handshake finds the tunnel the same msg1 already made and resends its cached response,
+  in symbols it has not sent before, on the path the copy came by. An initiator sends msg1 to
+  every address it knows and through its relays, the responder reassembles each path separately,
+  and each path is answered on its own, so a path that only works one way is covered by the
+  others in the same attempt.
 - Before an address is validated, a responder sends at most 3x the bytes it received from it as
   fragments (QUIC's rule). Normal handshakes sit near 1x. A response that would need more, a
   responder whose certificate is several times the initiator's, is held back: the responder
   answers with a cookie reply instead, the initiator resends msg1 as fragments carrying the
-  cookie, which proves its address, and the remembered msg1 is answered in full without redoing
-  the handshake. The cookie reply is the same one a responder under load sends.
+  cookie, which proves its address, and gets the cached response in full. Asking for the cookie
+  ends the msg1's quiet period, so that resend is answered as soon as it arrives. The cookie
+  reply is the same one a responder under load sends.
 - A response that fits one packet goes as one, as before, with no budget beyond that.
 
 ## Denial of service
