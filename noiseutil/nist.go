@@ -12,6 +12,9 @@ import (
 // DHP256 is the NIST P-256 ECDH function
 var DHP256 noise.DHFunc = newNISTCurve("P256", ecdh.P256(), 32)
 
+// DHP384 is the NIST P-384 ECDH function, the classical half of the hybrid curve
+var DHP384 noise.DHFunc = newNISTCurve("P384", ecdh.P384(), 48)
+
 type nistCurve struct {
 	name   string
 	curve  ecdh.Curve
