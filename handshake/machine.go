@@ -63,6 +63,7 @@ type Machine struct {
 	msgs           []msgFlags
 	myVersion      cert.Version
 	subtype        header.MessageSubType
+	hybrid         bool
 	indexAllocated bool
 	remoteCertSet  bool
 	payloadSet     bool
@@ -90,8 +91,13 @@ func NewMachine(
 	if cred == nil {
 		return nil, fmt.Errorf("%w: %v", ErrNoCredential, version)
 	}
+	// Certificates on the hybrid curve go with hybrid patterns and nothing else.
+	hybrid := info.kem != nil
+	if err := checkCurve(hybrid, cred.Cert.Curve()); err != nil {
+		return nil, err
+	}
 
-	hs, err := cred.buildHandshakeState(initiator, info.pattern)
+	hs, err := cred.buildHandshakeState(initiator, info)
 	if err != nil {
 		return nil, fmt.Errorf("build noise state: %w", err)
 	}
@@ -100,6 +106,7 @@ func NewMachine(
 		hs:         hs,
 		subtype:    subtype,
 		msgs:       info.msgs,
+		hybrid:     hybrid,
 		getCred:    getCred,
 		allocIndex: allocIndex,
 		verifier:   verifier,
@@ -121,6 +128,12 @@ func (m *Machine) Subtype() header.MessageSubType {
 	return m.subtype
 }
 
+// PeerCert returns the peer's verified certificate once a message carrying it
+// has been read, which for a three message pattern is before completion.
+func (m *Machine) PeerCert() *cert.CachedCertificate {
+	return m.result.RemoteCert
+}
+
 // MessageIndex returns the noise handshake message index, which equals the
 // wire counter of the most recently sent or received message.
 func (m *Machine) MessageIndex() int {
@@ -137,7 +150,8 @@ func (m *Machine) requireComplete() error {
 	return nil
 }
 
-// myMsgFlags returns the flags for the current outgoing message.
+// myMsgFlags returns the flags for the current outgoing message, which are
+// also the flags of the next incoming message before it is read.
 func (m *Machine) myMsgFlags() msgFlags {
 	idx := m.hs.MessageIndex()
 	if idx < len(m.msgs) {
@@ -220,12 +234,8 @@ func (m *Machine) ProcessPacket(out, packet []byte) ([]byte, *Result, error) {
 		return nil, nil, ErrInitiateNotCalled
 	}
 
-	// The (eKey, dKey) ordering here is correct for IX, where the initiator
-	// completes the handshake by reading the responder's stage-2 message.
-	// noise returns (cs1, cs2) where cs1 is the initiator->responder cipher.
-	// For 3-message patterns where a responder finishes by reading the final
-	// message, this ordering would be wrong; revisit when XX/pqIX lands.
-	msg, eKey, dKey, err := m.hs.ReadMessage(nil, packet[header.Len:])
+	msg, cs1, cs2, err := m.hs.ReadMessage(nil, packet[header.Len:])
+	eKey, dKey := m.cipherStates(cs1, cs2)
 	if err != nil {
 		// Noise ReadMessage failed. The noise library checkpoints and rolls back
 		// on failure, so the Machine is still alive. The caller can retry with
@@ -255,7 +265,7 @@ func (m *Machine) ProcessPacket(out, packet []byte) ([]byte, *Result, error) {
 	}
 
 	// ReadMessage didn't complete, produce the next outgoing message
-	out, dk, ek, err := m.buildResponse(out)
+	out, ek, dk, err := m.buildResponse(out)
 	if err != nil {
 		m.failed = true
 		return nil, nil, err
@@ -273,6 +283,15 @@ func (m *Machine) ProcessPacket(out, packet []byte) ([]byte, *Result, error) {
 	}
 
 	return out, nil, nil
+}
+
+// cipherStates orders the cipher states noise returns, (cs1, cs2) with cs1 the
+// initiator to responder direction, into this side's (eKey, dKey).
+func (m *Machine) cipherStates(cs1, cs2 *noise.CipherState) (*noise.CipherState, *noise.CipherState) {
+	if m.result.Initiator {
+		return cs1, cs2
+	}
+	return cs2, cs1
 }
 
 func (m *Machine) completed(eKey, dKey *noise.CipherState) *Result {
@@ -339,16 +358,27 @@ func (m *Machine) processPayload(msg []byte, flags msgFlags) error {
 	return nil
 }
 
+// checkCurve checks that a certificate is on the hybrid curve exactly when the
+// pattern is hybrid.
+func checkCurve(hybrid bool, curve cert.Curve) error {
+	if hybrid != (curve == cert.Curve_P384_MLKEM1024_MLDSA87) {
+		return fmt.Errorf("%w: %s", ErrCurveMismatch, cert.CurveName(curve))
+	}
+	return nil
+}
+
 func (m *Machine) validateCert(payload Payload) error {
 	cred := m.getCred(m.myVersion)
 	if cred == nil {
 		m.failed = true
 		return fmt.Errorf("%w: %v", ErrNoCredential, m.myVersion)
 	}
+	// PeerStatic builds a fresh composite key on every call for hybrid patterns.
+	peerStatic := m.hs.PeerStatic()
 	rc, err := cert.Recombine(
 		cert.Version(payload.CertVersion),
 		payload.Cert,
-		m.hs.PeerStatic(),
+		peerStatic,
 		cred.Cert.Curve(),
 	)
 	if err != nil {
@@ -356,9 +386,16 @@ func (m *Machine) validateCert(payload Payload) error {
 		return fmt.Errorf("recombine cert: %w", err)
 	}
 
-	if !bytes.Equal(rc.PublicKey(), m.hs.PeerStatic()) {
+	if !bytes.Equal(rc.PublicKey(), peerStatic) {
 		m.failed = true
 		return ErrPublicKeyMismatch
+	}
+
+	// A certificate on the hybrid curve only ever comes with a hybrid pattern,
+	// and a hybrid pattern only ever with one.
+	if err := checkCurve(m.hybrid, rc.Curve()); err != nil {
+		m.failed = true
+		return err
 	}
 
 	// Version negotiation, if the peer sent a different version and we have it, switch
@@ -438,17 +475,11 @@ func (m *Machine) buildResponse(out []byte) ([]byte, *noise.CipherState, *noise.
 
 	// noise.WriteMessage appends the encrypted handshake message to out,
 	// reusing capacity when present.
-	//
-	// The (dKey, eKey) ordering here is correct for IX, where the responder
-	// completes the handshake by writing the stage-2 message. noise returns
-	// (cs1, cs2) where cs1 is the initiator->responder cipher (which is the
-	// responder's decrypt key). For 3-message patterns where an initiator
-	// finishes by writing the final message, this ordering would be wrong;
-	// revisit when XX/pqIX lands.
-	out, dKey, eKey, err := m.hs.WriteMessage(out, hsBytes)
+	out, cs1, cs2, err := m.hs.WriteMessage(out, hsBytes)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("noise WriteMessage: %w", err)
 	}
 
-	return out, dKey, eKey, nil
+	eKey, dKey := m.cipherStates(cs1, cs2)
+	return out, eKey, dKey, nil
 }
