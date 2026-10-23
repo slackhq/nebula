@@ -85,8 +85,11 @@ func patternOf(st header.MessageSubType) header.MessageSubType {
 
 // patternFor is the handshake pattern a node on curve makes.
 func patternFor(curve cert.Curve) header.MessageSubType {
-	if curve == cert.Curve_P384_MLKEM1024_MLDSA87 {
+	switch curve {
+	case cert.Curve_P384_MLKEM1024_MLDSA87:
 		return header.HandshakeIXHybrid
+	case cert.Curve_MLKEM1024_MLDSA87:
+		return header.HandshakeIXPQ
 	}
 	return header.HandshakeIXPSK0
 }
@@ -355,7 +358,7 @@ func (hm *HandshakeManager) reconfirmHybrid(index uint32) {
 	if hostinfo == nil || hostinfo.ConnectionState == nil || hostinfo.ConnectionState.initiator {
 		return
 	}
-	if pc := hostinfo.ConnectionState.peerCert; pc == nil || pc.Certificate.Curve() != cert.Curve_P384_MLKEM1024_MLDSA87 {
+	if pc := hostinfo.ConnectionState.peerCert; pc == nil || !cert.IsPostQuantum(pc.Certificate.Curve()) {
 		return
 	}
 	now := time.Now().UnixNano()

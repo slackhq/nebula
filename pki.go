@@ -285,6 +285,20 @@ func (cs *CertState) getCertificate(v cert.Version) cert.Certificate {
 // (Curve25519 and ChaChaPoly) are rejected with an error. Callers pass
 // fips140.Enforced() for fips140Enforced.
 func newCipherSuite(curve cert.Curve, pkcs11backed bool, cipher string, fips140Enforced bool) (noise.CipherSuite, error) {
+	if curve == cert.Curve_MLKEM1024_MLDSA87 {
+		// The post-quantum curve has no DH function: every secret comes from ML-KEM-1024, which the pattern brings.
+		if pkcs11backed {
+			return nil, errors.New("pki: the post-quantum curve is not supported with PKCS#11 keys")
+		}
+		if cipher == "chachapoly" {
+			if fips140Enforced {
+				return nil, errors.New("pki: use of ChaChaPoly is not allowed in FIPS 140-only mode")
+			}
+			return noise.NewKEMCipherSuite(noise.CipherChaChaPoly, noise.HashSHA512), nil
+		}
+		return noise.NewKEMCipherSuite(noiseutil.CipherAESGCM, noise.HashSHA512), nil
+	}
+
 	var dhFunc noise.DHFunc
 	switch curve {
 	case cert.Curve_CURVE25519:
@@ -391,7 +405,7 @@ func newCertStateFromConfig(c *config.C, cipher string) (*CertState, error) {
 			return nil, err
 		}
 
-		if fips140.Enforced() && crt.Curve() != cert.Curve_P256 && crt.Curve() != cert.Curve_P384_MLKEM1024_MLDSA87 {
+		if fips140.Enforced() && crt.Curve() != cert.Curve_P256 && !cert.IsPostQuantum(crt.Curve()) {
 			return nil, fmt.Errorf("pki: use of %s is not allowed in FIPS 140-only mode", cert.CurveName(crt.Curve()))
 		}
 
