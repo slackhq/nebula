@@ -55,7 +55,7 @@ func newFragTestManager(t *testing.T) (*HandshakeManager, *recordingConn) {
 	c, _, keyPEM, _ := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, ca, caKey, "me", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")}, nil, nil)
 	key, _, curve, err := cert.UnmarshalPrivateKeyFromPEM(keyPEM)
 	require.NoError(t, err)
-	cs, err := newCertState(cert.Version2, nil, c, false, curve, key, "aes")
+	cs, err := newCertState(cert.Version2, nil, c, nil, false, curve, key, "aes")
 	require.NoError(t, err)
 	p := &PKI{}
 	p.cs.Store(cs)

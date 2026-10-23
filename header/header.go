@@ -68,6 +68,14 @@ const (
 	HandshakeIXPSK0 MessageSubType = 0
 	HandshakeXXPSK0 MessageSubType = 1
 
+	// 2 was ix_psk2_mlkem1024, an ephemeral ML-KEM exchange over IX on version 2 certificates that was never released.
+	// Do not reuse it.
+
+	// HandshakeIXHybridMLKEM1024 is the hybrid IX of github.com/DefinedNet/noise: IX with X25519 or P256 and
+	// ML-KEM-1024 side by side, authenticated by version 3 certificates. It takes three messages, each too big for one
+	// packet, so it always travels as fragments.
+	HandshakeIXHybridMLKEM1024 MessageSubType = 3
+
 	// HandshakeFragmented, set on a handshake subtype, marks a message that travels as fragments, see
 	// handshake/fragment. The rest of the subtype names the handshake pattern as it would unfragmented.
 	HandshakeFragmented MessageSubType = 0x80
@@ -102,7 +110,8 @@ var subTypeMap = map[MessageType]*map[MessageSubType]string{
 	Test:        &subTypeTestMap,
 	CloseTunnel: &subTypeNoneMap,
 	Handshake: {
-		HandshakeIXPSK0: "ix_psk0",
+		HandshakeIXPSK0:            "ix_psk0",
+		HandshakeIXHybridMLKEM1024: "ix_hybrid_mlkem1024",
 	},
 	Control: &subTypeNoneMap,
 }
@@ -219,7 +228,8 @@ func IsValidSubType(t MessageType, s MessageSubType) bool {
 	case Message:
 		return s == MessageNone || s == MessageRelay
 	case Handshake:
-		return HandshakePattern(s) == HandshakeIXPSK0
+		p := HandshakePattern(s)
+		return p == HandshakeIXPSK0 || p == HandshakeIXHybridMLKEM1024
 	case Test:
 		return s == TestReply || s == TestRequest
 	case Control, CloseTunnel, RecvError, LightHouse:

@@ -135,6 +135,15 @@ func (hh *HandshakeHostInfo) cachePacket(l *slog.Logger, t header.MessageType, s
 	}
 }
 
+// v2FingerprintAttr logs the fingerprint of a version 3 certificate's v2 form, the one to blocklist to block both
+// forms. It is empty, and so not logged, for any other version.
+func v2FingerprintAttr(cc *cert.CachedCertificate) slog.Attr {
+	if fp := cc.V2Fingerprint(); fp != "" {
+		return slog.String("v2Fingerprint", fp)
+	}
+	return slog.Attr{}
+}
+
 func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *LightHouse, outside udp.Conn, config HandshakeConfig) *HandshakeManager {
 	hm := &HandshakeManager{
 		vpnIps:                    map[netip.Addr]*HandshakeHostInfo{},
@@ -843,6 +852,7 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		"certName", remoteCert.Certificate.Name(),
 		"certVersion", remoteCert.Certificate.Version(),
 		"fingerprint", remoteCert.Fingerprint,
+		v2FingerprintAttr(remoteCert),
 		"issuer", remoteCert.Certificate.Issuer(),
 		"initiatorIndex", result.RemoteIndex,
 		"responderIndex", result.LocalIndex,
@@ -984,6 +994,7 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 				"certName", remoteCert.Certificate.Name(),
 				"certVersion", remoteCert.Certificate.Version(),
 				"fingerprint", remoteCert.Fingerprint,
+				v2FingerprintAttr(remoteCert),
 				"issuer", remoteCert.Certificate.Issuer(),
 				"handshake", m{"stage": uint64(machine.MessageIndex()), "style": header.SubTypeName(header.Handshake, machine.Subtype())},
 			)
@@ -1007,6 +1018,7 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 			"certName", remoteCert.Certificate.Name(),
 			"certVersion", remoteCert.Certificate.Version(),
 			"fingerprint", remoteCert.Fingerprint,
+			v2FingerprintAttr(remoteCert),
 			"issuer", remoteCert.Certificate.Issuer(),
 			"handshake", m{"stage": uint64(machine.MessageIndex()), "style": header.SubTypeName(header.Handshake, machine.Subtype())},
 		)
@@ -1035,6 +1047,7 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		"certName", remoteCert.Certificate.Name(),
 		"certVersion", remoteCert.Certificate.Version(),
 		"fingerprint", remoteCert.Fingerprint,
+		v2FingerprintAttr(remoteCert),
 		"issuer", remoteCert.Certificate.Issuer(),
 		"initiatorIndex", result.LocalIndex,
 		"responderIndex", result.RemoteIndex,
@@ -1100,6 +1113,7 @@ func (hm *HandshakeManager) validatePeerCert(via ViaSender, remoteCert *cert.Cac
 				"certName", remoteCert.Certificate.Name(),
 				"certVersion", remoteCert.Certificate.Version(),
 				"fingerprint", remoteCert.Fingerprint,
+				v2FingerprintAttr(remoteCert),
 				"issuer", remoteCert.Certificate.Issuer(),
 			)
 			return nil, false, false
@@ -1151,6 +1165,7 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 			"certName", peerCert.Certificate.Name(),
 			"certVersion", peerCert.Certificate.Version(),
 			"fingerprint", peerCert.Fingerprint,
+			v2FingerprintAttr(peerCert),
 			"issuer", peerCert.Certificate.Issuer(),
 		)
 	}
@@ -1226,6 +1241,7 @@ func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hos
 			"certName", peerCert.Certificate.Name(),
 			"certVersion", peerCert.Certificate.Version(),
 			"fingerprint", peerCert.Fingerprint,
+			v2FingerprintAttr(peerCert),
 			"issuer", peerCert.Certificate.Issuer(),
 			"oldHandshakeTime", existing.lastHandshakeTime,
 			"newHandshakeTime", hostinfo.lastHandshakeTime,
@@ -1242,6 +1258,7 @@ func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hos
 			"certName", peerCert.Certificate.Name(),
 			"certVersion", peerCert.Certificate.Version(),
 			"fingerprint", peerCert.Fingerprint,
+			v2FingerprintAttr(peerCert),
 			"issuer", peerCert.Certificate.Issuer(),
 			"localIndex", hostinfo.localIndexId,
 			"initiatorIndex", hostinfo.remoteIndexId,
@@ -1257,6 +1274,7 @@ func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hos
 			"certName", peerCert.Certificate.Name(),
 			"certVersion", peerCert.Certificate.Version(),
 			"fingerprint", peerCert.Fingerprint,
+			v2FingerprintAttr(peerCert),
 			"issuer", peerCert.Certificate.Issuer(),
 			"initiatorIndex", hostinfo.remoteIndexId,
 			"responderIndex", hostinfo.localIndexId,

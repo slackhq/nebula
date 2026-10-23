@@ -5,6 +5,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 
 	"golang.org/x/crypto/ed25519"
 )
@@ -64,6 +66,7 @@ func SplitPEM(data []byte, atEOF bool) (advance int, token []byte, err error) {
 const ( //cert banners
 	CertificateBanner   = "NEBULA CERTIFICATE"
 	CertificateV2Banner = "NEBULA CERTIFICATE V2"
+	CertificateV3Banner = "NEBULA CERTIFICATE V3"
 )
 
 const ( //key-agreement-key banners
@@ -72,6 +75,153 @@ const ( //key-agreement-key banners
 	P256PrivateKeyBanner   = "NEBULA P256 PRIVATE KEY"
 	P256PublicKeyBanner    = "NEBULA P256 PUBLIC KEY"
 )
+
+// Version 3 keys are composite: the classical key followed by the post-quantum key of the certificate's PQSuite, a
+// KEM seed or public key for hosts and a signature algorithm's seed or public key for CAs. Their banners name both
+// halves, "NEBULA X25519 MLKEM1024 PRIVATE KEY" or "NEBULA ED25519 MLDSA87 PUBLIC KEY" for example, because the
+// post-quantum algorithm can not be told from the key's size: ML-KEM and ML-DSA seeds are the same size at every
+// strength. The banners name algorithms, not suites, so suites sharing an algorithm share its banners too.
+
+// Classical key sizes, the composite keys of version 3 add the post-quantum key to these.
+const (
+	x25519KeySize          = 32
+	p256PublicKeySize      = 65 // uncompressed
+	p256PrivateKeySize     = 32
+	ed25519PublicKeySize   = 32
+	ed25519PrivateKeySize  = 64
+	ecdsaP256PublicKeySize = 65 // uncompressed
+)
+
+// SplitKey is a host key read from PEM, split into its halves as its banner says.
+type SplitKey struct {
+	Curve Curve
+
+	// Classical is all of a classical key, or the classical half of a composite one.
+	Classical []byte
+
+	// PQ is the post-quantum half of a composite key, nil for a classical one.
+	PQ []byte
+}
+
+// Bytes returns the whole key, classical || post-quantum, as UnmarshalPrivateKeyFromPEM and UnmarshalPublicKeyFromPEM
+// return it.
+func (k SplitKey) Bytes() []byte {
+	return append(bytes.Clone(k.Classical), k.PQ...)
+}
+
+// UnmarshalSplitPrivateKeyFromPEM is UnmarshalPrivateKeyFromPEM, with the key split into its classical and
+// post-quantum halves.
+func UnmarshalSplitPrivateKeyFromPEM(b []byte) (SplitKey, []byte, error) {
+	key, r, curve, err := UnmarshalPrivateKeyFromPEM(b)
+	if err != nil {
+		return SplitKey{}, r, err
+	}
+	// X25519 and P256 private keys are the same size.
+	return splitKey(b, pqPrivateKey, curve, key, x25519KeySize), r, nil
+}
+
+// UnmarshalSplitPublicKeyFromPEM is UnmarshalPublicKeyFromPEM, with the key split into its classical and
+// post-quantum halves.
+func UnmarshalSplitPublicKeyFromPEM(b []byte) (SplitKey, []byte, error) {
+	key, r, curve, err := UnmarshalPublicKeyFromPEM(b)
+	if err != nil {
+		return SplitKey{}, r, err
+	}
+	classical := x25519KeySize
+	if curve == Curve_P256 {
+		classical = p256PublicKeySize
+	}
+	return splitKey(b, pqPublicKey, curve, key, classical), r, nil
+}
+
+// splitKey splits key, which was read from the first PEM block of b, after its first classical bytes when the block's
+// banner is that of a composite key of kind. The unmarshal that read key checked its size for the banner.
+func splitKey(b []byte, kind pqKeyKind, curve Curve, key []byte, classical int) SplitKey {
+	k := SplitKey{Curve: curve, Classical: key}
+	if block, _ := pem.Decode(b); block != nil {
+		if banner, ok := pqKeyBanners[block.Type]; ok && banner.kind == kind {
+			k.Classical, k.PQ = key[:classical], key[classical:]
+		}
+	}
+	return k
+}
+
+// pqKeyKind is what a composite key banner holds.
+type pqKeyKind int
+
+const (
+	pqPrivateKey pqKeyKind = iota
+	pqPublicKey
+	pqSigningPrivateKey
+	pqSigningPublicKey
+	pqEncryptedSigningPrivateKey
+)
+
+// pqKeyBanner is what a composite key banner says about the key under it.
+type pqKeyBanner struct {
+	kind  pqKeyKind
+	curve Curve
+	size  int // of the whole composite key; for an encrypted key, once decrypted
+}
+
+var pqKeyKinds = []pqKeyKind{pqPrivateKey, pqPublicKey, pqSigningPrivateKey, pqSigningPublicKey, pqEncryptedSigningPrivateKey}
+
+// pqKeyBanners maps every composite key banner of every suite to what it holds, see registerPQSuite.
+var pqKeyBanners = map[string]pqKeyBanner{}
+
+// pqBannerName returns the banner for a composite key.
+func pqBannerName(kind pqKeyKind, curve Curve, suite *pqSuite) string {
+	classical := map[Curve]string{Curve_CURVE25519: "X25519", Curve_P256: "P256"}[curve]
+	alg := suite.kem.name
+	if kind != pqPrivateKey && kind != pqPublicKey {
+		classical = map[Curve]string{Curve_CURVE25519: "ED25519", Curve_P256: "ECDSA P256"}[curve]
+		alg = suite.dsa.name
+	}
+	return "NEBULA " + classical + " " + alg + " " + map[pqKeyKind]string{
+		pqPrivateKey:                 "PRIVATE KEY",
+		pqPublicKey:                  "PUBLIC KEY",
+		pqSigningPrivateKey:          "PRIVATE KEY",
+		pqSigningPublicKey:           "PUBLIC KEY",
+		pqEncryptedSigningPrivateKey: "ENCRYPTED PRIVATE KEY",
+	}[kind]
+}
+
+// pqKeySize returns the size of a composite key.
+func pqKeySize(kind pqKeyKind, curve Curve, suite *pqSuite) int {
+	p256 := curve == Curve_P256
+	switch kind {
+	case pqPrivateKey:
+		return x25519KeySize + suite.kem.privateKeySize // a P256 private key is the same size
+	case pqPublicKey:
+		return map[bool]int{false: x25519KeySize, true: p256PublicKeySize}[p256] + suite.kem.publicKeySize
+	case pqSigningPublicKey:
+		return map[bool]int{false: ed25519PublicKeySize, true: ecdsaP256PublicKeySize}[p256] + suite.dsa.publicKeySize
+	default:
+		return map[bool]int{false: ed25519PrivateKeySize, true: p256PrivateKeySize}[p256] + suite.dsa.privateKeySize
+	}
+}
+
+// marshalPQKeyToPEM PEM encodes a composite key of suite, nil for an unknown curve or suite or a key of the wrong size.
+func marshalPQKeyToPEM(kind pqKeyKind, curve Curve, suite PQSuite, b []byte) []byte {
+	p := pqSuites[suite]
+	if p == nil || (curve != Curve_CURVE25519 && curve != Curve_P256) || len(b) != pqKeySize(kind, curve, p) {
+		return nil
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: pqBannerName(kind, curve, p), Bytes: b})
+}
+
+// unmarshalPQKeyBlock checks a PEM block that may hold a composite key of one of kinds. ok is false when the banner
+// is not a composite key banner of those kinds at all.
+func unmarshalPQKeyBlock(k *pem.Block, kinds ...pqKeyKind) (curve Curve, ok bool, err error) {
+	b, found := pqKeyBanners[k.Type]
+	if !found || !slices.Contains(kinds, b.kind) {
+		return 0, false, nil
+	}
+	if b.kind != pqEncryptedSigningPrivateKey && len(k.Bytes) != b.size {
+		return b.curve, true, fmt.Errorf("key was not %d bytes, is invalid %s", b.size, strings.ToLower(strings.TrimPrefix(k.Type, "NEBULA ")))
+	}
+	return b.curve, true, nil
+}
 
 /* including "ECDSA" in the P256 banners is a clue that these keys should be used only for signing */
 const ( //signing key banners
@@ -109,12 +259,20 @@ func unmarshalCertificateBlock(block *pem.Block) (Certificate, error) {
 		return unmarshalCertificateV1(block.Bytes, nil)
 	case CertificateV2Banner:
 		return unmarshalCertificateV2(block.Bytes, nil, Curve_CURVE25519)
+	case CertificateV3Banner:
+		return unmarshalCertificateV3(block.Bytes, nil, Curve_CURVE25519)
 	default:
 		return nil, ErrInvalidPEMCertificateBanner
 	}
 }
 
 func marshalCertPublicKeyToPEM(c Certificate) []byte {
+	if suite := PQSuiteOf(c); suite != PQSuiteUnknown {
+		if c.IsCA() {
+			return MarshalPQSigningPublicKeyToPEM(c.Curve(), suite, c.PublicKey())
+		}
+		return MarshalPQPublicKeyToPEM(c.Curve(), suite, c.PublicKey())
+	}
 	if c.IsCA() {
 		return MarshalSigningPublicKeyToPEM(c.Curve(), c.PublicKey())
 	} else {
@@ -135,6 +293,12 @@ func MarshalPublicKeyToPEM(curve Curve, b []byte) []byte {
 	}
 }
 
+// MarshalPQPublicKeyToPEM returns a PEM representation of a composite host public key of suite, the classical ECDH
+// key followed by the suite's KEM public key, or nil if b is not one.
+func MarshalPQPublicKeyToPEM(curve Curve, suite PQSuite, b []byte) []byte {
+	return marshalPQKeyToPEM(pqPublicKey, curve, suite, b)
+}
+
 // MarshalSigningPublicKeyToPEM returns a PEM representation of a public key used for signing.
 // if your public key came from a certificate, prefer Certificate.PublicKeyPEM() if possible, to avoid mistakes!
 func MarshalSigningPublicKeyToPEM(curve Curve, b []byte) []byte {
@@ -148,6 +312,12 @@ func MarshalSigningPublicKeyToPEM(curve Curve, b []byte) []byte {
 	}
 }
 
+// MarshalPQSigningPublicKeyToPEM returns a PEM representation of a composite CA public key of suite, the classical
+// signing key followed by the public key of the suite's signature algorithm, or nil if b is not one.
+func MarshalPQSigningPublicKeyToPEM(curve Curve, suite PQSuite, b []byte) []byte {
+	return marshalPQKeyToPEM(pqSigningPublicKey, curve, suite, b)
+}
+
 // UnmarshalPublicKeyFromPEM will try to unmarshal the first pem block in a byte array, returning any non
 // consumed data or an error on failure. Only key-agreement (ECDH) public key banners are accepted.
 // Use UnmarshalSigningPublicKeyFromPEM for Ed25519/ECDSA banners.
@@ -155,6 +325,12 @@ func UnmarshalPublicKeyFromPEM(b []byte) ([]byte, []byte, Curve, error) {
 	k, r := pem.Decode(b)
 	if k == nil {
 		return nil, r, 0, fmt.Errorf("input did not contain a valid PEM encoded block")
+	}
+	if curve, ok, err := unmarshalPQKeyBlock(k, pqPublicKey); ok {
+		if err != nil {
+			return nil, r, 0, err
+		}
+		return k.Bytes, r, curve, nil
 	}
 	var expectedLen int
 	var curve Curve
@@ -182,6 +358,12 @@ func UnmarshalSigningPublicKeyFromPEM(b []byte) ([]byte, []byte, Curve, error) {
 	k, r := pem.Decode(b)
 	if k == nil {
 		return nil, r, 0, fmt.Errorf("input did not contain a valid PEM encoded block")
+	}
+	if curve, ok, err := unmarshalPQKeyBlock(k, pqSigningPublicKey); ok {
+		if err != nil {
+			return nil, r, 0, err
+		}
+		return k.Bytes, r, curve, nil
 	}
 	var expectedLen int
 	var curve Curve
@@ -213,6 +395,18 @@ func MarshalPrivateKeyToPEM(curve Curve, b []byte) []byte {
 	}
 }
 
+// MarshalPQPrivateKeyToPEM returns a PEM representation of a composite host private key of suite, the classical ECDH
+// key followed by the seed of the suite's KEM, or nil if b is not one.
+func MarshalPQPrivateKeyToPEM(curve Curve, suite PQSuite, b []byte) []byte {
+	return marshalPQKeyToPEM(pqPrivateKey, curve, suite, b)
+}
+
+// MarshalPQSigningPrivateKeyToPEM returns a PEM representation of a composite CA private key of suite, the classical
+// signing key followed by the seed of the suite's signature algorithm, or nil if b is not one.
+func MarshalPQSigningPrivateKeyToPEM(curve Curve, suite PQSuite, b []byte) []byte {
+	return marshalPQKeyToPEM(pqSigningPrivateKey, curve, suite, b)
+}
+
 func MarshalSigningPrivateKeyToPEM(curve Curve, b []byte) []byte {
 	switch curve {
 	case Curve_CURVE25519:
@@ -230,6 +424,12 @@ func UnmarshalPrivateKeyFromPEM(b []byte) ([]byte, []byte, Curve, error) {
 	k, r := pem.Decode(b)
 	if k == nil {
 		return nil, r, 0, fmt.Errorf("input did not contain a valid PEM encoded block")
+	}
+	if curve, ok, err := unmarshalPQKeyBlock(k, pqPrivateKey); ok {
+		if err != nil {
+			return nil, r, 0, err
+		}
+		return k.Bytes, r, curve, nil
 	}
 	var expectedLen int
 	var curve Curve
@@ -253,6 +453,15 @@ func UnmarshalSigningPrivateKeyFromPEM(b []byte) ([]byte, []byte, Curve, error) 
 	k, r := pem.Decode(b)
 	if k == nil {
 		return nil, r, 0, fmt.Errorf("input did not contain a valid PEM encoded block")
+	}
+	if curve, ok, err := unmarshalPQKeyBlock(k, pqSigningPrivateKey, pqEncryptedSigningPrivateKey); ok {
+		switch {
+		case err != nil:
+			return nil, r, 0, err
+		case pqKeyBanners[k.Type].kind == pqEncryptedSigningPrivateKey:
+			return nil, nil, curve, ErrPrivateKeyEncrypted
+		}
+		return k.Bytes, r, curve, nil
 	}
 	var curve Curve
 	switch k.Type {

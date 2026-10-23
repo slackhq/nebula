@@ -35,15 +35,17 @@ const _ = RejectAfterMessages - RehandshakeAfterMessages
 var sessionEpoch atomic.Uint64
 
 type ConnectionState struct {
-	eKey           noiseutil.CipherState
-	dKey           noiseutil.CipherState
-	myCert         cert.Certificate
-	peerCert       *cert.CachedCertificate
-	initiator      bool
-	messageCounter atomic.Uint64
-	window         *Bits
-	decryptLock    sync.Mutex
-	writeLock      sync.Mutex
+	eKey   noiseutil.CipherState
+	dKey   noiseutil.CipherState
+	myCert cert.Certificate
+	// myCertFingerprint is the fingerprint of myCert, to compare with the current certificate's.
+	myCertFingerprint string
+	peerCert          *cert.CachedCertificate
+	initiator         bool
+	messageCounter    atomic.Uint64
+	window            *Bits
+	decryptLock       sync.Mutex
+	writeLock         sync.Mutex
 	// epoch is this session's sessionEpoch ordinal. Immutable after creation.
 	epoch uint64
 }
@@ -58,14 +60,20 @@ func newConnectionStateFromResult(r *handshake.Result) (*ConnectionState, error)
 		return nil, fmt.Errorf("handshake message index %d exceeds replay window", r.MessageIndex)
 	}
 
+	fp, err := r.MyCert.Fingerprint()
+	if err != nil {
+		return nil, fmt.Errorf("error computing the fingerprint of our certificate: %w", err)
+	}
+
 	ci := &ConnectionState{
-		myCert:    r.MyCert,
-		initiator: r.Initiator,
-		peerCert:  r.RemoteCert,
-		eKey:      noiseutil.NewCipherState(r.EKey, r.Cipher),
-		dKey:      noiseutil.NewCipherState(r.DKey, r.Cipher),
-		window:    NewBits(ReplayWindow),
-		epoch:     sessionEpoch.Add(1),
+		myCert:            r.MyCert,
+		myCertFingerprint: fp,
+		initiator:         r.Initiator,
+		peerCert:          r.RemoteCert,
+		eKey:              noiseutil.NewCipherState(r.EKey, r.Cipher),
+		dKey:              noiseutil.NewCipherState(r.DKey, r.Cipher),
+		window:            NewBits(ReplayWindow),
+		epoch:             sessionEpoch.Add(1),
 	}
 	ci.messageCounter.Add(r.MessageIndex)
 	for i := uint64(1); i <= r.MessageIndex; i++ {
@@ -90,6 +98,14 @@ func (cs *ConnectionState) NextMessageCounter() (uint64, bool) {
 		return c, false
 	}
 	return c, true
+}
+
+// heardFromPeer reports whether anything from the peer has decrypted under these
+// keys, beyond the handshake messages the replay window was seeded with.
+func (cs *ConnectionState) heardFromPeer(handshakeMessages uint64) bool {
+	cs.decryptLock.Lock()
+	defer cs.decryptLock.Unlock()
+	return cs.window.current > handshakeMessages
 }
 
 func (cs *ConnectionState) Curve() cert.Curve {

@@ -139,6 +139,38 @@ func TestIdentityReportsAPeerFromItsCertificate(t *testing.T) {
 	}
 }
 
+// A version 3 peer is reported with the fingerprint of its v2 form too, the one that blocks both forms.
+func TestIdentityReportsAV3PeersV2Fingerprint(t *testing.T) {
+	cert_test.SkipWithoutPQ(t)
+	f, _ := identityFixture(t)
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version3, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	addr := netip.MustParseAddr("10.0.0.5")
+	v3Cert, _, _, _ := cert_test.NewTestCert(cert.Version3, cert.Curve_CURVE25519, ca, caKey, "v3", time.Time{}, time.Time{}, []netip.Prefix{netip.PrefixFrom(addr, 24)}, nil, nil)
+	f.hostMap.Hosts[addr] = &HostInfo{
+		vpnAddrs:        []netip.Addr{addr},
+		ConnectionState: &ConnectionState{peerCert: &cert.CachedCertificate{Certificate: v3Cert}},
+	}
+	fp, err := v3Cert.Fingerprint()
+	require.NoError(t, err)
+	v2Fp, err := cert.V2Form(v3Cert).Fingerprint()
+	require.NoError(t, err)
+
+	r := identity(t, f, addr.String())
+	require.True(t, r.OK, r.Reason)
+	id := r.Value.(hostIdentity)
+	assert.Equal(t, fp, id.Fingerprint)
+	assert.Equal(t, v2Fp, id.V2Fingerprint)
+	assert.Equal(t, 3, id.CertVersion)
+
+	b, err := json.Marshal(r.Payload())
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"v2Fingerprint":"`+v2Fp+`"`)
+
+	out := &bytes.Buffer{}
+	require.NoError(t, commands.Render(&commands.Command{Name: commands.Identity, Text: textIdentityValue}, r, commands.FormatText, out))
+	assert.Contains(t, out.String(), "fingerprint: "+fp+"\nv2 fingerprint: "+v2Fp+"\nissuer: ")
+}
+
 // TestIdentityRefusals: the ways a lookup fails are told apart, because a program
 // deciding whether to let a connection in treats them differently.
 func TestIdentityRefusals(t *testing.T) {

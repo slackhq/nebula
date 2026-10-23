@@ -4,6 +4,7 @@ import (
 	"crypto/fips140"
 	"fmt"
 	"net/netip"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -259,4 +260,131 @@ func TestLoadCAPoolBlocklist(t *testing.T) {
 	assert.True(t, res.Failed)
 	assert.True(t, p.GetCAPool().IsBlocklisted(fp))
 	assert.True(t, p.GetCAPool().IsBlocklisted(otherFp))
+}
+
+func TestNewCertStateFromConfig_V3(t *testing.T) {
+	cert_test.SkipWithoutPQ(t)
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version3, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	host, _, keyPEM, certPEM := cert_test.NewTestCert(cert.Version3, cert.Curve_CURVE25519, ca, caKey, "host", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.1/16")}, nil, nil)
+	v2PEM, err := cert.V2Form(host).MarshalPEM()
+	require.NoError(t, err)
+	key, _, _, err := cert.UnmarshalPrivateKeyFromPEM(keyPEM)
+	require.NoError(t, err)
+	classicalPEM := cert.MarshalPrivateKeyToPEM(cert.Curve_CURVE25519, key[:len(key)-cert.MLKEM1024PrivateKeySize])
+
+	load := func(certPEM, keyPEM []byte) (*CertState, error) {
+		c := config.NewC(test.NewLogger())
+		c.Settings["pki"] = map[string]any{"cert": string(certPEM), "key": string(keyPEM)}
+		return newCertStateFromConfig(c, "aes")
+	}
+
+	cs, err := load(certPEM, keyPEM)
+	require.NoError(t, err)
+	assert.Equal(t, host, cs.GetCredential(cert.Version3).Cert)
+	assert.Equal(t, cert.V2Form(host), cs.GetCredential(cert.Version2).Cert, "the v2 form comes with it")
+	assert.Equal(t, cert.Version2, cs.DefaultVersion(), "classical handshakes still start with v2")
+
+	// Listing the v2 form as well is fine.
+	_, err = load(append(append([]byte{}, certPEM...), v2PEM...), keyPEM)
+	require.NoError(t, err)
+
+	// Any other v2 certificate is not.
+	_, _, _, otherPEM := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, cert.V2Form(ca), caKey[:len(caKey)-cert.MLDSA87PrivateKeySize], "other", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.1/16")}, nil, nil)
+	_, err = load(append(append([]byte{}, certPEM...), otherPEM...), keyPEM)
+	require.ErrorContains(t, err, "not the v2 form of the v3 certificate")
+
+	// A v3 certificate needs the composite key.
+	_, err = load(certPEM, classicalPEM)
+	require.ErrorContains(t, err, "not a pair")
+
+	// A composite key also serves a lone v2 certificate.
+	cs, err = load(v2PEM, keyPEM)
+	require.NoError(t, err)
+	assert.Nil(t, cs.GetCredential(cert.Version3))
+	assert.NotNil(t, cs.GetCredential(cert.Version2))
+}
+
+// A v3 certificate without a v2 form stands alone: the node speaks hybrid handshakes only, takes its networks from it,
+// and initiates as version 3.
+func TestNewCertStateFromConfig_V3WithoutV2Form(t *testing.T) {
+	cert_test.SkipWithoutPQ(t)
+	ca, _, caKey, caPEM := cert_test.NewTestV3CaCertWithoutV2Form(cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	network := netip.MustParsePrefix("10.1.0.1/16")
+	host, _, keyPEM, certPEM := cert_test.NewTestCert(cert.Version3, cert.Curve_CURVE25519, ca, caKey, "host", time.Time{}, time.Time{}, []netip.Prefix{network}, nil, nil)
+	require.Nil(t, cert.V2Form(host))
+
+	load := func(extra string, certPEMs ...[]byte) *config.C {
+		c := config.NewC(test.NewLogger())
+		var all []byte
+		for _, b := range certPEMs {
+			all = append(all, b...)
+		}
+		require.NoError(t, c.LoadString(fmt.Sprintf("pki:\n  ca: %q\n  cert: %q\n  key: %q\n%s", caPEM, all, keyPEM, extra)))
+		return c
+	}
+
+	cs, err := newCertStateFromConfig(load("", certPEM), "aes")
+	require.NoError(t, err)
+	assert.Equal(t, cert.Version3, cs.DefaultVersion())
+	assert.Equal(t, host, cs.GetDefaultCertificate())
+	assert.Equal(t, host, cs.ownCertificate())
+	assert.Nil(t, cs.GetCredential(cert.Version2))
+	assert.Nil(t, cs.GetCredential(cert.Version1))
+	assert.NotNil(t, cs.GetCredential(cert.Version3))
+	assert.False(t, cs.classicalCapable())
+	assert.Equal(t, []netip.Prefix{network}, cs.myVpnNetworks)
+
+	// A v1 or v2 certificate can not be listed with it, and only version 3 initiates.
+	v2CA, _, v2CAKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	_, _, _, v2PEM := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, v2CA, v2CAKey, "host", time.Time{}, time.Time{}, []netip.Prefix{network}, nil, nil)
+	_, err = newCertStateFromConfig(load("", certPEM, v2PEM), "aes")
+	require.ErrorContains(t, err, "has no v2 form")
+	_, err = newCertStateFromConfig(load("  initiating_version: 2\n", certPEM), "aes")
+	require.ErrorContains(t, err, "without a v2 certificate")
+	_, err = newCertStateFromConfig(load("  initiating_version: 3\n", certPEM), "aes")
+	require.NoError(t, err)
+
+	// Reloading onto a v3 certificate without a v2 form compares it with the certificate it replaces.
+	interopCA, _, interopKey, interopCAPEM := cert_test.NewTestCaCert(cert.Version3, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	_, _, iKeyPEM, iCertPEM := cert_test.NewTestCert(cert.Version3, cert.Curve_CURVE25519, interopCA, interopKey, "host", time.Time{}, time.Time{}, []netip.Prefix{network}, nil, nil)
+	_, _, pKeyPEM, pCertPEM := cert_test.NewTestCert(cert.Version3, cert.Curve_CURVE25519, ca, caKey, "host", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.2.0.1/16")}, nil, nil)
+	pkiConfig := func(certPEM, keyPEM []byte) string {
+		return fmt.Sprintf("pki:\n  ca: %q\n  cert: %q\n  key: %q\n", string(caPEM)+string(interopCAPEM), certPEM, keyPEM)
+	}
+	c := config.NewC(test.NewLogger())
+	require.NoError(t, c.LoadString(pkiConfig(iCertPEM, iKeyPEM)))
+	p, err := NewPKIFromConfig(test.NewLogger(), c)
+	require.NoError(t, err)
+	res := c.ReloadConfigString(pkiConfig(certPEM, keyPEM))
+	require.NoError(t, res.Err)
+	assert.False(t, res.Failed)
+	assert.False(t, res.RestartRequired, "same networks")
+	assert.False(t, p.getCertState().classicalCapable())
+	res = c.ReloadConfigString(pkiConfig(pCertPEM, pKeyPEM))
+	require.NoError(t, res.Err)
+	assert.True(t, res.RestartRequired, "other networks")
+	assert.Equal(t, []netip.Prefix{network}, p.getCertState().myVpnNetworks)
+}
+
+// A build without ML-DSA, the FIPS 140-3 Go Cryptographic Module v1.0.0, leaves version 3 CAs out of the pool with a
+// warning, so a bundle shared with v3 nodes keeps working; a bundle of nothing else leaves no CA. It can not make a v3
+// CA, so the one here is testdata/v3-ca.crt, made by nebula-cert ca -version 3.
+func TestLoadCAPoolWithoutPQ(t *testing.T) {
+	if cert.DefaultPQSuite.Available() == nil {
+		t.Skip("this build runs ML-DSA, see cert.TestCAPool_PQUnavailable")
+	}
+	v3PEM, err := os.ReadFile("testdata/v3-ca.crt")
+	require.NoError(t, err)
+	_, _, _, v2PEM := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+
+	load := func(caPEM []byte) (*cert.CAPool, error) {
+		c := config.NewC(test.NewLogger())
+		require.NoError(t, c.LoadString(fmt.Sprintf("pki:\n  ca: %q\n", caPEM)))
+		return loadCAPoolFromConfig(test.NewLogger(), c)
+	}
+	pool, err := load(append(append([]byte{}, v3PEM...), v2PEM...))
+	require.NoError(t, err)
+	assert.Len(t, pool.CAs, 1)
+	_, err = load(v3PEM)
+	require.ErrorContains(t, err, "no valid CA certificates present")
 }

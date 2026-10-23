@@ -9,6 +9,7 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/overlay/overlaytest"
 	"github.com/slackhq/nebula/test"
@@ -200,6 +201,68 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	assert.False(t, (hostinfo.state.Load()&stateIn != 0))
 	assert.Contains(t, nc.hostMap.Indexes, hostinfo.localIndexId)
 	assert.Contains(t, nc.hostMap.Hosts, hostinfo.vpnAddrs[0])
+}
+
+// Re-extending a v3 certificate with a new post-quantum key keeps its v2 form, and so its classical signature, but it
+// is a new certificate and tunnels built on the old one must move to it.
+func Test_NewConnectionManager_RehandshakeOnNewV3Cert(t *testing.T) {
+	cert_test.SkipWithoutPQ(t)
+	l := test.NewLogger()
+	vpnIp := netip.MustParseAddr("172.1.1.2")
+	hostMap := newHostMap(l)
+	hostMap.preferredRanges.Store(&[]netip.Prefix{netip.MustParsePrefix("10.1.1.1/24")})
+
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version3, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	old, _, _, _ := cert_test.NewTestCert(cert.Version3, cert.Curve_CURVE25519, ca, caKey, "me", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("172.1.1.1/24")}, nil, nil)
+	suite := cert.PQSuiteOf(ca)
+	pqPub, _, err := suite.GenerateKey(false)
+	require.NoError(t, err)
+	classicalCAKey, pqCAKey, err := suite.SplitPrivateKey(true, caKey)
+	require.NoError(t, err)
+	sign, err := cert.SignClassical(cert.Curve_CURVE25519, classicalCAKey)
+	require.NoError(t, err)
+	signPQ, err := cert.SignPQ(suite, cert.Curve_CURVE25519, pqCAKey)
+	require.NoError(t, err)
+	current, err := cert.ExtendToV3(cert.V2Form(old), suite, pqPub, ca, sign, signPQ)
+	require.NoError(t, err)
+	require.Equal(t, cert.V2Form(old).Signature(), cert.V2Form(current).Signature())
+
+	oldFp, err := old.Fingerprint()
+	require.NoError(t, err)
+	currentFp, err := current.Fingerprint()
+	require.NoError(t, err)
+
+	cs := &CertState{
+		initiatingVersion: cert.Version2,
+		v2Cert:            cert.V2Form(current),
+		v3Cert:            current,
+		fingerprints:      map[cert.Version]string{cert.Version3: currentFp},
+	}
+	lh := newTestLighthouse()
+	ifce := &Interface{
+		hostMap:          hostMap,
+		inside:           &overlaytest.NoopTun{},
+		outside:          &udp.NoopConn{},
+		firewall:         &Firewall{},
+		lightHouse:       lh,
+		pki:              &PKI{},
+		myVpnAddrs:       []netip.Addr{netip.MustParseAddr("172.1.1.1")},
+		handshakeManager: NewHandshakeManager(l, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
+		l:                l,
+	}
+	ifce.pki.cs.Store(cs)
+
+	conf := config.NewC(test.NewLogger())
+	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, NewPunchyFromConfig(test.NewLogger(), conf, nil))
+	nc.intf = ifce
+
+	hostinfo := &HostInfo{vpnAddrs: []netip.Addr{vpnIp}, localIndexId: 1099, remoteIndexId: 9901}
+	hostinfo.ConnectionState = &ConnectionState{myCert: old, myCertFingerprint: oldFp}
+	nc.hostMap.unlockedAddHostInfo(hostinfo, ifce)
+
+	assert.False(t, nc.shouldSwapPrimary(hostinfo), "a tunnel on the old certificate is not swapped to primary")
+	nc.tryRehandshake(hostinfo)
+	assert.NotNil(t, ifce.handshakeManager.QueryVpnAddr(vpnIp), "a tunnel on the old certificate rehandshakes")
 }
 
 func Test_NewConnectionManager_CounterLimits(t *testing.T) {
@@ -523,8 +586,8 @@ func (d *dummyCert) MarshalPublicKeyPEM() []byte {
 	return cert.MarshalPublicKeyToPEM(d.curve, d.publicKey)
 }
 
-func (d *dummyCert) Signature() []byte {
-	return d.signature
+func (d *dummyCert) Signature() cert.Signatures {
+	return cert.Signatures{Classical: d.signature}
 }
 
 func (d *dummyCert) UnsafeNetworks() []netip.Prefix {
