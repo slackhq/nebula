@@ -228,7 +228,9 @@ func ownCertificate(cs *CertState) cert.Certificate {
 // networks, when the address is unknown, when the tunnel is still pending and when it
 // is mid teardown. A peer's comes with the fingerprint nebula computed when it verified
 // the certificate; our own comes with "", since none is kept for it. identity goes
-// through it.
+// through it. The lighthouse's DNS TXT lookup goes through the two halves
+// without the networks limit, since a TXT record describes a certificate rather than
+// vouching for a sender, and keeps answering with the certificate handshakes start with.
 func findCertificateForVpnAddr(cs *CertState, hostMap *HostMap, ip netip.Addr) (crt cert.Certificate, fingerprint string) {
 	if ownsVpnAddr(cs, ip) {
 		return ownCertificate(cs), ""
