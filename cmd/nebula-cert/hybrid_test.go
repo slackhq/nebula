@@ -80,7 +80,7 @@ func Test_hybridCurve(t *testing.T) {
 	require.EqualError(t, signCert([]string{"-ca-crt", p("ca.crt"), "-ca-key", p("ca.key"), "-name", "x", "-networks", "10.1.0.3/16", "-in-pub", p("x.pub"), "-out-crt", p("x.crt")}, ob, eb, nopw), "curve of in-pub does not match ca")
 
 	// The hybrid curve is v2 only.
-	assertHelpError(t, signCert([]string{"-version", "1", "-ca-crt", p("ca.crt"), "-ca-key", p("ca.key"), "-name", "v1", "-networks", "10.1.0.4/16", "-out-crt", p("v1.crt"), "-out-key", p("v1.key")}, ob, eb, nopw), "a "+hybridCurveFlag+" CA signs version 2 certificates only")
+	assertHelpError(t, signCert([]string{"-version", "1", "-ca-crt", p("ca.crt"), "-ca-key", p("ca.key"), "-name", "v1", "-networks", "10.1.0.4/16", "-out-crt", p("v1.crt"), "-out-key", p("v1.key")}, ob, eb, nopw), "a P384_MLKEM1024_MLDSA87 CA signs version 2 certificates only")
 	assertHelpError(t, ca([]string{"-version", "1", "-name", "v1", "-curve", hybridCurveFlag, "-out-crt", p("v1ca.crt"), "-out-key", p("v1ca.key")}, ob, eb, nopw), "-curve "+hybridCurveFlag+" needs -version 2")
 }
 
@@ -105,4 +105,40 @@ func Test_hybridCurveEncrypted(t *testing.T) {
 	host, _, err := cert.UnmarshalCertificateFromPEM(rb)
 	require.NoError(t, err)
 	assert.Equal(t, cert.Curve_P384_MLKEM1024_MLDSA87, host.Curve())
+}
+
+// A post-quantum CA signs post-quantum host certificates, made here or from a keygen public key.
+func Test_pureCurve(t *testing.T) {
+	skipWithoutHybrid(t)
+	dir := t.TempDir()
+	p := func(name string) string { return filepath.Join(dir, name) }
+	ob, eb := &bytes.Buffer{}, &bytes.Buffer{}
+	nopw := &StubPasswordReader{}
+
+	require.NoError(t, ca([]string{"-name", "pq ca", "-curve", pureCurveFlag, "-duration", "1h", "-out-crt", p("ca.crt"), "-out-key", p("ca.key")}, ob, eb, nopw))
+	rb, err := os.ReadFile(p("ca.crt"))
+	require.NoError(t, err)
+	caCrt, _, err := cert.UnmarshalCertificateFromPEM(rb)
+	require.NoError(t, err)
+	assert.Equal(t, cert.Curve_MLKEM1024_MLDSA87, caCrt.Curve())
+	pool := cert.NewCAPool()
+	require.NoError(t, pool.AddCA(caCrt))
+
+	require.NoError(t, signCert([]string{"-ca-crt", p("ca.crt"), "-ca-key", p("ca.key"), "-name", "host", "-networks", "10.1.0.1/16", "-out-crt", p("host.crt"), "-out-key", p("host.key")}, ob, eb, nopw))
+	require.NoError(t, keygen([]string{"-curve", pureCurveFlag, "-out-key", p("kg.key"), "-out-pub", p("kg.pub")}, ob, eb))
+	require.NoError(t, signCert([]string{"-ca-crt", p("ca.crt"), "-ca-key", p("ca.key"), "-name", "kg", "-networks", "10.1.0.2/16", "-in-pub", p("kg.pub"), "-out-crt", p("kg.crt")}, ob, eb, nopw))
+	for _, name := range []string{"host", "kg"} {
+		rb, err := os.ReadFile(p(name + ".crt"))
+		require.NoError(t, err)
+		c, _, err := cert.UnmarshalCertificateFromPEM(rb)
+		require.NoError(t, err)
+		assert.Equal(t, cert.Curve_MLKEM1024_MLDSA87, c.Curve())
+		_, err = pool.VerifyCertificate(time.Now(), c)
+		require.NoError(t, err)
+		rb, err = os.ReadFile(p(name + ".key"))
+		require.NoError(t, err)
+		key, _, curve, err := cert.UnmarshalPrivateKeyFromPEM(rb)
+		require.NoError(t, err)
+		require.NoError(t, c.VerifyPrivateKey(curve, key))
+	}
 }

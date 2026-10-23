@@ -196,8 +196,8 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 	if version == 0 {
 		version = caCert.Version()
 	}
-	if curve == cert.Curve_P384_MLKEM1024_MLDSA87 && version != cert.Version2 {
-		return newHelpErrorf("a %s CA signs version 2 certificates only", hybridCurveFlag)
+	if cert.IsPostQuantum(curve) && version != cert.Version2 {
+		return newHelpErrorf("a %s CA signs version 2 certificates only", cert.CurveName(curve))
 	}
 
 	// if no duration is given, expire one second before the root expires
@@ -436,6 +436,12 @@ func newKeypair(curve cert.Curve) ([]byte, []byte) {
 		return p256Keypair()
 	case cert.Curve_P384_MLKEM1024_MLDSA87:
 		pub, priv, err := cert.GenerateHybridKeypair()
+		if err != nil {
+			panic(err)
+		}
+		return pub, priv
+	case cert.Curve_MLKEM1024_MLDSA87:
+		pub, priv, err := cert.GeneratePureKeypair()
 		if err != nil {
 			panic(err)
 		}

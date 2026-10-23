@@ -194,10 +194,10 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 	// don't yet support) are dropped here rather than silently routed through
 	// the IX path. Add a case when introducing a new pattern.
 	switch h.Subtype {
-	case header.HandshakeIXPSK0, header.HandshakeIXPSK0Fragmented, header.HandshakeIXHybridFragmented:
+	case header.HandshakeIXPSK0, header.HandshakeIXPSK0Fragmented, header.HandshakeIXHybridFragmented, header.HandshakeIXPQFragmented:
 		// supported
-	case header.HandshakeIXHybrid:
-		hm.l.Debug("dropping hybrid handshake that is not fragmented", "from", via)
+	case header.HandshakeIXHybrid, header.HandshakeIXPQ:
+		hm.l.Debug("dropping post-quantum handshake that is not fragmented", "from", via)
 		return
 	default:
 		hm.l.Debug("dropping handshake with unsupported subtype",
@@ -214,7 +214,7 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 	}
 
 	if pattern, fragmented := header.FragmentedPattern(h.Subtype); fragmented {
-		if hm.fragConfig().mode == fragmentNever && !handshake.IsHybrid(pattern) {
+		if hm.fragConfig().mode == fragmentNever && !handshake.IsPostQuantum(pattern) {
 			hm.l.Debug("dropping fragmented handshake, handshakes.fragment is never", "from", via)
 			return
 		}
@@ -793,7 +793,7 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 
 	// A hybrid responder has to wait for msg3, so its index is registered right away for msg3 to find.
 	var pending *HandshakeHostInfo
-	if handshake.IsHybrid(subtype) {
+	if handshake.IsPostQuantum(subtype) {
 		if hm.resendPendingHybrid(via, packet, in) {
 			return
 		}

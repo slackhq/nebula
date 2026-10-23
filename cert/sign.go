@@ -61,6 +61,12 @@ func (t *TBSCertificate) Sign(signer Certificate, curve Curve, key []byte) (Cert
 			return nil, err
 		}
 		return t.SignWith(signer, curve, sp)
+	case Curve_MLKEM1024_MLDSA87:
+		sp, err := pureSigner(key)
+		if err != nil {
+			return nil, err
+		}
+		return t.SignWith(signer, curve, sp)
 	case Curve_P256:
 		pk, err := ecdsa.ParseRawPrivateKey(elliptic.P256(), key)
 		if err != nil {

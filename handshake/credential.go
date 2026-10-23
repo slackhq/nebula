@@ -26,7 +26,8 @@ type Credential struct {
 // appropriate DH function, cipher, and hash.
 //
 // On the hybrid curve privateKey is the host key, P-384 scalar || ML-KEM-1024
-// seed, matching Cert.PublicKey().
+// seed, matching Cert.PublicKey(). On the post-quantum curve it is the
+// ML-KEM-1024 seed alone, and there is no DH key.
 func NewCredential(
 	c cert.Certificate,
 	hsBytes []byte,
@@ -47,11 +48,16 @@ func NewCredential(
 		// Expand the static KEM key once rather than in every handshake.
 		hc.kemDK, _ = mlkem.NewDecapsulationKey1024(hc.kemKey.Private)
 	}
+	if c.Curve() == cert.Curve_MLKEM1024_MLDSA87 {
+		hc.kemKey = noise.KEMKey{Private: privateKey, Public: c.PublicKey()}
+		hc.privateKey, hc.publicKey = nil, nil
+		hc.kemDK, _ = mlkem.NewDecapsulationKey1024(privateKey)
+	}
 	return hc
 }
 
 // buildHandshakeState creates a noise.HandshakeState from this credential. A
-// hybrid pattern also gets its KEM and the static KEM key.
+// post-quantum pattern also gets its KEM and the static KEM key.
 func (hc *Credential) buildHandshakeState(initiator bool, info subtypeInfo) (*noise.HandshakeState, error) {
 	cfg := noise.Config{
 		CipherSuite:   hc.cipherSuite,

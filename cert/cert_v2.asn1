@@ -11,7 +11,12 @@ Curve ::= ENUMERATED {
     -- publicKey is the ML-DSA-87 key (2592) || uncompressed point (97), and signature is
     -- the ML-DSA-87 signature (4627) || DER ECDSA signature, which must be low-s.
     -- The fingerprint, and so the issuer, is SHA-512 rather than SHA-256.
-    p384-mlkem1024-mldsa87 (2)
+    p384-mlkem1024-mldsa87 (2),
+    -- Hosts: ML-KEM-1024, publicKey is the encapsulation key (1568).
+    -- CAs: ML-DSA-87, publicKey is the ML-DSA-87 key (2592), and signature is one ML-DSA-87
+    -- signature (4627) with the context "nebula certificate".
+    -- The fingerprint, and so the issuer, is SHA-512 rather than SHA-256.
+    mlkem1024-mldsa87 (3)
 }
 
 -- The maximum size of a certificate must not exceed 65536 bytes
