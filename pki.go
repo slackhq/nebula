@@ -3,6 +3,7 @@ package nebula
 import (
 	"crypto/fips140"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -598,6 +599,13 @@ func loadCAPoolFromConfig(l *slog.Logger, c *config.C) (*cert.CAPool, error) {
 	defer caReader.Close()
 
 	caPool, err := cert.NewCAPoolFromPEMReader(caReader)
+	if errors.Is(err, cert.ErrPQUnavailable) {
+		// A bundle shared with hybrid nodes stays usable here, without its hybrid CAs.
+		l.Warn("Leaving hybrid CA certificates out of the CA pool, this build can not verify them", "error", err)
+		if len(caPool.CAs) == 0 {
+			return nil, errors.New("no valid CA certificates present")
+		}
+	}
 	if errors.Is(err, cert.ErrExpired) {
 		var expired int
 		for _, crt := range caPool.CAs {
@@ -611,7 +619,7 @@ func loadCAPoolFromConfig(l *slog.Logger, c *config.C) (*cert.CAPool, error) {
 			return nil, errors.New("no valid CA certificates present")
 		}
 
-	} else if err != nil {
+	} else if err != nil && !errors.Is(err, cert.ErrPQUnavailable) {
 		return nil, fmt.Errorf("error while adding CA certificate to CA trust store: %s", err)
 	}
 
@@ -621,7 +629,7 @@ func loadCAPoolFromConfig(l *slog.Logger, c *config.C) (*cert.CAPool, error) {
 		for i, raw := range bl {
 			// Fingerprints are compared as lowercase hex strings, a malformed entry would silently block nothing
 			fp := strings.ToLower(strings.TrimSpace(raw))
-			if b, err := hex.DecodeString(fp); err != nil || len(b) != sha256.Size {
+			if b, err := hex.DecodeString(fp); err != nil || (len(b) != sha256.Size && len(b) != sha512.Size) {
 				bad = append(bad, fmt.Sprintf("entry %d %q", i+1, raw))
 				continue
 			}
