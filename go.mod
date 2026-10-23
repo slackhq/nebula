@@ -49,4 +49,4 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 )
 
-replace github.com/DefinedNet/noise => /home/jack/work/git/DefinedNet-noise
+replace github.com/DefinedNet/noise => /home/jack/work/git/DefinedNet-noise-kemonly
