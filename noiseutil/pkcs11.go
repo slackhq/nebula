@@ -3,6 +3,7 @@ package noiseutil
 import (
 	"crypto/ecdh"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -39,15 +40,27 @@ var (
 	p11cache = map[string]*p11Client{}
 )
 
-func getP11Client(uri string) *p11Client {
-	p11mu.Lock()
-	defer p11mu.Unlock()
-	c := p11cache[uri]
-	if c == nil {
-		c = &p11Client{}
-		p11cache[uri] = c
+func getP11Client(uri string) (*p11Client, bool) {
+	url, err := url.Parse(uri)
+	cache := false
+	if url != nil && err == nil {
+		query := url.Query()
+		cache = query.Has("cache-sessions")
 	}
-	return c
+
+	var c *p11Client = nil
+	if cache {
+		p11mu.Lock()
+		defer p11mu.Unlock()
+		c := p11cache[uri]
+		if c == nil {
+			c = &p11Client{}
+			p11cache[uri] = c
+		}
+	} else {
+		c = &p11Client{}
+	}
+	return c, cache
 }
 
 func (c nistP11Curve) DH(privkey, pubkey []byte) ([]byte, error) {
@@ -63,9 +76,12 @@ func (c nistP11Curve) DH(privkey, pubkey []byte) ([]byte, error) {
 		return nil, fmt.Errorf("unable to unmarshal pubkey: %w", err)
 	}
 
-	pc := getP11Client(pkStr)
-	pc.mu.Lock()
-	defer pc.mu.Unlock()
+	pc, cache := getP11Client(pkStr)
+
+	if cache {
+		pc.mu.Lock()
+		defer pc.mu.Unlock()
+	}
 
 	if pc.client == nil {
 		pc.client, err = pkclient.FromUrl(pkStr)
@@ -75,12 +91,11 @@ func (c nistP11Curve) DH(privkey, pubkey []byte) ([]byte, error) {
 	}
 
 	out, err := pc.client.DeriveNoise(ecdhPubKey.Bytes())
-	if err != nil {
+	if err != nil || !cache {
 		// The session may be stale (token reset / re-init). Drop it so the
 		// next handshake re-opens a fresh client.
 		_ = pc.client.Close()
 		pc.client = nil
-		return nil, err
 	}
-	return out, nil
+	return out, err
 }
