@@ -131,7 +131,7 @@ func TestCertificate_SignP256_AlwaysNormalized(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, c)
 		assert.True(t, c.CheckSignature(pub))
-		normie, err := p256.IsNormalized(c.Signature())
+		normie, err := p256.IsNormalized(c.Signature().Classical)
 		require.NoError(t, err)
 		assert.True(t, normie)
 	}

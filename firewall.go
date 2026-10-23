@@ -197,11 +197,7 @@ func NewFirewall(l *slog.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.Dur
 }
 
 func NewFirewallFromConfig(l *slog.Logger, cs *CertState, c *config.C) (*Firewall, error) {
-	certificate := cs.getCertificate(cert.Version2)
-	if certificate == nil {
-		certificate = cs.getCertificate(cert.Version1)
-	}
-
+	certificate := cs.ownCertificate()
 	if certificate == nil {
 		panic("No certificate available to reconfigure the firewall")
 	}
@@ -773,6 +769,14 @@ func (fc *FirewallCA) match(p firewall.Packet, c *cert.CachedCertificate, caPool
 
 	if t, ok := fc.CAShas[c.Certificate.Issuer()]; ok {
 		if t.match(p, c) {
+			return true
+		}
+	}
+
+	// A version 3 certificate names its v3 CA, matched above. A rule may also use the
+	// fingerprint of the CA's v2 form, which the certificate's own v2 form names.
+	if v2 := cert.V2Form(c.Certificate); v2 != nil {
+		if t, ok := fc.CAShas[v2.Issuer()]; ok && t.match(p, c) {
 			return true
 		}
 	}

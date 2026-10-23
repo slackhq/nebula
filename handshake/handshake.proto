@@ -26,4 +26,7 @@ message NebulaHandshakeDetails {
   uint32 CertVersion = 8;
   // reserved for WIP multiport
   reserved 6, 7;
+  // 9 carried an ephemeral ML-KEM key in ix_psk2_mlkem1024, a handshake that
+  // was never released
+  reserved 9;
 }

@@ -61,6 +61,8 @@ func Test_caHelp(t *testing.T) {
 			"    \tRequired: name of the certificate authority\n"+
 			"  -networks string\n"+
 			"    \tOptional: comma separated list of ip address and network in CIDR notation. This will limit which ip addresses and networks subordinate certs can use in networks\n"+
+			"  -no-v2-form\n"+
+			"    \tOptional: make a version 3 CA without a v2 form. It then signs only version 3 certificates without one, for networks where every node has a version 3 certificate\n"+
 			"  -out-crt string\n"+
 			"    \tOptional: path to write the certificate to (default \"ca.crt\")\n"+
 			"  -out-key string\n"+
@@ -68,12 +70,14 @@ func Test_caHelp(t *testing.T) {
 			"  -out-qr string\n"+
 			"    \tOptional: output a qr code image (png) of the certificate\n"+
 			optionalPkcs11String("  -pkcs11 string\n    \tOptional: PKCS#11 URI to an existing private key\n")+
+			"  -pq-suite string\n"+
+			"    \tOptional: post-quantum suite of a version 3 CA, which the certificates it signs share (MLKEM1024_MLDSA87) (default \"MLKEM1024_MLDSA87\")\n"+
 			"  -subnets string\n"+
 			"    \tDeprecated, see -unsafe-networks\n"+
 			"  -unsafe-networks string\n"+
 			"    \tOptional: comma separated list of ip address and network in CIDR notation. This will limit which ip addresses and networks subordinate certs can use in unsafe networks\n"+
 			"  -version uint\n"+
-			"    \tOptional: version of the certificate format to use (default 2)\n",
+			"    \tOptional: version of the certificate format to use. Version 3 adds a post-quantum key, for post-quantum certificates (default 2)\n",
 		ob.String(),
 	)
 }

@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"io"
 	"net/netip"
+	"testing"
 	"time"
 
 	"golang.org/x/crypto/curve25519"
@@ -39,6 +40,10 @@ func NewTestCaCert(version Version, curve Curve, before, after time.Time, networ
 		// There is no default to allow the underlying lib to respond with an error
 	}
 
+	if version == Version3 {
+		pub, priv = appendPQSigningKey(pub, priv)
+	}
+
 	if before.IsZero() {
 		before = testCertNow.Add(time.Second * -60)
 	}
@@ -57,6 +62,9 @@ func NewTestCaCert(version Version, curve Curve, before, after time.Time, networ
 		UnsafeNetworks: unsafeNetworks,
 		Groups:         groups,
 		IsCA:           true,
+	}
+	if version == Version3 {
+		t.PQSuite = DefaultPQSuite
 	}
 
 	c, err := t.Sign(nil, curve, priv)
@@ -97,6 +105,10 @@ func NewTestCert(v Version, curve Curve, ca Certificate, key []byte, name string
 		panic("unknown curve")
 	}
 
+	if v == Version3 {
+		pub, priv = appendPQKey(ca, pub, priv)
+	}
+
 	nc := &TBSCertificate{
 		Version:        v,
 		Curve:          curve,
@@ -108,6 +120,9 @@ func NewTestCert(v Version, curve Curve, ca Certificate, key []byte, name string
 		NotAfter:       time.Unix(after.Unix(), 0),
 		PublicKey:      pub,
 		IsCA:           false,
+		PQSuite:        PQSuiteOf(ca),
+		// A v3 host certificate has a v2 form when its CA does.
+		OmitV2Form: v == Version3 && V2Form(ca) == nil,
 	}
 
 	c, err := nc.Sign(ca, ca.Curve(), key)
@@ -120,7 +135,28 @@ func NewTestCert(v Version, curve Curve, ca Certificate, key []byte, name string
 		panic(err)
 	}
 
+	if v == Version3 {
+		return c, pub, MarshalPQPrivateKeyToPEM(curve, PQSuiteOf(ca), priv), pem
+	}
 	return c, pub, MarshalPrivateKeyToPEM(curve, priv), pem
+}
+
+// appendPQSigningKey makes a classical CA keypair into a version 3 composite one with a fresh key of the default suite.
+func appendPQSigningKey(pub, priv []byte) ([]byte, []byte) {
+	pqPub, pqPriv, err := DefaultPQSuite.GenerateKey(true)
+	if err != nil {
+		panic(err)
+	}
+	return append(pub, pqPub...), append(priv, pqPriv...)
+}
+
+// appendPQKey makes a classical host keypair into a version 3 composite one with a fresh key of the CA's suite.
+func appendPQKey(ca Certificate, pub, priv []byte) ([]byte, []byte) {
+	pqPub, pqPriv, err := PQSuiteOf(ca).GenerateKey(false)
+	if err != nil {
+		panic(err)
+	}
+	return append(pub, pqPub...), append(priv, pqPriv...)
 }
 
 func X25519Keypair() ([]byte, []byte) {
@@ -144,4 +180,13 @@ func P256Keypair() ([]byte, []byte) {
 	}
 	pubkey := privkey.PublicKey()
 	return pubkey.Bytes(), privkey.Bytes()
+}
+
+// skipWithoutPQ skips a test that needs the default post-quantum suite when this build can not run it, as under the
+// FIPS 140-3 Go Cryptographic Module v1.0.0, which has no ML-DSA.
+func skipWithoutPQ(t testing.TB) {
+	t.Helper()
+	if err := DefaultPQSuite.Available(); err != nil {
+		t.Skip(err)
+	}
 }

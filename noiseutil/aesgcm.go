@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 
-	"github.com/flynn/noise"
+	"github.com/DefinedNet/noise"
 )
 
 // CipherStateAESGCM is the data-plane wrapper for the AES-GCM AEAD cipher.

@@ -41,10 +41,12 @@ type hostIdentity struct {
 	UnsafeNetworks []netip.Prefix `json:"unsafeNetworks"`
 	Groups         []string       `json:"groups"`
 	Fingerprint    string         `json:"fingerprint"`
-	Issuer         string         `json:"issuer"`
-	NotBefore      time.Time      `json:"notBefore"`
-	NotAfter       time.Time      `json:"notAfter"`
-	CertVersion    int            `json:"certVersion"`
+	// V2Fingerprint is the fingerprint of a version 3 certificate's v2 form, the one to blocklist to block both forms.
+	V2Fingerprint string    `json:"v2Fingerprint,omitempty"`
+	Issuer        string    `json:"issuer"`
+	NotBefore     time.Time `json:"notBefore"`
+	NotAfter      time.Time `json:"notAfter"`
+	CertVersion   int       `json:"certVersion"`
 }
 
 // runIdentity answers for whoever owns the address: this node, when it is one of ours or
@@ -146,14 +148,19 @@ func textIdentityValue(v any, w io.Writer) error {
 
 // textIdentity is the human rendering, shared by every surface.
 func textIdentity(id hostIdentity, w io.Writer) error {
+	v2Fingerprint := ""
+	if id.V2Fingerprint != "" {
+		v2Fingerprint = "v2 fingerprint: " + id.V2Fingerprint + "\n"
+	}
 	_, err := fmt.Fprintf(w,
-		"name: %s\nvpn addrs: %s\nnetworks: %s\nunsafe networks: %s\ngroups: %s\nfingerprint: %s\nissuer: %s\nnot before: %s\nnot after: %s\ncert version: %d\n",
+		"name: %s\nvpn addrs: %s\nnetworks: %s\nunsafe networks: %s\ngroups: %s\nfingerprint: %s\n%sissuer: %s\nnot before: %s\nnot after: %s\ncert version: %d\n",
 		id.Name,
 		joinStringers(id.VpnAddrs),
 		joinStringers(id.Networks),
 		joinStringers(id.UnsafeNetworks),
 		strings.Join(id.Groups, ", "),
 		id.Fingerprint,
+		v2Fingerprint,
 		id.Issuer,
 		id.NotBefore.Format(time.RFC3339),
 		id.NotAfter.Format(time.RFC3339),
@@ -182,6 +189,14 @@ func newHostIdentity(crt cert.Certificate, fingerprint string) (hostIdentity, er
 		}
 		fingerprint = fp
 	}
+	var v2Fingerprint string
+	if v2 := cert.V2Form(crt); v2 != nil {
+		fp, err := v2.Fingerprint()
+		if err != nil {
+			return hostIdentity{}, err
+		}
+		v2Fingerprint = fp
+	}
 
 	networks, unsafeNetworks, groups := crt.Networks(), crt.UnsafeNetworks(), crt.Groups()
 	id := hostIdentity{
@@ -191,6 +206,7 @@ func newHostIdentity(crt cert.Certificate, fingerprint string) (hostIdentity, er
 		UnsafeNetworks: append(make([]netip.Prefix, 0, len(unsafeNetworks)), unsafeNetworks...),
 		Groups:         append(make([]string, 0, len(groups)), groups...),
 		Fingerprint:    fingerprint,
+		V2Fingerprint:  v2Fingerprint,
 		Issuer:         crt.Issuer(),
 		NotBefore:      crt.NotBefore(),
 		NotAfter:       crt.NotAfter(),
@@ -203,19 +219,14 @@ func newHostIdentity(crt cert.Certificate, fingerprint string) (hostIdentity, er
 	return id, nil
 }
 
-// ownCertificate is this node's certificate: the v2 one when it is loaded, else the v1.
-// A v2 certificate is a superset of the v1 and may carry more networks, and it is the
-// one newCertState builds myVpnAddrsTable from, so an address that matched that table is
-// always listed in the certificate reported here. It is nil only when no certificate is
-// loaded, which a running nebula never has.
+// ownCertificate is this node's certificate, see CertState.ownCertificate. It is the one
+// newCertState builds myVpnAddrsTable from, so an address that matched that table is
+// always listed in the certificate reported here.
 func ownCertificate(cs *CertState) cert.Certificate {
 	if cs == nil {
 		return nil
 	}
-	if crt := cs.getCertificate(cert.Version2); crt != nil {
-		return crt
-	}
-	return cs.getCertificate(cert.Version1)
+	return cs.ownCertificate()
 }
 
 // findCertificateForVpnAddr answers who owns a vpn address: this node, from its own

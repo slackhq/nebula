@@ -1,7 +1,6 @@
 package nebula
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -273,7 +272,7 @@ func (cm *connectionManager) migrateRelayUsed(oldhostinfo, newhostinfo *HostInfo
 			InitiatorRelayIndex: index,
 		}
 
-		switch newhostinfo.GetCert().Certificate.Version() {
+		switch protocolVersion(newhostinfo.GetCert().Certificate.Version()) {
 		case cert.Version1:
 			if !relayFrom.Is4() {
 				cm.l.Error("can not migrate v1 relay with a v6 network because the relay is not running a current nebula version")
@@ -464,14 +463,15 @@ func (cm *connectionManager) shouldSwapPrimary(current *HostInfo) bool {
 		return false
 	}
 
-	crt := cm.intf.pki.getCertState().getCertificate(current.ConnectionState.myCert.Version())
-	if crt == nil {
+	cs := cm.intf.pki.getCertState()
+	v := current.ConnectionState.myCert.Version()
+	if cs.getCertificate(v) == nil {
 		//my cert was reloaded away. We should definitely swap from this tunnel
 		return true
 	}
 	// If this tunnel is using the latest certificate then we should swap it to primary for a bit and see if things
 	// settle down.
-	return bytes.Equal(current.ConnectionState.myCert.Signature(), crt.Signature())
+	return current.ConnectionState.myCertFingerprint == cs.getFingerprint(v)
 }
 
 func (cm *connectionManager) swapPrimary(current, primary *HostInfo) {
@@ -501,12 +501,14 @@ func (cm *connectionManager) isInvalidCertificate(now time.Time, hostinfo *HostI
 		hostinfo.logger(cm.l).Info("Remote certificate is blocked, tearing down the tunnel",
 			"error", err,
 			"fingerprint", remoteCert.Fingerprint,
+			v2FingerprintAttr(remoteCert),
 		)
 		return true
 	} else if cm.intf.disconnectInvalid.Load() {
 		hostinfo.logger(cm.l).Info("Remote certificate is no longer valid, tearing down the tunnel",
 			"error", err,
 			"fingerprint", remoteCert.Fingerprint,
+			v2FingerprintAttr(remoteCert),
 		)
 		return true
 	} else {
@@ -545,7 +547,7 @@ func (cm *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 			return
 		}
 	}
-	if !bytes.Equal(curCrt.Signature(), myCrt.Signature()) {
+	if hostinfo.ConnectionState.myCertFingerprint != cs.getFingerprint(curCrtVersion) {
 		cm.l.Info("Re-handshaking with remote",
 			"vpnAddrs", hostinfo.vpnAddrs,
 			"reason", "local certificate is not current",

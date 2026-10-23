@@ -19,4 +19,6 @@ var (
 	ErrAsymmetricCipherKeys    = errors.New("noise produced only one cipher key")
 	ErrMultiMessageUnsupported = errors.New("multi-message handshake patterns are not yet supported by the manager")
 	ErrSubtypeMismatch         = errors.New("packet subtype does not match handshake machine subtype")
+	ErrCertVersionMismatch     = errors.New("handshake subtype does not allow this certificate version")
+	ErrPQSuiteMismatch         = errors.New("handshake subtype does not use the KEM of this certificate's post-quantum suite")
 )

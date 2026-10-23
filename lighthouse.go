@@ -847,9 +847,9 @@ func (lh *LightHouse) innerQueryServer(addr netip.Addr, nb, out []byte) {
 	for _, lhVpnAddr := range lighthouses {
 		hi := lh.ifce.GetHostInfo(lhVpnAddr)
 		if hi != nil {
-			v = hi.ConnectionState.myCert.Version()
+			v = protocolVersion(hi.ConnectionState.myCert.Version())
 		} else {
-			v = lh.ifce.GetCertState().initiatingVersion
+			v = protocolVersion(lh.ifce.GetCertState().initiatingVersion)
 		}
 
 		if v == cert.Version1 {
@@ -1009,9 +1009,9 @@ func (lh *LightHouse) SendUpdate() {
 		var v cert.Version
 		hi := lh.ifce.GetHostInfo(lhVpnAddr)
 		if hi != nil {
-			v = hi.ConnectionState.myCert.Version()
+			v = protocolVersion(hi.ConnectionState.myCert.Version())
 		} else {
-			v = lh.ifce.GetCertState().initiatingVersion
+			v = protocolVersion(lh.ifce.GetCertState().initiatingVersion)
 		}
 		if v == cert.Version1 {
 			if v1Update == nil {
@@ -1272,10 +1272,10 @@ func (lhh *LightHouseHandler) sendHostPunchNotification(n *NebulaMeta, fromVpnAd
 		n.Type = NebulaMeta_HostPunchNotification
 		var useVersion cert.Version
 		if targetHI == nil {
-			useVersion = lhh.lh.ifce.GetCertState().initiatingVersion
+			useVersion = protocolVersion(lhh.lh.ifce.GetCertState().initiatingVersion)
 		} else {
 			crt := targetHI.GetCert().Certificate
-			useVersion = crt.Version()
+			useVersion = protocolVersion(crt.Version())
 			// we can only retarget if we have a hostinfo
 			newDest, ok := findNetworkUnion(crt.Networks(), fromVpnAddrs)
 			if ok {

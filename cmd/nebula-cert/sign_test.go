@@ -43,6 +43,8 @@ func Test_signHelp(t *testing.T) {
 			"    \tRequired: name of the cert, usually a hostname\n"+
 			"  -networks string\n"+
 			"    \tRequired: comma separated list of ip address and network in CIDR notation to assign to this cert\n"+
+			"  -no-v2-form\n"+
+			"    \tOptional: sign a version 3 certificate without a v2 form, for version 3 peers only. A CA without a v2 form signs only those\n"+
 			"  -out-crt string\n"+
 			"    \tOptional: path to write the certificate to\n"+
 			"  -out-key string\n"+
@@ -55,7 +57,7 @@ func Test_signHelp(t *testing.T) {
 			"  -unsafe-networks string\n"+
 			"    \tOptional: comma separated list of ip address and network in CIDR notation. Unsafe networks this cert can route for\n"+
 			"  -version uint\n"+
-			"    \tOptional: version of the certificate format to use. The default is to match the version of the signing CA\n",
+			"    \tOptional: version of the certificate format to use. The default is to match the version of the signing CA. A version 3 CA with a v2 form also signs version 2 certificates, as its v2 form\n",
 		ob.String(),
 	)
 }

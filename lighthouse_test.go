@@ -12,6 +12,7 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/test"
@@ -1041,4 +1042,54 @@ func TestLighthouse_reloadAdvertiseAddrInNetworkFails(t *testing.T) {
 	require.NoError(t, res.Err)
 	assert.True(t, res.Failed)
 	assert.Equal(t, []netip.AddrPort{netip.MustParseAddrPort("1.2.3.4:4242")}, lh.GetAdvertiseAddrs())
+}
+
+// hybridTargetEncWriter is a testEncWriter that knows one host, behind a tunnel built on a v3 certificate.
+type hybridTargetEncWriter struct {
+	testEncWriter
+	target *HostInfo
+}
+
+func (w *hybridTargetEncWriter) GetHostInfo(vpnIp netip.Addr) *HostInfo {
+	if vpnIp == w.target.vpnAddrs[0] {
+		return w.target
+	}
+	return nil
+}
+
+// A punch notification to a host behind a hybrid tunnel speaks the v2 protocol, as every message over a v3 tunnel
+// does, rather than failing on the certificate's version.
+func TestLighthouse_PunchNotificationToHybridPeer(t *testing.T) {
+	cert_test.SkipWithoutPQ(t)
+	l := test.NewLogger()
+	myVpnNet := netip.MustParsePrefix("10.128.0.1/24")
+	c := config.NewC(l)
+	c.Settings["lighthouse"] = map[string]any{"am_lighthouse": true}
+	c.Settings["listen"] = map[string]any{"port": 4242}
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, testCertState(myVpnNet), nil, nil)
+	require.NoError(t, err)
+
+	peer := netip.MustParseAddr("10.128.0.2")
+	peerUdp := netip.MustParseAddrPort("10.0.0.2:4242")
+	target := netip.MustParseAddr("10.128.0.3")
+	targetUdp := netip.MustParseAddrPort("10.0.0.3:4242")
+
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version3, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	targetCert, _, _, _ := cert_test.NewTestCert(cert.Version3, cert.Curve_CURVE25519, ca, caKey, "target", time.Time{}, time.Time{}, []netip.Prefix{netip.PrefixFrom(target, 24)}, nil, nil)
+	lh.ifce = &hybridTargetEncWriter{
+		testEncWriter: testEncWriter{protocolVersion: cert.Version2},
+		target: &HostInfo{
+			vpnAddrs:        []netip.Addr{target},
+			ConnectionState: &ConnectionState{peerCert: &cert.CachedCertificate{Certificate: targetCert}},
+		},
+	}
+	lhh := lh.NewRequestHandler()
+	newLHHostUpdate(peerUdp, peer, []netip.AddrPort{peerUdp}, lhh)
+	newLHHostUpdate(targetUdp, target, []netip.AddrPort{targetUdp}, lhh)
+
+	filter := NebulaMeta_HostPunchNotification
+	w := sendLHHostRequest(peerUdp, peer, target, lhh, &filter)
+	require.NotNil(t, w.lastReply.msg, "the punch notification was sent")
+	assert.Equal(t, target, w.lastReply.vpnIp)
+	assert.Equal(t, peer, protoAddrToNetAddr(w.lastReply.msg.Details.VpnAddr))
 }

@@ -54,7 +54,8 @@ func verify(args []string, out io.Writer, errOut io.Writer) error {
 	defer caReader.Close()
 
 	caPool, err := cert.NewCAPoolFromPEMReader(caReader)
-	if err != nil && !errors.Is(err, cert.ErrExpired) {
+	// Expired CAs, and v3 CAs this build can not run, are left out of the pool; certificates they signed fail below.
+	if err != nil && !errors.Is(err, cert.ErrExpired) && !errors.Is(err, cert.ErrPQUnavailable) {
 		return fmt.Errorf("error while adding ca cert to pool: %w", err)
 	}
 

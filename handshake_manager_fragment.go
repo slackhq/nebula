@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/handshake/fragment"
 	"github.com/slackhq/nebula/header"
 )
@@ -143,15 +144,19 @@ type msg2Slot struct {
 	a      *fragment.Assembly
 }
 
+// msg2Slots reassembles the msg2s answering one attempt, a slot per responder. An array, not a map: one slot is used
+// nearly always.
+type msg2Slots [fragMsg2Slots]msg2Slot
+
 // slotFor returns the assembly collecting msg2 fragments with fh's FragID, starting one if there is none. A responder
 // never changes its FragID or MsgLen, so a fragment whose MsgLen disagrees with its slot is a stray or a forgery and
 // starts that slot over. When every slot is taken the one holding the least is replaced: a third responder is
 // vanishingly rare, and a forged FragID could already spoil an attempt. It returns nil if no assembly can be made for
 // fh.
-func (hh *HandshakeHostInfo) slotFor(fh fragment.Header) *fragment.Assembly {
+func (slots *msg2Slots) slotFor(fh fragment.Header) *fragment.Assembly {
 	victim := -1
-	for i := range hh.msg2 {
-		s := &hh.msg2[i]
+	for i := range slots {
+		s := &slots[i]
 		if s.a != nil && s.fragID == fh.FragID {
 			if s.msgLen == fh.MsgLen {
 				return s.a
@@ -161,8 +166,8 @@ func (hh *HandshakeHostInfo) slotFor(fh fragment.Header) *fragment.Assembly {
 		}
 	}
 	if victim < 0 {
-		for i := range hh.msg2 {
-			if hh.msg2[i].a == nil {
+		for i := range slots {
+			if slots[i].a == nil {
 				victim = i
 				break
 			}
@@ -170,8 +175,8 @@ func (hh *HandshakeHostInfo) slotFor(fh fragment.Header) *fragment.Assembly {
 	}
 	if victim < 0 {
 		victim = 0
-		for i := 1; i < len(hh.msg2); i++ {
-			if hh.msg2[i].a.Stored() < hh.msg2[victim].a.Stored() {
+		for i := 1; i < len(slots); i++ {
+			if slots[i].a.Stored() < slots[victim].a.Stored() {
 				victim = i
 			}
 		}
@@ -181,15 +186,15 @@ func (hh *HandshakeHostInfo) slotFor(fh fragment.Header) *fragment.Assembly {
 	if err != nil {
 		return nil
 	}
-	hh.msg2[victim] = msg2Slot{fragID: fh.FragID, msgLen: fh.MsgLen, a: a}
+	slots[victim] = msg2Slot{fragID: fh.FragID, msgLen: fh.MsgLen, a: a}
 	return a
 }
 
-// dropSlot releases the slot holding a.
-func (hh *HandshakeHostInfo) dropSlot(a *fragment.Assembly) {
-	for i := range hh.msg2 {
-		if hh.msg2[i].a == a {
-			hh.msg2[i] = msg2Slot{}
+// drop releases the slot holding a.
+func (slots *msg2Slots) drop(a *fragment.Assembly) {
+	for i := range slots {
+		if slots[i].a == a {
+			slots[i] = msg2Slot{}
 		}
 	}
 }
@@ -274,6 +279,9 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 
 	switch h.MessageCounter {
 	case 1:
+		if handshake.IsHybrid(h.Subtype) && !hm.acceptHybrid(via, h) {
+			return
+		}
 		if h.RemoteIndex != 0 {
 			hm.l.Debug("dropping stage-1 handshake with non-zero RemoteIndex",
 				"from", via, "remoteIndex", h.RemoteIndex)
@@ -318,8 +326,18 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 		}
 
 	case 2:
-		if hh := hm.queryIndex(h.RemoteIndex); hh != nil {
+		hh := hm.queryIndex(h.RemoteIndex)
+		switch {
+		case hh == nil:
+		case handshake.IsHybrid(h.Subtype):
+			hm.continuePQ(via, hh, h, fh, sym)
+		default:
 			hm.continueFragmented(via, hh, h, fh, sym)
+		}
+
+	case 3:
+		if handshake.IsHybrid(h.Subtype) {
+			hm.continueHybridResponder(via, h, fh, sym)
 		}
 	}
 }
@@ -332,11 +350,12 @@ func (hm *HandshakeManager) continueFragmented(via ViaSender, hh *HandshakeHostI
 	}
 
 	hh.Lock()
-	if cur := hm.queryIndex(hh.hostinfo.localIndexId); cur != hh {
+	// The index may be a post-quantum attempt's, which takes only hybrid messages.
+	if cur := hm.queryIndex(hh.hostinfo.localIndexId); cur != hh || h.RemoteIndex != hh.hostinfo.localIndexId {
 		hh.Unlock()
 		return
 	}
-	a := hh.slotFor(fh)
+	a := hh.msg2.slotFor(fh)
 	if a == nil {
 		hh.Unlock()
 		return
@@ -347,7 +366,7 @@ func (hm *HandshakeManager) continueFragmented(via ViaSender, hh *HandshakeHostI
 		return
 	}
 	pkt, err := a.Decode(make([]byte, header.Len))
-	hh.dropSlot(a)
+	hh.msg2.drop(a)
 	hh.Unlock()
 	if err != nil {
 		hm.l.Debug("failed to decode handshake fragments", "from", via, "error", err)
@@ -359,6 +378,11 @@ func (hm *HandshakeManager) continueFragmented(via ViaSender, hh *HandshakeHostI
 // sendFragmented sends packets to a peer: now immediately and later after the repair delay. It returns the first error
 // from the immediate sends; errors from delayed sends are only logged.
 func (hm *HandshakeManager) sendFragmented(now, later [][]byte, send func([]byte) error) error {
+	return hm.sendFragmentedAfter(now, later, send, hm.fragConfig().repairDelay)
+}
+
+// sendFragmentedAfter is sendFragmented with the given repair delay.
+func (hm *HandshakeManager) sendFragmentedAfter(now, later [][]byte, send func([]byte) error, delay time.Duration) error {
 	var first error
 	for _, p := range now {
 		if err := send(p); err != nil && first == nil {
@@ -372,7 +396,7 @@ func (hm *HandshakeManager) sendFragmented(now, later [][]byte, send func([]byte
 			}
 		}
 	}
-	switch delay := hm.fragConfig().repairDelay; {
+	switch {
 	case len(later) == 0:
 	case delay <= 0:
 		sendLater()
@@ -448,9 +472,12 @@ func (hm *HandshakeManager) sendFragmentedResponse(via ViaSender, msg []byte, ho
 	return hm.sendFragmented(pkts, later, hm.sendTo(via))
 }
 
-// stillAnswering reports whether the hostinfo that answered a msg1 still holds its index as an established tunnel, so
-// resending its msg2 can still lead somewhere.
+// stillAnswering reports whether the hostinfo that answered a msg1 still holds its index, as a pending hybrid
+// responder or an established tunnel, so resending its msg2 can still lead somewhere.
 func (hm *HandshakeManager) stillAnswering(hostinfo *HostInfo) bool {
+	if hh := hm.queryIndex(hostinfo.localIndexId); hh != nil && hh.hostinfo == hostinfo {
+		return true
+	}
 	return hm.mainHostMap.QueryIndex(hostinfo.localIndexId) == hostinfo
 }
 
@@ -618,6 +645,10 @@ func (hm *HandshakeManager) handleCookie(via ViaSender, packet []byte, h *header
 	}
 	hh := hm.queryIndex(h.RemoteIndex)
 	if hh == nil {
+		return
+	}
+	if handshake.IsHybrid(h.Subtype) {
+		hm.handlePQCookie(via, hh, packet, h)
 		return
 	}
 	hh.Lock()

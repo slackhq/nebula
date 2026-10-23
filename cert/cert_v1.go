@@ -87,8 +87,8 @@ func (c *certificateV1) MarshalPublicKeyPEM() []byte {
 	return marshalCertPublicKeyToPEM(c)
 }
 
-func (c *certificateV1) Signature() []byte {
-	return c.signature
+func (c *certificateV1) Signature() Signatures {
+	return Signatures{Classical: c.signature}
 }
 
 func (c *certificateV1) UnsafeNetworks() []netip.Prefix {
@@ -273,7 +273,7 @@ func (c *certificateV1) marshalJSON() m {
 			"curve":          c.details.curve.String(),
 		},
 		"fingerprint": fp,
-		"signature":   fmt.Sprintf("%x", c.Signature()),
+		"signature":   fmt.Sprintf("%x", c.signature),
 	}
 }
 
