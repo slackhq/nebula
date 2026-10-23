@@ -50,6 +50,9 @@ type caFlags struct {
 // for CAs. The spelling of cert.CurveName is accepted too.
 const hybridCurveFlag = "P384-MLKEM1024-MLDSA87"
 
+// pureCurveFlag is how -curve names the post-quantum curve, ML-KEM-1024 for hosts and ML-DSA-87 for CAs.
+const pureCurveFlag = "MLKEM1024-MLDSA87"
+
 func defaultCurve() string {
 	if fips140.Enforced() {
 		return "P256"
@@ -87,7 +90,7 @@ func newCaFlags() *caFlags {
 	cf.argonParallelism = cf.set.Uint("argon-parallelism", 4, "Optional: Argon2 parallelism parameter used for encrypted private key passphrase")
 	cf.argonIterations = cf.set.Uint("argon-iterations", defaultArgonIterations, "Optional: Argon2 iterations parameter used for encrypted private key passphrase")
 	cf.encryption = cf.set.Bool("encrypt", false, "Optional: prompt for passphrase and write out-key in an encrypted format")
-	cf.curve = cf.set.String("curve", defaultCurve(), "EdDSA/ECDSA Curve (25519, P256, "+hybridCurveFlag+")")
+	cf.curve = cf.set.String("curve", defaultCurve(), "EdDSA/ECDSA Curve (25519, P256, "+hybridCurveFlag+", "+pureCurveFlag+")")
 	cf.p11url = p11Flag(cf.set)
 
 	cf.ips = cf.set.String("ips", "", "Deprecated, see -networks")
@@ -307,6 +310,18 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 			pub, rawPriv, err = cert.GenerateHybridSigningKeypair()
 			if err != nil {
 				return fmt.Errorf("error while generating hybrid keys: %s", err)
+			}
+		case pureCurveFlag, cert.CurveName(cert.Curve_MLKEM1024_MLDSA87):
+			if version != cert.Version2 {
+				return newHelpErrorf("-curve %s needs -version 2", pureCurveFlag)
+			}
+			if err := cert.HybridAvailable(); err != nil {
+				return err
+			}
+			curve = cert.Curve_MLKEM1024_MLDSA87
+			pub, rawPriv, err = cert.GeneratePureSigningKeypair()
+			if err != nil {
+				return fmt.Errorf("error while generating post-quantum keys: %s", err)
 			}
 		default:
 			return fmt.Errorf("invalid curve: %s", *cf.curve)
