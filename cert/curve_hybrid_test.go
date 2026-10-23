@@ -249,7 +249,7 @@ func TestHybridMarshalJSON(t *testing.T) {
 // TestHybridCAPoolBundle loads a bundle of a hybrid CA and a P-256 CA: the build keeps both when it can run the hybrid
 // curve, and the P-256 one alone, with an error saying why, when it can not.
 func TestHybridCAPoolBundle(t *testing.T) {
-	b, err := os.ReadFile("testdata/hybrid_and_p256_ca.pem")
+	b, err := os.ReadFile("testdata/hybrid_and_p256_ca.txt")
 	require.NoError(t, err)
 	pool, err := NewCAPoolFromPEM(b)
 	if HybridAvailable() == nil {
