@@ -94,23 +94,31 @@ func New(control *nebula.Control) (_ *Service, reterr error) {
 		return nil, fmt.Errorf("could not create netstack NIC: %v", tcpipProblem)
 	}
 	ipv4Subnet, _ := tcpip.NewSubnet(tcpip.AddrFrom4([4]byte{0x00, 0x00, 0x00, 0x00}), tcpip.MaskFrom(strings.Repeat("\x00", 4)))
+	ipv6Subnet, _ := tcpip.NewSubnet(tcpip.AddrFrom16([16]byte{}), tcpip.MaskFrom(strings.Repeat("\x00", 16)))
 	s.ipstack.SetRouteTable([]tcpip.Route{
 		{
 			Destination: ipv4Subnet,
 			NIC:         nicID,
 		},
+		{
+			Destination: ipv6Subnet,
+			NIC:         nicID,
+		},
 	})
 
-	ipNet := device.Networks()
-	pa := tcpip.ProtocolAddress{
-		AddressWithPrefix: tcpip.AddrFromSlice(ipNet[0].Addr().AsSlice()).WithPrefix(),
-		Protocol:          ipv4.ProtocolNumber,
-	}
-	if err := s.ipstack.AddProtocolAddress(nicID, pa, stack.AddressProperties{
-		PEB:        stack.CanBePrimaryEndpoint, // zero value default
-		ConfigType: stack.AddressConfigStatic,  // zero value default
-	}); err != nil {
-		return nil, fmt.Errorf("error creating IP: %s", err)
+	// A v2 cert can carry several networks, possibly of both families, and each
+	// needs its own address on the NIC for that family to work
+	for _, ipNet := range device.Networks() {
+		pa := tcpip.ProtocolAddress{
+			AddressWithPrefix: tcpip.AddrFromSlice(ipNet.Addr().AsSlice()).WithPrefix(),
+			Protocol:          getProtocolNumber(ipNet.Addr()),
+		}
+		if err := s.ipstack.AddProtocolAddress(nicID, pa, stack.AddressProperties{
+			PEB:        stack.CanBePrimaryEndpoint, // zero value default
+			ConfigType: stack.AddressConfigStatic,  // zero value default
+		}); err != nil {
+			return nil, fmt.Errorf("error creating IP: %s", err)
+		}
 	}
 
 	const tcpReceiveBufferSize = 0
@@ -141,10 +149,20 @@ func New(control *nebula.Control) (_ *Service, reterr error) {
 				s.control.Stop()
 				return err
 			}
+			var proto tcpip.NetworkProtocolNumber
+			switch header.IPVersion(buf[:n]) {
+			case header.IPv4Version:
+				proto = header.IPv4ProtocolNumber
+			case header.IPv6Version:
+				proto = header.IPv6ProtocolNumber
+			default:
+				// Not an IP packet, nothing in the stack can use it
+				continue
+			}
 			packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
 				Payload: buffer.MakeWithData(bytes.Clone(buf[:n])),
 			})
-			linkEP.InjectInbound(header.IPv4ProtocolNumber, packetBuf)
+			linkEP.InjectInbound(proto, packetBuf)
 
 			if ctx.Err() != nil {
 				return nil
