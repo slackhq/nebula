@@ -60,6 +60,9 @@ type Firewall struct {
 
 	// assignedNetworks is a list of vpn networks assigned to us in the certificate.
 	assignedNetworks []netip.Prefix
+	// vpnNetworks holds assignedNetworks for lookup: a source address inside one of them
+	// belongs to a node of the overlay, and only that node may send as it.
+	vpnNetworks *bart.Lite
 	// unsafeNetworks is the list of unsafe networks issued to us in the certificate
 	unsafeNetworks []netip.Prefix
 
@@ -156,10 +159,12 @@ func NewFirewall(l *slog.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.Dur
 	}
 
 	routableNetworks := new(bart.Lite)
+	vpnNetworks := new(bart.Lite)
 	var assignedNetworks []netip.Prefix
 	for _, network := range c.Networks() {
 		nprefix := netip.PrefixFrom(network.Addr(), network.Addr().BitLen())
 		routableNetworks.Insert(nprefix)
+		vpnNetworks.Insert(network)
 		assignedNetworks = append(assignedNetworks, network)
 	}
 
@@ -180,6 +185,7 @@ func NewFirewall(l *slog.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.Dur
 		DefaultTimeout:   defaultTimeout,
 		routableNetworks: routableNetworks,
 		assignedNetworks: assignedNetworks,
+		vpnNetworks:      vpnNetworks,
 		unsafeNetworks:   unsafeNetworks,
 		l:                l,
 
@@ -462,7 +468,17 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
 			return ErrPeerRejected // reject for now, one day this may have different FW rules
 		case NetworkTypeUnsafe:
-			break // nothing special, one day this may have different FW rules
+			// An unsafe network says what a peer routes for, never who it is. One that
+			// overlaps our own networks would let the peer send as any node of the overlay,
+			// and whatever trusts the source address, the firewall's own rules and the
+			// identity a program looks up for it, would be told the wrong node. A source
+			// inside our networks is a node's own address, which only that node sends
+			// from, as NetworkTypeVPN, matched first; through an unsafe network it is
+			// refused. Outbound the address is a destination and claims nothing.
+			if incoming && f.vpnNetworks.Contains(fp.RemoteAddr) {
+				f.metrics(incoming).droppedRemoteAddr.Inc(1)
+				return ErrInvalidRemoteIP
+			}
 		default:
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
 			return ErrUnknownNetworkType //should never happen
