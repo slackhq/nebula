@@ -45,6 +45,7 @@ var (
 	ErrFlags         = errors.New("fragment has reserved flags set")
 	ErrNoCookie      = errors.New("fragment is too short for its cookie")
 	ErrSymbolSize    = errors.New("fragment symbol size does not match its MsgLen")
+	ErrSubtype       = errors.New("handshake subtype has no fragmented form")
 )
 
 // Cookie proves a sender received a responder's reply at its address.

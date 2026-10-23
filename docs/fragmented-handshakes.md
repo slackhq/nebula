@@ -23,8 +23,13 @@ messages are always several packets long, and works the same for classical ones.
 - `never`: every message goes as one packet however big, and fragments from others are dropped
   unread: the node has no fragment support, as before this change.
 
-Under `auto` and `always` a node reassembles fragments from others. `handshakes.repair_delay`
-(10ms) is how long repair fragments trail the data fragments; both settings reload.
+Under `auto` and `always` a node reassembles fragments from others. `handshakes.repair_delay` is
+how long repair fragments trail the data fragments; unset, it is a tenth of
+`handshakes.try_interval` (10ms by default), which keeps it well inside the receiver's quiet
+period of half a retry interval. Both settings reload. With message metrics on
+(`stats.message_metrics`), fragment packets and cookie replies are counted in
+`messages.{tx,rx}.handshake_ixpsk0_fragmented` (and `handshake_xxpsk0_fragmented`), apart from
+the single-packet `handshake_ixpsk0`.
 
 A peer running an older nebula, or set to `never`, can not reassemble fragments. A message too
 big for one packet goes to it as fragments anyway: the oversized datagram it could have read
@@ -34,12 +39,13 @@ was working.
 
 ## Wire format
 
-A fragment is marked by `header.HandshakeFragmented` (0x80) on the handshake subtype, and the
-rest of the subtype still names the handshake pattern: a fragment of a classical IX message has
-subtype `ix_psk0 | 0x80`, shown as `ix_psk0_fragmented`. Every packet of a fragmented message is:
+Each handshake pattern has a fragmented subtype of its own, its value with 0x80 added:
+`header.HandshakeIXPSK0Fragmented` (0x80, shown as `ix_psk0_fragmented`) for classical IX, and
+`header.HandshakeXXPSK0Fragmented` (0x81) reserved alongside XX. Every packet of a fragmented
+message is:
 
 ```
-Nebula header (16)   Version | Type=Handshake | Subtype|0x80 | Reserved=0 | RemoteIndex | Counter
+Nebula header (16)   Version | Type=Handshake | Subtype (fragmented) | Reserved=0 | RemoteIndex | Counter
 Fragment header (8)  FragID u32 | MsgLen u16 | Index u8 | Flags u8
 Cookie (16)          only when Flags has 0x01
 Symbol               SymbolSize bytes
@@ -61,7 +67,7 @@ Symbol               SymbolSize bytes
 A cookie reply is a bare 32 byte packet:
 
 ```
-Nebula header (16)   Version | Type=Handshake | Subtype|0x80 | Reserved=0 | RemoteIndex=FragID | Counter=0
+Nebula header (16)   Version | Type=Handshake | Subtype (fragmented) | Reserved=0 | RemoteIndex=FragID | Counter=0
 Cookie (16)
 ```
 
@@ -114,8 +120,8 @@ Implemented in `handshake/fragment` (`Sender`, `Assembly`, and the capped `Table
 - If the handshake rejects a decoded message, the entry is discarded and the next attempt
   supplies fresh symbols.
 - msg1 entries, from senders not yet authenticated, live in a table keyed by (source address or
-  relay index, FragID) with a total memory cap of 4 MiB and 1024 entries, per-source quotas of 4
-  (/32 for IPv4, /64 for IPv6, one relay channel), a sliding TTL of 3 s refreshed by progress,
+  relay index, FragID) with a total memory cap of 4 MiB and 1024 entries, per-source quotas of 32
+  (/32 for IPv4, /64 for IPv6, one relay channel), enough for a busy NAT or a /64 of hosts, a sliding TTL of 3 s refreshed by progress,
   and random eviction under pressure.
 - msg2 reassembly attaches to the pending handshake found by RemoteIndex, in two slots keyed by
   the responder's FragID. When a stale lighthouse address for the peer belongs to another host
@@ -152,15 +158,19 @@ Retry and the SCTP state cookie:
   Fragments that already belong to an entry need one too, so an attacker can not hold old entries
   open.
 - A cookie is `HMAC-SHA-512(secret, source address and port, relay channel, FragID)` truncated to
-  16 bytes. The secret rotates every 2 minutes and the previous one is still accepted, so a
-  cookie is good for 2 to 4 minutes.
-- Replies are never larger than the packet that prompted them (no amplification) and are rate
-  limited as a whole (a burst of 256, then 1000 per second), so spoofed floods can not turn the
-  responder into a reflector.
+  16 bytes. The secret rotates every 2 minutes, on the handshake manager's clock whether or not
+  cookies are in use, and the previous one is still accepted, so a cookie is good for 2 to 4
+  minutes.
+- Replies are never larger than the packet that prompted them, 32 bytes against a fragment of up
+  to 1200, so a spoofed flood reflects less than it sends. They are not rate limited: a limit
+  would only cap the HMAC, and a flood could use it up and starve the initiators that need a
+  cookie.
 - The initiator attaches the cookie to its msg1, switching it to fragments if it was going as one
-  packet, since only a fragment carries a cookie, so every later packet carries it, and
-  immediately resends fresh symbols to the address the reply came from, at most once per retry
-  interval.
+  packet, since only a fragment carries a cookie, so every later packet carries it. When the
+  reply came from an address the last attempt was sent to, or through a relay, it also resends
+  fresh symbols to it at once, at most once per retry interval. A reply from any other address
+  only sets the cookie for the next attempt: anyone who knows the initiator's index can forge one,
+  and resending to its source would aim the whole msg1 at an address of the forger's choosing.
 - An attacker on the path can forge a cookie reply; the bogus cookie is simply rejected and
   answered with a real one.
 

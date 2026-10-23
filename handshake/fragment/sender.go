@@ -35,15 +35,18 @@ type Sender struct {
 
 // NewSender prepares pkt, a handshake message as it would travel unfragmented,
 // Nebula header included, for sending as fragments. Every fragment carries that
-// header with header.HandshakeFragmented set on its subtype; fragID is the
-// sender's local index. The Sender keeps pkt, which must not change while it is
-// in use.
+// header with the fragmented form of its subtype; fragID is the sender's local
+// index. The Sender keeps pkt, which must not change while it is in use.
 func NewSender(pkt []byte, fragID uint32) (*Sender, error) {
 	var h header.H
 	if err := h.Parse(pkt); err != nil {
 		return nil, err
 	}
-	return newSender(pkt[header.Len:], h.Subtype|header.HandshakeFragmented, h.RemoteIndex, h.MessageCounter, fragID)
+	st, ok := header.FragmentedSubtype(h.Subtype)
+	if !ok {
+		return nil, ErrSubtype
+	}
+	return newSender(pkt[header.Len:], st, h.RemoteIndex, h.MessageCounter, fragID)
 }
 
 // newSender prepares msg, the message alone, for sending. subtype, remoteIndex

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"sync"
 	"time"
 
@@ -17,14 +18,16 @@ import (
 )
 
 // A handshake message too big for one packet, a certificate carrying many groups, names or networks say, travels as
-// fragments: Reed-Solomon coded symbols of at most fragment.MaxPacketLen bytes each, marked by
-// header.HandshakeFragmented on the subtype, so it never relies on IP fragmentation. See handshake/fragment for the
-// wire format. The handshake itself is unchanged: a fragmented message is reassembled into the packet the handshake
-// Machine would have received unfragmented.
+// fragments: Reed-Solomon coded symbols of at most fragment.MaxPacketLen bytes each, marked by the fragmented form of
+// the handshake subtype, such as header.HandshakeIXPSK0Fragmented, so it never relies on IP fragmentation. See
+// handshake/fragment for the wire format. The handshake itself is unchanged: a fragmented message is reassembled into
+// the packet the handshake Machine would have received unfragmented.
 
 const (
-	// DefaultHandshakeRepairDelay is how long repair fragments trail the data fragments.
-	DefaultHandshakeRepairDelay = 10 * time.Millisecond
+	// repairDelayDivisor sets the default handshakes.repair_delay, how long repair fragments trail the data fragments,
+	// as a fraction of the retry interval: 10ms at the default 100ms. It keeps the repair fragments well inside the
+	// quiet period of half a retry interval that follows a completed msg1, see fragment.TableConfig.Quiet.
+	repairDelayDivisor = 10
 
 	// fragAmplification bounds what a responder sends in reply to an unvalidated address, as a multiple of what it
 	// received from it.
@@ -65,8 +68,10 @@ type fragmentConfig struct {
 	repairDelay time.Duration
 }
 
-func fragmentConfigFrom(c *config.C) (fragmentConfig, error) {
-	cfg := fragmentConfig{repairDelay: c.GetDuration("handshakes.repair_delay", DefaultHandshakeRepairDelay)}
+// fragmentConfigFrom reads the fragment settings. handshakes.repair_delay, when unset, follows tryInterval, the retry
+// interval in effect.
+func fragmentConfigFrom(c *config.C, tryInterval time.Duration) (fragmentConfig, error) {
+	cfg := fragmentConfig{repairDelay: c.GetDuration("handshakes.repair_delay", tryInterval/repairDelayDivisor)}
 	switch s := c.GetString("handshakes.fragment", "auto"); s {
 	case "auto":
 		cfg.mode = fragmentAuto
@@ -93,7 +98,8 @@ func (hm *HandshakeManager) reloadFragment(c *config.C, r *config.Reload) {
 	if !c.HasChanged("handshakes.fragment") && !c.HasChanged("handshakes.repair_delay") {
 		return
 	}
-	cfg, err := fragmentConfigFrom(c)
+	// handshakes.try_interval does not reload, so the default repair delay follows the one in effect.
+	cfg, err := fragmentConfigFrom(c, hm.config.tryInterval)
 	if err != nil {
 		hm.l.Error("Failed to reload handshake fragment settings, keeping the previous ones", "error", err)
 		r.Failed()
@@ -126,7 +132,7 @@ func (hm *HandshakeManager) shouldFragment(msgLen int, answeringFragments bool) 
 var fragTableConfig = fragment.TableConfig{
 	MaxBytes:     4 << 20,
 	MaxEntries:   1024,
-	MaxPerSource: 4,
+	MaxPerSource: 32,
 	TTL:          3 * time.Second,
 }
 
@@ -218,7 +224,9 @@ func fragKeyFor(via ViaSender, fragID uint32) (fragKey, fragSource) {
 // reassembled turns a decoded message into the packet the handshake Machine expects, unfragmented: the header of one
 // of its fragments, less the fragmented flag, in the header.Len bytes left for it in front of the message.
 func reassembled(h *header.H, pkt []byte) []byte {
-	return header.Encode(pkt, header.Version, header.Handshake, header.HandshakePattern(h.Subtype), h.RemoteIndex, h.MessageCounter)[:len(pkt)]
+	// Only a fragmented subtype reaches here.
+	pattern, _ := header.FragmentedPattern(h.Subtype)
+	return header.Encode(pkt, header.Version, header.Handshake, pattern, h.RemoteIndex, h.MessageCounter)[:len(pkt)]
 }
 
 // fragmentStage0 prepares the initiator's msg1 as fragments, named by its local index, when it should travel so.
@@ -450,6 +458,13 @@ func cookieMAC(secret []byte, key fragKey) fragment.Cookie {
 	return c
 }
 
+// tick rotates the secret when it is due, so cookies expire on time however rarely they are made or checked.
+func (c *fragCookies) tick(now time.Time) {
+	c.Lock()
+	defer c.Unlock()
+	c.rotate(now)
+}
+
 func (c *fragCookies) make(key fragKey, now time.Time) fragment.Cookie {
 	c.Lock()
 	defer c.Unlock()
@@ -470,8 +485,8 @@ func (c *fragCookies) valid(key fragKey, cookie fragment.Cookie, now time.Time) 
 	return false
 }
 
-// sendCookie answers a msg1 with a cookie reply, naming the initiator by fragID. The reply is never larger than what
-// triggered it, and replies are rate limited as a whole.
+// sendCookie answers a msg1 with a cookie reply of the fragmented subtype given, naming the initiator by fragID. The
+// reply is never larger than what triggered it, so it reflects nothing and needs no rate limit.
 func (hm *HandshakeManager) sendCookie(via ViaSender, subtype header.MessageSubType, fragID uint32, key fragKey, received int, now time.Time) {
 	if received < fragCookieReplyLen {
 		return
@@ -481,22 +496,21 @@ func (hm *HandshakeManager) sendCookie(via ViaSender, subtype header.MessageSubT
 		hm.l.Debug("Failed to send handshake cookie", "to", via, "error", err)
 		return
 	}
-	if _, ok := hm.cookieLimiter.Allow(); !ok {
-		return
-	}
 	c := hm.cookies.make(key, now)
 	reply := make([]byte, header.Len, fragCookieReplyLen)
-	header.Encode(reply, header.Version, header.Handshake, subtype|header.HandshakeFragmented, fragID, fragCookieCounter)
+	header.Encode(reply, header.Version, header.Handshake, subtype, fragID, fragCookieCounter)
 	reply = append(reply, c[:]...)
-	hm.f.messageMetrics.Tx(header.Handshake, subtype|header.HandshakeFragmented, 1)
+	hm.f.messageMetrics.Tx(header.Handshake, subtype, 1)
 	if err := send(reply); err != nil {
 		hm.l.Debug("Failed to send handshake cookie", "to", via, "error", err)
 	}
 }
 
 // handleCookie attaches a responder's cookie to the attempt it names, switching msg1 to fragments if it was a single
-// packet, since only a fragment carries a cookie, and resends right away, at most once per retry interval, rather
-// than waiting for the next attempt.
+// packet, since only a fragment carries a cookie. When the reply came from an address the last attempt was sent to, or
+// through a relay, it resends right away, at most once per retry interval, rather than waiting for the next attempt.
+// A reply from anywhere else only sets the cookie: anyone who knows the attempt's index can forge one, and an immediate
+// resend to its source would aim the whole msg1 at whatever address it claims.
 func (hm *HandshakeManager) handleCookie(via ViaSender, packet []byte, h *header.H) {
 	if len(packet) != fragCookieReplyLen {
 		return
@@ -520,6 +534,9 @@ func (hm *HandshakeManager) handleCookie(via ViaSender, packet []byte, h *header
 	copy(c[:], packet[header.Len:])
 	hh.sender.SetCookie(c)
 
+	if !via.IsRelayed && !slices.Contains(hh.lastRemotes, via.UdpAddr) {
+		return
+	}
 	now := time.Now()
 	if now.Sub(hh.cookieResendAt) < hm.config.tryInterval {
 		return

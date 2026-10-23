@@ -142,13 +142,17 @@ func TestSender(t *testing.T) {
 
 		pkt := header.Encode(make([]byte, header.Len), header.Version, header.Handshake, testSubtype, 77, 2)
 		pkt = append(pkt, randMsg(rand.New(rand.NewPCG(1, 1)), 2000)...)
+		_, err = NewSender(pkt, 1234)
+		require.ErrorIs(t, err, ErrSubtype, "a subtype with no fragmented form")
+
+		header.Encode(pkt, header.Version, header.Handshake, header.HandshakeIXPSK0, 77, 2)
 		s, err := NewSender(pkt, 1234)
 		require.NoError(t, err)
 		now, _, err := s.Attempt(0)
 		require.NoError(t, err)
 		for _, p := range now {
 			nh, h, _ := parse(t, p)
-			assert.Equal(t, testSubtype|header.HandshakeFragmented, nh.Subtype)
+			assert.Equal(t, header.HandshakeIXPSK0Fragmented, nh.Subtype)
 			assert.Equal(t, uint32(77), nh.RemoteIndex)
 			assert.Equal(t, uint64(2), nh.MessageCounter)
 			assert.Equal(t, uint32(1234), h.FragID)
