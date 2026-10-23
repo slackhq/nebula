@@ -6,8 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
-	"github.com/slackhq/nebula/handshake/fragment"
-	"github.com/slackhq/nebula/ratelimit"
 	"log/slog"
 	"net/netip"
 	"slices"
@@ -18,7 +16,9 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/handshake"
+	"github.com/slackhq/nebula/handshake/fragment"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/ratelimit"
 	"github.com/slackhq/nebula/udp"
 )
 
