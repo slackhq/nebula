@@ -23,11 +23,17 @@ func Test_keygenHelp(t *testing.T) {
 			"  Pass \"-\" to any path flag to read from stdin or write to stdout.\n"+
 			"  -curve string\n"+
 			"    \tECDH Curve (25519, P256) (default \"25519\")\n"+
+			"  -in-key string\n"+
+			"    \tOptional: path to an existing private key to add a post-quantum key to, keeping the existing key. Implies -version 3\n"+
 			"  -out-key string\n"+
 			"    \tRequired: path to write the private key to\n"+
 			"  -out-pub string\n"+
 			"    \tRequired: path to write the public key to\n"+
-			optionalPkcs11String("  -pkcs11 string\n    \tOptional: PKCS#11 URI to an existing private key\n"),
+			optionalPkcs11String("  -pkcs11 string\n    \tOptional: PKCS#11 URI to an existing private key\n")+
+			"  -pq-suite string\n"+
+			"    \tOptional: post-quantum suite of a version 3 key, which must be the suite of the CA that signs it (MLKEM1024_MLDSA87) (default \"MLKEM1024_MLDSA87\")\n"+
+			"  -version uint\n"+
+			"    \tOptional: 3 adds a post-quantum key, for version 3 certificates\n",
 		ob.String(),
 	)
 }

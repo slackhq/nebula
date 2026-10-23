@@ -73,6 +73,19 @@ func printCert(args []string, out io.Writer, errOut io.Writer) error {
 			if *pf.json {
 				jsonCerts = append(jsonCerts, c)
 			} else {
+				// A version 3 certificate has two fingerprints, and only the v2 one blocks both of its forms.
+				// Lead with them so the right one is the obvious one to copy.
+				if v2 := cert.V2Form(c); v2 != nil {
+					fp, err := c.Fingerprint()
+					if err != nil {
+						return fmt.Errorf("error while computing fingerprint: %s", err)
+					}
+					v2fp, err := v2.Fingerprint()
+					if err != nil {
+						return fmt.Errorf("error while computing v2 fingerprint: %s", err)
+					}
+					_, _ = fmt.Fprintf(out, "Fingerprint:    %s\nv2 fingerprint: %s  (block this one in pki.blocklist, it covers both forms)\n", fp, v2fp)
+				}
 				_, _ = out.Write([]byte(c.String()))
 				_, _ = out.Write([]byte("\n"))
 			}
