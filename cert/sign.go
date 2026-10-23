@@ -55,6 +55,12 @@ func (t *TBSCertificate) Sign(signer Certificate, curve Curve, key []byte) (Cert
 			return sig, nil
 		}
 		return t.SignWith(signer, curve, sp)
+	case Curve_P384_MLKEM1024_MLDSA87:
+		sp, err := compositeSigner(key)
+		if err != nil {
+			return nil, err
+		}
+		return t.SignWith(signer, curve, sp)
 	case Curve_P256:
 		pk, err := ecdsa.ParseRawPrivateKey(elliptic.P256(), key)
 		if err != nil {
@@ -68,7 +74,7 @@ func (t *TBSCertificate) Sign(signer Certificate, curve Curve, key []byte) (Cert
 		}
 		return t.SignWith(signer, curve, sp)
 	default:
-		return nil, fmt.Errorf("invalid curve: %s", t.Curve)
+		return nil, fmt.Errorf("invalid curve: %s", CurveName(t.Curve))
 	}
 }
 
@@ -128,8 +134,14 @@ func (t *TBSCertificate) SignWith(signer Certificate, curve Curve, sp SignerLamb
 		return nil, err
 	}
 
-	if curve == Curve_P256 {
+	switch curve {
+	case Curve_P256:
 		sig, err = p256.Normalize(sig)
+		if err != nil {
+			return nil, err
+		}
+	case Curve_P384_MLKEM1024_MLDSA87:
+		sig, err = compositeNormalize(sig)
 		if err != nil {
 			return nil, err
 		}

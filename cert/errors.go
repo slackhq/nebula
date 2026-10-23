@@ -24,6 +24,7 @@ var (
 	ErrUnknownCurve               = errors.New("certificate curve unrecognized")
 	ErrCertPubkeyPresent          = errors.New("certificate has unexpected pubkey present")
 	ErrCurveMismatch              = errors.New("certificate curve does not match CA")
+	ErrPQUnavailable              = errors.New("post-quantum algorithms unavailable in this build")
 
 	ErrInvalidPEMBlock                   = errors.New("input did not contain a valid PEM encoded block")
 	ErrInvalidPEMCertificateBanner       = errors.New("bytes did not contain a proper certificate banner")
