@@ -173,33 +173,35 @@ func TestReassembledIsUnfragmented(t *testing.T) {
 	assert.Len(t, got, header.Len+3)
 }
 
-func TestSendFragmentedResponse(t *testing.T) {
-	hm, conn := newFragTestManager(t)
-	via := ViaSender{UdpAddr: netip.MustParseAddrPort("192.0.2.1:4242")}
+func TestFragmentResponse(t *testing.T) {
 	hostinfo := &HostInfo{localIndexId: 77}
 
 	// A 2000 byte message is 2 symbols of 1000, so packets of 1024 bytes.
 	msg := testMsg2(2000, 1)
 	const pktLen = header.Len + fragment.HeaderLen + 1000
 
+	indexes := func(budget int) []int {
+		t.Helper()
+		now, later, err := fragmentResponse(msg, hostinfo, budget)
+		require.NoError(t, err)
+		return fragmentIndexes(t, append(now, later...), 77, 5)
+	}
+
 	t.Run("first send", func(t *testing.T) {
-		require.NoError(t, hm.sendFragmentedResponse(via, msg, hostinfo, -1))
-		assert.Equal(t, []int{0, 1, 2, 3}, fragmentIndexes(t, conn.take(), 77, 5))
+		assert.Equal(t, []int{0, 1, 2, 3}, indexes(-1))
 	})
 
 	t.Run("a repeat is answered at once with fresh symbols", func(t *testing.T) {
-		require.NoError(t, hm.sendFragmentedResponse(via, msg, hostinfo, 10*pktLen))
-		assert.Equal(t, []int{4, 5, 6, 7}, fragmentIndexes(t, conn.take(), 77, 5))
+		assert.Equal(t, []int{4, 5, 6, 7}, indexes(10*pktLen))
 	})
 
 	t.Run("amplification budget trims repair", func(t *testing.T) {
-		require.NoError(t, hm.sendFragmentedResponse(via, msg, hostinfo, 3*pktLen))
-		assert.Equal(t, []int{8, 9, 10}, fragmentIndexes(t, conn.take(), 77, 5))
+		assert.Equal(t, []int{8, 9, 10}, indexes(3*pktLen))
 	})
 
 	t.Run("amplification budget below the data refuses", func(t *testing.T) {
-		require.ErrorIs(t, hm.sendFragmentedResponse(via, msg, hostinfo, pktLen), errOverBudget)
-		assert.Empty(t, conn.take())
+		_, _, err := fragmentResponse(msg, hostinfo, pktLen)
+		require.ErrorIs(t, err, errOverBudget)
 	})
 }
 
@@ -295,10 +297,16 @@ func TestFragCookies(t *testing.T) {
 	assert.False(t, c.valid(key, cookie, now), "two rotations retire a cookie")
 }
 
+// testMsg1 is a msg1 packet carrying msg after its header, as the handshake Machine writes it.
+func testMsg1(msg []byte) []byte {
+	pkt := header.Encode(make([]byte, header.Len, header.Len+len(msg)), header.Version, header.Handshake, header.HandshakeIXPSK0, 0, 1)
+	return append(pkt, msg...)
+}
+
 // msg1Fragment builds the first fragment of a msg1, optionally with a cookie.
 func msg1Fragment(t *testing.T, fragID uint32, cookie *fragment.Cookie) ([]byte, *header.H) {
 	t.Helper()
-	s, err := fragment.NewSender(make([]byte, 2000), ixFragmented, 0, 1, fragID)
+	s, err := fragment.NewSender(testMsg1(make([]byte, 2000)), fragID)
 	require.NoError(t, err)
 	if cookie != nil {
 		s.SetCookie(*cookie)
@@ -479,7 +487,8 @@ func bytes16(b byte) []byte {
 
 func msg2Fragments(t *testing.T, msg []byte, fragID uint32) [][]byte {
 	t.Helper()
-	s, err := fragment.NewSender(msg, ixFragmented, 7, 2, fragID)
+	pkt := header.Encode(make([]byte, header.Len, header.Len+len(msg)), header.Version, header.Handshake, header.HandshakeIXPSK0, 7, 2)
+	s, err := fragment.NewSender(append(pkt, msg...), fragID)
 	require.NoError(t, err)
 	now, later, err := s.Attempt(fragment.DefaultRepair(s.Layout().K))
 	require.NoError(t, err)
@@ -617,7 +626,7 @@ func TestFragAnsweredForgottenResponder(t *testing.T) {
 	msg2 := testMsg2(300, 4)
 	repeat := func(fragID uint32, port uint16) {
 		t.Helper()
-		s, err := fragment.NewSender(msg1, ixFragmented, 0, 1, fragID)
+		s, err := fragment.NewSender(testMsg1(msg1), fragID)
 		require.NoError(t, err)
 		pkts, _, err := s.Attempt(0)
 		require.NoError(t, err)

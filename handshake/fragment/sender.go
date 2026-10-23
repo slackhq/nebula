@@ -33,10 +33,22 @@ type Sender struct {
 	cookie      *Cookie
 }
 
-// NewSender prepares msg for sending. subtype, remoteIndex and counter fill the
-// Nebula header of every fragment; fragID is the sender's local index. The
-// Sender keeps msg, which must not change while it is in use.
-func NewSender(msg []byte, subtype header.MessageSubType, remoteIndex uint32, counter uint64, fragID uint32) (*Sender, error) {
+// NewSender prepares pkt, a handshake message as it would travel unfragmented,
+// Nebula header included, for sending as fragments. Every fragment carries that
+// header with header.HandshakeFragmented set on its subtype; fragID is the
+// sender's local index. The Sender keeps pkt, which must not change while it is
+// in use.
+func NewSender(pkt []byte, fragID uint32) (*Sender, error) {
+	var h header.H
+	if err := h.Parse(pkt); err != nil {
+		return nil, err
+	}
+	return newSender(pkt[header.Len:], h.Subtype|header.HandshakeFragmented, h.RemoteIndex, h.MessageCounter, fragID)
+}
+
+// newSender prepares msg, the message alone, for sending. subtype, remoteIndex
+// and counter fill the Nebula header of every fragment.
+func newSender(msg []byte, subtype header.MessageSubType, remoteIndex uint32, counter uint64, fragID uint32) (*Sender, error) {
 	if len(msg) == 0 || len(msg) > math.MaxUint16 {
 		return nil, ErrMsgLen
 	}
@@ -69,11 +81,6 @@ func (s *Sender) SetNext(index int) {
 // SetCookie attaches a cookie from a responder under load to every later packet.
 func (s *Sender) SetCookie(c Cookie) {
 	s.cookie = &c
-}
-
-// Next returns the index the next attempt starts from.
-func (s *Sender) Next() int {
-	return s.next
 }
 
 // Attempt returns the packets for one transmission attempt carrying K+repair

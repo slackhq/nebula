@@ -12,7 +12,6 @@ import (
 )
 
 var (
-	ErrTooLarge    = errors.New("fragmented message exceeds the size limit")
 	ErrSourceQuota = errors.New("source has too many messages in progress")
 	ErrNoRoom      = errors.New("no room for fragment")
 )
@@ -22,7 +21,6 @@ type TableConfig struct {
 	MaxBytes     int           // symbol bytes held across all entries
 	MaxEntries   int           // messages in progress across all sources
 	MaxPerSource int           // messages in progress per source
-	MaxMsgLen    int           // largest message accepted
 	TTL          time.Duration // an entry idle this long is dropped
 
 	// RepeatInterval is how often, at most, an answered message is reported as a
@@ -90,8 +88,7 @@ func NewTable[K, S comparable](cfg TableConfig) *Table[K, S] {
 
 // Result describes a completed message.
 type Result struct {
-	Msg      []byte            // the decoded message, nil for a repeat
-	Packet   []byte            // header.Len bytes for the caller's Nebula header, then Msg
+	Packet   []byte            // header.Len bytes for the caller's Nebula header, then the message; nil for a repeat
 	Hash     [sha256.Size]byte // sha256 of the message
 	Received int               // packet bytes received for it, for the amplification budget
 
@@ -109,10 +106,6 @@ type Result struct {
 // is removed and the result returned; otherwise the result is nil. A decode
 // error means the message is lost and must be retransmitted.
 func (t *Table[K, S]) Add(key K, source S, now time.Time, h Header, sym []byte) (*Result, error) {
-	if int(h.MsgLen) > t.cfg.MaxMsgLen {
-		return nil, ErrTooLarge
-	}
-
 	t.mu.Lock()
 	if a, ok := t.answered[key]; ok {
 		if now.Sub(a.lastSeen) <= t.cfg.TTL {
@@ -164,11 +157,9 @@ func (t *Table[K, S]) Add(key K, source S, now time.Time, h Header, sym []byte) 
 	if err != nil {
 		return nil, err
 	}
-	msg := pkt[header.Len:]
 	return &Result{
-		Msg:      msg,
 		Packet:   pkt,
-		Hash:     sha256.Sum256(msg),
+		Hash:     sha256.Sum256(pkt[header.Len:]),
 		Received: e.a.Received(),
 		msgLen:   e.a.msgLen,
 		k:        e.a.dec.Layout().K,
@@ -265,13 +256,6 @@ func (t *Table[K, S]) Load() float64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return max(float64(t.bytes)/float64(t.cfg.MaxBytes), float64(len(t.entries))/float64(t.cfg.MaxEntries))
-}
-
-// Bytes returns the number of symbol bytes held.
-func (t *Table[K, S]) Bytes() int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.bytes
 }
 
 func (t *Table[K, S]) insert(key K, source S, h Header) (*tableEntry[K, S], error) {

@@ -33,7 +33,6 @@ func testConfig() TableConfig {
 		MaxBytes:     1 << 20,
 		MaxEntries:   64,
 		MaxPerSource: 4,
-		MaxMsgLen:    16384,
 		TTL:          2 * time.Second,
 	}
 }
@@ -129,15 +128,37 @@ func TestDefaultRepair(t *testing.T) {
 }
 
 func TestSender(t *testing.T) {
-	_, err := NewSender(nil, testSubtype, 0, 1, 1)
+	_, err := newSender(nil, testSubtype, 0, 1, 1)
 	require.ErrorIs(t, err, ErrMsgLen)
-	_, err = NewSender(make([]byte, 65536), testSubtype, 0, 1, 1)
+	_, err = newSender(make([]byte, 65536), testSubtype, 0, 1, 1)
 	require.ErrorIs(t, err, ErrMsgLen)
-	_, err = NewSender(make([]byte, 10), testSubtype, 0, 1, 0)
+	_, err = newSender(make([]byte, 10), testSubtype, 0, 1, 0)
 	require.ErrorIs(t, err, ErrFragID)
 
+	t.Run("from a packet", func(t *testing.T) {
+		_, err := NewSender(make([]byte, header.Len-1), 1)
+		require.ErrorIs(t, err, header.ErrHeaderTooShort)
+		_, err = NewSender(make([]byte, header.Len), 1)
+		require.ErrorIs(t, err, ErrMsgLen)
+
+		pkt := header.Encode(make([]byte, header.Len), header.Version, header.Handshake, testSubtype, 77, 2)
+		pkt = append(pkt, randMsg(rand.New(rand.NewPCG(1, 1)), 2000)...)
+		s, err := NewSender(pkt, 1234)
+		require.NoError(t, err)
+		now, _, err := s.Attempt(0)
+		require.NoError(t, err)
+		for _, p := range now {
+			nh, h, _ := parse(t, p)
+			assert.Equal(t, testSubtype|header.HandshakeFragmented, nh.Subtype)
+			assert.Equal(t, uint32(77), nh.RemoteIndex)
+			assert.Equal(t, uint64(2), nh.MessageCounter)
+			assert.Equal(t, uint32(1234), h.FragID)
+			assert.Equal(t, uint16(2000), h.MsgLen, "the Nebula header is not part of the message")
+		}
+	})
+
 	msg := randMsg(rand.New(rand.NewPCG(1, 1)), 9800)
-	s, err := NewSender(msg, testSubtype, 77, 2, 1234)
+	s, err := newSender(msg, testSubtype, 77, 2, 1234)
 	require.NoError(t, err)
 	require.Equal(t, 9, s.Layout().K)
 
@@ -169,18 +190,18 @@ func TestSender(t *testing.T) {
 	assert.Equal(t, []int{21, 22, 23}, indexes(later))
 
 	// A sender rebuilt from the same message resumes where it was told to.
-	s2, err := NewSender(msg, testSubtype, 77, 2, 1234)
+	s2, err := newSender(msg, testSubtype, 77, 2, 1234)
 	require.NoError(t, err)
-	s2.SetNext(s.Next())
+	s2.SetNext(s.next)
 	now2, _, err := s2.Attempt(0)
 	require.NoError(t, err)
 	assert.Equal(t, []int{24, 25, 26, 27, 28, 29, 30, 31, 32}, indexes(now2))
 	s2.SetNext(-1)
-	assert.Equal(t, 255, s2.Next())
+	assert.Equal(t, 255, s2.next)
 
 	// A cookie rides on every later packet, which still fits MaxPacketLen even
 	// with a full size symbol.
-	full, err := NewSender(make([]byte, 2*MaxSymbolSize), testSubtype, 0, 1, 9)
+	full, err := newSender(make([]byte, 2*MaxSymbolSize), testSubtype, 0, 1, 9)
 	require.NoError(t, err)
 	full.SetCookie(Cookie{1, 2, 3})
 	pkts, _, err := full.Attempt(1)
@@ -212,7 +233,7 @@ func TestLossy(t *testing.T) {
 	for i := range 300 {
 		msg := randMsg(r, 1+r.IntN(16384))
 		fragID := uint32(i + 1)
-		s, err := NewSender(msg, testSubtype, 0, 1, fragID)
+		s, err := newSender(msg, testSubtype, 0, 1, fragID)
 		require.NoError(t, err)
 
 		var got *Result
@@ -240,9 +261,8 @@ func TestLossy(t *testing.T) {
 					// The table keeps no memory of completed messages, so a late
 					// duplicate can complete one again; the handshake layer
 					// recognises the repeat.
-					require.True(t, bytes.Equal(msg, res.Msg))
 					require.Len(t, res.Packet, header.Len+len(msg))
-					require.Equal(t, &res.Packet[header.Len], &res.Msg[0], "Msg follows room for a header")
+					require.True(t, bytes.Equal(msg, res.Packet[header.Len:]))
 					got = res
 				}
 				checkInvariants(t, tb)
@@ -254,7 +274,7 @@ func TestLossy(t *testing.T) {
 		tb.Expire(now.Add(time.Hour))
 	}
 	assert.Zero(t, tb.Len())
-	assert.Zero(t, tb.Bytes())
+	assert.Zero(t, tb.bytes)
 }
 
 // TestConcurrent spreads each message's fragments across goroutines, as
@@ -270,7 +290,7 @@ func TestConcurrent(t *testing.T) {
 	for id := uint32(1); id <= msgs; id++ {
 		msg := randMsg(r, 1+r.IntN(16384))
 		want[id] = msg
-		s, err := NewSender(msg, testSubtype, 0, 1, id)
+		s, err := newSender(msg, testSubtype, 0, 1, id)
 		require.NoError(t, err)
 		a, b, err := s.Attempt(DefaultRepair(s.Layout().K))
 		require.NoError(t, err)
@@ -297,7 +317,7 @@ func TestConcurrent(t *testing.T) {
 					return
 				}
 				if res != nil {
-					if !bytes.Equal(want[h.FragID], res.Msg) {
+					if !bytes.Equal(want[h.FragID], res.Packet[header.Len:]) {
 						t.Errorf("message %d decoded wrong", h.FragID)
 					}
 					mu.Lock()
@@ -314,7 +334,7 @@ func TestConcurrent(t *testing.T) {
 
 func firstFragment(t *testing.T, msgLen int, fragID uint32) (Header, []byte) {
 	t.Helper()
-	s, err := NewSender(make([]byte, msgLen), testSubtype, 0, 1, fragID)
+	s, err := newSender(make([]byte, msgLen), testSubtype, 0, 1, fragID)
 	require.NoError(t, err)
 	now, _, err := s.Attempt(0)
 	require.NoError(t, err)
@@ -324,14 +344,6 @@ func firstFragment(t *testing.T, msgLen int, fragID uint32) (Header, []byte) {
 
 func TestTableLimits(t *testing.T) {
 	now := time.Unix(1000, 0)
-
-	t.Run("max message length", func(t *testing.T) {
-		tb := NewTable[testKey, string](testConfig())
-		h, sym := firstFragment(t, 16385, 1)
-		_, err := tb.Add(testKey{"a", 1}, "a", now, h, sym)
-		require.ErrorIs(t, err, ErrTooLarge)
-		assert.Zero(t, tb.Len())
-	})
 
 	t.Run("per source quota", func(t *testing.T) {
 		cfg := testConfig()
@@ -378,7 +390,7 @@ func TestTableLimits(t *testing.T) {
 			require.NoError(t, err)
 			checkInvariants(t, tb)
 		}
-		assert.Equal(t, 3000, tb.Bytes())
+		assert.Equal(t, 3000, tb.bytes)
 	})
 
 	t.Run("no room removes new entry", func(t *testing.T) {
@@ -399,7 +411,7 @@ func TestTableLimits(t *testing.T) {
 			_, err := tb.Add(testKey{"a", 1}, "a", now, h, sym)
 			require.NoError(t, err)
 		}
-		assert.Equal(t, 1000, tb.Bytes())
+		assert.Equal(t, 1000, tb.bytes)
 	})
 
 	t.Run("mismatch drops the entry", func(t *testing.T) {
@@ -412,7 +424,7 @@ func TestTableLimits(t *testing.T) {
 		_, err = tb.Add(testKey{"a", 1}, "a", now, h2, sym2)
 		require.ErrorIs(t, err, ErrMismatch)
 		assert.Zero(t, tb.Len())
-		assert.Zero(t, tb.Bytes())
+		assert.Zero(t, tb.bytes)
 		checkInvariants(t, tb)
 	})
 
@@ -434,7 +446,7 @@ func TestTableLimits(t *testing.T) {
 
 	t.Run("ttl", func(t *testing.T) {
 		tb := NewTable[testKey, string](testConfig())
-		s, err := NewSender(make([]byte, 5000), testSubtype, 0, 1, 1)
+		s, err := newSender(make([]byte, 5000), testSubtype, 0, 1, 1)
 		require.NoError(t, err)
 		pkts, _, err := s.Attempt(0)
 		require.NoError(t, err)
@@ -447,7 +459,7 @@ func TestTableLimits(t *testing.T) {
 		_, h, sym = parse(t, pkts[1])
 		_, err = tb.Add(testKey{"a", 1}, "a", now.Add(1500*time.Millisecond), h, sym)
 		require.NoError(t, err)
-		assert.Equal(t, 2000, tb.Bytes())
+		assert.Equal(t, 2000, tb.bytes)
 
 		tb.Expire(now.Add(3 * time.Second))
 		assert.Equal(t, 1, tb.Len())
@@ -456,7 +468,7 @@ func TestTableLimits(t *testing.T) {
 		_, h, sym = parse(t, pkts[2])
 		_, err = tb.Add(testKey{"a", 1}, "a", now.Add(10*time.Second), h, sym)
 		require.NoError(t, err)
-		assert.Equal(t, 1000, tb.Bytes())
+		assert.Equal(t, 1000, tb.bytes)
 
 		tb.Expire(now.Add(time.Minute))
 		assert.Zero(t, tb.Len())
@@ -488,7 +500,6 @@ func FuzzTable(f *testing.F) {
 			MaxBytes:     4000,
 			MaxEntries:   3,
 			MaxPerSource: 2,
-			MaxMsgLen:    6000,
 			TTL:          time.Second,
 		})
 		now := time.Unix(0, 0)
@@ -510,7 +521,7 @@ func FuzzTable(f *testing.F) {
 			res, err := tb.Add(testKey{src, fragID}, src, now, h, sym)
 			if res != nil {
 				require.NoError(t, err)
-				require.Len(t, res.Msg, int(msgLen))
+				require.Len(t, res.Packet, header.Len+int(msgLen))
 			}
 			checkInvariants(t, tb)
 		}
@@ -545,7 +556,7 @@ func TestTableAnswered(t *testing.T) {
 	for i := range 3 * testConfig().MaxPerSource {
 		msg := randMsg(r, msgLen)
 		key := testKey{"a", uint32(i + 1)}
-		s, err := NewSender(msg, testSubtype, 0, 1, key.fragID)
+		s, err := newSender(msg, testSubtype, 0, 1, key.fragID)
 		require.NoError(t, err)
 		data, repair, err := s.Attempt(DefaultRepair(s.Layout().K))
 		require.NoError(t, err)
@@ -554,7 +565,7 @@ func TestTableAnswered(t *testing.T) {
 
 		res := sendAll(key, data)
 		require.Len(t, res, 1, "message %d was refused", i)
-		require.Equal(t, msg, res[0].Msg)
+		require.Equal(t, msg, res[0].Packet[header.Len:])
 		tb.Answered(key, res[0], now)
 
 		assert.Empty(t, sendAll(key, repair), "stragglers are not a new message")
@@ -565,7 +576,7 @@ func TestTableAnswered(t *testing.T) {
 	// A retry offers fresh symbols, and once K of them arrive it is a repeat.
 	msg := randMsg(r, msgLen)
 	key := testKey{"b", 99}
-	s, err := NewSender(msg, testSubtype, 0, 1, key.fragID)
+	s, err := newSender(msg, testSubtype, 0, 1, key.fragID)
 	require.NoError(t, err)
 	data, repair, err := s.Attempt(DefaultRepair(s.Layout().K))
 	require.NoError(t, err)
@@ -579,7 +590,7 @@ func TestTableAnswered(t *testing.T) {
 	res = sendAll(key, append(data, repair...))
 	require.Len(t, res, 1)
 	assert.True(t, res[0].Repeat)
-	assert.Nil(t, res[0].Msg)
+	assert.Nil(t, res[0].Packet)
 	assert.Equal(t, sha256.Sum256(msg), res[0].Hash)
 	assert.Positive(t, res[0].Received)
 
@@ -590,7 +601,7 @@ func TestTableAnswered(t *testing.T) {
 	res = sendAll(key, data)
 	require.Len(t, res, 1)
 	assert.False(t, res[0].Repeat)
-	assert.Equal(t, msg, res[0].Msg)
+	assert.Equal(t, msg, res[0].Packet[header.Len:])
 
 	// Answered messages expire with the TTL like entries do.
 	tb.Answered(key, res[0], now)
@@ -647,9 +658,9 @@ func TestTableRepeatInterval(t *testing.T) {
 	// the initiator offers the same symbols on every path.
 	direct := testKey{"direct", 1}
 	relayed := testKey{"relay", 1}
-	sd, err := NewSender(msg, testSubtype, 0, 1, 1)
+	sd, err := newSender(msg, testSubtype, 0, 1, 1)
 	require.NoError(t, err)
-	sr, err := NewSender(msg, testSubtype, 0, 1, 1)
+	sr, err := newSender(msg, testSubtype, 0, 1, 1)
 	require.NoError(t, err)
 	answer(direct, sd)
 	answer(relayed, sr)
@@ -673,7 +684,7 @@ func TestTableRepeatInterval(t *testing.T) {
 	// Without an interval every K fresh symbols is a repeat, which is what the
 	// other tests rely on.
 	tb = NewTable[testKey, string](testConfig())
-	s2, err := NewSender(msg, testSubtype, 0, 1, 2)
+	s2, err := newSender(msg, testSubtype, 0, 1, 2)
 	require.NoError(t, err)
 	k2 := testKey{"a", 2}
 	answer(k2, s2)
