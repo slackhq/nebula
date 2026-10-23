@@ -24,10 +24,14 @@ import (
 // id-MLDSA87-ECDSA-P384-SHA512 of draft-ietf-lamps-pq-composite-sigs. Every algorithm is in CNSA 1.0 or 2.0.
 const Curve_P384_MLKEM1024_MLDSA87 Curve = 2
 
-// CurveName returns the name of a curve, the hybrid one included, which the generated Curve.String does not know.
+// CurveName returns the name of a curve, the post-quantum ones included, which the generated Curve.String does not
+// know.
 func CurveName(c Curve) string {
-	if c == Curve_P384_MLKEM1024_MLDSA87 {
+	switch c {
+	case Curve_P384_MLKEM1024_MLDSA87:
 		return "P384_MLKEM1024_MLDSA87"
+	case Curve_MLKEM1024_MLDSA87:
+		return "MLKEM1024_MLDSA87"
 	}
 	return c.String()
 }
