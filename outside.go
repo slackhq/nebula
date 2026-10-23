@@ -25,7 +25,7 @@ var ErrOutOfWindow = errors.New("out of window packet")
 
 // readOutsidePackets processes one received underlay packet.
 // Message payloads are decrypted IN PLACE, so packet must stay untouched
-// by the caller until the batcher for queue q has been flushed
+// by the caller until the TUN and relay batches for queue q have been flushed.
 func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxContext) {
 	h := rxc.h
 	err := h.Parse(packet)
@@ -233,8 +233,14 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 				// Forward this packet through the relay tunnel, rebuilding it in place.
 				// Encode overwrites the old outer header, and the new AEAD tag lands where the old one was
 				fwdBuf := packet[:0]
-				//todo it would potentially be nice to batch these
-				f.SendVia(targetHI, targetRelay, signedPayload, rxc.nb, fwdBuf, true, rxc.q)
+				out, err := f.prepareSendVia(targetHI, targetRelay, signedPayload, rxc.nb, fwdBuf, true)
+				if err == nil {
+					// Borrows the receive buffer, the listener's flush callback drains it before the buffer is reused
+					rxc.relayBatch.Commit(out, targetHI.GetRemote())
+					if rxc.relayBatch.Len() >= batch.SendBatchCap {
+						f.flushSendBatch(rxc.relayBatch, rxc.q)
+					}
+				}
 			case TerminalType:
 				hostinfo.logger(f.l).Error("Unexpected Relay Type of Terminal")
 				return

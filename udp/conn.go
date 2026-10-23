@@ -41,7 +41,7 @@ type Conn interface {
 	//
 	// Returns the number of packets successfully written. A destination the kernel rejects costs only
 	// its own packet, so a short count means some peers were undeliverable, not that the batch failed.
-	// Not safe for concurrent use on the same Conn.
+	// Safe for concurrent use on the same Conn.
 	WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error)
 	// ReloadConfig applies the listen settings that can change, r is nil at startup
 	ReloadConfig(c *config.C, r *config.Reload)
