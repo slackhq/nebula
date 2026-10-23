@@ -91,7 +91,7 @@ There is no version 1 certificate on the curve, and no classical certificate bes
 
 ## Handshake
 
-`ix_hybrid` (subtype 3) runs `HandshakeHybridIX` from
+`ix_hybrid` (subtype 3, on the wire always as its fragmented form 0x83) runs `HandshakeHybridIX` from
 [github.com/DefinedNet/noise](https://github.com/DefinedNet/noise) (its `PQ_RESEARCH.md` gives the
 design rationale and security argument), with P-384 for the DH tokens, ML-KEM-1024 for the KEM
 tokens, SHA-512 as the hash and the operator's `cipher`: `Noise_IXhybrid_P384+MLKEM1024_AESGCM_SHA512`.
