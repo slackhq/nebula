@@ -101,7 +101,9 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxCont
 	// At this point we should have a valid existing tunnel, verify and send
 	// recvError if necessary
 	if hostinfo == nil || hostinfo.ConnectionState == nil {
-		if !via.IsRelayed {
+		// A hybrid responder waiting for msg3 already gets data from an initiator
+		// that has its keys. A RecvError would tear that new tunnel down.
+		if !via.IsRelayed && !f.handshakeManager.isHybridResponder(h.RemoteIndex) {
 			f.maybeSendRecvError(via.UdpAddr, h.RemoteIndex)
 		}
 		return
