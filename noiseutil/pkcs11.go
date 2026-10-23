@@ -3,6 +3,7 @@ package noiseutil
 import (
 	"crypto/ecdh"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -39,15 +40,60 @@ var (
 	p11cache = map[string]*p11Client{}
 )
 
-func getP11Client(uri string) *p11Client {
-	p11mu.Lock()
-	defer p11mu.Unlock()
-	c := p11cache[uri]
-	if c == nil {
-		c = &p11Client{}
-		p11cache[uri] = c
+// Normalizes a PKCS#11 URI, removing all Nebula-specific parameters.
+// Returns the normalized URI (if it parses successfully), a boolean indicating
+// whether this session should be cached, and an optional error.
+func normalizeP11Uri(uri string) (string, bool, error) {
+	parsedUri, err := url.Parse(uri)
+	cache := true
+
+	if parsedUri != nil && err == nil {
+		query := parsedUri.Query()
+
+		// Ensure that we delete keys here, or else we get a
+		// "malformed query attribute" error from PKClient.
+		if query.Has("cache-sessions") {
+			cacheSessions := query.Get("cache-sessions")
+			if cacheSessions == "0" {
+				cache = false
+			} else if cacheSessions == "" || cacheSessions == "1" {
+				cache = true
+			} else {
+				return uri, cache, fmt.Errorf("invalid value for cache-sessions: %v", cacheSessions)
+			}
+			query.Del("cache-sessions")
+		}
+
+		parsedUri.RawQuery = query.Encode()
+		return parsedUri.String(), cache, nil
+	} else {
+		return uri, cache, fmt.Errorf("bad URI: %w", err)
 	}
-	return c
+}
+
+// Returns a PKCS#11 client from the specified URI, possibly caching it.
+// Returns (client, final URI, true if it was cached, error).
+func getP11Client(uri string) (*p11Client, string, bool, error) {
+	normalizedUri, cache, err := normalizeP11Uri(uri)
+
+	if err != nil {
+		return nil, normalizedUri, cache, fmt.Errorf("unable to parse PKCS#11 URI: %w", err)
+	}
+
+	var c *p11Client = nil
+	if cache {
+		p11mu.Lock()
+		defer p11mu.Unlock()
+		c = p11cache[normalizedUri]
+		if c == nil {
+			c = &p11Client{}
+			p11cache[normalizedUri] = c
+		}
+	} else {
+		c = &p11Client{}
+	}
+
+	return c, normalizedUri, cache, nil
 }
 
 func (c nistP11Curve) DH(privkey, pubkey []byte) ([]byte, error) {
@@ -63,24 +109,30 @@ func (c nistP11Curve) DH(privkey, pubkey []byte) ([]byte, error) {
 		return nil, fmt.Errorf("unable to unmarshal pubkey: %w", err)
 	}
 
-	pc := getP11Client(pkStr)
-	pc.mu.Lock()
-	defer pc.mu.Unlock()
+	pc, uri, cache, err := getP11Client(pkStr)
+
+	if err != nil {
+		return nil, fmt.Errorf("unable to get PKCS#11 client: %w", err)
+	}
+
+	if cache {
+		pc.mu.Lock()
+		defer pc.mu.Unlock()
+	}
 
 	if pc.client == nil {
-		pc.client, err = pkclient.FromUrl(pkStr)
+		pc.client, err = pkclient.FromUrl(uri)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	out, err := pc.client.DeriveNoise(ecdhPubKey.Bytes())
-	if err != nil {
+	if err != nil || !cache {
 		// The session may be stale (token reset / re-init). Drop it so the
 		// next handshake re-opens a fresh client.
 		_ = pc.client.Close()
 		pc.client = nil
-		return nil, err
 	}
-	return out, nil
+	return out, err
 }
