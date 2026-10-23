@@ -31,10 +31,6 @@ const (
 	// received from it.
 	fragAmplification = 3
 
-	// fragMaxMsgLen bounds the fragmented handshake messages a node reassembles, msg1 in the responder's table and
-	// msg2 in an initiator's slots: the most a fragment header's MsgLen can say.
-	fragMaxMsgLen = 65535
-
 	// fragMsg2Slots is how many responders' msg2s one attempt reassembles at once.
 	fragMsg2Slots = 2
 )
@@ -132,7 +128,6 @@ var fragTableConfig = fragment.TableConfig{
 	MaxBytes:     4 << 20,
 	MaxEntries:   1024,
 	MaxPerSource: 4,
-	MaxMsgLen:    fragMaxMsgLen,
 	TTL:          3 * time.Second,
 }
 
@@ -238,11 +233,7 @@ func (hm *HandshakeManager) fragmentStage0(hh *HandshakeHostInfo, msg []byte) er
 
 // useFragments makes the initiator's msg1 travel as fragments from now on.
 func (hm *HandshakeManager) useFragments(hh *HandshakeHostInfo, msg []byte) error {
-	var h header.H
-	if err := h.Parse(msg); err != nil {
-		return err
-	}
-	s, err := fragment.NewSender(msg[header.Len:], h.Subtype|header.HandshakeFragmented, h.RemoteIndex, h.MessageCounter, hh.hostinfo.localIndexId)
+	s, err := fragment.NewSender(msg, hh.hostinfo.localIndexId)
 	if err != nil {
 		return err
 	}
@@ -327,10 +318,6 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 // continueFragmented collects msg2 fragments for an initiator's attempt, one slot per responder FragID, and processes
 // the first msg2 to complete.
 func (hm *HandshakeManager) continueFragmented(via ViaSender, hh *HandshakeHostInfo, h *header.H, fh fragment.Header, sym []byte) {
-	if int(fh.MsgLen) > fragMaxMsgLen {
-		return
-	}
-
 	hh.Lock()
 	if cur := hm.queryIndex(hh.hostinfo.localIndexId); cur != hh {
 		hh.Unlock()
@@ -401,20 +388,16 @@ func (in msg1Info) budget() int {
 // errOverBudget is a response bigger than its amplification budget allows.
 var errOverBudget = errors.New("handshake response exceeds the amplification budget")
 
-// sendFragmentedResponse sends the responder's msg2 as fragments, each send offering symbols the hostinfo has not sent
-// before. The clock on resends is per path and lives in the fragment table: a copy of msg1 arriving by a second path
-// (the other address family, a relay) is answered on that path at once, which carries the handshake when the first
-// path only works one way, and a retry on a path is reported as a repeat at most once per retry interval. budget
-// bounds the bytes sent before the address is validated, -1 for none; a response that does not fit it at all returns
-// errOverBudget.
-func (hm *HandshakeManager) sendFragmentedResponse(via ViaSender, msg []byte, hostinfo *HostInfo, budget int) error {
-	var h header.H
-	if err := h.Parse(msg); err != nil {
-		return err
-	}
-	s, err := fragment.NewSender(msg[header.Len:], h.Subtype|header.HandshakeFragmented, h.RemoteIndex, h.MessageCounter, hostinfo.localIndexId)
+// fragmentResponse builds the responder's msg2 as fragments, now to send immediately and later after the repair delay,
+// each call offering symbols the hostinfo has not sent before. The clock on resends is per path and lives in the
+// fragment table: a copy of msg1 arriving by a second path (the other address family, a relay) is answered on that
+// path at once, which carries the handshake when the first path only works one way, and a retry on a path is reported
+// as a repeat at most once per retry interval. budget bounds the bytes sent before the address is validated, -1 for
+// none; a response that does not fit it at all returns errOverBudget.
+func fragmentResponse(msg []byte, hostinfo *HostInfo, budget int) (now, later [][]byte, err error) {
+	s, err := fragment.NewSender(msg, hostinfo.localIndexId)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	l := s.Layout()
@@ -423,29 +406,14 @@ func (hm *HandshakeManager) sendFragmentedResponse(via ViaSender, msg []byte, ho
 		pktLen := header.Len + fragment.HeaderLen + l.SymbolSize
 		packets := budget / pktLen
 		if packets < l.K {
-			return errOverBudget
+			return nil, nil, errOverBudget
 		}
 		repair = min(repair, packets-l.K)
 	}
 
 	n := uint32(l.K + repair)
 	s.SetNext(int(hostinfo.handshakeNextSymbol.Add(n) - n))
-	pkts, later, err := s.Attempt(repair)
-	if err != nil {
-		return err
-	}
-
-	if via.IsRelayed {
-		if via.relay == nil {
-			return errors.New("both addr and via.relay are nil")
-		}
-		// We received a valid handshake on this relay, so make sure the relay
-		// state reflects that, in case it had been marked Disestablished.
-		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnAddrs[0])
-		via.relayHI.relayState.UpdateRelayForByIdxState(via.relay.LocalIndex, Established)
-	}
-	hm.f.messageMetrics.Tx(header.Handshake, h.Subtype|header.HandshakeFragmented, int64(len(pkts)+len(later)))
-	return hm.sendFragmented(pkts, later, hm.sendTo(via))
+	return s.Attempt(repair)
 }
 
 // stillAnswering reports whether the hostinfo that answered a msg1 still holds its index as an established tunnel, so
@@ -596,6 +564,11 @@ func (hm *HandshakeManager) sendCookie(via ViaSender, subtype header.MessageSubT
 	if received < fragCookieReplyLen {
 		return
 	}
+	send, err := hm.sendTo(via)
+	if err != nil {
+		hm.l.Debug("Failed to send handshake cookie", "to", via, "error", err)
+		return
+	}
 	if _, ok := hm.cookieLimiter.Allow(); !ok {
 		return
 	}
@@ -604,7 +577,7 @@ func (hm *HandshakeManager) sendCookie(via ViaSender, subtype header.MessageSubT
 	header.Encode(reply, header.Version, header.Handshake, subtype|header.HandshakeFragmented, fragID, fragCookieCounter)
 	reply = append(reply, c[:]...)
 	hm.f.messageMetrics.Tx(header.Handshake, subtype|header.HandshakeFragmented, 1)
-	if err := hm.sendTo(via)(reply); err != nil {
+	if err := send(reply); err != nil {
 		hm.l.Debug("Failed to send handshake cookie", "to", via, "error", err)
 	}
 }
@@ -644,27 +617,33 @@ func (hm *HandshakeManager) handleCookie(via ViaSender, packet []byte, h *header
 	if err != nil {
 		return
 	}
+	send, err := hm.sendTo(via)
+	if err != nil {
+		hm.l.Debug("Failed to resend handshake with cookie", "to", via, "error", err)
+		return
+	}
 	hm.messageMetrics.Tx(header.Handshake, h.Subtype, int64(len(pkts)+len(later)))
-	if err := hm.sendFragmented(pkts, later, hm.sendTo(via)); err != nil {
+	if err := hm.sendFragmented(pkts, later, send); err != nil {
 		hm.l.Debug("Failed to resend handshake with cookie", "to", via, "error", err)
 	}
 }
 
-// sendTo returns a function sending a packet back the way via came: directly, or through the relay it arrived on.
-func (hm *HandshakeManager) sendTo(via ViaSender) func([]byte) error {
+// sendTo returns a function sending a packet back the way via came: directly, or through the relay it arrived on. It
+// fails when via claims a relay it does not name, so a caller that gets a function may also use via's relay.
+func (hm *HandshakeManager) sendTo(via ViaSender) (func([]byte) error, error) {
 	f := hm.f
 	if !via.IsRelayed {
 		return func(p []byte) error {
 			return f.outside.WriteTo(p, via.UdpAddr)
-		}
+		}, nil
+	}
+	if via.relay == nil {
+		return nil, errors.New("both addr and via.relay are nil")
 	}
 	return func(p []byte) error {
-		if via.relay == nil {
-			return errors.New("both addr and via.relay are nil")
-		}
 		f.sendHandshakeVia(via.relayHI, via.relay, p)
 		return nil
-	}
+	}, nil
 }
 
 // sendHandshakeVia sends a handshake packet through a relay, with buffers sized for the packet rather than the mtu:

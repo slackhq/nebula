@@ -48,11 +48,12 @@ Symbol               SymbolSize bytes
 - `Counter` is the handshake message number (1, 2). `RemoteIndex` is 0 for msg1, as for an
   unfragmented msg1.
 - `FragID` is the sender's local index (random, non-zero).
-- `MsgLen` is the length of the whole message, at most 65535 bytes. Both ends derive the layout
-  from it: `K = ceil(MsgLen / 1160)`, `SymbolSize = ceil(MsgLen / K)`. Every symbol has the same
-  size. Room for a cookie is always reserved, so a packet is at most 16 + 8 + 16 + 1160 = 1200
-  bytes with or without one, and 1232 relayed (a 16 byte header and a 16 byte tag), the IPv6
-  minimum MTU budget also used by DNS Flag Day 2020.
+- `MsgLen` is the length of the whole message. Being a u16, it bounds every message a node
+  reassembles to 65535 bytes; there is no other size limit. Both ends derive the layout from it:
+  `K = ceil(MsgLen / 1160)`, `SymbolSize = ceil(MsgLen / K)`. Every symbol has the same size.
+  Room for a cookie is always reserved, so a packet is at most 16 + 8 + 16 + 1160 = 1200 bytes
+  with or without one, and 1232 relayed (a 16 byte header and a 16 byte tag), the IPv6 minimum
+  MTU budget also used by DNS Flag Day 2020.
 - `Index < K` is a data symbol (a slice of the message, the last one zero padded);
   `Index >= K` is a repair symbol.
 - `Flags` bit 0x01 means a cookie follows the fragment header. Other bits must be zero.

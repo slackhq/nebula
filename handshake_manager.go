@@ -1155,47 +1155,49 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 		)
 	}
 
+	send, err := hm.sendTo(via)
+	if err != nil {
+		f.l.Error("Failed to send handshake message", append(logFields, "error", err)...)
+		return
+	}
+	if via.IsRelayed {
+		logFields = append(logFields, "relay", via.relayHI.vpnAddrs[0])
+	} else {
+		logFields = append(logFields, "from", via)
+	}
+
+	now, later := [][]byte{msg}, [][]byte(nil)
 	if hm.shouldFragment(len(msg), in.fragmented) {
-		fields := append(logFields, "from", via)
 		// A repeat of this msg1 is answered from here on without redoing the handshake.
 		if !cached {
 			hm.answered.add(hostinfo.HandshakePacket[handshakePacketStage0], hostinfo, time.Now())
 		}
-		err := hm.sendFragmentedResponse(via, msg, hostinfo, in.budget())
-		switch {
-		case errors.Is(err, errOverBudget):
+		now, later, err = fragmentResponse(msg, hostinfo, in.budget())
+		if errors.Is(err, errOverBudget) {
 			key, _ := fragKeyFor(via, hostinfo.remoteIndexId)
 			hm.sendCookie(via, subtype, hostinfo.remoteIndexId, key, in.received, time.Now())
-			f.l.Debug("Handshake response exceeds the amplification budget, asking the initiator to show its address", fields...)
-		case err != nil:
-			f.l.Debug("Did not send handshake message", append(fields, "error", err)...)
-		default:
-			f.l.Info("Handshake message sent", fields...)
-		}
-		return
-	}
-
-	f.messageMetrics.Tx(header.Handshake, subtype, 1)
-	if !via.IsRelayed {
-		fields := append(logFields, "from", via)
-		err := f.outside.WriteTo(msg, via.UdpAddr)
-		if err != nil {
-			f.l.Error("Failed to send handshake message", append(fields, "error", err)...)
-		} else {
-			f.l.Info("Handshake message sent", fields...)
-		}
-	} else {
-		if via.relay == nil {
-			f.l.Error("Handshake send failed: both addr and via.relay are nil.")
+			f.l.Debug("Handshake response exceeds the amplification budget, asking the initiator to show its address", logFields...)
 			return
 		}
-		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnAddrs[0])
+		if err != nil {
+			f.l.Error("Failed to send handshake message", append(logFields, "error", err)...)
+			return
+		}
+		subtype |= header.HandshakeFragmented
+	}
+
+	if via.IsRelayed {
 		// We received a valid handshake on this relay, so make sure the relay
 		// state reflects that, in case it had been marked Disestablished.
+		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnAddrs[0])
 		via.relayHI.relayState.UpdateRelayForByIdxState(via.relay.LocalIndex, Established)
-		f.sendHandshakeVia(via.relayHI, via.relay, msg)
-		f.l.Info("Handshake message sent", append(logFields, "relay", via.relayHI.vpnAddrs[0])...)
 	}
+	f.messageMetrics.Tx(header.Handshake, subtype, int64(len(now)+len(later)))
+	if err := hm.sendFragmented(now, later, send); err != nil {
+		f.l.Error("Failed to send handshake message", append(logFields, "error", err)...)
+		return
+	}
+	f.l.Info("Handshake message sent", logFields...)
 }
 
 // handleCheckAndCompleteError handles errors from CheckAndComplete.
