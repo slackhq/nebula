@@ -261,6 +261,31 @@ func (hh *HandshakeHostInfo) stage0Packets() (now, later [][]byte, err error) {
 	return hh.sender.Attempt(fragment.DefaultRepair(hh.sender.Layout().K))
 }
 
+// relayEstablished sends the pending handshake with target through a relay that just came up, rather than leaving it
+// for the next retry, which may be a retry interval or more away. A relay is often still being set up when a handshake's
+// first attempt goes out, and re-requested on every attempt after the tunnel to the peer closes.
+// send sends a packet through the relay, whose vpn address is relayAddr.
+func (hm *HandshakeManager) relayEstablished(target, relayAddr netip.Addr, send func([]byte) error) {
+	hh := hm.queryVpnIp(target)
+	if hh == nil {
+		return
+	}
+	hh.Lock()
+	defer hh.Unlock()
+	if hm.queryVpnIp(target) != hh || !hh.ready {
+		return
+	}
+	now, later, err := hh.stage0Packets()
+	if err != nil {
+		return
+	}
+	hh.hostinfo.logger(hm.l).Info("Send handshake via new relay", "relay", relayAddr)
+	hm.messageMetrics.Tx(header.Handshake, header.MessageSubType(now[0][1]), int64(len(now)+len(later)))
+	if err := hm.sendFragmented(now, later, send); err != nil {
+		hh.hostinfo.logger(hm.l).Debug("Failed to send handshake via new relay", "relay", relayAddr, "error", err)
+	}
+}
+
 // handleFragment takes a fragment of a handshake message, or a cookie reply.
 func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *header.H) {
 	if h.MessageCounter == fragCookieCounter {
