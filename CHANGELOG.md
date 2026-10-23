@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fragmented handshakes: a handshake message too big for one packet, from a certificate with many groups, names or
   networks, is sent as Reed-Solomon coded fragments that each fit the IPv6 minimum MTU, rather than relying on IP
   fragmentation. `handshakes.fragment` (`auto`, `always`, `never`) chooses when, and `handshakes.repair_delay` how
-  long repair fragments trail. A node reassembles fragments unless set to `never`; an older peer can not, but the
+  long repair fragments trail, a tenth of `handshakes.try_interval` unless set. Fragments are counted in
+  `messages.{tx,rx}.handshake_ixpsk0_fragmented`. A node reassembles fragments unless set to `never`; an older peer can not, but the
   oversized packet it could have read needed IP fragmentation to arrive. See `docs/fragmented-handshakes.md`.
 
 - A control socket that provides access to all of the ssh debug server's commands along with support

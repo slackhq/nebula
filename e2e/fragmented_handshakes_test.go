@@ -40,7 +40,7 @@ func handshakeOf(p *udp.Packet) (*header.H, *fragment.Header) {
 	if h.Type != header.Handshake {
 		return nil, nil
 	}
-	if !header.IsFragmented(h.Subtype) || h.MessageCounter == 0 {
+	if _, fragmented := header.FragmentedPattern(h.Subtype); !fragmented || h.MessageCounter == 0 {
 		return h, nil
 	}
 	// A relayed packet still has the relay's AEAD tag on the end.
@@ -70,7 +70,7 @@ func (ft *fragmentTally) observe(p *udp.Packet) {
 	ft.Lock()
 	defer ft.Unlock()
 	switch {
-	case header.IsFragmented(h.Subtype) && h.MessageCounter == 0:
+	case h.MessageCounter == 0 && h.Subtype == header.HandshakeIXPSK0Fragmented:
 		ft.cookies++
 	case fh != nil:
 		ft.fragments++

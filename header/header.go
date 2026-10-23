@@ -68,19 +68,36 @@ const (
 	HandshakeIXPSK0 MessageSubType = 0
 	HandshakeXXPSK0 MessageSubType = 1
 
-	// HandshakeFragmented, set on a handshake subtype, marks a message that travels as fragments, see
-	// handshake/fragment. The rest of the subtype names the handshake pattern as it would unfragmented.
-	HandshakeFragmented MessageSubType = 0x80
+	// HandshakeIXPSK0Fragmented and HandshakeXXPSK0Fragmented are the subtypes of those patterns' messages when they
+	// travel as fragments, see handshake/fragment.
+	HandshakeIXPSK0Fragmented MessageSubType = 0x80
+	HandshakeXXPSK0Fragmented MessageSubType = 0x81
 )
 
-// IsFragmented reports whether a handshake message of this subtype travels as fragments.
-func IsFragmented(st MessageSubType) bool {
-	return st&HandshakeFragmented != 0
+// FragmentedSubtype returns the subtype a handshake message of this pattern carries as fragments, and false for a
+// subtype with no fragmented form.
+func FragmentedSubtype(pattern MessageSubType) (MessageSubType, bool) {
+	switch pattern {
+	case HandshakeIXPSK0:
+		return HandshakeIXPSK0Fragmented, true
+	case HandshakeXXPSK0:
+		return HandshakeXXPSK0Fragmented, true
+	default:
+		return 0, false
+	}
 }
 
-// HandshakePattern returns the handshake pattern a handshake subtype names, fragmented or not.
-func HandshakePattern(st MessageSubType) MessageSubType {
-	return st &^ HandshakeFragmented
+// FragmentedPattern returns the handshake pattern a fragmented subtype carries, and false for a subtype that does not
+// travel as fragments.
+func FragmentedPattern(st MessageSubType) (MessageSubType, bool) {
+	switch st {
+	case HandshakeIXPSK0Fragmented:
+		return HandshakeIXPSK0, true
+	case HandshakeXXPSK0Fragmented:
+		return HandshakeXXPSK0, true
+	default:
+		return 0, false
+	}
 }
 
 var ErrHeaderTooShort = errors.New("header is too short")
@@ -102,7 +119,8 @@ var subTypeMap = map[MessageType]*map[MessageSubType]string{
 	Test:        &subTypeTestMap,
 	CloseTunnel: &subTypeNoneMap,
 	Handshake: {
-		HandshakeIXPSK0: "ix_psk0",
+		HandshakeIXPSK0:           "ix_psk0",
+		HandshakeIXPSK0Fragmented: "ix_psk0_fragmented",
 	},
 	Control: &subTypeNoneMap,
 }
@@ -199,12 +217,6 @@ func (h *H) IsValidSubType() bool {
 
 // SubTypeName will transform a nebula message sub type into a human string
 func SubTypeName(t MessageType, s MessageSubType) string {
-	if t == Handshake && IsFragmented(s) {
-		if n := SubTypeName(t, HandshakePattern(s)); n != "unknown" {
-			return n + "_fragmented"
-		}
-		return "unknown"
-	}
 	if n, ok := subTypeMap[t]; ok {
 		if x, ok := (*n)[s]; ok {
 			return x
@@ -219,7 +231,7 @@ func IsValidSubType(t MessageType, s MessageSubType) bool {
 	case Message:
 		return s == MessageNone || s == MessageRelay
 	case Handshake:
-		return HandshakePattern(s) == HandshakeIXPSK0
+		return s == HandshakeIXPSK0 || s == HandshakeIXPSK0Fragmented
 	case Test:
 		return s == TestReply || s == TestRequest
 	case Control, CloseTunnel, RecvError, LightHouse:

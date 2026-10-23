@@ -491,7 +491,8 @@ logging:
   # docs/fragmented-handshakes.md. Reloadable.
   #fragment: auto
 
-  # repair_delay is how long repair fragments trail the data fragments of a fragmented message. Reloadable.
+  # repair_delay is how long repair fragments trail the data fragments of a fragmented message. It defaults to a
+  # tenth of try_interval, and should stay well below half of it. Reloadable.
   #repair_delay: 10ms
 
 # Tunnel manager settings

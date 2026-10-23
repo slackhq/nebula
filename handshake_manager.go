@@ -18,7 +18,6 @@ import (
 	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/handshake/fragment"
 	"github.com/slackhq/nebula/header"
-	"github.com/slackhq/nebula/ratelimit"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -45,7 +44,7 @@ var (
 		tryInterval:   DefaultHandshakeTryInterval,
 		retries:       DefaultHandshakeRetries,
 		triggerBuffer: DefaultHandshakeTriggerBuffer,
-		fragment:      fragmentConfig{repairDelay: DefaultHandshakeRepairDelay},
+		fragment:      fragmentConfig{repairDelay: DefaultHandshakeTryInterval / repairDelayDivisor},
 	}
 )
 
@@ -83,11 +82,10 @@ type HandshakeManager struct {
 
 	// frag holds the fragment settings, swapped on reload.
 	frag atomic.Pointer[fragmentConfig]
-	// fragTable reassembles msg1 fragments from senders not yet authenticated, and cookies and cookieLimiter ask
-	// senders to validate their address under load or before a big answer.
-	fragTable     *fragment.Table[fragKey, fragSource]
-	cookies       *fragCookies
-	cookieLimiter *ratelimit.Limiter
+	// fragTable reassembles msg1 fragments from senders not yet authenticated, and cookies ask senders to validate
+	// their address under load or before a big answer.
+	fragTable *fragment.Table[fragKey, fragSource]
+	cookies   *fragCookies
 }
 
 type HandshakeHostInfo struct {
@@ -158,8 +156,6 @@ func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *Light
 	tableCfg.Quiet = config.tryInterval / 2
 	hm.fragTable = fragment.NewTable[fragKey, fragSource](tableCfg)
 	hm.cookies = newFragCookies(time.Now())
-	// Cookie replies are tiny, but a flood of spoofed fragments must not turn into a flood of replies.
-	hm.cookieLimiter, _ = ratelimit.New(256, time.Millisecond)
 	return hm
 }
 
@@ -176,6 +172,7 @@ func (hm *HandshakeManager) Run(ctx context.Context) {
 		case now := <-clockSource.C:
 			hm.NextOutboundHandshakeTimerTick(now)
 			hm.fragTable.Expire(now)
+			hm.cookies.tick(now)
 		}
 	}
 }
@@ -184,9 +181,9 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 	// Gate on known handshake subtypes. Unknown subtypes (or future ones we
 	// don't yet support) are dropped here rather than silently routed through
 	// the IX path. Add a case when introducing a new pattern.
-	switch header.HandshakePattern(h.Subtype) {
-	case header.HandshakeIXPSK0:
-		// supported, fragmented or not
+	switch h.Subtype {
+	case header.HandshakeIXPSK0, header.HandshakeIXPSK0Fragmented:
+		// supported
 	default:
 		hm.l.Debug("dropping handshake with unsupported subtype",
 			"from", via, "subtype", h.Subtype)
@@ -201,7 +198,7 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 		}
 	}
 
-	if header.IsFragmented(h.Subtype) {
+	if _, fragmented := header.FragmentedPattern(h.Subtype); fragmented {
 		if hm.fragConfig().mode == fragmentNever {
 			hm.l.Debug("dropping fragmented handshake, handshakes.fragment is never", "from", via)
 			return
@@ -294,7 +291,16 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 	// HandshakeHostInfo tracking a single "currentOutbound" packet (bytes +
 	// header metadata) that gets replaced as the handshake progresses,
 	// instead of indexing into HandshakePacket.
-	//
+	remotes := hostinfo.remotes.CopyAddrs(hm.mainHostMap.GetPreferredRanges())
+	remotesHaveChanged := !slices.Equal(remotes, hh.lastRemotes)
+
+	// We only care about a lighthouse trigger if we have new remotes to send to.
+	// This is a very specific optimization for a fast lighthouse reply.
+	if lighthouseTriggered && !remotesHaveChanged {
+		// If we didn't return here a lighthouse could cause us to aggressively send handshakes
+		return
+	}
+
 	// msg1 as fragments offers fresh symbols every attempt: now goes out at once, later after the repair delay.
 	now, later, err := hh.stage0Packets()
 	if err != nil {
@@ -304,21 +310,12 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 	}
 	subtype := hh.machine.Subtype()
 	if hh.sender != nil {
-		subtype |= header.HandshakeFragmented
+		// A sender only exists for a subtype with a fragmented form.
+		subtype, _ = header.FragmentedSubtype(subtype)
 	}
 	hsFields := m{
 		"stage": uint64(hh.machine.MessageIndex()),
 		"style": header.SubTypeName(header.Handshake, subtype),
-	}
-
-	remotes := hostinfo.remotes.CopyAddrs(hm.mainHostMap.GetPreferredRanges())
-	remotesHaveChanged := !slices.Equal(remotes, hh.lastRemotes)
-
-	// We only care about a lighthouse trigger if we have new remotes to send to.
-	// This is a very specific optimization for a fast lighthouse reply.
-	if lighthouseTriggered && !remotesHaveChanged {
-		// If we didn't return here a lighthouse could cause us to aggressively send handshakes
-		return
 	}
 
 	hh.lastRemotes = remotes
@@ -1167,12 +1164,14 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 	now, later := [][]byte{msg}, [][]byte(nil)
 	if hm.shouldFragment(len(msg), in.fragmented) {
 		now, later, err = fragmentResponse(msg, hostinfo, in.budget())
+		// Fragments, or a budget to fit them in, are only reached for a subtype with a fragmented form.
+		fragmented, _ := header.FragmentedSubtype(subtype)
 		if errors.Is(err, errOverBudget) {
 			key, _ := fragKeyFor(via, hostinfo.remoteIndexId)
 			// The initiator resends msg1 with the cookie as soon as it has it, so let that through the quiet period
 			// the msg1 just started; it is answered with this response, cached.
 			hm.fragTable.Reopen(key)
-			hm.sendCookie(via, subtype, hostinfo.remoteIndexId, key, in.received, time.Now())
+			hm.sendCookie(via, fragmented, hostinfo.remoteIndexId, key, in.received, time.Now())
 			f.l.Debug("Handshake response exceeds the amplification budget, asking the initiator to show its address", logFields...)
 			return
 		}
@@ -1180,7 +1179,7 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 			f.l.Error("Failed to send handshake message", append(logFields, "error", err)...)
 			return
 		}
-		subtype |= header.HandshakeFragmented
+		subtype = fragmented
 	}
 
 	if via.IsRelayed {
