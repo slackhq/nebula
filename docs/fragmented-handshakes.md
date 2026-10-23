@@ -20,16 +20,17 @@ messages are always several packets long, and works the same for classical ones.
   and so does a response to a msg1 that came as fragments, since its sender can reassemble them.
   Every other message goes as one packet, as before, so today's certificates see no change.
 - `always`: every handshake message goes as fragments.
-- `never`: every message goes as one packet however big, as before this change.
+- `never`: every message goes as one packet however big, and fragments from others are dropped
+  unread: the node has no fragment support, as before this change.
 
-A node reassembles fragments from others whatever the setting. `handshakes.repair_delay` (10ms)
-is how long repair fragments trail the data fragments; both settings reload.
+Under `auto` and `always` a node reassembles fragments from others. `handshakes.repair_delay`
+(10ms) is how long repair fragments trail the data fragments; both settings reload.
 
-A peer running an older nebula can not reassemble fragments. A message too big for one packet
-goes to it as fragments anyway: the oversized datagram it could have read depended on IP
-fragmentation, which is what fails, so nothing that worked reliably is lost. Such a handshake
-times out as it may have before; `never` on either side keeps the old behaviour where it was
-working.
+A peer running an older nebula, or set to `never`, can not reassemble fragments. A message too
+big for one packet goes to it as fragments anyway: the oversized datagram it could have read
+depended on IP fragmentation, which is what fails, so nothing that worked reliably is lost. Such a
+handshake times out as it may have before; `never` on both sides keeps the old behaviour where it
+was working.
 
 ## Wire format
 

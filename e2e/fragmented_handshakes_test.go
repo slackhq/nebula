@@ -202,15 +202,36 @@ func TestFragmentedHandshake_Never(t *testing.T) {
 	theirControl.Stop()
 }
 
-// A node that never fragments still reassembles: its big msg1 goes as one packet, and the responder answers its own
-// big msg2 in fragments.
+// A node that never fragments meets an auto one as an older node would: its big msg1 goes as one packet, and a msg2
+// that fits one packet comes back as one.
 func TestFragmentedHandshake_NeverMeetsAuto(t *testing.T) {
 	t.Parallel()
-	myControl, theirControl, myVpn, theirVpn, r := newFragmentPair(t, groupsOf(50), groupsOf(50), fragmentMode("never"), nil)
+	myControl, theirControl, myVpn, theirVpn, r := newFragmentPair(t, groupsOf(50), nil, fragmentMode("never"), nil)
 	defer r.RenderFlow()
 	tally := handshakeAndCheck(t, myControl, theirControl, myVpn, theirVpn, r)
-	assert.Positive(t, tally.fragments, "msg2")
-	assert.Positive(t, tally.single, "msg1")
+	assert.Zero(t, tally.fragments)
+	assert.Greater(t, tally.maxSingle, fragment.MaxPacketLen, "msg1")
+	myControl.Stop()
+	theirControl.Stop()
+}
+
+// A node that never fragments does not reassemble either: an auto node's big msg1 goes to it as fragments, which it
+// drops unanswered.
+func TestFragmentedHandshake_NeverDropsFragments(t *testing.T) {
+	t.Parallel()
+	myControl, theirControl, myVpn, theirVpn, r := newFragmentPair(t, groupsOf(50), nil, nil, fragmentMode("never"))
+	defer r.RenderFlow()
+	var tally fragmentTally
+	answered := false
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpn[0].Addr(), 80, myVpn[0].Addr(), 80, []byte("Hi from me")))
+	up := r.RouteForAllExitFuncOrTimeout(time.Second, func(p *udp.Packet, receiver *nebula.Control) router.ExitType {
+		tally.observe(p)
+		answered = answered || receiver == myControl
+		return router.KeepRouting
+	})
+	assert.False(t, up)
+	assert.Positive(t, tally.fragments, "msg1")
+	assert.False(t, answered)
 	myControl.Stop()
 	theirControl.Stop()
 }

@@ -39,8 +39,8 @@ const (
 	fragMsg2Slots = 2
 )
 
-// fragmentMode says when this node sends its own handshake messages as fragments. It always reassembles fragments
-// from others, whatever the mode.
+// fragmentMode says when this node sends its own handshake messages as fragments. It reassembles fragments from others
+// unless the mode is never.
 type fragmentMode int
 
 const (
@@ -48,7 +48,8 @@ const (
 	fragmentAuto fragmentMode = iota
 	// fragmentAlways fragments every handshake message.
 	fragmentAlways
-	// fragmentNever sends every message as one packet, as big as it is, relying on IP fragmentation.
+	// fragmentNever sends every message as one packet, as big as it is, relying on IP fragmentation, and drops
+	// fragments from others unread, as a node without fragment support does.
 	fragmentNever
 )
 

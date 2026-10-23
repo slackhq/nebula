@@ -392,6 +392,27 @@ func TestFragCookieUnderLoad(t *testing.T) {
 	})
 }
 
+// never turns fragment support off: msg1 fragments and cookie replies are dropped unread, as a node without it would.
+func TestNeverDropsFragments(t *testing.T) {
+	hm, conn := newFragTestManager(t)
+	via := ViaSender{UdpAddr: netip.MustParseAddrPort("192.0.2.1:4242")}
+	hh := &HandshakeHostInfo{ready: true, hostinfo: &HostInfo{localIndexId: 99, HandshakePacket: map[uint8][]byte{handshakePacketStage0: make([]byte, header.Len+600)}}}
+	hm.indexes[99] = hh
+
+	hm.frag.Store(&fragmentConfig{mode: fragmentNever})
+	p, h := msg1Fragment(t, 7, nil)
+	hm.HandleIncoming(via, p, h)
+	assert.Zero(t, hm.fragTable.Len())
+	reply, rh := cookieReply(t, 99, 0xab)
+	hm.HandleIncoming(via, reply, rh)
+	assert.Nil(t, hh.sender)
+	assert.Empty(t, conn.take())
+
+	hm.frag.Store(&fragmentConfig{mode: fragmentAuto})
+	hm.HandleIncoming(via, p, h)
+	assert.Equal(t, 1, hm.fragTable.Len(), "auto reassembles")
+}
+
 // cookieReply builds a responder's cookie reply naming index.
 func cookieReply(t *testing.T, index uint32, cookie byte) ([]byte, *header.H) {
 	t.Helper()
