@@ -251,6 +251,78 @@ func TestFragmentedHandshake_CookieForBigResponse(t *testing.T) {
 	theirControl.Stop()
 }
 
+// When the msg1 that needs a cookie came as fragments, the initiator's immediate resend with the cookie is answered,
+// rather than held back until its next scheduled retry by the quiet period the first msg1 started.
+func TestFragmentedHandshake_CookieResendAnsweredAtOnce(t *testing.T) {
+	t.Parallel()
+	myControl, theirControl, myVpn, theirVpn, r := newFragmentPair(t, nil, groupsOf(120), fragmentMode("always"), nil)
+	defer r.RenderFlow()
+
+	cookieFragments, attempt := 0, 0
+	answeredAfter := -1
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpn[0].Addr(), 80, myVpn[0].Addr(), 80, []byte("Hi from me")))
+	require.True(t, routeUntilData(t, r, theirControl, 5*time.Second, func(p *udp.Packet) {
+		h, fh := handshakeOf(p)
+		switch {
+		case fh == nil:
+		case h.MessageCounter == 1 && fh.HasCookie():
+			cookieFragments++
+			l, err := fh.Layout()
+			require.NoError(t, err)
+			attempt = l.K + fragment.DefaultRepair(l.K)
+		case h.MessageCounter == 2 && answeredAfter < 0:
+			answeredAfter = cookieFragments
+		}
+	}), "tunnel never came up")
+	assertUdpPacket(t, []byte("Hi from me"), theirControl.GetFromTun(true), myVpn[0].Addr(), theirVpn[0].Addr(), 80, 80)
+
+	require.Positive(t, answeredAfter, "msg2 followed a msg1 with the cookie")
+	assert.LessOrEqual(t, answeredAfter, attempt, "the first attempt with the cookie was answered")
+
+	myControl.Stop()
+	theirControl.Stop()
+}
+
+// When the first msg2 is lost, the initiator's retry is reassembled and answered with the msg2 the responder already
+// sent, in fresh symbols, rather than starting a second handshake.
+func TestFragmentedHandshake_LostResponse(t *testing.T) {
+	t.Parallel()
+	myControl, theirControl, myVpn, theirVpn, r := newFragmentPair(t, groupsOf(50), groupsOf(50), nil, nil)
+	defer r.RenderFlow()
+
+	var dropped, delivered int
+	fragIDs := map[uint32]bool{}
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpn[0].Addr(), 80, myVpn[0].Addr(), 80, []byte("Hi from me")))
+	require.True(t, r.RouteForAllExitFuncOrTimeout(5*time.Second, func(p *udp.Packet, receiver *nebula.Control) router.ExitType {
+		if isTunnelData(p, receiver, theirControl) {
+			return router.RouteAndExit
+		}
+		h, fh := handshakeOf(p)
+		if h == nil || fh == nil || h.MessageCounter != 2 {
+			return router.KeepRouting
+		}
+		fragIDs[fh.FragID] = true
+		l, err := fh.Layout()
+		require.NoError(t, err)
+		if int(fh.Index) < l.K+fragment.DefaultRepair(l.K) {
+			// The whole first send of msg2.
+			dropped++
+			return router.Drop
+		}
+		delivered++
+		return router.KeepRouting
+	}), "tunnel never came up")
+	assertUdpPacket(t, []byte("Hi from me"), theirControl.GetFromTun(true), myVpn[0].Addr(), theirVpn[0].Addr(), 80, 80)
+	assertTunnel(t, myVpn[0].Addr(), theirVpn[0].Addr(), myControl, theirControl, r)
+
+	assert.Positive(t, dropped)
+	assert.Positive(t, delivered, "the retry was answered with fresh symbols")
+	assert.Len(t, fragIDs, 1, "by the responder that answered first")
+
+	myControl.Stop()
+	theirControl.Stop()
+}
+
 // Fragments go through relays too, and each relayed fragment fits the IPv6 minimum MTU.
 func TestFragmentedHandshake_Relayed(t *testing.T) {
 	t.Parallel()

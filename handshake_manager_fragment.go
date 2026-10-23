@@ -3,7 +3,6 @@ package nebula
 import (
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/binary"
 	"errors"
@@ -285,28 +284,10 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 		if res == nil {
 			return
 		}
+		// A retry is handled as an unfragmented one is: the handshake finds the tunnel this msg1 already made and
+		// resends its cached response on the path this copy came by.
 		in := msg1Info{fragmented: true, validated: validated, received: res.Received}
-		if existing := hm.answered.lookup(res.Hash, now); existing != nil && !hm.stillAnswering(existing) {
-			// The responder that answered is gone, timed out, failed or evicted: its msg2 would lead the initiator
-			// into a tunnel no one holds. Answer afresh.
-			hm.answered.forget(res.Hash)
-		} else if existing != nil {
-			// Already answered: resend with fresh symbols on the path this copy came by.
-			if msg := existing.HandshakePacket[handshakePacketStage2]; msg != nil {
-				hm.sendHandshakeResponse(via, msg, existing, true, in)
-			}
-			hm.fragTable.Answered(key, res, now)
-			return
-		}
-		if res.Repeat {
-			// Answered once, but long enough ago to be forgotten: start over.
-			hm.fragTable.Forget(key)
-			return
-		}
 		hm.beginHandshake(via, reassembled(h, res.Packet), h, in)
-		if hm.answered.lookup(res.Hash, now) != nil {
-			hm.fragTable.Answered(key, res, now)
-		}
 
 	case 2:
 		if hh := hm.queryIndex(h.RemoteIndex); hh != nil {
@@ -389,11 +370,9 @@ func (in msg1Info) budget() int {
 var errOverBudget = errors.New("handshake response exceeds the amplification budget")
 
 // fragmentResponse builds the responder's msg2 as fragments, now to send immediately and later after the repair delay,
-// each call offering symbols the hostinfo has not sent before. The clock on resends is per path and lives in the
-// fragment table: a copy of msg1 arriving by a second path (the other address family, a relay) is answered on that
-// path at once, which carries the handshake when the first path only works one way, and a retry on a path is reported
-// as a repeat at most once per retry interval. budget bounds the bytes sent before the address is validated, -1 for
-// none; a response that does not fit it at all returns errOverBudget.
+// each call offering symbols the hostinfo has not sent before, so an initiator still holding some from an earlier send
+// completes sooner. budget bounds the bytes sent before the address is validated, -1 for none; a response that does
+// not fit it at all returns errOverBudget.
 func fragmentResponse(msg []byte, hostinfo *HostInfo, budget int) (now, later [][]byte, err error) {
 	s, err := fragment.NewSender(msg, hostinfo.localIndexId)
 	if err != nil {
@@ -414,73 +393,6 @@ func fragmentResponse(msg []byte, hostinfo *HostInfo, budget int) (now, later []
 	n := uint32(l.K + repair)
 	s.SetNext(int(hostinfo.handshakeNextSymbol.Add(n) - n))
 	return s.Attempt(repair)
-}
-
-// stillAnswering reports whether the hostinfo that answered a msg1 still holds its index as an established tunnel, so
-// resending its msg2 can still lead somewhere.
-func (hm *HandshakeManager) stillAnswering(hostinfo *HostInfo) bool {
-	return hm.mainHostMap.QueryIndex(hostinfo.localIndexId) == hostinfo
-}
-
-// fragAnswered remembers the msg1s a responder recently answered, keyed by hash, so a repeat is recognised before any
-// noise or certificate work. Repeats are routine: the trailing repair fragments of an attempt rebuild a msg1 that its
-// data fragments already completed, and a retrying initiator offers fresh symbols for the same msg1. Entries only exist
-// for completed handshakes, which need a valid certificate, and live as long as an initiator keeps retrying.
-type fragAnswered struct {
-	sync.Mutex
-	ttl     time.Duration
-	entries map[[sha256.Size]byte]fragAnsweredEntry
-}
-
-type fragAnsweredEntry struct {
-	hostinfo *HostInfo
-	at       time.Time
-}
-
-const fragAnsweredMax = 4096
-
-func newFragAnswered(ttl time.Duration) *fragAnswered {
-	return &fragAnswered{ttl: ttl, entries: map[[sha256.Size]byte]fragAnsweredEntry{}}
-}
-
-func (a *fragAnswered) add(msg1 []byte, hostinfo *HostInfo, now time.Time) {
-	a.Lock()
-	defer a.Unlock()
-	if len(a.entries) >= fragAnsweredMax {
-		for k := range a.entries {
-			delete(a.entries, k)
-			break
-		}
-	}
-	a.entries[sha256.Sum256(msg1)] = fragAnsweredEntry{hostinfo: hostinfo, at: now}
-}
-
-// lookup finds the hostinfo that answered the msg1 with this hash.
-func (a *fragAnswered) lookup(hash [sha256.Size]byte, now time.Time) *HostInfo {
-	a.Lock()
-	defer a.Unlock()
-	e, ok := a.entries[hash]
-	if !ok || now.Sub(e.at) > a.ttl {
-		return nil
-	}
-	return e.hostinfo
-}
-
-// forget drops the entry for the msg1 with this hash.
-func (a *fragAnswered) forget(hash [sha256.Size]byte) {
-	a.Lock()
-	defer a.Unlock()
-	delete(a.entries, hash)
-}
-
-func (a *fragAnswered) expire(now time.Time) {
-	a.Lock()
-	defer a.Unlock()
-	for k, e := range a.entries {
-		if now.Sub(e.at) > a.ttl {
-			delete(a.entries, k)
-		}
-	}
 }
 
 // A responder stops keeping state for senders that have not shown they receive at their address while its msg1 table

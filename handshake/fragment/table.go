@@ -1,13 +1,11 @@
 package fragment
 
 import (
-	"crypto/sha256"
 	"errors"
 	"math/rand/v2"
 	"sync"
 	"time"
 
-	"github.com/slackhq/nebula/handshake/fec"
 	"github.com/slackhq/nebula/header"
 )
 
@@ -23,9 +21,8 @@ type TableConfig struct {
 	MaxPerSource int           // messages in progress per source
 	TTL          time.Duration // an entry idle this long is dropped
 
-	// RepeatInterval is how often, at most, an answered message is reported as a
-	// repeat on one key. Zero reports every K fresh symbols.
-	RepeatInterval time.Duration
+	// Quiet is how long a key drops every fragment once its message completes.
+	Quiet time.Duration
 }
 
 // Table reassembles messages from senders that have not authenticated yet, the
@@ -36,14 +33,15 @@ type TableConfig struct {
 // K identifies one message, typically the source plus FragID. S identifies the
 // source for quotas, typically the address masked to /32 or /64.
 //
-// A message the caller answered is remembered, see Answered, so the fragments
-// still arriving for it do not start it over. Without that, the repair
-// fragments trailing a message whose data fragments already completed it would
-// open a new entry that, for K above the repair count, never completes: it holds
-// symbols and a source's quota until it expires. A retry of an answered message
-// is reported as a repeat, at most once per RepeatInterval on that key. Keys
-// include the path a message arrives by, so the same message arriving by two
-// paths is two keys with two clocks.
+// Once a message completes its key goes quiet: every fragment for it is dropped
+// for the Quiet period. That takes care of the repair fragments trailing an
+// attempt whose data fragments already completed the message, which would
+// otherwise complete it again or, for K above the repair count, open an entry
+// that never completes and holds a source's quota until it expires. A retry
+// comes after the quiet period and is reassembled like the first attempt; a
+// straggler that comes after it opens an entry the retry completes. Keys include
+// the path a message arrives by, so the same message arriving by two paths is
+// two keys, each quiet on its own.
 //
 // A Table is safe for concurrent use.
 type Table[K, S comparable] struct {
@@ -53,21 +51,7 @@ type Table[K, S comparable] struct {
 	order     []K
 	perSource map[S]int
 	bytes     int
-	answered  map[K]*answeredEntry
-}
-
-// answeredEntry is what is kept of an answered message: no symbols, only which
-// indexes have been seen, so a retry's fresh symbols can be told apart from
-// stragglers of an attempt already decoded.
-type answeredEntry struct {
-	hash       [sha256.Size]byte
-	msgLen     uint16
-	k          int
-	seen       [fec.MaxSymbols]bool
-	fresh      int
-	received   int
-	lastSeen   time.Time
-	lastRepeat time.Time // when it was answered, or last reported as a repeat
+	quiet     map[K]time.Time // when each quiet key takes fragments again
 }
 
 type tableEntry[K, S comparable] struct {
@@ -82,38 +66,28 @@ func NewTable[K, S comparable](cfg TableConfig) *Table[K, S] {
 		cfg:       cfg,
 		entries:   make(map[K]*tableEntry[K, S]),
 		perSource: make(map[S]int),
-		answered:  make(map[K]*answeredEntry),
+		quiet:     make(map[K]time.Time),
 	}
 }
 
 // Result describes a completed message.
 type Result struct {
-	Packet   []byte            // header.Len bytes for the caller's Nebula header, then the message; nil for a repeat
-	Hash     [sha256.Size]byte // sha256 of the message
-	Received int               // packet bytes received for it, for the amplification budget
-
-	// Repeat means a message marked Answered was sent again: as many fresh
-	// symbols as it has data symbols arrived, which a retry offers and stragglers
-	// of an attempt already decoded do not.
-	Repeat bool
-
-	msgLen uint16
-	k      int
-	seen   [fec.MaxSymbols]bool
+	Packet   []byte // header.Len bytes for the caller's Nebula header, then the message
+	Received int    // packet bytes received for it, for the amplification budget
 }
 
 // Add records a fragment parsed by Parse. When the message is complete its entry
-// is removed and the result returned; otherwise the result is nil. A decode
+// is removed, its key goes quiet and the result is returned; otherwise the result
+// is nil, as it is for a fragment dropped because its key is quiet. A decode
 // error means the message is lost and must be retransmitted.
 func (t *Table[K, S]) Add(key K, source S, now time.Time, h Header, sym []byte) (*Result, error) {
 	t.mu.Lock()
-	if a, ok := t.answered[key]; ok {
-		if now.Sub(a.lastSeen) <= t.cfg.TTL {
-			res := a.add(now, h, sym, t.cfg.RepeatInterval)
+	if until, ok := t.quiet[key]; ok {
+		if now.Before(until) {
 			t.mu.Unlock()
-			return res, nil
+			return nil, nil
 		}
-		delete(t.answered, key)
+		delete(t.quiet, key)
 	}
 
 	e, ok := t.entries[key]
@@ -151,78 +125,40 @@ func (t *Table[K, S]) Add(key K, source S, now time.Time, h Header, sym []byte) 
 	}
 
 	t.remove(key, e)
+	t.quietKey(key, now)
 	t.mu.Unlock()
 
 	pkt, err := e.a.Decode(make([]byte, header.Len))
 	if err != nil {
 		return nil, err
 	}
-	return &Result{
-		Packet:   pkt,
-		Hash:     sha256.Sum256(pkt[header.Len:]),
-		Received: e.a.Received(),
-		msgLen:   e.a.msgLen,
-		k:        e.a.dec.Layout().K,
-		seen:     e.a.dec.Seen(),
-	}, nil
+	return &Result{Packet: pkt, Received: e.a.Received()}, nil
 }
 
-func (a *answeredEntry) add(now time.Time, h Header, sym []byte, interval time.Duration) *Result {
-	if h.MsgLen != a.msgLen {
-		return nil
-	}
-	a.lastSeen = now
-	a.received += header.Len + HeaderLen + len(sym)
-	if a.seen[h.Index] {
-		return nil
-	}
-	a.seen[h.Index] = true
-	a.fresh++
-	if a.fresh < a.k || now.Sub(a.lastRepeat) < interval {
-		// Not enough fresh symbols yet, or this key was answered within the
-		// interval. The fresh symbols keep counting, so the first one to arrive
-		// once the interval is up reports the repeat.
-		return nil
-	}
-	r := &Result{Hash: a.hash, Received: a.received, Repeat: true}
-	a.fresh = 0
-	a.received = 0
-	a.lastRepeat = now
-	return r
-}
-
-// Answered records that the caller answered res, the result of Add for key, so
-// later fragments of it are counted rather than reassembled. A message is kept
-// for the TTL after its last fragment, outside the entry, byte and source caps;
-// at most MaxEntries are kept.
-func (t *Table[K, S]) Answered(key K, res *Result, now time.Time) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	// A straggler may have opened an entry while the caller worked.
-	if e, ok := t.entries[key]; ok {
-		t.remove(key, e)
-	}
-	if res.Repeat {
+// quietKey makes key drop fragments for the Quiet period. At most MaxEntries keys
+// are quiet at once, outside the entry, byte and source caps.
+func (t *Table[K, S]) quietKey(key K, now time.Time) {
+	if t.cfg.Quiet <= 0 {
 		return
 	}
-	if _, ok := t.answered[key]; !ok && len(t.answered) >= t.cfg.MaxEntries {
-		for k := range t.answered {
-			delete(t.answered, k)
+	if _, ok := t.quiet[key]; !ok && len(t.quiet) >= t.cfg.MaxEntries {
+		for k := range t.quiet {
+			delete(t.quiet, k)
 			break
 		}
 	}
-	t.answered[key] = &answeredEntry{hash: res.Hash, msgLen: res.msgLen, k: res.k, seen: res.seen, lastSeen: now, lastRepeat: now}
+	t.quiet[key] = now.Add(t.cfg.Quiet)
 }
 
-// Forget drops what Answered recorded for key, so its fragments are reassembled
-// again.
-func (t *Table[K, S]) Forget(key K) {
+// Reopen ends key's quiet period, so its fragments are reassembled again at once.
+func (t *Table[K, S]) Reopen(key K) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	delete(t.answered, key)
+	delete(t.quiet, key)
 }
 
-// Expire drops every entry idle for longer than the TTL.
+// Expire drops every entry idle for longer than the TTL, and ends the quiet
+// periods that are over.
 func (t *Table[K, S]) Expire(now time.Time) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -236,9 +172,9 @@ func (t *Table[K, S]) Expire(now time.Time) {
 		}
 		i++
 	}
-	for key, a := range t.answered {
-		if now.Sub(a.lastSeen) > t.cfg.TTL {
-			delete(t.answered, key)
+	for key, until := range t.quiet {
+		if !now.Before(until) {
+			delete(t.quiet, key)
 		}
 	}
 }
