@@ -58,8 +58,9 @@ func (rm *relayManager) GetUseRelays() bool {
 // StartRelays drives the relay-establishment side of an outbound handshake attempt.
 // For each candidate relay it either kicks off a handshake to the relay, sends a CreateRelayRequest, retransmits
 // one that may have been lost, or, once the relay is Established, forwards the in-progress
-// stage 0 handshake packet for vpnIp through it.
-func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hh *HandshakeHostInfo, stage0 []byte) {
+// stage 0 handshake packets for vpnIp through it: now immediately and later after the
+// handshake repair delay.
+func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hh *HandshakeHostInfo, now, later [][]byte) {
 	hostinfo := hh.hostinfo
 	if !rm.GetUseRelays() || len(hostinfo.remotes.relays) == 0 {
 		hh.lastRelays = nil
@@ -162,7 +163,10 @@ func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hh *Handshak
 		switch existingRelay.State {
 		case Established:
 			hl.Log(context.Background(), level, "Send handshake via relay", "relay", relay.String())
-			f.SendVia(relayHostInfo, existingRelay, stage0, make([]byte, 12), make([]byte, mtu), false, 0)
+			_ = f.handshakeManager.sendFragmented(now, later, func(p []byte) error {
+				f.sendHandshakeVia(relayHostInfo, existingRelay, p)
+				return nil
+			})
 		case Disestablished:
 			// Mark this relay as 'requested'
 			relayHostInfo.relayState.UpdateRelayForByIpState(vpnIp, Requested)
