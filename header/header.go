@@ -67,7 +67,21 @@ const (
 const (
 	HandshakeIXPSK0 MessageSubType = 0
 	HandshakeXXPSK0 MessageSubType = 1
+
+	// HandshakeFragmented, set on a handshake subtype, marks a message that travels as fragments, see
+	// handshake/fragment. The rest of the subtype names the handshake pattern as it would unfragmented.
+	HandshakeFragmented MessageSubType = 0x80
 )
+
+// IsFragmented reports whether a handshake message of this subtype travels as fragments.
+func IsFragmented(st MessageSubType) bool {
+	return st&HandshakeFragmented != 0
+}
+
+// HandshakePattern returns the handshake pattern a handshake subtype names, fragmented or not.
+func HandshakePattern(st MessageSubType) MessageSubType {
+	return st &^ HandshakeFragmented
+}
 
 var ErrHeaderTooShort = errors.New("header is too short")
 
@@ -185,6 +199,12 @@ func (h *H) IsValidSubType() bool {
 
 // SubTypeName will transform a nebula message sub type into a human string
 func SubTypeName(t MessageType, s MessageSubType) string {
+	if t == Handshake && IsFragmented(s) {
+		if n := SubTypeName(t, HandshakePattern(s)); n != "unknown" {
+			return n + "_fragmented"
+		}
+		return "unknown"
+	}
 	if n, ok := subTypeMap[t]; ok {
 		if x, ok := (*n)[s]; ok {
 			return x
@@ -199,7 +219,7 @@ func IsValidSubType(t MessageType, s MessageSubType) bool {
 	case Message:
 		return s == MessageNone || s == MessageRelay
 	case Handshake:
-		return s == HandshakeIXPSK0
+		return HandshakePattern(s) == HandshakeIXPSK0
 	case Test:
 		return s == TestReply || s == TestRequest
 	case Control, CloseTunnel, RecvError, LightHouse:
