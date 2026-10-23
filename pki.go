@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/fips140"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -620,6 +621,11 @@ func loadCAPoolFromConfig(l *slog.Logger, c *config.C) (*cert.CAPool, error) {
 
 	if err != nil {
 		for _, e := range cert.SkippedCertificates(err) {
+			if errors.Is(e, cert.ErrPQUnavailable) {
+				// A bundle shared with hybrid nodes stays usable here, without its hybrid CAs.
+				l.Warn("Leaving a hybrid CA certificate out of the CA pool, this build can not verify it", "error", e)
+				continue
+			}
 			l.Warn("Skipping a CA certificate that this version of nebula does not support", "error", e)
 		}
 
@@ -642,7 +648,7 @@ func loadCAPoolFromConfig(l *slog.Logger, c *config.C) (*cert.CAPool, error) {
 		for i, raw := range bl {
 			// Fingerprints are compared as lowercase hex strings, a malformed entry would silently block nothing
 			fp := strings.ToLower(strings.TrimSpace(raw))
-			if b, err := hex.DecodeString(fp); err != nil || len(b) != sha256.Size {
+			if b, err := hex.DecodeString(fp); err != nil || (len(b) != sha256.Size && len(b) != sha512.Size) {
 				bad = append(bad, fmt.Sprintf("entry %d %q", i+1, raw))
 				continue
 			}

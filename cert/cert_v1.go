@@ -332,6 +332,13 @@ func (c *certificateV1) fromTBSCertificate(t *TBSCertificate) error {
 func (c *certificateV1) validate() error {
 	// Empty names are allowed
 
+	switch c.details.curve {
+	case Curve_CURVE25519, Curve_P256:
+	default:
+		// The hybrid curve is defined for v2 only
+		return fmt.Errorf("invalid curve for a v1 certificate: %s", CurveName(c.details.curve))
+	}
+
 	if len(c.details.publicKey) == 0 {
 		return ErrInvalidPublicKey
 	}
