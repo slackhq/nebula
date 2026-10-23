@@ -39,6 +39,11 @@ func NewTestCaCert(version cert.Version, curve cert.Curve, before, after time.Ti
 
 		pub = elliptic.Marshal(elliptic.P256(), privk.PublicKey.X, privk.PublicKey.Y)
 		priv = privk.D.FillBytes(make([]byte, 32))
+	case cert.Curve_P384_MLKEM1024_MLDSA87:
+		pub, priv, err = cert.GenerateHybridSigningKeypair()
+		if err != nil {
+			panic(err)
+		}
 	default:
 		// There is no default to allow the underlying lib to respond with an error
 	}
@@ -93,6 +98,12 @@ func NewTestCert(v cert.Version, curve cert.Curve, ca cert.Certificate, key []by
 		pub, priv = X25519Keypair()
 	case cert.Curve_P256:
 		pub, priv = P256Keypair()
+	case cert.Curve_P384_MLKEM1024_MLDSA87:
+		var err error
+		pub, priv, err = cert.GenerateHybridKeypair()
+		if err != nil {
+			panic(err)
+		}
 	default:
 		panic("unknown curve")
 	}
