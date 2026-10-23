@@ -241,12 +241,15 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		retries:        int64(c.GetInt("handshakes.retries", DefaultHandshakeRetries)),
 		triggerBuffer:  c.GetInt("handshakes.trigger_buffer", DefaultHandshakeTriggerBuffer),
 		fragment:       fragmentCfg,
+		pq:             pqHandshakeConfigFrom(c),
 		messageMetrics: messageMetrics,
 	}
 
+	warnPQWithoutV3(l, handshakeConfig.pq, pki.getCertState())
 	handshakeManager := NewHandshakeManager(l, hostMap, lightHouse, udpConns[0], handshakeConfig)
 	lightHouse.handshakeTrigger = handshakeManager.trigger
 	c.RegisterReloadCallback(handshakeManager.reloadFragment)
+	c.RegisterReloadCallback(handshakeManager.reloadPQ)
 
 	ds, err := newDnsServerFromConfig(ctx, l, pki, hostMap, c)
 	if err != nil {

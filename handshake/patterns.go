@@ -87,10 +87,10 @@ func HybridSubtype(suite cert.PQSuite) (header.MessageSubType, bool) {
 	return st, ok
 }
 
-// IsHybrid reports whether subtype is a hybrid handshake, one that needs version
+// IsHybrid reports whether subtype, fragmented or not, is a hybrid handshake, one that needs version
 // 3 certificates.
 func IsHybrid(subtype header.MessageSubType) bool {
-	return subtypeInfos[subtype].kem != nil
+	return subtypeInfos[header.HandshakePattern(subtype)].kem != nil
 }
 
 func subtypeInfoFor(subtype header.MessageSubType) (subtypeInfo, error) {

@@ -491,7 +491,7 @@ func feedMsg2(t *testing.T, hh *HandshakeHostInfo, p []byte) (*fragment.Assembly
 	t.Helper()
 	fh, sym, err := fragment.Parse(p[header.Len:])
 	require.NoError(t, err)
-	a := hh.slotFor(fh)
+	a := hh.msg2.slotFor(fh)
 	require.NotNil(t, a)
 	ready, err := a.Add(fh, sym)
 	require.NoError(t, err)
@@ -542,7 +542,7 @@ func TestMsg2Slots(t *testing.T) {
 		msg, err := a.Decode(nil)
 		require.NoError(t, err)
 		got = msg
-		hh.dropSlot(a)
+		hh.msg2.drop(a)
 	}
 	require.Equal(t, msgB, got)
 

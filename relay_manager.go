@@ -365,6 +365,8 @@ func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f
 	}
 	// Do I need to complete the relays now?
 	if relay.Type == TerminalType {
+		// The relay I asked for is up; a handshake waiting on it can go now.
+		f.handshakeManager.relayEstablished(relay.PeerAddr, h, relay)
 		return
 	}
 	// I'm the middle man. Let the initiator know that the I've established the relay they requested.
