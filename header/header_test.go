@@ -106,6 +106,10 @@ func TestTypeMap(t *testing.T) {
 // subtype. IsValidSubType was reimplemented as an explicit switch; this keeps
 // the original behavior around so we can prove the switch is equivalent to it.
 func mapIsValidSubType(t MessageType, s MessageSubType) bool {
+	// Any handshake pattern may also travel fragmented.
+	if t == Handshake {
+		s = HandshakePattern(s)
+	}
 	if n, ok := subTypeMap[t]; ok {
 		if _, ok := (*n)[s]; ok {
 			return true
@@ -122,6 +126,8 @@ func TestIsValidSubType(t *testing.T) {
 	assert.False(t, IsValidSubType(Message, 2))
 
 	assert.True(t, IsValidSubType(Handshake, HandshakeIXPSK0))
+	assert.True(t, IsValidSubType(Handshake, HandshakeIXPSK0|HandshakeFragmented), "any pattern may travel fragmented")
+	assert.False(t, IsValidSubType(Handshake, HandshakeXXPSK0|HandshakeFragmented))
 	// HandshakeXXPSK0 is defined but not a wire-valid subtype.
 	assert.False(t, IsValidSubType(Handshake, HandshakeXXPSK0))
 
@@ -169,4 +175,16 @@ func TestHeader_MarshalJSON(t *testing.T) {
 		"{\"messageCounter\":97,\"remoteIndex\":98,\"reserved\":99,\"subType\":\"testRequest\",\"type\":\"test\",\"version\":100}",
 		string(b),
 	)
+}
+
+func TestHandshakeFragmented(t *testing.T) {
+	st := HandshakeIXPSK0 | HandshakeFragmented
+	assert.True(t, IsFragmented(st))
+	assert.False(t, IsFragmented(HandshakeIXPSK0))
+	assert.Equal(t, HandshakeIXPSK0, HandshakePattern(st))
+	assert.Equal(t, HandshakeIXPSK0, HandshakePattern(HandshakeIXPSK0))
+	assert.Equal(t, "ix_psk0_fragmented", SubTypeName(Handshake, st))
+	assert.Equal(t, "ix_psk0", SubTypeName(Handshake, HandshakeIXPSK0))
+	assert.Equal(t, "unknown", SubTypeName(Handshake, 0x7f|HandshakeFragmented))
+	assert.Equal(t, "unknown", SubTypeName(Message, MessageNone|HandshakeFragmented), "only handshakes fragment")
 }
