@@ -19,6 +19,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for running `nebula ctl <command>` as a client from the CLI.
 - An info socket that serves the `identity` command over HTTP: `GET /v1/identity` for this node,
   `GET /v1/identity/<vpn addr>` for the host owning an address, and `/pem` under either for the certificate.
+- Version 3 certificates and post-quantum hybrid handshakes (`ix_hybrid_mlkem1024`). A version 3 certificate is a
+  version 2 certificate extended with a post-quantum key and a deterministic composite CA signature, classical and
+  post-quantum, of the whole certificate, and a node
+  holding one still presents the version 2 certificate it extends to peers that need it. Its post-quantum suite names
+  the algorithms, as its curve does the classical ones; the one suite today is `MLKEM1024_MLDSA87`, an ML-KEM-1024
+  key for hosts and ML-DSA-87 for CAs and their signatures, chosen with `nebula-cert -pq-suite`. `nebula-cert
+  pq-extend` upgrades existing CAs and hosts in place. Extending a host certificate twice gives the same certificate,
+  and a CA too when `-in-pq-key` passes the version 3 key of its first extension.
+  The v2 form is optional: `nebula-cert ca -version 3 -no-v2-form` makes a CA, and `nebula-cert sign -no-v2-form` a
+  certificate, for networks where every node has a version 3 certificate. A node holding one speaks only hybrid
+  handshakes. Hybrid handshakes always travel as fragmented handshakes, whatever `handshakes.fragment` says. See
+  `docs/pq-handshake.md`.
+
+### Changed
+
+- A version 3 certificate has two fingerprints: its own, and that of the version 2 certificate it extends. Both
+  identify it in logs and to `pki.blocklist`. **To block a version 3 certificate, block its v2 fingerprint**: the
+  pool checks it for the v3 certificate and for its v2 form alike, so that one entry covers both forms. Blocking only
+  the v3 fingerprint leaves the v2 form usable in classical handshakes. `nebula-cert print` leads with both
+  fingerprints and says which one to block; in JSON they are `fingerprint` and `v2Fingerprint`.
+- Firewall `ca_sha` rules match a version 3 peer by either fingerprint of its CA.
+- `cert.Certificate.Signature()` returns a `cert.Signatures`, the classical signature and, for version 3, the
+  post-quantum one; a version 3 certificate's are those of the whole certificate, its v2 form's are
+  `cert.V2Form(c).Signature()`. Callers that want the old value of a v1 or v2 certificate use `.Classical`.
 
 ### Removed
 
