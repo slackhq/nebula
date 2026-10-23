@@ -29,6 +29,8 @@ type Settings struct {
 type Conn interface {
 	Rebind() error
 	LocalAddr() (netip.AddrPort, error)
+	// IPv4Only reports whether this conn's socket can only send to IPv4 remotes
+	IPv4Only() bool
 	// ListenOut invokes r for each received packet.
 	// On batch-capable backends (recvmmsg), flush is called after each batch is fully delivered.
 	// Callers use it to flush per-batch accumulators such as TUN write coalescers.
@@ -56,6 +58,9 @@ func (NoopConn) Rebind() error {
 }
 func (NoopConn) LocalAddr() (netip.AddrPort, error) {
 	return netip.AddrPort{}, nil
+}
+func (NoopConn) IPv4Only() bool {
+	return false
 }
 func (NoopConn) ListenOut(_ EncReader, _ func()) error {
 	return nil
