@@ -266,6 +266,9 @@ type HostInfo struct {
 	// handshakeNextSymbol is the next fragment symbol index a responder offers when it resends a fragmented
 	// handshake response, so every resend carries symbols it has not sent before.
 	handshakeNextSymbol atomic.Uint32
+	// handshakeResendAt is when a hybrid responder last confirmed its completed handshake, in unix nanos: it confirms
+	// again for a resent msg3 at most once per retry interval.
+	handshakeResendAt atomic.Int64
 
 	// nextLHQuery is the earliest we can ask the lighthouse for new information.
 	// This is used to limit lighthouse re-queries in chatty clients
