@@ -168,7 +168,9 @@ func TestShouldFragment(t *testing.T) {
 		{fragmentNever, small, true, false},
 	} {
 		hm.frag.Store(&fragmentConfig{mode: tc.mode})
-		assert.Equal(t, tc.want, hm.shouldFragment(tc.msgLen, tc.answeringFragments), "%+v", tc)
+		assert.Equal(t, tc.want, hm.shouldFragment(header.HandshakeIXPSK0, tc.msgLen, tc.answeringFragments), "%+v", tc)
+		// Hybrid handshakes have no unfragmented form.
+		assert.True(t, hm.shouldFragment(header.HandshakeIXHybrid, tc.msgLen, tc.answeringFragments), "%+v", tc)
 	}
 }
 
