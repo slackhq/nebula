@@ -3,7 +3,7 @@ package handshake
 import (
 	"crypto/rand"
 
-	"github.com/flynn/noise"
+	"github.com/DefinedNet/noise"
 	"github.com/slackhq/nebula/cert"
 )
 

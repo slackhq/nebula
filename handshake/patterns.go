@@ -3,7 +3,7 @@ package handshake
 import (
 	"fmt"
 
-	"github.com/flynn/noise"
+	"github.com/DefinedNet/noise"
 	"github.com/slackhq/nebula/header"
 )
 

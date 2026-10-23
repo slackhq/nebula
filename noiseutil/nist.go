@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/flynn/noise"
+	"github.com/DefinedNet/noise"
 )
 
 // DHP256 is the NIST P-256 ECDH function

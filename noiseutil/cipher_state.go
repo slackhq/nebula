@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/flynn/noise"
+	"github.com/DefinedNet/noise"
 )
 
 // RejectHeadroom is the wrap gap for senders racing the counter, sized large enough for any routine count.
