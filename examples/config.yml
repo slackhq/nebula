@@ -487,8 +487,8 @@ logging:
   # fragment says when handshake messages are sent as fragments, each small enough for the IPv6 minimum MTU, so
   # certificates bigger than one packet do not depend on IP fragmentation. auto fragments a message too big for one
   # packet and answers fragments with fragments, always fragments every message, never sends every message as one
-  # packet however big. Fragments from others are reassembled whatever this says. See docs/fragmented-handshakes.md.
-  # Reloadable.
+  # packet however big and drops fragments from others rather than reassembling them. See
+  # docs/fragmented-handshakes.md. Reloadable.
   #fragment: auto
 
   # repair_delay is how long repair fragments trail the data fragments of a fragmented message. Reloadable.

@@ -204,6 +204,10 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 	}
 
 	if header.IsFragmented(h.Subtype) {
+		if hm.fragConfig().mode == fragmentNever {
+			hm.l.Debug("dropping fragmented handshake, handshakes.fragment is never", "from", via)
+			return
+		}
 		hm.handleFragment(via, packet, h)
 		return
 	}
