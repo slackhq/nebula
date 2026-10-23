@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Post-quantum hybrid handshakes, `ix_hybrid`, on a new certificate curve, `P384_MLKEM1024_MLDSA87`, whose algorithms
+  are all in CNSA 1.0 or 2.0: P-384 and ML-KEM-1024 for host keys, the composite of ML-DSA-87 and ECDSA P-384
+  (`id-MLDSA87-ECDSA-P384-SHA512`) for CA signatures, and SHA-512 for the handshake hash and the certificates'
+  fingerprints. Version 2 certificates only. Like any curve it is the node's only one: a node on it makes hybrid
+  handshakes and nothing else, and can not reach classical nodes. `nebula-cert ca`, `keygen` and
+  `sign -curve P384-MLKEM1024-MLDSA87` make the CAs, keys and certificates. See `docs/pq-handshake.md`.
+
+### Changed
+
+- `pki.blocklist` accepts SHA-512 fingerprints, the length hybrid certificates have, as well as SHA-256 ones.
+
 ## [1.12.0] - 2026-10-29
 
 This release introduces udp/tun offloading support that can be enabled for greater performance. This will be enabled by default in a future release. See the `listen.udp_offloads` and `tun.use_offloads` example config settings for more details.
