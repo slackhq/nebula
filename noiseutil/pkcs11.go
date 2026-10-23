@@ -7,7 +7,7 @@ import (
 
 	"github.com/slackhq/nebula/pkclient"
 
-	"github.com/flynn/noise"
+	"github.com/DefinedNet/noise"
 )
 
 // DHP256PKCS11 is the NIST P-256 ECDH function

@@ -96,8 +96,10 @@ func TestTypeMap(t *testing.T) {
 		Test:        &subTypeTestMap,
 		CloseTunnel: &subTypeNoneMap,
 		Handshake: {
-			HandshakeIXPSK0:           "ix_psk0",
-			HandshakeIXPSK0Fragmented: "ix_psk0_fragmented",
+			HandshakeIXPSK0:             "ix_psk0",
+			HandshakeIXPSK0Fragmented:   "ix_psk0_fragmented",
+			HandshakeIXHybrid:           "ix_hybrid",
+			HandshakeIXHybridFragmented: "ix_hybrid_fragmented",
 		},
 		Control: &subTypeNoneMap,
 	}, subTypeMap)
@@ -124,6 +126,10 @@ func TestIsValidSubType(t *testing.T) {
 
 	assert.True(t, IsValidSubType(Handshake, HandshakeIXPSK0))
 	assert.True(t, IsValidSubType(Handshake, HandshakeIXPSK0Fragmented))
+	assert.True(t, IsValidSubType(Handshake, HandshakeIXHybridFragmented))
+	assert.True(t, IsValidSubType(Handshake, HandshakeIXHybrid), "named, but the handshake manager drops it unfragmented")
+	// 2 was the unreleased ix_psk2_mlkem1024 and stays reserved.
+	assert.False(t, IsValidSubType(Handshake, 2))
 	assert.False(t, IsValidSubType(Handshake, HandshakeXXPSK0Fragmented), "a pattern that is not valid is not valid fragmented either")
 	// HandshakeXXPSK0 is defined but not a wire-valid subtype.
 	assert.False(t, IsValidSubType(Handshake, HandshakeXXPSK0))
@@ -178,6 +184,7 @@ func TestHandshakeFragmented(t *testing.T) {
 	for _, c := range []struct{ pattern, fragmented MessageSubType }{
 		{HandshakeIXPSK0, HandshakeIXPSK0Fragmented},
 		{HandshakeXXPSK0, HandshakeXXPSK0Fragmented},
+		{HandshakeIXHybrid, HandshakeIXHybridFragmented},
 	} {
 		st, ok := FragmentedSubtype(c.pattern)
 		assert.True(t, ok)
@@ -196,6 +203,7 @@ func TestHandshakeFragmented(t *testing.T) {
 
 	assert.Equal(t, "ix_psk0_fragmented", SubTypeName(Handshake, HandshakeIXPSK0Fragmented))
 	assert.Equal(t, "ix_psk0", SubTypeName(Handshake, HandshakeIXPSK0))
+	assert.Equal(t, "ix_hybrid_fragmented", SubTypeName(Handshake, HandshakeIXHybridFragmented))
 	assert.Equal(t, "unknown", SubTypeName(Handshake, HandshakeXXPSK0Fragmented), "named once XX is")
 	assert.Equal(t, "unknown", SubTypeName(Message, 0x80), "only handshakes fragment")
 }

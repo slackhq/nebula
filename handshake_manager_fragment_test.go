@@ -168,7 +168,9 @@ func TestShouldFragment(t *testing.T) {
 		{fragmentNever, small, true, false},
 	} {
 		hm.frag.Store(&fragmentConfig{mode: tc.mode})
-		assert.Equal(t, tc.want, hm.shouldFragment(tc.msgLen, tc.answeringFragments), "%+v", tc)
+		assert.Equal(t, tc.want, hm.shouldFragment(header.HandshakeIXPSK0, tc.msgLen, tc.answeringFragments), "%+v", tc)
+		// Hybrid handshakes have no unfragmented form.
+		assert.True(t, hm.shouldFragment(header.HandshakeIXHybrid, tc.msgLen, tc.answeringFragments), "%+v", tc)
 	}
 }
 
@@ -679,4 +681,47 @@ func TestMsg2Slots(t *testing.T) {
 		n, _ := slotsUsed(hh)
 		assert.Zero(t, n)
 	})
+}
+
+// A relay coming up sends the pending handshake through it at once, the attempt's packets as they are, rather than
+// leaving it to the next retry.
+func TestRelayEstablished(t *testing.T) {
+	hm, _ := newFragTestManager(t)
+	target := netip.MustParseAddr("10.0.0.2")
+	relay := netip.MustParseAddr("10.0.0.3")
+	var sent [][]byte
+	send := func(p []byte) error {
+		sent = append(sent, p)
+		return nil
+	}
+
+	// Nothing pending for target: nothing to send.
+	hm.relayEstablished(target, relay, send)
+	assert.Empty(t, sent)
+
+	stage0 := make([]byte, header.Len, header.Len+600)
+	header.Encode(stage0, header.Version, header.Handshake, header.HandshakeIXPSK0, 0, 1)
+	stage0 = append(stage0, make([]byte, 600)...)
+	hh := &HandshakeHostInfo{hostinfo: &HostInfo{vpnAddrs: []netip.Addr{target}, localIndexId: 99, HandshakePacket: map[uint8][]byte{handshakePacketStage0: stage0}}}
+	hm.vpnIps[target] = hh
+
+	// Pending, but its msg1 is not built yet.
+	hm.relayEstablished(target, relay, send)
+	assert.Empty(t, sent)
+
+	hh.ready = true
+	hm.relayEstablished(target, relay, send)
+	require.Len(t, sent, 1)
+	assert.Equal(t, stage0, sent[0])
+
+	// As fragments, when msg1 travels so.
+	sent = nil
+	require.NoError(t, hm.useFragments(hh, stage0))
+	hm.relayEstablished(target, relay, send)
+	require.NotEmpty(t, sent)
+	for _, p := range sent {
+		var h header.H
+		require.NoError(t, h.Parse(p))
+		assert.Equal(t, header.HandshakeIXPSK0Fragmented, h.Subtype)
+	}
 }

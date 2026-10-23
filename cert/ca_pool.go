@@ -37,10 +37,15 @@ func NewCAPoolFromPEM(caPEMs []byte) (*CAPool, error) {
 
 // NewCAPoolFromPEMReader will create a new CA pool from the provided reader.
 // The reader must contain a PEM-encoded set of nebula certificates.
+// A CA on a curve whose algorithms this build can not run, such as the hybrid curve under a FIPS module without
+// ML-DSA, is left out rather than failing the pool, so a bundle can carry CAs for nodes that have them; the returned
+// error then wraps ErrPQUnavailable alongside the pool, as it wraps ErrExpired for expired CAs, and the caller decides
+// whether a pool without them will do.
 func NewCAPoolFromPEMReader(r io.Reader) (*CAPool, error) {
 	pool := NewCAPool()
 
 	var expired bool
+	var unavailable []error
 
 	scanner := bufio.NewScanner(r)
 	scanner.Split(SplitPEM)
@@ -57,7 +62,10 @@ func NewCAPoolFromPEMReader(r io.Reader) (*CAPool, error) {
 		}
 
 		c, err := unmarshalCertificateBlock(block)
-		if err != nil {
+		if errors.Is(err, ErrPQUnavailable) {
+			unavailable = append(unavailable, err)
+			continue
+		} else if err != nil {
 			return nil, err
 		}
 
@@ -73,11 +81,17 @@ func NewCAPoolFromPEMReader(r io.Reader) (*CAPool, error) {
 		return nil, ErrInvalidPEMBlock
 	}
 
-	if expired {
-		return pool, ErrExpired
+	if len(unavailable) == 0 {
+		if expired {
+			return pool, ErrExpired
+		}
+		return pool, nil
 	}
-
-	return pool, nil
+	err := fmt.Errorf("%d CA certificate(s) left out: %w", len(unavailable), unavailable[0])
+	if expired {
+		err = errors.Join(ErrExpired, err)
+	}
+	return pool, err
 }
 
 // AddCAFromPEM verifies a Nebula CA certificate and adds it to the pool.

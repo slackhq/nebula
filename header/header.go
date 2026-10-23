@@ -72,6 +72,17 @@ const (
 	// travel as fragments, see handshake/fragment.
 	HandshakeIXPSK0Fragmented MessageSubType = 0x80
 	HandshakeXXPSK0Fragmented MessageSubType = 0x81
+
+	// 2 was ix_psk2_mlkem1024, an ephemeral ML-KEM exchange over IX that was
+	// never released. Do not reuse it, nor 0x82.
+
+	// HandshakeIXHybrid is the hybrid IX of github.com/DefinedNet/noise, for
+	// certificates on the hybrid curve: IX with P-384 and ML-KEM-1024 side by
+	// side. It takes three messages, too big for one packet, so they always
+	// travel as fragments, HandshakeIXHybridFragmented; the pattern's own
+	// subtype only names the reassembled message the handshake Machine reads.
+	HandshakeIXHybrid           MessageSubType = 3
+	HandshakeIXHybridFragmented MessageSubType = 0x83
 )
 
 // FragmentedSubtype returns the subtype a handshake message of this pattern carries as fragments, and false for a
@@ -82,6 +93,8 @@ func FragmentedSubtype(pattern MessageSubType) (MessageSubType, bool) {
 		return HandshakeIXPSK0Fragmented, true
 	case HandshakeXXPSK0:
 		return HandshakeXXPSK0Fragmented, true
+	case HandshakeIXHybrid:
+		return HandshakeIXHybridFragmented, true
 	default:
 		return 0, false
 	}
@@ -95,6 +108,8 @@ func FragmentedPattern(st MessageSubType) (MessageSubType, bool) {
 		return HandshakeIXPSK0, true
 	case HandshakeXXPSK0Fragmented:
 		return HandshakeXXPSK0, true
+	case HandshakeIXHybridFragmented:
+		return HandshakeIXHybrid, true
 	default:
 		return 0, false
 	}
@@ -119,8 +134,10 @@ var subTypeMap = map[MessageType]*map[MessageSubType]string{
 	Test:        &subTypeTestMap,
 	CloseTunnel: &subTypeNoneMap,
 	Handshake: {
-		HandshakeIXPSK0:           "ix_psk0",
-		HandshakeIXPSK0Fragmented: "ix_psk0_fragmented",
+		HandshakeIXPSK0:             "ix_psk0",
+		HandshakeIXPSK0Fragmented:   "ix_psk0_fragmented",
+		HandshakeIXHybrid:           "ix_hybrid",
+		HandshakeIXHybridFragmented: "ix_hybrid_fragmented",
 	},
 	Control: &subTypeNoneMap,
 }
@@ -231,7 +248,8 @@ func IsValidSubType(t MessageType, s MessageSubType) bool {
 	case Message:
 		return s == MessageNone || s == MessageRelay
 	case Handshake:
-		return s == HandshakeIXPSK0 || s == HandshakeIXPSK0Fragmented
+		// ix_hybrid is valid here; the handshake manager drops one that is not fragmented.
+		return s == HandshakeIXPSK0 || s == HandshakeIXPSK0Fragmented || s == HandshakeIXHybrid || s == HandshakeIXHybridFragmented
 	case Test:
 		return s == TestReply || s == TestRequest
 	case Control, CloseTunnel, RecvError, LightHouse:

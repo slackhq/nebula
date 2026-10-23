@@ -68,6 +68,25 @@ func TestNewCipherSuite(t *testing.T) {
 			wantErr:         "pki: use of ChaChaPoly is not allowed in FIPS 140-only mode",
 		},
 		{
+			name:     "hybrid aesgcm takes SHA-512",
+			curve:    cert.Curve_P384_MLKEM1024_MLDSA87,
+			cipher:   "aesgcm",
+			wantName: "P384_AESGCM_SHA512",
+		},
+		{
+			name:     "hybrid chachapoly takes SHA-512",
+			curve:    cert.Curve_P384_MLKEM1024_MLDSA87,
+			cipher:   "chachapoly",
+			wantName: "P384_ChaChaPoly_SHA512",
+		},
+		{
+			name:            "hybrid aesgcm, enforced is allowed",
+			curve:           cert.Curve_P384_MLKEM1024_MLDSA87,
+			cipher:          "aesgcm",
+			fips140Enforced: true,
+			wantName:        "P384_AESGCM_SHA512",
+		},
+		{
 			// Curve is checked before cipher, so a Curve25519+ChaChaPoly
 			// request reports the Curve25519 rejection.
 			name:            "curve25519 chachapoly rejected on curve when enforced",
@@ -259,4 +278,35 @@ func TestLoadCAPoolBlocklist(t *testing.T) {
 	assert.True(t, res.Failed)
 	assert.True(t, p.GetCAPool().IsBlocklisted(fp))
 	assert.True(t, p.GetCAPool().IsBlocklisted(otherFp))
+}
+
+// A hybrid node holds one certificate on the hybrid curve, version 2, and its key, as a classical node holds its own.
+func TestNewCertStateFromConfig_Hybrid(t *testing.T) {
+	if err := cert.HybridAvailable(); err != nil {
+		t.Skip(err)
+	}
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_P384_MLKEM1024_MLDSA87, time.Time{}, time.Time{}, nil, nil, nil)
+	host, _, keyPEM, certPEM := cert_test.NewTestCert(cert.Version2, cert.Curve_P384_MLKEM1024_MLDSA87, ca, caKey, "host", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.1/16")}, nil, nil)
+	load := func(certPEM, keyPEM []byte) (*CertState, error) {
+		c := config.NewC(test.NewLogger())
+		require.NoError(t, c.LoadString(fmt.Sprintf("pki:\n  cert: %q\n  key: %q\n", certPEM, keyPEM)))
+		return newCertStateFromConfig(c, "aes")
+	}
+
+	cs, err := load(certPEM, keyPEM)
+	require.NoError(t, err)
+	assert.Equal(t, host, cs.GetCredential(cert.Version2).Cert)
+	assert.Equal(t, cert.Version2, cs.DefaultVersion())
+	assert.Equal(t, []netip.Prefix{netip.MustParsePrefix("10.1.0.1/16")}, cs.myVpnNetworks)
+
+	// The curves of a node's certificates never mix.
+	classicalCA, _, classicalCAKey, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	_, _, _, v1PEM := cert_test.NewTestCert(cert.Version1, cert.Curve_CURVE25519, classicalCA, classicalCAKey, "host", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.1/16")}, nil, nil)
+	_, err = load(append(append([]byte{}, v1PEM...), certPEM...), keyPEM)
+	require.Error(t, err)
+
+	// Nor does a key of another curve fit.
+	_, _, otherKeyPEM, _ := cert_test.NewTestCert(cert.Version1, cert.Curve_CURVE25519, classicalCA, classicalCAKey, "other", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.2/16")}, nil, nil)
+	_, err = load(certPEM, otherKeyPEM)
+	require.ErrorContains(t, err, "not a pair")
 }
