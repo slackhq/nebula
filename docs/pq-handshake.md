@@ -193,8 +193,14 @@ October 2026. What it asks for, and where nebula stands:
   SHA-256 nowhere, not even in a KDF. The hybrid curve uses ML-KEM-1024, ML-DSA-87 and SHA-512
   throughout its handshake, keys and fingerprints. `cipher: aes` is AES-256-GCM; `chachapoly` is
   not a CNSA algorithm.
-- **Hybrids are not required.** P-384 rides along with ML-KEM-1024 and ML-DSA-87 so the curve is
-  no weaker than CNSA 1.0 against classical attacks should a post-quantum algorithm fall.
+- **CNSA 2.0 has no elliptic curves.** P-384 is CNSA 1.0, what the FAQ says devices should use
+  today ("Curve P-384, RSA with at least a 3072-bit modulus, or an NSA-approved alternative"). It
+  rides along with ML-KEM-1024 and ML-DSA-87 by choice, so the curve is no weaker than CNSA 1.0
+  against classical attacks should a post-quantum algorithm fall, not because CNSA 2.0 asks for it.
+- **Hybrids are not required, and self-designed ones are not compliant.** "NSA has confidence in
+  CNSA 2.0 algorithms and will not require NSS developers to use hybrid certified products", and
+  "only the hybrid solution identified by NSA would be considered 'CNSA 2.0 compliant'". NSA has
+  identified none for nebula; its one example is IKEv2.
 - **"NSS systems using PKI should not use novel mechanisms to support multiple algorithms within a
   single certificate".** A composite signature is such a mechanism. The curve uses one anyway,
   so a hybrid CA has a single key and every hybrid certificate a single signature; dropping the
