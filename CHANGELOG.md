@@ -15,11 +15,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   long repair fragments trail, a tenth of `handshakes.try_interval` unless set. Fragments are counted in
   `messages.{tx,rx}.handshake_ixpsk0_fragmented`. A node reassembles fragments unless set to `never`; an older peer can not, but the
   oversized packet it could have read needed IP fragmentation to arrive. See `docs/fragmented-handshakes.md`.
+- Post-quantum hybrid handshakes, `ix_hybrid`, on a new certificate curve, `P384_MLKEM1024_MLDSA87`, whose algorithms
+  are all in CNSA 1.0 or 2.0: P-384 and ML-KEM-1024 for host keys, the composite of ML-DSA-87 and ECDSA P-384
+  (`id-MLDSA87-ECDSA-P384-SHA512`) for CA signatures, and SHA-512 for the handshake hash and the certificates'
+  fingerprints. Version 2 certificates only. Like any curve it is the node's only one: a node on it makes hybrid
+  handshakes and nothing else, and can not reach classical nodes. `nebula-cert ca`, `keygen` and
+  `sign -curve P384-MLKEM1024-MLDSA87` make the CAs, keys and certificates. See `docs/pq-handshake.md`.
 
 - A control socket that provides access to all of the ssh debug server's commands along with support
   for running `nebula ctl <command>` as a client from the CLI.
 - An info socket that serves the `identity` command over HTTP: `GET /v1/identity` for this node,
   `GET /v1/identity/<vpn addr>` for the host owning an address, and `/pem` under either for the certificate.
+
+### Changed
+
+- `pki.blocklist` accepts SHA-512 fingerprints, the length hybrid certificates have, as well as SHA-256 ones.
 
 ### Removed
 

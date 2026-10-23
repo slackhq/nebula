@@ -31,6 +31,10 @@ period of half a retry interval. Both settings reload. With message metrics on
 `messages.{tx,rx}.handshake_ixpsk0_fragmented` (and `handshake_xxpsk0_fragmented`), apart from
 the single-packet `handshake_ixpsk0`.
 
+`handshakes.fragment` governs classical handshakes. Hybrid handshakes, which have no unfragmented
+form, always travel as fragments and are always reassembled, `never` included; see
+[post-quantum handshakes](pq-handshake.md).
+
 A peer running an older nebula, or set to `never`, can not reassemble fragments. A message too
 big for one packet goes to it as fragments anyway: the oversized datagram it could have read
 depended on IP fragmentation, which is what fails, so nothing that worked reliably is lost. Such a
