@@ -1,7 +1,6 @@
 package cert
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/pem"
 	"errors"
@@ -30,7 +29,10 @@ func NewCAPool() *CAPool {
 // NewCAPoolFromPEM will create a new CA pool from the provided
 // input bytes, which must be a PEM-encoded set of nebula certificates.
 // If the pool contains any expired certificates, an ErrExpired will be
-// returned along with the pool. The caller must handle any such errors.
+// returned along with the pool. Certificates this version of nebula does not
+// support, an unknown version or curve, are left out and their errors are
+// returned along with the pool too, joined with any ErrExpired. A nil pool
+// means the input could not be used at all. The caller must handle any such errors.
 func NewCAPoolFromPEM(caPEMs []byte) (*CAPool, error) {
 	return NewCAPoolFromPEMReader(bytes.NewReader(caPEMs))
 }
@@ -41,11 +43,11 @@ func NewCAPoolFromPEMReader(r io.Reader) (*CAPool, error) {
 	pool := NewCAPool()
 
 	var expired bool
+	var skipped []error
 
-	scanner := bufio.NewScanner(r)
-	scanner.Split(SplitPEM)
+	scanner := NewPEMScanner(r)
 
-	for scanner.Scan() {
+	for i := 1; scanner.Scan(); i++ {
 		pemBytes := scanner.Bytes()
 
 		block, rest := pem.Decode(pemBytes)
@@ -57,7 +59,10 @@ func NewCAPoolFromPEMReader(r io.Reader) (*CAPool, error) {
 		}
 
 		c, err := unmarshalCertificateBlock(block)
-		if err != nil {
+		if errors.Is(err, ErrUnknownVersion) {
+			skipped = append(skipped, fmt.Errorf("certificate %d: %w", i, err))
+			continue
+		} else if err != nil {
 			return nil, err
 		}
 
@@ -65,19 +70,42 @@ func NewCAPoolFromPEMReader(r io.Reader) (*CAPool, error) {
 		if errors.Is(err, ErrExpired) {
 			expired = true
 			continue
+		} else if errors.Is(err, ErrUnknownCurve) {
+			skipped = append(skipped, fmt.Errorf("certificate %d: %w", i, err))
+			continue
 		} else if err != nil {
 			return nil, err
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, ErrInvalidPEMBlock
+		return nil, fmt.Errorf("%w: %w", ErrInvalidPEMBlock, err)
 	}
 
 	if expired {
-		return pool, ErrExpired
+		if len(skipped) == 0 {
+			return pool, ErrExpired
+		}
+		skipped = append(skipped, ErrExpired)
 	}
 
-	return pool, nil
+	return pool, errors.Join(skipped...)
+}
+
+// SkippedCertificates returns an error for each certificate NewCAPoolFromPEM or NewCAPoolFromPEMReader left out of
+// the pool because this version of nebula does not support it.
+func SkippedCertificates(err error) []error {
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		return nil
+	}
+
+	var skipped []error
+	for _, e := range joined.Unwrap() {
+		if !errors.Is(e, ErrExpired) {
+			skipped = append(skipped, e)
+		}
+	}
+	return skipped
 }
 
 // AddCAFromPEM verifies a Nebula CA certificate and adds it to the pool.
@@ -100,16 +128,20 @@ func (ncp *CAPool) AddCAFromPEM(pemBytes []byte) ([]byte, error) {
 // AddCA verifies a Nebula CA certificate and adds it to the pool.
 func (ncp *CAPool) AddCA(c Certificate) error {
 	if !c.IsCA() {
-		return fmt.Errorf("%s: %w", c.Name(), ErrNotCA)
+		return fmt.Errorf("%s: %w", QuoteName(c.Name()), ErrNotCA)
+	}
+
+	if err := CheckKnownCurve(c); err != nil {
+		return err
 	}
 
 	if !c.CheckSignature(c.PublicKey()) {
-		return fmt.Errorf("%s: %w", c.Name(), ErrNotSelfSigned)
+		return fmt.Errorf("%s: %w", QuoteName(c.Name()), ErrNotSelfSigned)
 	}
 
 	sum, err := c.Fingerprint()
 	if err != nil {
-		return fmt.Errorf("could not calculate fingerprint for provided CA; error: %w; %s", err, c.Name())
+		return fmt.Errorf("could not calculate fingerprint for provided CA; error: %w; %s", err, QuoteName(c.Name()))
 	}
 
 	cc := &CachedCertificate{
@@ -125,7 +157,7 @@ func (ncp *CAPool) AddCA(c Certificate) error {
 	ncp.CAs[sum] = cc
 
 	if c.Expired(time.Now()) {
-		return fmt.Errorf("%s: %w", c.Name(), ErrExpired)
+		return fmt.Errorf("%s: %w", QuoteName(c.Name()), ErrExpired)
 	}
 
 	return nil

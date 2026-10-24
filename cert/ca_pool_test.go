@@ -1,7 +1,10 @@
 package cert
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/pem"
+	"fmt"
 	"io"
 	"net/netip"
 	"strings"
@@ -113,6 +116,118 @@ k+coOv04r+zh33ISyhbsafnYduN17p2eD7CmHvHuerguXD9f32gcxo/KsFCKEjMe
 	require.NoError(t, err)
 	assert.Equal(t, ppppp.CAs["552bf7d99bec1fc775a0e4c324bf6d8f789b3078f1919c7960d2e5e0c351ee97"].Certificate.Name(), rootCAP256.details.name)
 	assert.Len(t, ppppp.CAs, 1)
+}
+
+// A bundle can hold CAs a newer nebula understands, those are skipped and reported along with the pool. Anything else
+// that fails to load still fails the whole pool.
+func TestNewCAPoolFromPEM_SkipsUnsupported(t *testing.T) {
+	ca, _, _, caPEM := NewTestCaCert(Version2, Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	fp, err := ca.Fingerprint()
+	require.NoError(t, err)
+
+	newCurve, _, _, _ := NewTestCaCert(Version2, Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	nc := newCurve.Copy().(*certificateV2)
+	nc.curve = Curve(2)
+	newCurvePEM, err := nc.MarshalPEM()
+	require.NoError(t, err)
+	newVersionPEM := pem.EncodeToMemory(&pem.Block{Type: "NEBULA CERTIFICATE V9", Bytes: []byte{0x30, 0x00}})
+
+	pool, err := NewCAPoolFromPEM(appendByteSlices(newVersionPEM, caPEM, newCurvePEM))
+	require.NotNil(t, pool)
+	require.ErrorIs(t, err, ErrUnknownVersion)
+	require.ErrorIs(t, err, ErrUnknownCurve)
+	require.NotErrorIs(t, err, ErrExpired)
+	assert.Len(t, pool.CAs, 1)
+	assert.Contains(t, pool.CAs, fp)
+
+	// Expired CAs are still reported too
+	_, _, _, expiredPEM := NewTestCaCert(Version2, Curve_CURVE25519, time.Now().Add(-2*time.Hour), time.Now().Add(-time.Hour), nil, nil, nil)
+	pool, err = NewCAPoolFromPEM(appendByteSlices(caPEM, expiredPEM, newVersionPEM))
+	require.NotNil(t, pool)
+	require.ErrorIs(t, err, ErrExpired)
+	require.ErrorIs(t, err, ErrUnknownVersion)
+	assert.Len(t, pool.CAs, 2)
+
+	// Nothing we can use is still a pool, the caller decides if an empty one is ok
+	pool, err = NewCAPoolFromPEM(newVersionPEM)
+	require.NotNil(t, pool)
+	require.ErrorIs(t, err, ErrUnknownVersion)
+	assert.Empty(t, pool.CAs)
+
+	// A banner that isn't a nebula certificate at all is a mistake, not something newer
+	notNebula := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte{0x30, 0x00}})
+	pool, err = NewCAPoolFromPEM(appendByteSlices(caPEM, notNebula))
+	assert.Nil(t, pool)
+	require.ErrorIs(t, err, ErrInvalidPEMCertificateBanner)
+
+	// A newer curve is only skipped once the rest of the certificate parses, a damaged one still fails the pool
+	raw, err := nc.Marshal()
+	require.NoError(t, err)
+	sigTag := len(raw) - len(nc.signature) - 2
+	require.Equal(t, byte(TagCertSignature), raw[sigTag])
+	raw[sigTag] = 0x84
+	damaged := pem.EncodeToMemory(&pem.Block{Type: CertificateV2Banner, Bytes: raw})
+	pool, err = NewCAPoolFromPEM(appendByteSlices(caPEM, damaged))
+	assert.Nil(t, pool)
+	require.ErrorIs(t, err, ErrBadFormat)
+
+	// So is a CA we understand that doesn't verify
+	bad := ca.Copy().(*certificateV2)
+	bad.signature = bytes.Repeat([]byte{1}, len(bad.signature))
+	badPEM, err := bad.MarshalPEM()
+	require.NoError(t, err)
+	pool, err = NewCAPoolFromPEM(appendByteSlices(newVersionPEM, badPEM))
+	assert.Nil(t, pool)
+	require.ErrorIs(t, err, ErrNotSelfSigned)
+
+	// The skipped errors are what SkippedCertificates hands back, without any ErrExpired
+	_, err = NewCAPoolFromPEM(appendByteSlices(caPEM, expiredPEM, newVersionPEM, newCurvePEM))
+	skipped := SkippedCertificates(err)
+	require.Len(t, skipped, 2)
+	require.ErrorIs(t, skipped[0], ErrUnknownVersion)
+	require.ErrorIs(t, skipped[1], ErrUnknownCurve)
+	require.ErrorContains(t, skipped[0], "certificate 3: ")
+	require.ErrorContains(t, skipped[1], "certificate 4: ")
+	assert.Nil(t, SkippedCertificates(ErrExpired))
+	assert.Nil(t, SkippedCertificates(nil))
+}
+
+func TestCAPool_AddCAUnknownCurve(t *testing.T) {
+	ca, _, _, _ := NewTestCaCert(Version2, Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	c := ca.Copy().(*certificateV2)
+	c.curve = Curve(2)
+
+	err := NewCAPool().AddCA(c)
+	require.ErrorIs(t, err, ErrUnknownCurve)
+	require.EqualError(t, err, fmt.Sprintf("%q: certificate curve unrecognized: 2", c.Name()))
+}
+
+// A CA's name comes from the certificate, it is quoted so it can't inject control sequences into an error
+func TestCAPool_AddCAQuotesName(t *testing.T) {
+	ca, _, _, _ := NewTestCaCert(Version2, Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	c := ca.Copy().(*certificateV2)
+	c.details.name = "evil\x1b[31m\n"
+	c.details.isCA = false
+
+	err := NewCAPool().AddCA(c)
+	require.ErrorIs(t, err, ErrNotCA)
+	require.EqualError(t, err, `"evil\x1b[31m\n": certificate is not a CA`)
+}
+
+// A CA near MaxCertificateSize is larger than a bufio.Scanner holds by default as PEM
+func TestNewCAPoolFromPEM_LargeCertificate(t *testing.T) {
+	var groups []string
+	for i := 0; len(groups)*20 < MaxCertificateSize-4096; i++ {
+		groups = append(groups, fmt.Sprintf("group-%013d", i))
+	}
+	ca, _, _, caPEM := NewTestCaCert(Version2, Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, groups)
+	require.Greater(t, len(caPEM), bufio.MaxScanTokenSize)
+	fp, err := ca.Fingerprint()
+	require.NoError(t, err)
+
+	pool, err := NewCAPoolFromPEM(caPEM)
+	require.NoError(t, err)
+	assert.Contains(t, pool.CAs, fp)
 }
 
 // oneByteReader wraps a reader to return at most 1 byte per Read call,
