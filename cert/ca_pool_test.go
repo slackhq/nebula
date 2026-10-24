@@ -186,8 +186,8 @@ func TestNewCAPoolFromPEM_SkipsUnsupported(t *testing.T) {
 	require.Len(t, skipped, 2)
 	require.ErrorIs(t, skipped[0], ErrUnknownVersion)
 	require.ErrorIs(t, skipped[1], ErrUnknownCurve)
-	assert.ErrorContains(t, skipped[0], "certificate 3: ")
-	assert.ErrorContains(t, skipped[1], "certificate 4: ")
+	require.ErrorContains(t, skipped[0], "certificate 3: ")
+	require.ErrorContains(t, skipped[1], "certificate 4: ")
 	assert.Nil(t, SkippedCertificates(ErrExpired))
 	assert.Nil(t, SkippedCertificates(nil))
 }
