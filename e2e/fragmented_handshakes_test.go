@@ -283,6 +283,36 @@ func TestFragmentedHandshake_CookieResendAnsweredAtOnce(t *testing.T) {
 	theirControl.Stop()
 }
 
+// Junk msg1 fragments from an address sharing my /32 fill the responder's per-source quota without ever filling its
+// table. My handshake from that prefix is then asked for a cookie rather than dropped, and comes up.
+func TestFragmentedHandshake_SourceQuotaFull(t *testing.T) {
+	t.Parallel()
+	myControl, theirControl, myVpn, theirVpn, r := newFragmentPair(t, groupsOf(50), groupsOf(50), nil, nil)
+	defer r.RenderFlow()
+
+	// One fragment each of 32 two-fragment messages, the per-source quota, refreshed by nothing and never completed.
+	neighbor := netip.AddrPortFrom(myControl.GetUDPAddr().Addr(), myControl.GetUDPAddr().Port()+1)
+	for i := range 32 {
+		pkt := header.Encode(make([]byte, header.Len, header.Len+2000), header.Version, header.Handshake, header.HandshakeIXPSK0, 0, 1)
+		s, err := fragment.NewSender(append(pkt, make([]byte, 2000)...), uint32(0x7000_0000+i))
+		require.NoError(t, err)
+		now, _, err := s.Attempt(0)
+		require.NoError(t, err)
+		require.Len(t, now, 2)
+		theirControl.InjectUDPPacket(&udp.Packet{To: theirControl.GetUDPAddr(), From: neighbor, Data: now[0]})
+	}
+
+	// Well inside the 3s the junk would take to expire on its own.
+	var tally fragmentTally
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpn[0].Addr(), 80, myVpn[0].Addr(), 80, []byte("Hi from me")))
+	require.True(t, routeUntilData(t, r, theirControl, time.Second, tally.observe), "tunnel never came up")
+	assertUdpPacket(t, []byte("Hi from me"), theirControl.GetFromTun(true), myVpn[0].Addr(), theirVpn[0].Addr(), 80, 80)
+	assert.Positive(t, tally.cookies, "the responder asked for a cookie instead of dropping my fragments")
+
+	myControl.Stop()
+	theirControl.Stop()
+}
+
 // When the first msg2 is lost, the initiator's retry is reassembled and answered with the msg2 the responder already
 // sent, in fresh symbols, rather than starting a second handshake.
 func TestFragmentedHandshake_LostResponse(t *testing.T) {
