@@ -281,14 +281,14 @@ func TestBlocklistedHandshakeLogLevelAndCounter(t *testing.T) {
 	hm.f = &Interface{pki: pki, l: logger}
 	via := ViaSender{UdpAddr: netip.MustParseAddrPort("198.51.100.7:4242")}
 
-	hm.beginHandshake(via, packet, nil)
+	hm.beginHandshake(via, packet, nil, msg1Info{})
 	entry := findEntry(t, handler.entries, "Failed to process handshake packet")
 	assert.Equal(t, slog.LevelDebug, entry.Level)
 	require.ErrorIs(t, entry.Attrs["error"].(error), cert.ErrBlockListed)
 	assert.Equal(t, int64(1), hm.metricRejectedBlocklisted.Count())
 
 	handler.entries = nil
-	hm.beginHandshake(via, nil, nil)
+	hm.beginHandshake(via, nil, nil, msg1Info{})
 	entry = findEntry(t, handler.entries, "Failed to process handshake packet")
 	assert.Equal(t, slog.LevelError, entry.Level)
 	assert.Equal(t, int64(1), hm.metricRejectedBlocklisted.Count())
