@@ -1,7 +1,6 @@
 package cert
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/pem"
 	"errors"
@@ -46,10 +45,9 @@ func NewCAPoolFromPEMReader(r io.Reader) (*CAPool, error) {
 	var expired bool
 	var skipped []error
 
-	scanner := bufio.NewScanner(r)
-	scanner.Split(SplitPEM)
+	scanner := NewPEMScanner(r)
 
-	for scanner.Scan() {
+	for i := 1; scanner.Scan(); i++ {
 		pemBytes := scanner.Bytes()
 
 		block, rest := pem.Decode(pemBytes)
@@ -62,7 +60,7 @@ func NewCAPoolFromPEMReader(r io.Reader) (*CAPool, error) {
 
 		c, err := unmarshalCertificateBlock(block)
 		if errors.Is(err, ErrUnknownVersion) {
-			skipped = append(skipped, err)
+			skipped = append(skipped, fmt.Errorf("certificate %d: %w", i, err))
 			continue
 		} else if err != nil {
 			return nil, err
@@ -73,14 +71,14 @@ func NewCAPoolFromPEMReader(r io.Reader) (*CAPool, error) {
 			expired = true
 			continue
 		} else if errors.Is(err, ErrUnknownCurve) {
-			skipped = append(skipped, err)
+			skipped = append(skipped, fmt.Errorf("certificate %d: %w", i, err))
 			continue
 		} else if err != nil {
 			return nil, err
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, ErrInvalidPEMBlock
+		return nil, fmt.Errorf("%w: %w", ErrInvalidPEMBlock, err)
 	}
 
 	if expired {
@@ -130,20 +128,20 @@ func (ncp *CAPool) AddCAFromPEM(pemBytes []byte) ([]byte, error) {
 // AddCA verifies a Nebula CA certificate and adds it to the pool.
 func (ncp *CAPool) AddCA(c Certificate) error {
 	if !c.IsCA() {
-		return fmt.Errorf("%s: %w", c.Name(), ErrNotCA)
+		return fmt.Errorf("%s: %w", QuoteName(c.Name()), ErrNotCA)
 	}
 
-	if !c.Curve().Known() {
-		return fmt.Errorf("%s: %w: %d", c.Name(), ErrUnknownCurve, c.Curve())
+	if err := CheckKnownCurve(c); err != nil {
+		return err
 	}
 
 	if !c.CheckSignature(c.PublicKey()) {
-		return fmt.Errorf("%s: %w", c.Name(), ErrNotSelfSigned)
+		return fmt.Errorf("%s: %w", QuoteName(c.Name()), ErrNotSelfSigned)
 	}
 
 	sum, err := c.Fingerprint()
 	if err != nil {
-		return fmt.Errorf("could not calculate fingerprint for provided CA; error: %w; %s", err, c.Name())
+		return fmt.Errorf("could not calculate fingerprint for provided CA; error: %w; %s", err, QuoteName(c.Name()))
 	}
 
 	cc := &CachedCertificate{
@@ -159,7 +157,7 @@ func (ncp *CAPool) AddCA(c Certificate) error {
 	ncp.CAs[sum] = cc
 
 	if c.Expired(time.Now()) {
-		return fmt.Errorf("%s: %w", c.Name(), ErrExpired)
+		return fmt.Errorf("%s: %w", QuoteName(c.Name()), ErrExpired)
 	}
 
 	return nil

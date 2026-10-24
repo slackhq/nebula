@@ -1,8 +1,10 @@
 package cert
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"net/netip"
 	"strings"
@@ -184,6 +186,8 @@ func TestNewCAPoolFromPEM_SkipsUnsupported(t *testing.T) {
 	require.Len(t, skipped, 2)
 	require.ErrorIs(t, skipped[0], ErrUnknownVersion)
 	require.ErrorIs(t, skipped[1], ErrUnknownCurve)
+	assert.ErrorContains(t, skipped[0], "certificate 3: ")
+	assert.ErrorContains(t, skipped[1], "certificate 4: ")
 	assert.Nil(t, SkippedCertificates(ErrExpired))
 	assert.Nil(t, SkippedCertificates(nil))
 }
@@ -195,7 +199,35 @@ func TestCAPool_AddCAUnknownCurve(t *testing.T) {
 
 	err := NewCAPool().AddCA(c)
 	require.ErrorIs(t, err, ErrUnknownCurve)
-	require.EqualError(t, err, c.Name()+": certificate curve unrecognized: 2")
+	require.EqualError(t, err, fmt.Sprintf("%q: certificate curve unrecognized: 2", c.Name()))
+}
+
+// A CA's name comes from the certificate, it is quoted so it can't inject control sequences into an error
+func TestCAPool_AddCAQuotesName(t *testing.T) {
+	ca, _, _, _ := NewTestCaCert(Version2, Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	c := ca.Copy().(*certificateV2)
+	c.details.name = "evil\x1b[31m\n"
+	c.details.isCA = false
+
+	err := NewCAPool().AddCA(c)
+	require.ErrorIs(t, err, ErrNotCA)
+	require.EqualError(t, err, `"evil\x1b[31m\n": certificate is not a CA`)
+}
+
+// A CA near MaxCertificateSize is larger than a bufio.Scanner holds by default as PEM
+func TestNewCAPoolFromPEM_LargeCertificate(t *testing.T) {
+	var groups []string
+	for i := 0; len(groups)*20 < MaxCertificateSize-4096; i++ {
+		groups = append(groups, fmt.Sprintf("group-%013d", i))
+	}
+	ca, _, _, caPEM := NewTestCaCert(Version2, Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, groups)
+	require.Greater(t, len(caPEM), bufio.MaxScanTokenSize)
+	fp, err := ca.Fingerprint()
+	require.NoError(t, err)
+
+	pool, err := NewCAPoolFromPEM(caPEM)
+	require.NoError(t, err)
+	assert.Contains(t, pool.CAs, fp)
 }
 
 // oneByteReader wraps a reader to return at most 1 byte per Read call,

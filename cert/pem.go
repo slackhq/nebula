@@ -1,16 +1,26 @@
 package cert
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"golang.org/x/crypto/ed25519"
 )
 
 var ErrTruncatedPEMBlock = errors.New("truncated PEM block")
+
+// NewPEMScanner returns a bufio.Scanner over each PEM block in r, with room for a certificate of MaxCertificateSize.
+func NewPEMScanner(r io.Reader) *bufio.Scanner {
+	s := bufio.NewScanner(r)
+	s.Buffer(nil, 2*MaxCertificateSize)
+	s.Split(SplitPEM)
+	return s
+}
 
 // SplitPEM is a split function for bufio.Scanner that returns each PEM block.
 func SplitPEM(data []byte, atEOF bool) (advance int, token []byte, err error) {
@@ -123,10 +133,7 @@ func unmarshalCertificateBlock(block *pem.Block) (Certificate, error) {
 const maxBannerLen = 64
 
 func quoteBanner(banner string) string {
-	if len(banner) > maxBannerLen {
-		return fmt.Sprintf("%q...", banner[:maxBannerLen])
-	}
-	return fmt.Sprintf("%q", banner)
+	return quoteCapped(banner, maxBannerLen)
 }
 
 func marshalCertPublicKeyToPEM(c Certificate) []byte {

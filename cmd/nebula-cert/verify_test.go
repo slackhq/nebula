@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/pem"
+	"fmt"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/cert_test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ed25519"
@@ -28,7 +30,7 @@ func Test_verifyHelp(t *testing.T) {
 			"  -ca string\n"+
 			"    \tRequired: path to a file containing one or more ca certificates\n"+
 			"  -crt string\n"+
-			"    \tRequired: path to a file containing a single certificate\n",
+			"    \tRequired: path to a file containing one or more certificates\n",
 		ob.String(),
 	)
 }
@@ -93,7 +95,7 @@ func Test_verify(t *testing.T) {
 	err = verify([]string{"-ca", caFile.Name(), "-crt", certFile.Name()}, ob, eb)
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
-	require.EqualError(t, err, "error while parsing crt: input did not contain a valid PEM encoded block")
+	require.EqualError(t, err, "error while parsing crt: input did not contain a valid PEM encoded block: truncated PEM block")
 
 	// unverifiable cert at path
 	crt, _ := NewTestCert(ca, caPriv, "test-cert", time.Now().Add(time.Hour*-1), time.Now().Add(time.Hour), nil, nil, nil)
@@ -128,7 +130,47 @@ func Test_verify(t *testing.T) {
 	caFile.Write(pem.EncodeToMemory(&pem.Block{Type: "NEBULA CERTIFICATE V9", Bytes: []byte{0x30, 0x00}}))
 	err = verify([]string{"-ca", caFile.Name(), "-crt", certFile.Name()}, ob, eb)
 	assert.Empty(t, ob.String())
-	assert.Equal(t, "skipping ca: certificate version unrecognized: \"NEBULA CERTIFICATE V9\"\n", eb.String())
+	assert.Equal(t, "skipping ca: certificate 2: certificate version unrecognized: \"NEBULA CERTIFICATE V9\"\n", eb.String())
+	require.NoError(t, err)
+
+	// a crt file can hold certificates we don't know too, the rest are still verified
+	ob.Reset()
+	eb.Reset()
+	newCurve, _, _, newCurvePEM := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	certFile.Truncate(0)
+	certFile.Seek(0, 0)
+	certFile.Write(pem.EncodeToMemory(&pem.Block{Type: "NEBULA CERTIFICATE V9", Bytes: []byte{0x30, 0x00}}))
+	certFile.Write(cert_test.WithCurve(newCurvePEM, cert.Curve(2)))
+	certFile.Write(b)
+	err = verify([]string{"-ca", caFile.Name(), "-crt", certFile.Name()}, ob, eb)
+	assert.Empty(t, ob.String())
+	assert.Equal(t, "skipping ca: certificate 2: certificate version unrecognized: \"NEBULA CERTIFICATE V9\"\n"+
+		"skipping crt: certificate 1: certificate version unrecognized: \"NEBULA CERTIFICATE V9\"\n"+
+		fmt.Sprintf("skipping crt: certificate 2: %q: certificate curve unrecognized: 2\n", newCurve.Name()), eb.String())
+	require.NoError(t, err)
+
+	// a crt file with nothing we could check is not a pass
+	ob.Reset()
+	eb.Reset()
+	certFile.Truncate(0)
+	certFile.Seek(0, 0)
+	certFile.Write(pem.EncodeToMemory(&pem.Block{Type: "NEBULA CERTIFICATE V9", Bytes: []byte{0x30, 0x00}}))
+	err = verify([]string{"-ca", caFile.Name(), "-crt", certFile.Name()}, ob, eb)
+	assert.Empty(t, ob.String())
+	assert.Equal(t, "skipping ca: certificate 2: certificate version unrecognized: \"NEBULA CERTIFICATE V9\"\n"+
+		"skipping crt: certificate 1: certificate version unrecognized: \"NEBULA CERTIFICATE V9\"\n", eb.String())
+	require.EqualError(t, err, "no valid certificates found in crt")
+
+	// neither is an empty one
+	certFile.Truncate(0)
+	certFile.Seek(0, 0)
+	err = verify([]string{"-ca", caFile.Name(), "-crt", certFile.Name()}, ob, eb)
+	require.EqualError(t, err, "no valid certificates found in crt")
+
+	// trailing blank lines after the last certificate are fine
+	certFile.Write(b)
+	certFile.Write([]byte("\n\n  \n"))
+	err = verify([]string{"-ca", caFile.Name(), "-crt", certFile.Name()}, ob, eb)
 	require.NoError(t, err)
 
 	// a ca bundle with nothing we can use has nothing to verify against
@@ -139,8 +181,8 @@ func Test_verify(t *testing.T) {
 	caFile.Write(pem.EncodeToMemory(&pem.Block{Type: "NEBULA CERTIFICATE V9", Bytes: []byte{0x30, 0x00}}))
 	err = verify([]string{"-ca", caFile.Name(), "-crt", certFile.Name()}, ob, eb)
 	assert.Empty(t, ob.String())
-	assert.Equal(t, "skipping ca: certificate version unrecognized: \"NEBULA CERTIFICATE V9\"\n", eb.String())
-	require.ErrorIs(t, err, cert.ErrCaNotFound)
+	assert.Equal(t, "skipping ca: certificate 1: certificate version unrecognized: \"NEBULA CERTIFICATE V9\"\n", eb.String())
+	require.EqualError(t, err, "no valid CA certificates present")
 }
 
 func Test_verify_stdio(t *testing.T) {

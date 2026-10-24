@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"bytes"
 	"crypto/fips140"
 	"crypto/sha256"
 	"encoding/binary"
@@ -370,17 +371,16 @@ func newCertStateFromConfig(l *slog.Logger, c *config.C, cipher string) (*CertSt
 		}
 	}
 
-	var crt, v1, v2 cert.Certificate
+	var v1, v2 cert.Certificate
 	var skipped []error
-	for {
+	scanner := cert.NewPEMScanner(bytes.NewReader(rawCert))
+	for i := 1; scanner.Scan(); i++ {
 		// Load the certificate
-		crt, rawCert, err = loadCertificate(rawCert)
+		crt, _, err := loadCertificate(scanner.Bytes())
 		if errors.Is(err, cert.ErrUnknownVersion) || errors.Is(err, cert.ErrUnknownCurve) {
+			err = fmt.Errorf("certificate %d: %w", i, err)
 			l.Warn("Skipping a certificate in pki.cert that this version of nebula does not support", "error", err)
 			skipped = append(skipped, err)
-			if len(rawCert) == 0 || strings.TrimSpace(string(rawCert)) == "" {
-				break
-			}
 			continue
 		} else if err != nil {
 			return nil, err
@@ -404,15 +404,14 @@ func newCertStateFromConfig(l *slog.Logger, c *config.C, cipher string) (*CertSt
 		default:
 			return nil, fmt.Errorf("unknown certificate version %v", crt.Version())
 		}
-
-		if len(rawCert) == 0 || strings.TrimSpace(string(rawCert)) == "" {
-			break
-		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error while unmarshaling pki.cert: %w: %w", cert.ErrInvalidPEMBlock, err)
 	}
 
 	if v1 == nil && v2 == nil {
 		if len(skipped) > 0 {
-			return nil, fmt.Errorf("no certificates found in pki.cert, skipped: %w", errors.Join(skipped...))
+			return nil, fmt.Errorf("no valid certificates found in pki.cert, skipped: %w", errors.Join(skipped...))
 		}
 		return nil, errors.New("no certificates found in pki.cert")
 	}
@@ -570,8 +569,14 @@ func loadPrivateKey(privPathOrPEM string) (rawKey []byte, curve cert.Curve, isPk
 
 func loadCertificate(b []byte) (cert.Certificate, []byte, error) {
 	c, b, err := cert.UnmarshalCertificateFromPEM(b)
-	if err != nil {
+	if errors.Is(err, cert.ErrUnknownVersion) {
+		return nil, b, err
+	} else if err != nil {
 		return nil, b, fmt.Errorf("error while unmarshaling pki.cert: %w", err)
+	}
+
+	if err := cert.CheckKnownCurve(c); err != nil {
+		return nil, b, err
 	}
 
 	if c.Expired(time.Now()) {
@@ -584,10 +589,6 @@ func loadCertificate(b []byte) (cert.Certificate, []byte, error) {
 
 	if c.IsCA() {
 		return nil, b, fmt.Errorf("host certificate is a CA certificate")
-	}
-
-	if !c.Curve().Known() {
-		return nil, b, fmt.Errorf("%w: %d", cert.ErrUnknownCurve, c.Curve())
 	}
 
 	return c, b, nil
