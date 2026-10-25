@@ -116,7 +116,12 @@ func New(control *nebula.Control) (_ *Service, reterr error) {
 			PEB:        stack.CanBePrimaryEndpoint, // zero value default
 			ConfigType: stack.AddressConfigStatic,  // zero value default
 		}); err != nil {
-			return nil, fmt.Errorf("error creating IP: %s", err)
+			// A certificate may list one address under several prefix lengths,
+			// and the netstack only holds the host address.
+			if _, ok := err.(*tcpip.ErrDuplicateAddress); ok {
+				continue
+			}
+			return nil, fmt.Errorf("error creating IP %s: %s", ipNet.Addr(), err)
 		}
 	}
 

@@ -195,6 +195,25 @@ func TestService(t *testing.T) {
 	}
 }
 
+// A cert may list one address under two prefix lengths, which the netstack
+// holds as a single host address.
+func TestServiceSameAddressTwoPrefixes(t *testing.T) {
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+	a := newService(ca, caKey, "a", []netip.Prefix{
+		netip.MustParsePrefix("10.0.0.1/24"),
+		netip.MustParsePrefix("10.0.0.1/16"),
+	}, m{
+		"static_host_map": m{},
+		"listen": m{
+			"host": "127.0.0.1",
+			"port": 0,
+		},
+	})
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TCP between two services must work over an IPv6 overlay, with IPv6-only and
 // dual-stack certs, and IPv4 must keep working on a dual-stack cert.
 func TestServiceIPv6(t *testing.T) {
