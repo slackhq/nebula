@@ -21,6 +21,7 @@ var (
 	ErrPrivateKeyEncrypted        = errors.New("private key must be decrypted")
 	ErrCaNotFound                 = errors.New("could not find ca for the certificate")
 	ErrUnknownVersion             = errors.New("certificate version unrecognized")
+	ErrUnknownCurve               = errors.New("certificate curve unrecognized")
 	ErrCertPubkeyPresent          = errors.New("certificate has unexpected pubkey present")
 	ErrCurveMismatch              = errors.New("certificate curve does not match CA")
 
