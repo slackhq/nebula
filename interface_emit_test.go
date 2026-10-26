@@ -1,4 +1,4 @@
-//go:build (linux || darwin) && !e2e_testing
+//go:build (linux || darwin) && !android && !e2e_testing
 
 package nebula
 
