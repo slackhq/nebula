@@ -1,4 +1,4 @@
-module github.com/slackhq/nebula
+module github.com/slackhq/nebula // v1.11.2
 
 go 1.27.2
 

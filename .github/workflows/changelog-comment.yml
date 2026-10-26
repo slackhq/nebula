@@ -1,0 +1,59 @@
+name: Changelog comment
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+permissions:
+  pull-requests: write
+jobs:
+
+  comment:
+    name: Comment with the PR's change files
+    if: "!(github.head_ref == 'release' && github.event.pull_request.head.repo.full_name == github.repository)"
+    runs-on: ubuntu-latest
+    steps:
+
+    # pull_request_target gets a write token even on fork PRs, so this job reads the PR through the API and never
+    # checks out or runs its code.
+    - name: Write the comment
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.number }}
+        HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        SKIP: ${{ contains(github.event.pull_request.labels.*.name, 'skip-changelog') }}
+      run: |
+        files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" \
+          --jq '.[] | select(.status == "added") | .filename | select(startswith(".changeset/") and endswith(".md"))')
+        {
+          if [ -n "$files" ]
+          then
+            echo "This PR adds these change files to the next release:"
+            for f in $files
+            do
+              printf '\n`%s`\n\n````markdown\n%s\n````\n' "$f" \
+                "$(gh api -H 'Accept: application/vnd.github.raw' "repos/$HEAD_REPO/contents/$f?ref=$HEAD_SHA")"
+            done
+          elif [ "$SKIP" = true ]
+          then
+            echo 'Labeled `skip-changelog`, so this PR ships without a changelog entry.'
+          else
+            echo 'This PR has no change file yet. If users will notice the change, add one under `.changeset/`:'
+            echo
+            echo '```markdown'
+            echo '---'
+            echo 'default: patch'
+            echo '---'
+            echo
+            echo 'One line describing the change for the changelog.'
+            echo '```'
+            echo
+            echo 'Use `minor` for a feature, `major` for a breaking change, and `changed` or `removed` for those sections,'
+            echo 'or run `knope document-change`. Otherwise, label the PR `skip-changelog`.'
+          fi
+        } > "$RUNNER_TEMP/comment.md"
+
+    - uses: mshick/add-pr-comment@ec328af66588ab8f77cdeb2c264f14aba45bbf59 # v3.12.0
+      with:
+        message-id: changelog
+        message-path: ${{ runner.temp }}/comment.md

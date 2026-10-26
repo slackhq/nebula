@@ -1,0 +1,60 @@
+[package]
+versioned_files = ["go.mod"]
+changelog = "CHANGELOG.md"
+extra_changelog_sections = [
+    { types = ["major"], name = "Breaking" },
+    { types = ["minor"], name = "Added" },
+    { types = ["changed"], name = "Changed" },
+    { types = ["removed"], name = "Removed" },
+    { types = ["patch"], name = "Fixed" },
+]
+
+[changes]
+ignore_conventional_commits = true
+
+[[workflows]]
+name = "document-change"
+
+[[workflows.steps]]
+type = "CreateChangeFile"
+
+[[workflows]]
+name = "prepare-release"
+
+[[workflows.steps]]
+type = "Command"
+command = "git switch -c release"
+
+[[workflows.steps]]
+type = "PrepareRelease"
+
+[[workflows.steps]]
+type = "Command"
+command = "git commit -m \"chore: prepare release $version\""
+
+[[workflows.steps]]
+type = "Command"
+command = "git push --force --set-upstream origin release"
+
+[workflows.steps.variables]
+"$version" = "Version"
+
+[[workflows.steps]]
+type = "CreatePullRequest"
+base = "master"
+
+[workflows.steps.title]
+template = "$version changelog"
+
+[workflows.steps.body]
+template = "Merging this PR tags `$version`, which runs the release workflow.\n\n$changelog"
+
+[[workflows]]
+name = "release"
+
+[[workflows.steps]]
+type = "Release"
+
+[github]
+owner = "slackhq"
+repo = "nebula"

@@ -1,0 +1,29 @@
+name: Changelog
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+permissions:
+  contents: read
+jobs:
+
+  changelog:
+    name: Require a change file
+    if: >-
+      !contains(github.event.pull_request.labels.*.name, 'skip-changelog')
+      && github.event.pull_request.user.login != 'dependabot[bot]'
+      && !(github.head_ref == 'release' && github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    steps:
+
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        fetch-depth: 2
+
+    # HEAD is the merge of the PR into its base, so HEAD^1 is the base.
+    - name: Look for a new change file
+      run: |
+        if ! git diff --name-only --diff-filter=A HEAD^1 HEAD -- '.changeset/*.md' | grep -q .
+        then
+          echo '::error::Add a change file under .changeset/, or label the PR skip-changelog.'
+          exit 1
+        fi

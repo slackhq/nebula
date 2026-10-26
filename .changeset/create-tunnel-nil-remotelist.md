@@ -1,0 +1,5 @@
+---
+default: patch
+---
+
+`create-tunnel -address <ip:port>` panicked on a nil RemoteList and, over the ssh debug server, took nebula down with it. A hostinfo returned by StartHandshake had no RemoteList until the handshake loop's first pass attached one, and `create-tunnel -address` set the remote before that. The list is now attached when the handshake starts, so a pending hostinfo never exists without one.

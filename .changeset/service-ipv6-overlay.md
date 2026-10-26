@@ -1,0 +1,5 @@
+---
+default: patch
+---
+
+The `service` package now works over an IPv6 overlay. It added only an IPv4 route, only the cert's first network (always labeled IPv4), and handed every inbound packet to gvisor as IPv4, so IPv6 dials failed and IPv6 replies were dropped.

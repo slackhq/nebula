@@ -1,0 +1,5 @@
+---
+default: patch
+---
+
+A node whose UDP socket is IPv4, as with the default `listen.host` of `0.0.0.0`, no longer tries to handshake, roam or punch to a peer's IPv6 addresses, which it could never send to, or advertise its own IPv6 interface addresses, which it could never receive on.

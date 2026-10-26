@@ -1,0 +1,44 @@
+name: Prepare release
+on:
+  push:
+    branches:
+    - master
+permissions:
+  contents: write
+  pull-requests: write
+concurrency:
+  group: prepare-release
+  cancel-in-progress: true
+jobs:
+
+  prepare-release:
+    name: Open or update the release PR
+    runs-on: ubuntu-latest
+    steps:
+
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        fetch-depth: 0
+        # Pushes made with GITHUB_TOKEN don't run workflows, so without RELEASE_TOKEN the release PR has no checks.
+        token: ${{ secrets.RELEASE_TOKEN || github.token }}
+
+    - name: Look for change files
+      id: changes
+      run: |
+        if ls .changeset/*.md >/dev/null 2>&1
+        then
+          echo "found=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    - if: steps.changes.outputs.found
+      uses: knope-dev/action@19617851f9f13ab2f27a05989c55efb18aca3675 # v2.1.2
+      with:
+        version: 0.23.2
+
+    - if: steps.changes.outputs.found
+      env:
+        GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        knope prepare-release --verbose
