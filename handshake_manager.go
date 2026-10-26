@@ -590,6 +590,19 @@ func (hm *HandshakeManager) GetPreferredRanges() []netip.Prefix {
 	return hm.mainHostMap.GetPreferredRanges()
 }
 
+// ForVpnAddr calls f with the pending hostinfo for vpnAddr while holding the read lock, reporting whether there was
+// one. allocateIndex writes localIndexId under the write lock.
+func (hm *HandshakeManager) ForVpnAddr(vpnAddr netip.Addr, f controlEach) bool {
+	hm.RLock()
+	defer hm.RUnlock()
+
+	hh, ok := hm.vpnIps[vpnAddr]
+	if ok {
+		f(hh.hostinfo)
+	}
+	return ok
+}
+
 func (hm *HandshakeManager) ForEachVpnAddr(f controlEach) {
 	hm.RLock()
 	defer hm.RUnlock()

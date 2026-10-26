@@ -36,7 +36,7 @@ var ErrUnknownState = errors.New("nebula state is invalid")
 type controlEach func(h *HostInfo)
 
 type controlHostLister interface {
-	QueryVpnAddr(vpnAddr netip.Addr) *HostInfo
+	ForVpnAddr(vpnAddr netip.Addr, each controlEach) bool
 	ForEachIndex(each controlEach)
 	ForEachVpnAddr(each controlEach)
 	GetPreferredRanges() []netip.Prefix
@@ -283,12 +283,12 @@ func (c *Control) GetHostInfoByVpnAddr(vpnAddr netip.Addr, pending bool) *Contro
 		hl = c.f.hostMap
 	}
 
-	h := hl.QueryVpnAddr(vpnAddr)
-	if h == nil {
+	// Copy under the lister's lock, a pending hostinfo is still being written by the handshake manager
+	var ch ControlHostInfo
+	pr := c.f.hostMap.GetPreferredRanges()
+	if !hl.ForVpnAddr(vpnAddr, func(h *HostInfo) { ch = copyHostInfo(h, pr) }) {
 		return nil
 	}
-
-	ch := copyHostInfo(h, c.f.hostMap.GetPreferredRanges())
 	return &ch
 }
 
