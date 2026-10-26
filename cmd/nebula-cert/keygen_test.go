@@ -104,6 +104,18 @@ func Test_keygen(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "key must not be written when pub is refused")
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
+
+	// test that an existing device is written to, not refused
+	args = []string{"-out-key", os.DevNull, "-out-pub", os.DevNull}
+	require.NoError(t, keygen(args, ob, eb))
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
+
+	// test that an existing directory is refused before the key is written
+	args = []string{"-out-key", keyPath, "-out-pub", dir}
+	require.EqualError(t, keygen(args, ob, eb), "refusing to overwrite existing public key: "+dir)
+	_, err = os.Stat(keyPath)
+	assert.True(t, os.IsNotExist(err), "key must not be written when pub is refused")
 }
 
 func Test_keygen_stdio(t *testing.T) {
