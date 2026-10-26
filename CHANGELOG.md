@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `nebula-cert keygen` refuses to overwrite an existing `-out-key` or `-out-pub` file, matching `ca` and `sign`.
   Overwriting kept the old file's mode, so a key written over a world-readable file stayed world-readable.
+- On a host with an IPv6 certificate network, a `service.Listen("tcp", ...)` listener now accepts IPv6 connections
+  as well as IPv4, and a connection to a port with no listener for its family is reset. Use `tcp4` to keep
+  accepting only IPv4.
 
 ### Removed
 
