@@ -3,13 +3,18 @@ package nebula
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"io"
 	"net/netip"
 	"testing"
 	"time"
 
+	"github.com/flynn/noise"
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/noiseutil"
+	"github.com/slackhq/nebula/overlay/batch"
 	"github.com/slackhq/nebula/overlay/overlaytest"
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
@@ -266,12 +271,12 @@ func Test_NewConnectionManager_CounterLimits(t *testing.T) {
 
 	// Still below the reject limit, the tunnel stays up
 	nc.In(hostinfo)
-	decision, _, _ := nc.makeTrafficDecision(hostinfo.localIndexId, time.Now())
+	decision, _, _, _ := nc.makeTrafficDecision(hostinfo.localIndexId, time.Now())
 	assert.Equal(t, tryRehandshake, decision)
 
 	// At the reject limit, the tunnel is deleted locally without a doomed CloseTunnel notify
 	hostinfo.ConnectionState.messageCounter.Store(RejectAfterMessages)
-	decision, _, _ = nc.makeTrafficDecision(hostinfo.localIndexId, time.Now())
+	decision, _, _, _ = nc.makeTrafficDecision(hostinfo.localIndexId, time.Now())
 	assert.Equal(t, deleteTunnel, decision)
 }
 
@@ -333,14 +338,14 @@ func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
 	assert.True(t, (hostinfo.state.Load()&stateIn != 0))
 
 	now := time.Now()
-	decision, _, _ := nc.makeTrafficDecision(hostinfo.localIndexId, now)
+	decision, _, _, _ := nc.makeTrafficDecision(hostinfo.localIndexId, now)
 	assert.Equal(t, tryRehandshake, decision)
 	assert.Equal(t, now, hostinfo.lastUsed)
 	assert.False(t, hostinfo.isPendingDeletion())
 	assert.False(t, hostinfo.sentSinceCheck())
 	assert.False(t, (hostinfo.state.Load()&stateIn != 0))
 
-	decision, _, _ = nc.makeTrafficDecision(hostinfo.localIndexId, now.Add(time.Second*5))
+	decision, _, _, _ = nc.makeTrafficDecision(hostinfo.localIndexId, now.Add(time.Second*5))
 	assert.Equal(t, doNothing, decision)
 	assert.Equal(t, now, hostinfo.lastUsed)
 	assert.False(t, hostinfo.isPendingDeletion())
@@ -348,7 +353,7 @@ func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
 	assert.False(t, (hostinfo.state.Load()&stateIn != 0))
 
 	// Do another traffic check tick, should still not be pending deletion
-	decision, _, _ = nc.makeTrafficDecision(hostinfo.localIndexId, now.Add(time.Second*10))
+	decision, _, _, _ = nc.makeTrafficDecision(hostinfo.localIndexId, now.Add(time.Second*10))
 	assert.Equal(t, doNothing, decision)
 	assert.Equal(t, now, hostinfo.lastUsed)
 	assert.False(t, hostinfo.isPendingDeletion())
@@ -358,7 +363,7 @@ func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
 	assert.Contains(t, nc.hostMap.Hosts, hostinfo.vpnAddrs[0])
 
 	// Finally advance beyond the inactivity timeout
-	decision, _, _ = nc.makeTrafficDecision(hostinfo.localIndexId, now.Add(time.Minute*10))
+	decision, _, _, _ = nc.makeTrafficDecision(hostinfo.localIndexId, now.Add(time.Minute*10))
 	assert.Equal(t, closeTunnel, decision)
 	assert.Equal(t, now, hostinfo.lastUsed)
 	assert.False(t, hostinfo.isPendingDeletion())
@@ -577,4 +582,240 @@ func (d *dummyCert) MarshalJSON() ([]byte, error) {
 
 func (d *dummyCert) Copy() cert.Certificate {
 	return d
+}
+
+// newPunchTestConnectionManager is a connection manager punching through conn, holding the tunnel from newPunchTarget
+func newPunchTestConnectionManager(t *testing.T, conn udp.Conn) (*connectionManager, *HostInfo) {
+	l := test.NewLogger()
+	hostMap := newHostMap(l)
+	hostMap.preferredRanges.Store(&[]netip.Prefix{})
+
+	lh := newTestLighthouse()
+	ifce := &Interface{
+		hostMap:          hostMap,
+		inside:           &overlaytest.NoopTun{},
+		outside:          &udp.NoopConn{},
+		firewall:         &Firewall{},
+		lightHouse:       lh,
+		pki:              &PKI{},
+		handshakeManager: NewHandshakeManager(l, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
+		l:                l,
+	}
+	ifce.pki.cs.Store(&CertState{
+		initiatingVersion: cert.Version1,
+		privateKey:        []byte{},
+		v1Cert:            &dummyCert{version: cert.Version1},
+	})
+
+	punchy := newPunchyForTest(t, map[string]any{"punch": true}, conn)
+	nc := newConnectionManagerFromConfig(l, config.NewC(l), hostMap, punchy)
+	nc.intf = ifce
+	ifce.connectionManager = nc
+	// Tunnel sends go through conn too, though without a key from withTestKey they never get as far as writing
+	ifce.writers = []udp.Conn{conn}
+	ifce.metricTxDropped = metrics.NilCounter{}
+
+	hostinfo := newPunchTarget()
+	hostinfo.localIndexId = 1099
+	hostinfo.remoteIndexId = 9901
+	hostinfo.ConnectionState = &ConnectionState{myCert: &dummyCert{version: cert.Version1}}
+	nc.hostMap.unlockedAddHostInfo(hostinfo, ifce)
+	return nc, hostinfo
+}
+
+// A tunnel we are not sending on gets punched whether or not it is receiving, the punch is the only thing that
+// would notice its remote has become unreachable.
+func Test_makeTrafficDecision_punchesWhenNotSending(t *testing.T) {
+	nc, hostinfo := newPunchTestConnectionManager(t, &recordingConn{})
+	now := time.Now()
+
+	// Receiving but not sending
+	hostinfo.takeTraffic()
+	nc.In(hostinfo)
+	decision, _, _, punch := nc.makeTrafficDecision(hostinfo.localIndexId, now)
+	assert.Equal(t, tryRehandshake, decision)
+	assert.Same(t, hostinfo, punch)
+
+	// Sending and receiving, our own traffic keeps the NAT state alive
+	nc.Out(hostinfo)
+	nc.In(hostinfo)
+	decision, _, _, punch = nc.makeTrafficDecision(hostinfo.localIndexId, now)
+	assert.Equal(t, tryRehandshake, decision)
+	assert.Nil(t, punch)
+
+	// Unused
+	decision, decided, _, punch := nc.makeTrafficDecision(hostinfo.localIndexId, now)
+	assert.Equal(t, doNothing, decision)
+	assert.Nil(t, decided, "an unused tunnel has no relay usage to reset")
+	assert.Same(t, hostinfo, punch)
+
+	// Sending but not receiving gets a test packet instead, which finds an unreachable remote on its own
+	nc.Out(hostinfo)
+	decision, _, _, punch = nc.makeTrafficDecision(hostinfo.localIndexId, now)
+	assert.Equal(t, sendTestPacket, decision)
+	assert.Nil(t, punch)
+}
+
+func Test_sendPunch_probesWhenRemoteUnreachable(t *testing.T) {
+	t.Run("unreachable", func(t *testing.T) {
+		conn := &recordingConn{fail: map[netip.AddrPort]error{punchTargetV6: errNoRoute}}
+		nc, hostinfo := newPunchTestConnectionManager(t, conn)
+
+		nc.sendPunch(hostinfo)
+		assert.Equal(t, []netip.AddrPort{punchTargetV6}, conn.wrote)
+		assert.NotZero(t, hostinfo.nextUnreachableProbe.Load(), "the tunnel should have probed its other remotes")
+		assert.Equal(t, []netip.Addr{hostinfo.vpnAddrs[0]}, drainQueries(nc.intf.lightHouse),
+			"the probe should ask the lighthouse to have the peer punch us")
+
+		// Within the probe interval nothing more goes out, however many sends fail
+		nc.sendPunch(hostinfo)
+		nc.sendPunch(hostinfo)
+		assert.Empty(t, drainQueries(nc.intf.lightHouse))
+	})
+
+	t.Run("delivered", func(t *testing.T) {
+		conn := &recordingConn{}
+		nc, hostinfo := newPunchTestConnectionManager(t, conn)
+
+		nc.sendPunch(hostinfo)
+		assert.Equal(t, []netip.AddrPort{punchTargetV6}, conn.wrote)
+		assert.Zero(t, hostinfo.nextUnreachableProbe.Load())
+		assert.Empty(t, drainQueries(nc.intf.lightHouse))
+	})
+
+	t.Run("other failure", func(t *testing.T) {
+		conn := &recordingConn{fail: map[netip.AddrPort]error{punchTargetV6: io.ErrShortWrite}}
+		nc, hostinfo := newPunchTestConnectionManager(t, conn)
+
+		nc.sendPunch(hostinfo)
+		assert.Zero(t, hostinfo.nextUnreachableProbe.Load(), "only a missing route says to look elsewhere")
+		assert.Empty(t, drainQueries(nc.intf.lightHouse))
+	})
+}
+
+// A packet the data path had no route for names its tunnel in its header, the peer's index for it
+func Test_sendUnreachable_findsTunnelFromHeader(t *testing.T) {
+	head := func(st header.MessageSubType, remoteIndex uint32) []byte {
+		return header.Encode(make([]byte, header.Len), header.Version, header.Message, st, remoteIndex, 1)
+	}
+
+	t.Run("direct", func(t *testing.T) {
+		nc, hostinfo := newPunchTestConnectionManager(t, &recordingConn{})
+		nc.intf.sendUnreachable(head(header.MessageNone, hostinfo.remoteIndexId), punchTargetV6)
+		assert.NotZero(t, hostinfo.nextUnreachableProbe.Load(), "the tunnel should have probed its other remotes")
+		assert.Equal(t, []netip.Addr{hostinfo.vpnAddrs[0]}, drainQueries(nc.intf.lightHouse))
+	})
+
+	t.Run("not its remote", func(t *testing.T) {
+		nc, hostinfo := newPunchTestConnectionManager(t, &recordingConn{})
+		nc.intf.sendUnreachable(head(header.MessageNone, hostinfo.remoteIndexId), punchTargetV4)
+		assert.Zero(t, hostinfo.nextUnreachableProbe.Load(), "a failure on a remote the tunnel is not using is stale")
+	})
+
+	t.Run("relayed", func(t *testing.T) {
+		nc, hostinfo := newPunchTestConnectionManager(t, &recordingConn{})
+		// A relay header's index is the relay session's, it must not be taken for a tunnel's even when they collide
+		nc.intf.sendUnreachable(head(header.MessageRelay, hostinfo.remoteIndexId), punchTargetV6)
+		assert.Zero(t, hostinfo.nextUnreachableProbe.Load())
+		assert.Empty(t, drainQueries(nc.intf.lightHouse))
+	})
+
+	t.Run("unknown tunnel", func(t *testing.T) {
+		nc, hostinfo := newPunchTestConnectionManager(t, &recordingConn{})
+		nc.intf.sendUnreachable(head(header.MessageNone, hostinfo.remoteIndexId+1), punchTargetV6)
+		assert.Zero(t, hostinfo.nextUnreachableProbe.Load())
+	})
+}
+
+// withTestKey gives a tunnel a real key so its sends get encrypted and written instead of returning early
+func withTestKey(hostinfo *HostInfo) {
+	cs := noise.NewCipherSuite(noise.DH25519, noise.CipherAESGCM, noise.HashSHA256)
+	hostinfo.ConnectionState.eKey = noiseutil.NewCipherState(noise.UnsafeNewCipherState(cs, [32]byte{}, 0), noise.CipherAESGCM)
+}
+
+// The probe itself, end to end from a failed send: a test packet to every remote but the one we cannot reach, and a
+// lighthouse query, through both places a send can fail.
+func Test_remoteUnreachable_probesOtherRemotes(t *testing.T) {
+	t.Run("control send", func(t *testing.T) {
+		conn := &recordingConn{fail: map[netip.AddrPort]error{punchTargetV6: errNoRoute}}
+		nc, hostinfo := newPunchTestConnectionManager(t, conn)
+		withTestKey(hostinfo)
+
+		nc.intf.SendMessageToHostInfo(header.Test, header.TestRequest, hostinfo, []byte{}, make([]byte, 12), make([]byte, mtu))
+		assert.Equal(t, []netip.AddrPort{punchTargetV6, punchTargetV4}, conn.wrote, "the failed send, then the probe")
+		assert.Equal(t, []header.MessageType{header.Test, header.Test}, conn.types)
+		assert.Equal(t, []netip.Addr{hostinfo.vpnAddrs[0]}, drainQueries(nc.intf.lightHouse))
+	})
+
+	t.Run("data path batch", func(t *testing.T) {
+		conn := &recordingConn{fail: map[netip.AddrPort]error{punchTargetV6: errNoRoute}}
+		nc, hostinfo := newPunchTestConnectionManager(t, conn)
+		withTestKey(hostinfo)
+
+		// Two of the tunnel's packets fail in one batch, they probe once
+		sb := batch.NewSendBatch(conn, 4, 4096)
+		for c := uint64(1); c <= 2; c++ {
+			pkt := header.Encode(sb.Reserve(64), header.Version, header.Message, header.MessageNone, hostinfo.remoteIndexId, c)
+			sb.Commit(append(pkt, make([]byte, 32)...), punchTargetV6)
+		}
+		nc.intf.flushSendBatch(sb, 0)
+
+		assert.Equal(t, []netip.AddrPort{punchTargetV6, punchTargetV6, punchTargetV4}, conn.wrote,
+			"the failed packets, then one probe")
+		assert.Equal(t, header.Test, conn.types[2])
+		assert.Equal(t, []netip.Addr{hostinfo.vpnAddrs[0]}, drainQueries(nc.intf.lightHouse))
+	})
+
+	t.Run("closing", func(t *testing.T) {
+		conn := &recordingConn{fail: map[netip.AddrPort]error{punchTargetV6: errNoRoute}}
+		nc, hostinfo := newPunchTestConnectionManager(t, conn)
+		withTestKey(hostinfo)
+
+		nc.intf.SendMessageToHostInfo(header.CloseTunnel, 0, hostinfo, []byte{}, make([]byte, 12), make([]byte, mtu))
+		assert.Equal(t, []netip.AddrPort{punchTargetV6}, conn.wrote, "a tunnel being torn down does not probe")
+		assert.Empty(t, drainQueries(nc.intf.lightHouse))
+	})
+
+	t.Run("lighthouse", func(t *testing.T) {
+		conn := &recordingConn{fail: map[netip.AddrPort]error{punchTargetV6: errNoRoute}}
+		nc, hostinfo := newPunchTestConnectionManager(t, conn)
+		withTestKey(hostinfo)
+		nc.intf.lightHouse.amLighthouse = true
+
+		nc.intf.SendMessageToHostInfo(header.Test, header.TestRequest, hostinfo, []byte{}, make([]byte, 12), make([]byte, mtu))
+		assert.Equal(t, []netip.AddrPort{punchTargetV6}, conn.wrote, "a lighthouse does not roam its clients")
+	})
+
+	t.Run("nothing else to probe", func(t *testing.T) {
+		conn := &recordingConn{fail: map[netip.AddrPort]error{punchTargetV6: errNoRoute}}
+		nc, hostinfo := newPunchTestConnectionManager(t, conn)
+		withTestKey(hostinfo)
+		nc.intf.reQueryWait.Store(int64(time.Minute))
+		// Forget the IPv4 remote, all the tunnel knows is the one it cannot reach
+		hostinfo.remotes = NewRemoteList(hostinfo.vpnAddrs, nil)
+		hostinfo.remotes.LearnRemote(hostinfo.vpnAddrs[0], punchTargetV6)
+
+		nc.intf.SendMessageToHostInfo(header.Test, header.TestRequest, hostinfo, []byte{}, make([]byte, 12), make([]byte, mtu))
+		assert.Equal(t, []netip.Addr{hostinfo.vpnAddrs[0]}, drainQueries(nc.intf.lightHouse),
+			"the lighthouse is the only way to learn of another remote")
+
+		// Past the probe interval, but the lighthouse is only asked again on the requery schedule
+		hostinfo.nextUnreachableProbe.Store(0)
+		nc.intf.SendMessageToHostInfo(header.Test, header.TestRequest, hostinfo, []byte{}, make([]byte, 12), make([]byte, mtu))
+		assert.Empty(t, drainQueries(nc.intf.lightHouse))
+		assert.Equal(t, []netip.AddrPort{punchTargetV6, punchTargetV6}, conn.wrote)
+	})
+}
+
+// drainQueries returns every lighthouse query waiting to go out
+func drainQueries(lh *LightHouse) []netip.Addr {
+	var queries []netip.Addr
+	for {
+		select {
+		case addr := <-lh.queryChan:
+			queries = append(queries, addr)
+		default:
+			return queries
+		}
+	}
 }

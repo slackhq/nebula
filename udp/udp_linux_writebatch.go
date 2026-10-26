@@ -192,8 +192,8 @@ func parseRelease(r string) (major, minor int) {
 // its packets are dropped and the rest of the chunk resumes in place.
 //
 // Returns the number of packets sent. An error means the call itself failed.
-// A short count means some destinations were undeliverable.
-func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
+// A short count means some destinations were undeliverable, failed hears about each of their packets.
+func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, failed func(i int, err error)) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -238,6 +238,7 @@ func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, er
 				if w.l.Enabled(context.Background(), slog.LevelDebug) {
 					w.l.Debug("skipping unroutable batch destination", "udpAddr", addrs[i], "packets", runLen, "error", err)
 				}
+				reportFailed(failed, i, i+runLen, err)
 				i += runLen
 				continue
 			}
@@ -305,10 +306,21 @@ func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, er
 					"gso", w.gsoSupported,
 				)
 			}
+			reportFailed(failed, w.entryEnd[done]-w.entryPkts[done], w.entryEnd[done], serr)
 			done++
 		}
 	}
 	return written, nil
+}
+
+// reportFailed tells failed, if anyone is listening, that every packet in bufs[start:end] was lost to err
+func reportFailed(failed func(i int, err error), start, end int, err error) {
+	if failed == nil {
+		return
+	}
+	for i := start; i < end; i++ {
+		failed(i, err)
+	}
 }
 
 // planRun returns the length of the run starting at start and its segment

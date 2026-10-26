@@ -373,8 +373,8 @@ func sendto(fd int, b []byte, addr netip.AddrPort, isV4 bool) error {
 
 // WriteBatch sends bufs via sendmmsg(2), coalescing same-destination runs into UDP-GSO superpackets when supported.
 // See batchWriter in udp_linux_writebatch.go for the mechanics.
-func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
-	return u.bw.WriteBatch(bufs, addrs)
+func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, failed func(i int, err error)) (int, error) {
+	return u.bw.WriteBatch(bufs, addrs, failed)
 }
 
 // writeSockaddr encodes addr into buf (which must be at least SizeofSockaddrInet6 bytes).

@@ -3,11 +3,14 @@ package nebula
 import (
 	"context"
 	"log/slog"
+	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/test"
+	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -241,4 +244,113 @@ func TestPunchyReloadRestartRequired(t *testing.T) {
 	res := c.ReloadConfigString("stats:\n  lighthouse_metrics: true\n")
 	require.NoError(t, res.Err)
 	assert.True(t, res.RestartRequired)
+}
+
+// errNoRoute is the unreachable error every platform classifies the same way
+var errNoRoute = udp.ErrInvalidIPv6RemoteForSocket
+
+// recordingConn records where every write went and what kind of message it was, and fails the ones to an address in
+// fail
+type recordingConn struct {
+	udp.NoopConn
+	fail  map[netip.AddrPort]error
+	wrote []netip.AddrPort
+	// types is the message type of each write, a punch has none
+	types []header.MessageType
+}
+
+func (c *recordingConn) WriteTo(b []byte, addr netip.AddrPort) error {
+	c.wrote = append(c.wrote, addr)
+	var h header.H
+	if h.Parse(b) == nil {
+		c.types = append(c.types, h.Type)
+	}
+	return c.fail[addr]
+}
+
+func (c *recordingConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, failed func(int, error)) (int, error) {
+	written := 0
+	for i := range bufs {
+		if err := c.WriteTo(bufs[i], addrs[i]); err != nil {
+			failed(i, err)
+			continue
+		}
+		written++
+	}
+	return written, nil
+}
+
+type noLighthouses struct{}
+
+func (noLighthouses) IsAnyLighthouseAddr([]netip.Addr) bool { return false }
+
+var (
+	punchTargetV4 = netip.MustParseAddrPort("10.0.0.3:4242")
+	punchTargetV6 = netip.MustParseAddrPort("[fd00::3]:4242")
+)
+
+// newPunchTarget is a tunnel on its IPv6 remote that also knows the peer's IPv4 one
+func newPunchTarget() *HostInfo {
+	vpnAddr := netip.MustParseAddr("10.128.0.3")
+	hostinfo := &HostInfo{
+		vpnAddrs: []netip.Addr{vpnAddr},
+		remotes:  NewRemoteList([]netip.Addr{vpnAddr}, nil),
+	}
+	hostinfo.remotes.LearnRemote(vpnAddr, punchTargetV4)
+	hostinfo.SetRemote(punchTargetV6)
+	return hostinfo
+}
+
+func newPunchyForTest(t *testing.T, settings map[string]any, conn udp.Conn) *Punchy {
+	c := config.NewC(test.NewLogger())
+	c.Settings["punchy"] = settings
+	p := NewPunchyFromConfig(test.NewLogger(), c, conn)
+
+	hm := newHostMap(test.NewLogger())
+	hm.preferredRanges.Store(&[]netip.Prefix{})
+	p.hm = hm
+	p.lh = noLighthouses{}
+	return p
+}
+
+func TestPunchy_SendPunchReportsCurrentRemote(t *testing.T) {
+	t.Run("disabled", func(t *testing.T) {
+		conn := &recordingConn{fail: map[netip.AddrPort]error{punchTargetV6: errNoRoute}}
+		p := newPunchyForTest(t, map[string]any{"punch": false}, conn)
+
+		remote, err := p.SendPunch(newPunchTarget())
+		assert.False(t, remote.IsValid())
+		require.NoError(t, err)
+		assert.Empty(t, conn.wrote)
+	})
+
+	t.Run("current remote", func(t *testing.T) {
+		conn := &recordingConn{fail: map[netip.AddrPort]error{punchTargetV6: errNoRoute}}
+		p := newPunchyForTest(t, map[string]any{"punch": true}, conn)
+
+		remote, err := p.SendPunch(newPunchTarget())
+		assert.Equal(t, punchTargetV6, remote)
+		require.ErrorIs(t, err, errNoRoute)
+		assert.Equal(t, []netip.AddrPort{punchTargetV6}, conn.wrote)
+	})
+
+	t.Run("all remotes, current fails", func(t *testing.T) {
+		conn := &recordingConn{fail: map[netip.AddrPort]error{punchTargetV6: errNoRoute}}
+		p := newPunchyForTest(t, map[string]any{"punch": true, "target_all_remotes": true}, conn)
+
+		remote, err := p.SendPunch(newPunchTarget())
+		assert.Equal(t, punchTargetV6, remote)
+		require.ErrorIs(t, err, errNoRoute)
+		assert.ElementsMatch(t, []netip.AddrPort{punchTargetV4, punchTargetV6}, conn.wrote)
+	})
+
+	t.Run("all remotes, only another fails", func(t *testing.T) {
+		conn := &recordingConn{fail: map[netip.AddrPort]error{punchTargetV4: errNoRoute}}
+		p := newPunchyForTest(t, map[string]any{"punch": true, "target_all_remotes": true}, conn)
+
+		remote, err := p.SendPunch(newPunchTarget())
+		assert.Equal(t, punchTargetV6, remote)
+		require.NoError(t, err, "a failure on a remote we are not using says nothing about the current one")
+		assert.ElementsMatch(t, []netip.AddrPort{punchTargetV4, punchTargetV6}, conn.wrote)
+	})
 }
