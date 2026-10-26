@@ -70,7 +70,7 @@ type HandshakeManager struct {
 	metricInitiated           metrics.Counter
 	metricTimedOut            metrics.Counter
 	metricRejectedBlocklisted metrics.Counter
-	downGateways              *downGateways
+	ecmpGateways              *ecmpGateways
 	f                         *Interface
 	l                         *slog.Logger
 
@@ -118,8 +118,8 @@ func (hh *HandshakeHostInfo) cachePacket(l *slog.Logger, t header.MessageType, s
 	}
 }
 
-// downGateways remembers which gateways of multi-gateway routes are down: a handshake with them timed out and none
-// has completed since.
+// ecmpGateways remembers whether each gateway of a multi-gateway route is up. A gateway is up until a handshake with
+// it times out, and up again once one completes.
 //
 // A packet whose flow hashes to a gateway without a tunnel waits for that gateway's handshake instead of going to
 // another gateway. Sending it elsewhere would split the flow: once the handshake completes, the rest of the flow goes
@@ -135,47 +135,48 @@ func (hh *HandshakeHostInfo) cachePacket(l *slog.Logger, t header.MessageType, s
 //
 // Only the routing path adds entries, for gateways of multi-gateway routes, so this holds one entry per such gateway
 // however many other hosts we handshake with.
-type downGateways struct {
+type ecmpGateways struct {
 	sync.RWMutex
-	m map[netip.Addr]bool
+	up map[netip.Addr]bool
 }
 
-func newDownGateways() *downGateways {
-	return &downGateways{m: map[netip.Addr]bool{}}
+func newECMPGateways() *ecmpGateways {
+	return &ecmpGateways{up: map[netip.Addr]bool{}}
 }
 
-// isDown reports whether gateway is down, and starts tracking gateway if it was not already.
-func (g *downGateways) isDown(gateway netip.Addr) bool {
+// isUp reports whether gateway is up, and starts tracking gateway as up if it was not already.
+func (g *ecmpGateways) isUp(gateway netip.Addr) bool {
 	g.RLock()
-	down, ok := g.m[gateway]
+	up, ok := g.up[gateway]
 	g.RUnlock()
 
 	if !ok {
 		g.Lock()
-		if _, ok := g.m[gateway]; !ok {
-			g.m[gateway] = false
+		if _, ok := g.up[gateway]; !ok {
+			g.up[gateway] = true
 		}
 		g.Unlock()
+		return true
 	}
 
-	return down
+	return up
 }
 
 // timedOut marks addr down if it is a tracked gateway.
-func (g *downGateways) timedOut(addr netip.Addr) {
+func (g *ecmpGateways) timedOut(addr netip.Addr) {
 	g.Lock()
-	if _, ok := g.m[addr]; ok {
-		g.m[addr] = true
+	if _, ok := g.up[addr]; ok {
+		g.up[addr] = false
 	}
 	g.Unlock()
 }
 
 // completed marks any tracked gateway in addrs, which now have a tunnel, up.
-func (g *downGateways) completed(addrs []netip.Addr) {
+func (g *ecmpGateways) completed(addrs []netip.Addr) {
 	g.RLock()
 	found := false
 	for _, addr := range addrs {
-		if g.m[addr] {
+		if up, ok := g.up[addr]; ok && !up {
 			found = true
 			break
 		}
@@ -188,8 +189,8 @@ func (g *downGateways) completed(addrs []netip.Addr) {
 
 	g.Lock()
 	for _, addr := range addrs {
-		if _, ok := g.m[addr]; ok {
-			g.m[addr] = false
+		if _, ok := g.up[addr]; ok {
+			g.up[addr] = true
 		}
 	}
 	g.Unlock()
@@ -209,7 +210,7 @@ func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *Light
 		metricInitiated:           metrics.GetOrRegisterCounter("handshake_manager.initiated", nil),
 		metricTimedOut:            metrics.GetOrRegisterCounter("handshake_manager.timed_out", nil),
 		metricRejectedBlocklisted: metrics.GetOrRegisterCounter("handshake_manager.rejected.blocklisted", nil),
-		downGateways:              newDownGateways(),
+		ecmpGateways:              newECMPGateways(),
 		l:                         l,
 	}
 }
@@ -313,7 +314,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		}
 		hh.hostinfo.logger(hm.l).Info("Handshake timed out", fields...)
 		hm.metricTimedOut.Inc(1)
-		hm.downGateways.timedOut(vpnIp)
+		hm.ecmpGateways.timedOut(vpnIp)
 		hm.DeleteHostInfo(hostinfo)
 		return
 	}
@@ -553,7 +554,7 @@ func (hm *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket
 	}
 
 	hm.mainHostMap.unlockedAddHostInfo(hostinfo, f)
-	hm.downGateways.completed(hostinfo.vpnAddrs)
+	hm.ecmpGateways.completed(hostinfo.vpnAddrs)
 	return existingHostInfo, nil
 }
 
@@ -578,7 +579,7 @@ func (hm *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 	// We need to remove from the pending hostmap first to avoid undoing work when after to the main hostmap.
 	hm.unlockedDeleteHostInfo(hostinfo)
 	hm.mainHostMap.unlockedAddHostInfo(hostinfo, f)
-	hm.downGateways.completed(hostinfo.vpnAddrs)
+	hm.ecmpGateways.completed(hostinfo.vpnAddrs)
 }
 
 // allocateIndex generates a unique localIndexId for this HostInfo

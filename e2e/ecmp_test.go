@@ -215,7 +215,7 @@ func TestECMPDownGatewayRecoversOnFirstFlow(t *testing.T) {
 	n.r.RouteFor(time.Second)
 
 	t.Log("The next flow that hashes to g2 goes to g1, and starts the handshake that marks g2 up")
-	// This is the one-handshake window downGateways documents: a flow started here is split if it outlives the
+	// This is the one-handshake window ecmpGateways documents: a flow started here is split if it outlives the
 	// handshake, since its later packets go to g2
 	port := n.portFor(t, 1)
 	n.send(port, "noticed")

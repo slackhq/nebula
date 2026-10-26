@@ -333,10 +333,10 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 
 		// Wait for the chosen gateway's handshake, as a single gateway route does. Sending the packet to another
 		// gateway would split its flow once the handshake completes. Only a down gateway is passed over, see
-		// downGateways for the cases that still split a flow.
+		// ecmpGateways for the cases that still split a flow.
 		// The packet is cached through GetOrHandshake so it happens under the handshake manager lock: the handshake
 		// may have completed since the call above, and a packet cached after its store was sent would be lost.
-		if !f.handshakeManager.downGateways.isDown(gatewayAddr) {
+		if f.handshakeManager.ecmpGateways.isUp(gatewayAddr) {
 			return f.handshakeManager.GetOrHandshake(gatewayAddr, cacheCallback)
 		}
 
