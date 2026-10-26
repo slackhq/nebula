@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `service.Listen` supports `tcp6` and follows `net.Listen` address family semantics for `tcp`, `tcp4` and `tcp6`.
 - A control socket that provides access to all of the ssh debug server's commands along with support
   for running `nebula ctl <command>` as a client from the CLI.
 - An info socket that serves the `identity` command over HTTP: `GET /v1/identity` for this node,
@@ -29,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A node whose UDP socket is IPv4, as with the default `listen.host` of `0.0.0.0`, no longer tries to handshake,
   roam or punch to a peer's IPv6 addresses, which it could never send to, or advertise its own IPv6 interface
   addresses, which it could never receive on.
+- The `service` package now works over an IPv6 overlay. It added only an IPv4 route, only the cert's first
+  network (always labeled IPv4), and handed every inbound packet to gvisor as IPv4, so IPv6 dials failed and
+  IPv6 replies were dropped.
 - Signing a v2 certificate with an empty name, a name longer than 253 bytes, or an empty group now fails.
   These certificates were signed successfully but could not be loaded.
 - `create-tunnel -address <ip:port>` panicked on a nil RemoteList and, over the ssh debug server, took nebula

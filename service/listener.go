@@ -6,9 +6,9 @@ import (
 )
 
 type tcpListener struct {
-	port   uint16
 	s      *Service
 	addr   *net.TCPAddr
+	keys   []listenerKey
 	accept chan net.Conn
 
 	// closed is closed instead of accept so a handler blocked handing off a
@@ -40,8 +40,12 @@ func (l *tcpListener) Close() error {
 		// no longer sees this listener knows Accept is already released.
 		close(l.closed)
 
+		// Keys are only reusable once removed here, so this listener still owns
+		// every one of them.
 		l.s.mu.Lock()
-		delete(l.s.mu.listeners, l.port)
+		for _, key := range l.keys {
+			delete(l.s.mu.listeners, key)
+		}
 		l.s.mu.Unlock()
 	})
 	return nil
