@@ -138,7 +138,7 @@ func sddlFor(acc Access) (string, error) {
 
 	sddl := fmt.Sprintf("D:P(A;;GA;;;%s)(A;;GA;;;SY)(A;;GA;;;BA)", user.User.Sid.String())
 	if acc.shared() {
-		sddl += fmt.Sprintf("(A;;0x%x;;;%s)", pipeClientAccess, acc.Group.ID)
+		sddl += fmt.Sprintf("(A;;0x%x;;;%s)", pipeClientAccess, acc.group.id)
 	}
 	return sddl, nil
 }
@@ -173,7 +173,7 @@ func applyAccess(path string, acc Access) error { return errAccessFixed }
 // accessChanged reports whether acc differs from the access a pipe was created with.
 // Only the group is in the pipe's security descriptor; the mode means nothing to a
 // pipe, so a change to it alone is no change.
-func accessChanged(old, acc Access) bool { return old.Group != acc.Group }
+func accessChanged(old, acc Access) bool { return old.group != acc.group }
 
 // samePath reports whether two configured pipe names name one pipe: compared without
 // case, which is how the kernel compares them. The spelling is otherwise what the

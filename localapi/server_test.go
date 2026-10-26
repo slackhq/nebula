@@ -39,7 +39,7 @@ func serve(t *testing.T, reg *commands.Registry) (*Server, string) {
 
 	path := testSocket(t)
 	s := NewServer(test.NewLogger(), reg)
-	require.NoError(t, s.Rebind(context.Background(), path, ownerOnly()))
+	require.NoError(t, s.Rebind(context.Background(), path, OwnerOnly()))
 	t.Cleanup(s.Stop)
 
 	return s, path
@@ -50,7 +50,7 @@ func serveAt(t *testing.T, path string) (*Server, func()) {
 	t.Helper()
 
 	s := NewServer(test.NewLogger(), basicRegistry())
-	require.NoError(t, s.Rebind(context.Background(), path, ownerOnly()))
+	require.NoError(t, s.Rebind(context.Background(), path, OwnerOnly()))
 	return s, s.Stop
 }
 
@@ -153,7 +153,7 @@ func TestLiveSocketIsNotStolen(t *testing.T) {
 	require.NotNil(t, first)
 
 	second := NewServer(test.NewLogger(), basicRegistry())
-	err := second.Rebind(context.Background(), path, ownerOnly())
+	err := second.Rebind(context.Background(), path, OwnerOnly())
 	assert.ErrorContains(t, err, "already in use", "a live endpoint must not be unlinked by a second instance")
 }
 
@@ -167,7 +167,7 @@ func TestLiveSocketIsNotStolenBeforeItsChmod(t *testing.T) {
 	require.NoError(t, os.Chmod(path, 0666))
 
 	second := NewServer(test.NewLogger(), basicRegistry())
-	err := second.Rebind(context.Background(), path, ownerOnly())
+	err := second.Rebind(context.Background(), path, OwnerOnly())
 	require.ErrorContains(t, err, "already in use", "a live socket at any mode is not thereby dead")
 
 	_, err = os.Stat(path)
@@ -181,7 +181,7 @@ func TestRebindMovesTheSocket(t *testing.T) {
 	s, path := serve(t, basicRegistry())
 	next := filepath.Join(filepath.Dir(path), "n.sock")
 
-	require.NoError(t, s.Rebind(context.Background(), next, ownerOnly()))
+	require.NoError(t, s.Rebind(context.Background(), next, OwnerOnly()))
 	assert.Equal(t, next, s.Path())
 
 	out, _ := run(t, next, "echo", "moved")
@@ -194,7 +194,7 @@ func TestRebindMovesTheSocket(t *testing.T) {
 func TestRebindFailureKeepsTheOldSocket(t *testing.T) {
 	s, path := serve(t, basicRegistry())
 
-	err := s.Rebind(context.Background(), "/nonexistent-dir-for-tests/x.sock", ownerOnly())
+	err := s.Rebind(context.Background(), "/nonexistent-dir-for-tests/x.sock", OwnerOnly())
 	require.Error(t, err)
 	assert.Equal(t, path, s.Path(), "a bad path must leave the working endpoint alone")
 
@@ -210,16 +210,16 @@ func TestSemaphoreSurvivesRestart(t *testing.T) {
 	s := NewServer(test.NewLogger(), basicRegistry())
 	path := testSocket(t)
 
-	require.NoError(t, s.Rebind(context.Background(), path, ownerOnly()))
+	require.NoError(t, s.Rebind(context.Background(), path, OwnerOnly()))
 	first := s.sem
 	require.NotNil(t, first)
 	s.Stop()
 
-	require.NoError(t, s.Rebind(context.Background(), path, ownerOnly()))
+	require.NoError(t, s.Rebind(context.Background(), path, OwnerOnly()))
 	defer s.Stop()
 	assert.Equal(t, first, s.sem, "Rebind after Stop must keep the same semaphore")
 
-	require.NoError(t, s.Rebind(context.Background(), testSocket(t), ownerOnly()))
+	require.NoError(t, s.Rebind(context.Background(), testSocket(t), OwnerOnly()))
 	assert.Equal(t, first, s.sem, "Rebind must keep the same semaphore")
 }
 
@@ -232,12 +232,12 @@ func TestRestartIsWatchedOnItsOwnContext(t *testing.T) {
 	path := testSocket(t)
 
 	ctxA, cancelA := context.WithCancel(context.Background())
-	require.NoError(t, s.Rebind(ctxA, path, ownerOnly()))
+	require.NoError(t, s.Rebind(ctxA, path, OwnerOnly()))
 	cancelA()
 	require.Eventually(t, func() bool { return s.Path() == "" }, time.Second, 10*time.Millisecond, "the first context must stop the server")
 
 	ctxB, cancelB := context.WithCancel(context.Background())
-	require.NoError(t, s.Rebind(ctxB, path, ownerOnly()))
+	require.NoError(t, s.Rebind(ctxB, path, OwnerOnly()))
 	defer s.Stop()
 	assert.Equal(t, path, s.Path())
 
@@ -256,12 +256,12 @@ func TestStopDetachesTheWatcher(t *testing.T) {
 
 	ctxA, cancelA := context.WithCancel(context.Background())
 	t.Cleanup(cancelA)
-	require.NoError(t, s.Rebind(ctxA, path, ownerOnly()))
+	require.NoError(t, s.Rebind(ctxA, path, OwnerOnly()))
 	s.Stop()
 
 	ctxB, cancelB := context.WithCancel(context.Background())
 	t.Cleanup(cancelB)
-	require.NoError(t, s.Rebind(ctxB, path, ownerOnly()))
+	require.NoError(t, s.Rebind(ctxB, path, OwnerOnly()))
 	t.Cleanup(s.Stop)
 
 	cancelA()
@@ -283,19 +283,19 @@ func TestGivingUpTheSocketDetachesTheWatcher(t *testing.T) {
 
 	ctxA, cancelA := context.WithCancel(context.Background())
 	t.Cleanup(cancelA)
-	require.NoError(t, s.Rebind(ctxA, path, ownerOnly()))
+	require.NoError(t, s.Rebind(ctxA, path, OwnerOnly()))
 
 	// The node goes and a directory takes its place, so the bind that follows fails.
 	require.NoError(t, os.Remove(path))
 	require.NoError(t, os.Mkdir(path, 0700))
-	err := s.Rebind(ctxA, path, ownerOnly())
+	err := s.Rebind(ctxA, path, OwnerOnly())
 	require.ErrorContains(t, err, "is not a socket")
 	assert.Empty(t, s.Path(), "the socket was given up before the bind failed")
 	require.NoError(t, os.Remove(path))
 
 	ctxB, cancelB := context.WithCancel(context.Background())
 	t.Cleanup(cancelB)
-	require.NoError(t, s.Rebind(ctxB, path, ownerOnly()))
+	require.NoError(t, s.Rebind(ctxB, path, OwnerOnly()))
 	t.Cleanup(s.Stop)
 
 	cancelA()
@@ -360,7 +360,7 @@ func TestSlowCommandIsNamedInTheLog(t *testing.T) {
 	s.maxConns = 1
 	s.slowAfter = 20 * time.Millisecond
 	path := testSocket(t)
-	require.NoError(t, s.Rebind(context.Background(), path, ownerOnly()))
+	require.NoError(t, s.Rebind(context.Background(), path, OwnerOnly()))
 	defer s.Stop()
 
 	var wg sync.WaitGroup
@@ -402,7 +402,7 @@ func TestPanickedCommandIsNotReportedAsStillRunning(t *testing.T) {
 	s := NewServer(test.NewLoggerWithOutput(&logs), reg)
 	s.slowAfter = 20 * time.Millisecond
 	path := testSocket(t)
-	require.NoError(t, s.Rebind(context.Background(), path, ownerOnly()))
+	require.NoError(t, s.Rebind(context.Background(), path, OwnerOnly()))
 	defer s.Stop()
 
 	res, err := (&Client{Path: path}).Invoke("boom", nil, nil, "")
@@ -454,7 +454,7 @@ func (f *flakyListener) Accept() (net.Conn, error) {
 func TestAcceptSurvivesTransientErrors(t *testing.T) {
 	path := testSocket(t)
 	require.NoError(t, os.Mkdir(filepath.Dir(path), 0700))
-	ln, err := listen(path, ownerOnly())
+	ln, err := listen(path, OwnerOnly())
 	require.NoError(t, err)
 
 	s := NewServer(test.NewLogger(), basicRegistry())
@@ -489,7 +489,7 @@ func TestContextCancellationStops(t *testing.T) {
 	path := testSocket(t)
 
 	s := NewServer(test.NewLogger(), basicRegistry())
-	require.NoError(t, s.Rebind(ctx, path, ownerOnly()))
+	require.NoError(t, s.Rebind(ctx, path, OwnerOnly()))
 
 	cancel()
 	assert.Eventually(t, func() bool {
@@ -749,10 +749,10 @@ func TestRebindAfterFailedBindStillStopsOnCancel(t *testing.T) {
 	// listen creates one level only, so a socket directory under a parent that is not
 	// there yet fails to bind, the shape of a runtime directory that does not exist.
 	s := NewServer(test.NewLogger(), basicRegistry())
-	require.Error(t, s.Rebind(ctx, filepath.Join(base, "missing", "n", "s.sock"), ownerOnly()))
+	require.Error(t, s.Rebind(ctx, filepath.Join(base, "missing", "n", "s.sock"), OwnerOnly()))
 
 	good := filepath.Join(base, "n", "s.sock")
-	require.NoError(t, s.Rebind(ctx, good, ownerOnly()))
+	require.NoError(t, s.Rebind(ctx, good, OwnerOnly()))
 	t.Cleanup(s.Stop)
 	_, err := (&Client{Path: good}).Describe()
 	require.NoError(t, err)
@@ -870,14 +870,14 @@ func TestRebindRefusesDuringShutdown(t *testing.T) {
 	// Built by hand rather than through serve: the context watcher is installed once,
 	// by the first bind, and this test needs it on a context it can cancel.
 	s := NewServer(test.NewLogger(), basicRegistry())
-	require.NoError(t, s.Rebind(ctx, testSocket(t), ownerOnly()))
+	require.NoError(t, s.Rebind(ctx, testSocket(t), OwnerOnly()))
 	t.Cleanup(s.Stop)
 
 	cancel()
 	assert.Eventually(t, func() bool { return s.Path() == "" }, 2*time.Second, 20*time.Millisecond, "the watcher stops the server")
 
 	next := testSocket(t)
-	err := s.Rebind(ctx, next, ownerOnly())
+	err := s.Rebind(ctx, next, OwnerOnly())
 	require.Error(t, err)
 	require.ErrorContains(t, err, "shutting down")
 	assert.Empty(t, s.Path(), "the server stays stopped")
@@ -895,13 +895,13 @@ func TestRebindAndStopSerialize(t *testing.T) {
 
 	for i := 0; i < 50; i++ {
 		s := NewServer(test.NewLogger(), basicRegistry())
-		require.NoError(t, s.Rebind(context.Background(), a, ownerOnly()))
+		require.NoError(t, s.Rebind(context.Background(), a, OwnerOnly()))
 
 		var wg sync.WaitGroup
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			_ = s.Rebind(context.Background(), b, ownerOnly())
+			_ = s.Rebind(context.Background(), b, OwnerOnly())
 		}()
 		go func() {
 			defer wg.Done()

@@ -70,13 +70,13 @@ func TestControlAccessFromConfig(t *testing.T) {
 
 	acc, err := load("local_api: {}\n")
 	require.NoError(t, err)
-	assert.Equal(t, ownerOnly(), acc)
+	assert.Equal(t, OwnerOnly(), acc)
 
 	acc, err = load("local_api:\n  control:\n    group: " + name + "\n")
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0660), acc.Mode)
-	assert.Equal(t, name, acc.Group.Name)
-	assert.Equal(t, gid, acc.Group.ID)
+	assert.Equal(t, os.FileMode(0660), acc.mode)
+	assert.Equal(t, name, acc.group.name)
+	assert.Equal(t, gid, acc.group.id)
 
 	_, err = load("local_api:\n  control:\n    group: no-such-group-nebula-test\n")
 	require.ErrorContains(t, err, CtlGroupKey)
@@ -96,7 +96,7 @@ func TestControlSocketIsHandedToTheGroup(t *testing.T) {
 
 	s := NewServer(test.NewLogger(), basicRegistry())
 	path := testSocket(t)
-	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: 0660, Group: Group{Name: name, ID: gid}}))
+	require.NoError(t, s.Rebind(context.Background(), path, Access{mode: 0660, group: Group{name: name, id: gid}}))
 	defer s.Stop()
 
 	fi, err := os.Lstat(path)
@@ -104,7 +104,7 @@ func TestControlSocketIsHandedToTheGroup(t *testing.T) {
 	assert.Equal(t, os.FileMode(0660), fi.Mode().Perm())
 	assert.Equal(t, uint32(want), socketGroup(t, path))
 
-	require.NoError(t, s.Rebind(context.Background(), path, ownerOnly()))
+	require.NoError(t, s.Rebind(context.Background(), path, OwnerOnly()))
 	fi, err = os.Lstat(path)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0600), fi.Mode().Perm())
@@ -130,14 +130,14 @@ func TestControlSocketWithAGroupTrustsTheKernel(t *testing.T) {
 	asUID(t, me)
 
 	path := testSocket(t)
-	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: 0660, Group: Group{Name: name, ID: gid}}))
+	require.NoError(t, s.Rebind(context.Background(), path, Access{mode: 0660, group: Group{name: name, id: gid}}))
 	defer s.Stop()
 
 	_, err := (&Client{Path: path}).Describe()
 	require.NoError(t, err, "the socket's group admitted us; the peer check must not refuse")
 
 	// Taking the group away on a reload puts the peer check back.
-	require.NoError(t, s.Rebind(context.Background(), path, ownerOnly()))
+	require.NoError(t, s.Rebind(context.Background(), path, OwnerOnly()))
 	_, err = (&Client{Path: path}).Describe()
 	require.ErrorContains(t, err, "not permitted")
 }
@@ -158,12 +158,12 @@ func TestInfoAccessFromConfig(t *testing.T) {
 
 	cfg, err := load(section("    group: " + name + "\n"))
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0660), cfg.Access.Mode)
-	assert.Equal(t, gid, cfg.Access.Group.ID)
+	assert.Equal(t, os.FileMode(0660), cfg.Access.mode)
+	assert.Equal(t, gid, cfg.Access.group.id)
 
 	cfg, err = load(section("    group: " + name + "\n    socket_mode: \"0664\"\n"))
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0664), cfg.Access.Mode)
+	assert.Equal(t, os.FileMode(0664), cfg.Access.mode)
 
 	_, err = load(section("    group: " + name + "\n    socket_mode: \"0600\"\n"))
 	require.ErrorContains(t, err, "gives group "+name+" no access")
@@ -171,7 +171,7 @@ func TestInfoAccessFromConfig(t *testing.T) {
 
 	cfg, err = load(section(""))
 	require.NoError(t, err)
-	assert.Equal(t, ownerOnly(), cfg.Access)
+	assert.Equal(t, OwnerOnly(), cfg.Access)
 }
 
 // TestRemovingTheGroupHandsTheSocketBack: a reload that drops the group key leaves the
@@ -196,11 +196,11 @@ func TestRemovingTheGroupHandsTheSocketBack(t *testing.T) {
 
 	s := NewServer(test.NewLogger(), basicRegistry())
 	path := testSocket(t)
-	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: 0660, Group: Group{Name: gid, ID: gid}}))
+	require.NoError(t, s.Rebind(context.Background(), path, Access{mode: 0660, group: Group{name: gid, id: gid}}))
 	defer s.Stop()
 	assert.Equal(t, uint32(other), socketGroup(t, path))
 
-	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: 0660}))
+	require.NoError(t, s.Rebind(context.Background(), path, Access{mode: 0660}))
 	assert.Equal(t, uint32(own), socketGroup(t, path), "the daemon's own group again")
 	fi, err := os.Lstat(path)
 	require.NoError(t, err)

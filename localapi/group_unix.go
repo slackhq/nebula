@@ -31,9 +31,9 @@ func gidFor(acc Access) (int, error) {
 	if !acc.shared() {
 		return os.Getegid(), nil
 	}
-	gid, err := strconv.ParseUint(acc.Group.ID, 10, 32)
+	gid, err := strconv.ParseUint(acc.group.id, 10, 32)
 	if err != nil {
-		return 0, fmt.Errorf("group %q resolved to %q, which is not a gid", acc.Group.Name, acc.Group.ID)
+		return 0, fmt.Errorf("group %q resolved to %q, which is not a gid", acc.group.name, acc.group.id)
 	}
 	return int(gid), nil
 }

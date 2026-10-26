@@ -14,18 +14,18 @@ import (
 // socket node's and the group becomes its owning group; on windows the group is an
 // entry in the pipe's security descriptor and the mode means nothing to a pipe.
 type Access struct {
-	Mode  os.FileMode
-	Group Group
+	mode  os.FileMode
+	group Group
 }
 
 // Group is a group named in the config, resolved to what the platform checks. The zero
 // Group is none.
 type Group struct {
-	// Name is what the config said.
-	Name string
+	// name is what the config said.
+	name string
 
-	// ID is the platform's identifier for it: a gid on unix, a SID on windows.
-	ID string
+	// id is the platform's identifier for it: a gid on unix, a SID on windows.
+	id string
 }
 
 const (
@@ -44,24 +44,24 @@ const (
 // then; see endpoint.rebindLocked.
 var errAccessFixed = errors.New("permissions/group cannot be changed on reconfig")
 
-// ownerOnly is the control socket's access when no group is configured. The mode
+// OwnerOnly is the control socket's access when no group is configured. The mode
 // itself is not configurable there; what an operator can choose is a group,
 // CtlGroupKey, which makes it groupSocketMode.
-func ownerOnly() Access { return Access{Mode: ownerOnlyMode} }
+func OwnerOnly() Access { return Access{mode: ownerOnlyMode} }
 
 // shared reports whether a group shares the socket.
-func (a Access) shared() bool { return a.Group.ID != "" }
+func (a Access) shared() bool { return a.group.id != "" }
 
 // narrowedBy reports whether acc takes away access a grants: a group a admits that acc
 // does not. A group acc adds is a widening, which costs nobody served anything.
-func (a Access) narrowedBy(acc Access) bool { return a.shared() && a.Group != acc.Group }
+func (a Access) narrowedBy(acc Access) bool { return a.shared() && a.group != acc.group }
 
 // String renders the access for a log line.
 func (a Access) String() string {
 	if !a.shared() {
-		return modeString(a.Mode)
+		return modeString(a.mode)
 	}
-	return fmt.Sprintf("%s group %s (%s)", modeString(a.Mode), a.Group.Name, a.Group.ID)
+	return fmt.Sprintf("%s group %s (%s)", modeString(a.mode), a.group.name, a.group.id)
 }
 
 // groupFromConfig reads the group a key names, the zero Group when it names none. The
@@ -77,7 +77,7 @@ func groupFromConfig(c interface{ GetString(string, string) string }, key string
 	if err != nil {
 		return Group{}, fmt.Errorf("%s: %w", key, err)
 	}
-	return Group{Name: name, ID: id}, nil
+	return Group{name: name, id: id}, nil
 }
 
 func modeString(m os.FileMode) string {

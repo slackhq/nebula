@@ -36,10 +36,10 @@ func controlAccessFrom(c interface{ GetString(string, string) string }) (Access,
 	if err != nil {
 		return Access{}, err
 	}
-	if group.ID == "" {
-		return ownerOnly(), nil
+	if group.id == "" {
+		return OwnerOnly(), nil
 	}
-	return Access{Mode: groupSocketMode, Group: group}, nil
+	return Access{mode: groupSocketMode, group: group}, nil
 }
 
 // SocketPathFromConfig returns the control socket path a config implies: CtlSocketKey

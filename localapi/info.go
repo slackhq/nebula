@@ -246,7 +246,7 @@ func infoConfigFrom(c *config.C) (infoConfig, error) {
 	// With neither a mode nor a group named, the daemon's user alone, so that enabling
 	// the API does not open it to anyone until the operator says who.
 	def := ownerOnlyMode
-	if group.ID != "" {
+	if group.id != "" {
 		def = groupSocketMode
 	}
 
@@ -257,10 +257,10 @@ func infoConfigFrom(c *config.C) (infoConfig, error) {
 	// On unix the mode is what admits the group, so one that shuts it out is a config
 	// error; on windows the group is an entry in the pipe's security descriptor and the
 	// mode means nothing to a pipe, so it is not held against the group there.
-	if runtime.GOOS != "windows" && group.ID != "" && mode&0070 == 0 {
-		return cfg, fmt.Errorf("%s %s gives group %s no access to the socket; use \"%04o\" or leave the mode unset", InfoModeKey, modeString(mode), group.Name, mode|0060)
+	if runtime.GOOS != "windows" && group.id != "" && mode&0070 == 0 {
+		return cfg, fmt.Errorf("%s %s gives group %s no access to the socket; use \"%04o\" or leave the mode unset", InfoModeKey, modeString(mode), group.name, mode|0060)
 	}
-	cfg.Access = Access{Mode: mode, Group: group}
+	cfg.Access = Access{mode: mode, group: group}
 
 	return cfg, nil
 }

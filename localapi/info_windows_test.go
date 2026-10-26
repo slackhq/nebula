@@ -24,12 +24,12 @@ import (
 func TestInfoIsServedOnAPipe(t *testing.T) {
 	users, err := windows.CreateWellKnownSid(windows.WinBuiltinUsersSid)
 	require.NoError(t, err)
-	group := Group{Name: "Users", ID: users.String()}
+	group := Group{name: "Users", id: users.String()}
 
 	logs := &bytes.Buffer{}
 	s := NewInfoServer(test.NewLoggerWithOutput(logs), stubInfoHandler())
 	path := pipePrefix + "nebula-info-test"
-	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: groupSocketMode, Group: group}))
+	require.NoError(t, s.Rebind(context.Background(), path, Access{mode: groupSocketMode, group: group}))
 	t.Cleanup(s.Stop)
 	assert.Equal(t, path, s.Path())
 
@@ -52,12 +52,12 @@ func TestInfoIsServedOnAPipe(t *testing.T) {
 
 	// The mode means nothing to a pipe, so a change to it alone is no change at all.
 	logs.Reset()
-	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: 0666, Group: group}))
+	require.NoError(t, s.Rebind(context.Background(), path, Access{mode: 0666, group: group}))
 	assert.NotContains(t, logs.String(), "restart nebula")
 
 	// A pipe's access is fixed when it is created. Taking the group away would leave the
 	// pipe admitting a group the config no longer names, so the pipe is stopped instead.
-	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: groupSocketMode}))
+	require.NoError(t, s.Rebind(context.Background(), path, Access{mode: groupSocketMode}))
 	assert.Contains(t, logs.String(), "cannot be narrowed")
 	assert.Empty(t, s.Path())
 	client.CloseIdleConnections()
@@ -67,9 +67,9 @@ func TestInfoIsServedOnAPipe(t *testing.T) {
 	// Once no client holds the name, a reload creates the pipe again as configured.
 	// Adding the group back then waits for a restart, since nobody served loses anything.
 	logs.Reset()
-	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: ownerOnlyMode}))
+	require.NoError(t, s.Rebind(context.Background(), path, Access{mode: ownerOnlyMode}))
 	assert.Equal(t, path, s.Path())
-	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: groupSocketMode, Group: group}))
+	require.NoError(t, s.Rebind(context.Background(), path, Access{mode: groupSocketMode, group: group}))
 	assert.Contains(t, logs.String(), "restart nebula to apply it")
 	assert.Equal(t, path, s.Path(), "still served, with the access it had")
 }
