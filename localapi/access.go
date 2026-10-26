@@ -13,20 +13,28 @@ import (
 // it, and who is in the group is managed outside nebula. On unix the mode is the
 // socket node's and the group becomes its owning group; on windows the group is an
 // entry in the pipe's security descriptor and the mode means nothing to a pipe.
+//
+// Only built in this package, to maintain control of validity.
 type Access struct {
 	mode  os.FileMode
 	group Group
 }
 
-// Group is a group named in the config, resolved to what the platform checks. The zero
-// Group is none.
-type Group struct {
-	// name is what the config said.
-	name string
+// Socket mode on unix, useless on windows.
+func (a Access) Mode() os.FileMode { return a.mode }
 
-	// id is the platform's identifier for it: a gid on unix, a SID on windows.
-	id string
+// Group that shares API access; Group{} if there isn't one.
+func (a Access) Group() Group { return a.group }
+
+type Group struct {
+	name string
+	id   string
 }
+
+func (g Group) Name() string { return g.name }
+
+// gid on unix, SID on windows.
+func (g Group) ID() string { return g.id }
 
 const (
 	// ownerOnlyMode is a socket's mode when no group shares it: the account nebula runs
@@ -44,12 +52,10 @@ const (
 // then; see endpoint.rebindLocked.
 var errAccessFixed = errors.New("permissions/group cannot be changed on reconfig")
 
-// OwnerOnly is the control socket's access when no group is configured. The mode
-// itself is not configurable there; what an operator can choose is a group,
-// CtlGroupKey, which makes it groupSocketMode.
+// Access specifying that only the nebula user/root should be able to access the endpoint.
 func OwnerOnly() Access { return Access{mode: ownerOnlyMode} }
 
-// shared reports whether a group shares the socket.
+// True if the access specifies group access.
 func (a Access) shared() bool { return a.group.id != "" }
 
 // narrowedBy reports whether acc takes away access a grants: a group a admits that acc
