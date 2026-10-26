@@ -3,13 +3,12 @@ package nebula
 import (
 	"net/netip"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func TestGatewayTimeouts(t *testing.T) {
-	g := newGatewayTimeouts()
+func TestDownGateways(t *testing.T) {
+	g := newDownGateways()
 	gw := netip.MustParseAddr("10.128.0.2")
 	other := netip.MustParseAddr("10.128.0.9")
 
@@ -17,14 +16,13 @@ func TestGatewayTimeouts(t *testing.T) {
 	g.timedOut(other)
 	assert.Empty(t, g.m)
 
-	assert.False(t, g.recentlyTimedOut(gw, time.Minute), "a gateway seen for the first time has no timeout")
+	assert.False(t, g.isDown(gw), "a gateway seen for the first time is not down")
 	assert.Len(t, g.m, 1)
 
 	g.timedOut(gw)
-	assert.True(t, g.recentlyTimedOut(gw, time.Minute))
-	assert.False(t, g.recentlyTimedOut(gw, 0), "a timeout older than the window no longer counts")
+	assert.True(t, g.isDown(gw))
 
 	g.completed([]netip.Addr{other, gw})
-	assert.False(t, g.recentlyTimedOut(gw, time.Minute), "a completed handshake clears the timeout")
+	assert.False(t, g.isDown(gw), "a completed handshake marks the gateway up")
 	assert.Len(t, g.m, 1)
 }

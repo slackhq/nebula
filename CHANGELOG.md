@@ -30,10 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A packet for an `unsafe_routes` entry with several gateways now waits for the handshake with the gateway its flow
   hashes to, as with a single gateway, instead of going to another gateway that had a tunnel. Once the handshake
   completed, the rest of the flow went to the gateway it hashes to, which reset TCP connections it had never seen.
-  A gateway is passed over only after a handshake with it times out, until one succeeds or two handshake timeouts
-  pass. A connection that started on another gateway while its own was passed over is still reset when its own
-  gateway comes back, including one started in the single handshake between that gateway recovering and Nebula
-  noticing.
+  A gateway is passed over only after a handshake with it times out, until one succeeds. A connection that started
+  on another gateway while its own was passed over is still reset when its own gateway comes back, including one
+  started in the single handshake between that gateway recovering and Nebula noticing.
 - A node whose UDP socket is IPv4, as with the default `listen.host` of `0.0.0.0`, no longer tries to handshake,
   roam or punch to a peer's IPv6 addresses, which it could never send to, or advertise its own IPv6 interface
   addresses, which it could never receive on.

@@ -201,7 +201,7 @@ func TestECMPFallsBackAfterHashedGatewayTimesOut(t *testing.T) {
 	assertUdpPacket(t, []byte("recovered"), n.g2.GetFromTun(true), n.myAddr, n.vip, port, 80)
 }
 
-func TestECMPHoldsAgainOnceTimeoutIsStale(t *testing.T) {
+func TestECMPDownGatewayRecoversOnFirstFlow(t *testing.T) {
 	t.Parallel()
 	n := newECMPNet(t, m{"handshakes": m{"try_interval": "100ms", "retries": 2}})
 	defer n.r.RenderFlow()
@@ -211,13 +211,24 @@ func TestECMPHoldsAgainOnceTimeoutIsStale(t *testing.T) {
 	n.send(n.portFor(t, 1), "held")
 	n.timeOutG2(t)
 
-	t.Log("g2 comes back while nothing is sent to it. Its timeout goes stale, so the next flow waits for it again")
-	// Two handshake timeouts (300ms each here) is when a timeout stops counting
+	t.Log("g2 comes back while nothing is sent to it, so it is still down to us")
 	n.r.RouteFor(time.Second)
+
+	t.Log("The next flow that hashes to g2 goes to g1, and starts the handshake that marks g2 up")
+	// This is the one-handshake window downGateways documents: a flow started here is split if it outlives the
+	// handshake, since its later packets go to g2
 	port := n.portFor(t, 1)
-	n.send(port, "first")
+	n.send(port, "noticed")
+	got, _ := n.route(time.Second, n.g1)
+	require.True(t, got, "packet never reached g1")
+	assertUdpPacket(t, []byte("noticed"), n.g1.GetFromTun(true), n.myAddr, n.vip, port, 80)
+	n.routeUntil(t, func() bool { return n.me.HasTunnel(n.gateways[1]) })
+
+	t.Log("Flows after that go to g2")
+	port = n.portFor(t, 1)
+	n.send(port, "recovered")
 	got, others := n.route(5*time.Second, n.g2)
 	require.True(t, got, "packet never reached g2")
-	assert.Zero(t, others, "packet went to another gateway after g2's timeout went stale")
-	assertUdpPacket(t, []byte("first"), n.g2.GetFromTun(true), n.myAddr, n.vip, port, 80)
+	assert.Zero(t, others, "packet went to another gateway after g2 recovered")
+	assertUdpPacket(t, []byte("recovered"), n.g2.GetFromTun(true), n.myAddr, n.vip, port, 80)
 }
