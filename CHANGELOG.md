@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A node whose UDP socket is IPv4, as with the default `listen.host` of `0.0.0.0`, no longer tries to handshake,
+  roam or punch to a peer's IPv6 addresses, which it could never send to, or advertise its own IPv6 interface
+  addresses, which it could never receive on.
 - Signing a v2 certificate with an empty name, a name longer than 253 bytes, or an empty group now fails.
   These certificates were signed successfully but could not be loaded.
 - `create-tunnel -address <ip:port>` panicked on a nil RemoteList and, over the ssh debug server, took nebula

@@ -170,6 +170,10 @@ func (u *StdConn) GetSoMark() (int, error) {
 	return unix.GetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_MARK)
 }
 
+func (u *StdConn) IPv4Only() bool {
+	return u.isV4
+}
+
 func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 	sa, err := unix.Getsockname(u.sysFd)
 	if err != nil {
