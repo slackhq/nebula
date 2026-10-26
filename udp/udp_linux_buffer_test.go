@@ -108,7 +108,7 @@ func TestReloadConfigBufferLogLevel(t *testing.T) {
 				t.Fatal(err)
 			}
 			buf.Reset()
-			sc.ReloadConfig(cfg)
+			sc.ReloadConfig(cfg, nil)
 			out := buf.String()
 			for _, w := range tc.want {
 				if !strings.Contains(out, w) {
