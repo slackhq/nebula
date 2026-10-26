@@ -1511,13 +1511,15 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpn
 		}
 	}
 
-	for _, a := range n.Details.V6AddrPorts {
-		if a == nil || lhh.lh.v4Only {
-			continue
-		}
-		b := protoV6AddrPortToNetAddrPort(a)
-		if remoteAllowList.Allow(detailsVpnAddr, b.Addr()) {
-			lhh.lh.punchy.Schedule(b, detailsVpnAddr)
+	if !lhh.lh.v4Only {
+		for _, a := range n.Details.V6AddrPorts {
+			if a == nil {
+				continue
+			}
+			b := protoV6AddrPortToNetAddrPort(a)
+			if remoteAllowList.Allow(detailsVpnAddr, b.Addr()) {
+				lhh.lh.punchy.Schedule(b, detailsVpnAddr)
+			}
 		}
 	}
 
