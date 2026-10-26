@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -20,7 +21,7 @@ import (
 // batchWriter owns the sendmmsg(2)/UDP-GSO transmit path for a StdConn: the
 // scratch WriteBatch packs mmsghdr entries into, plus the GSO capability
 // state probed at socket creation. Each queue has its own StdConn and
-// batchWriter, so no locking is needed.
+// batchWriter; mu serializes batches from the TUN reader and relay forwarding.
 //
 // Terminology, smallest to largest:
 //
@@ -39,6 +40,7 @@ import (
 //	chunk    the entries packed for one sendmmsg call, at most MaxWriteBatch.
 //	batch    the caller's whole bufs/addrs pair, processed as one or more chunks.
 type batchWriter struct {
+	mu   sync.Mutex
 	fd   int
 	isV4 bool
 
@@ -192,6 +194,9 @@ func parseRelease(r string) (major, minor int) {
 // Returns the number of packets sent. An error means the call itself failed.
 // A short count means some destinations were undeliverable.
 func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	if len(bufs) != len(addrs) {
 		return 0, fmt.Errorf("WriteBatch: len(bufs)=%d != len(addrs)=%d", len(bufs), len(addrs))
 	}
