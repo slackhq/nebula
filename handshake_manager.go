@@ -70,6 +70,7 @@ type HandshakeManager struct {
 	metricInitiated           metrics.Counter
 	metricTimedOut            metrics.Counter
 	metricRejectedBlocklisted metrics.Counter
+	gatewayTimeouts           *gatewayTimeouts
 	f                         *Interface
 	l                         *slog.Logger
 
@@ -131,6 +132,7 @@ func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *Light
 		metricInitiated:           metrics.GetOrRegisterCounter("handshake_manager.initiated", nil),
 		metricTimedOut:            metrics.GetOrRegisterCounter("handshake_manager.timed_out", nil),
 		metricRejectedBlocklisted: metrics.GetOrRegisterCounter("handshake_manager.rejected.blocklisted", nil),
+		gatewayTimeouts:           newGatewayTimeouts(),
 		l:                         l,
 	}
 }
@@ -234,6 +236,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		}
 		hh.hostinfo.logger(hm.l).Info("Handshake timed out", fields...)
 		hm.metricTimedOut.Inc(1)
+		hm.gatewayTimeouts.timedOut(vpnIp)
 		hm.DeleteHostInfo(hostinfo)
 		return
 	}
@@ -473,6 +476,7 @@ func (hm *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket
 	}
 
 	hm.mainHostMap.unlockedAddHostInfo(hostinfo, f)
+	hm.gatewayTimeouts.completed(hostinfo.vpnAddrs)
 	return existingHostInfo, nil
 }
 
@@ -497,6 +501,7 @@ func (hm *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 	// We need to remove from the pending hostmap first to avoid undoing work when after to the main hostmap.
 	hm.unlockedDeleteHostInfo(hostinfo)
 	hm.mainHostMap.unlockedAddHostInfo(hostinfo, f)
+	hm.gatewayTimeouts.completed(hostinfo.vpnAddrs)
 }
 
 // allocateIndex generates a unique localIndexId for this HostInfo
@@ -555,6 +560,14 @@ func (hm *HandshakeManager) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 				"vpnAddrs": hostinfo.vpnAddrs, "indexNumber": hostinfo.localIndexId, "remoteIndexNumber": hostinfo.remoteIndexId},
 		)
 	}
+}
+
+// gatewayRecentlyTimedOut reports whether a handshake with gateway, a gateway of a multi-gateway route, timed out
+// recently enough that packets should go to another gateway instead of waiting for it. While a gateway is down, a
+// handshake with it is retried as packets arrive and times out every handshake timeout, so a timeout older than two
+// of them means it may have recovered and is worth waiting for again.
+func (hm *HandshakeManager) gatewayRecentlyTimedOut(gateway netip.Addr) bool {
+	return hm.gatewayTimeouts.recentlyTimedOut(gateway, 2*hsTimeout(hm.config.retries, hm.config.tryInterval))
 }
 
 func (hm *HandshakeManager) QueryVpnAddr(vpnIp netip.Addr) *HostInfo {
