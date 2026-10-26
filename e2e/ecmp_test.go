@@ -95,14 +95,14 @@ func (n *ecmpNet) send(port uint16, data string) {
 	n.me.InjectTunPacket(BuildTunUDPPacket(n.vip, 80, n.myAddr, port, []byte(data)))
 }
 
-// route delivers packets until a data message reaches want or timeout passes, dropping everything sent to the
+// route delivers packets until a data message reaches want or timeout passes, dropping everything sent to or from the
 // controls in drop. It returns whether want got a data message, and how many data messages went to other controls.
 func (n *ecmpNet) route(timeout time.Duration, want *nebula.Control, drop ...*nebula.Control) (bool, int) {
 	h := &header.H{}
 	others := 0
 	got := n.r.RouteForAllExitFuncOrTimeout(timeout, func(p *udp.Packet, to *nebula.Control) router.ExitType {
 		for _, d := range drop {
-			if to == d {
+			if to == d || p.From == d.GetUDPAddr() {
 				return router.Drop
 			}
 		}
@@ -120,7 +120,7 @@ func (n *ecmpNet) route(timeout time.Duration, want *nebula.Control, drop ...*ne
 	return got, others
 }
 
-// routeUntil routes, dropping everything sent to the controls in drop, until done reports true. It returns how many
+// routeUntil routes, dropping everything sent to or from the controls in drop, until done reports true. It returns how many
 // data messages were delivered meanwhile.
 func (n *ecmpNet) routeUntil(t *testing.T, done func() bool, drop ...*nebula.Control) int {
 	deadline := time.Now().Add(10 * time.Second)
@@ -231,4 +231,29 @@ func TestECMPDownGatewayRecoversOnFirstFlow(t *testing.T) {
 	require.True(t, got, "packet never reached g2")
 	assert.Zero(t, others, "packet went to another gateway after g2 recovered")
 	assertUdpPacket(t, []byte("recovered"), n.g2.GetFromTun(true), n.myAddr, n.vip, port, 80)
+}
+
+func TestECMPFallsBackRightAwayWhenTunnelDies(t *testing.T) {
+	t.Parallel()
+	n := newECMPNet(t, nil)
+	defer n.r.RenderFlow()
+	n.warmG1(t)
+
+	t.Log("Stand up a tunnel to g2 as well")
+	port := n.portFor(t, 1)
+	n.send(port, "warm")
+	got, _ := n.route(5*time.Second, n.g2)
+	require.True(t, got, "warm packet never reached g2")
+	assertUdpPacket(t, []byte("warm"), n.g2.GetFromTun(true), n.myAddr, n.vip, port, 80)
+
+	t.Log("g2 becomes unreachable with its tunnel up, and the connection manager finds the tunnel dead")
+	n.send(port, "lost")
+	n.routeUntil(t, func() bool { return !n.me.HasTunnel(n.gateways[1]) }, n.g2)
+
+	t.Log("New flows that hash to g2 go to g1 right away, without waiting for a handshake with g2 to time out")
+	port = n.portFor(t, 1)
+	n.send(port, "fallback")
+	got, _ = n.route(time.Second, n.g1, n.g2)
+	require.True(t, got, "packet waited for g2 after its tunnel was found dead")
+	assertUdpPacket(t, []byte("fallback"), n.g1.GetFromTun(true), n.myAddr, n.vip, port, 80)
 }

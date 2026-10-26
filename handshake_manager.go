@@ -118,8 +118,8 @@ func (hh *HandshakeHostInfo) cachePacket(l *slog.Logger, t header.MessageType, s
 	}
 }
 
-// ecmpGateways remembers whether each gateway of a multi-gateway route is up. A gateway is up until a handshake with
-// it times out, and up again once one completes.
+// ecmpGateways remembers whether each gateway of a multi-gateway route is up. A gateway is down once a handshake with
+// it times out or the connection manager finds its tunnel dead, and up again once a handshake with it completes.
 //
 // A packet whose flow hashes to a gateway without a tunnel waits for that gateway's handshake instead of going to
 // another gateway. Sending it elsewhere would split the flow: once the handshake completes, the rest of the flow goes
@@ -162,17 +162,19 @@ func (g *ecmpGateways) isUp(gateway netip.Addr) bool {
 	return up
 }
 
-// timedOut marks addr down if it is a tracked gateway.
-func (g *ecmpGateways) timedOut(addr netip.Addr) {
+// markDown marks any tracked gateway in addrs down.
+func (g *ecmpGateways) markDown(addrs ...netip.Addr) {
 	g.Lock()
-	if _, ok := g.up[addr]; ok {
-		g.up[addr] = false
+	for _, addr := range addrs {
+		if _, ok := g.up[addr]; ok {
+			g.up[addr] = false
+		}
 	}
 	g.Unlock()
 }
 
-// completed marks any tracked gateway in addrs, which now have a tunnel, up.
-func (g *ecmpGateways) completed(addrs []netip.Addr) {
+// markUp marks any tracked gateway in addrs, which now have a tunnel, up.
+func (g *ecmpGateways) markUp(addrs ...netip.Addr) {
 	g.RLock()
 	found := false
 	for _, addr := range addrs {
@@ -314,7 +316,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		}
 		hh.hostinfo.logger(hm.l).Info("Handshake timed out", fields...)
 		hm.metricTimedOut.Inc(1)
-		hm.ecmpGateways.timedOut(vpnIp)
+		hm.ecmpGateways.markDown(vpnIp)
 		hm.DeleteHostInfo(hostinfo)
 		return
 	}
@@ -554,7 +556,7 @@ func (hm *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket
 	}
 
 	hm.mainHostMap.unlockedAddHostInfo(hostinfo, f)
-	hm.ecmpGateways.completed(hostinfo.vpnAddrs)
+	hm.ecmpGateways.markUp(hostinfo.vpnAddrs...)
 	return existingHostInfo, nil
 }
 
@@ -579,7 +581,7 @@ func (hm *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 	// We need to remove from the pending hostmap first to avoid undoing work when after to the main hostmap.
 	hm.unlockedDeleteHostInfo(hostinfo)
 	hm.mainHostMap.unlockedAddHostInfo(hostinfo, f)
-	hm.ecmpGateways.completed(hostinfo.vpnAddrs)
+	hm.ecmpGateways.markUp(hostinfo.vpnAddrs...)
 }
 
 // allocateIndex generates a unique localIndexId for this HostInfo
