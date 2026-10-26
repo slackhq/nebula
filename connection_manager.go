@@ -380,6 +380,12 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 			"tunnelCheck", m{"state": "dead", "method": "active"},
 		)
 
+		// A dead primary tunnel is as good a sign a gateway is down as a handshake timing out, so packets for a
+		// multi-gateway route go to its other gateways right away instead of waiting on a handshake with this one
+		if mainHostInfo {
+			cm.intf.handshakeManager.ecmpGateways.markDown(hostinfo.vpnAddrs...)
+		}
+
 		return deleteTunnel, hostinfo, nil
 	}
 
