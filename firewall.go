@@ -436,6 +436,7 @@ func AddFirewallRulesFromConfig(l *slog.Logger, inbound bool, c *config.C, fw Fi
 var ErrUnknownNetworkType = errors.New("unknown network type")
 var ErrPeerRejected = errors.New("remote address is not within a network that we handle")
 var ErrInvalidRemoteIP = errors.New("remote address is not in remote certificate networks")
+var ErrUnsafeVPNOverlap = errors.New("remote address is in our vpn networks but arrived via the peer's unsafe network")
 var ErrInvalidLocalIP = errors.New("local address is not in list of handled local addresses")
 var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 
@@ -463,6 +464,13 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 			return ErrPeerRejected // reject for now, one day this may have different FW rules
 		case NetworkTypeUnsafe:
 			break // nothing special, one day this may have different FW rules
+		case NetworkTypeUnsafeVPNOverlap:
+			// The peer's unsafe network overlaps our vpn networks, it is claiming another node's
+			// vpn address as a source. Outbound the address is only a destination.
+			if incoming {
+				f.metrics(incoming).droppedRemoteAddr.Inc(1)
+				return ErrUnsafeVPNOverlap
+			}
 		default:
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
 			return ErrUnknownNetworkType //should never happen

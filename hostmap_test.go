@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
@@ -459,4 +460,46 @@ func TestHostMap_reloadBadPreferredRangeFails(t *testing.T) {
 	require.NoError(t, res.Err)
 	assert.True(t, res.Failed)
 	assert.Equal(t, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, hm.GetPreferredRanges())
+}
+
+func TestHostInfo_buildNetworks_UnsafeVPNOverlap(t *testing.T) {
+	myVpnNetworksTable := new(bart.Lite)
+	myVpnNetworksTable.Insert(netip.MustParsePrefix("1.2.3.0/24"))
+	myVpnNetworksTable.Insert(netip.MustParsePrefix("fd00:1::/64"))
+
+	lookup := func(unsafe ...string) func(string) NetworkType {
+		c := dummyCert{networks: []netip.Prefix{netip.MustParsePrefix("1.2.3.9/24"), netip.MustParsePrefix("fd00:1::9/64")}}
+		for _, u := range unsafe {
+			c.unsafeNetworks = append(c.unsafeNetworks, netip.MustParsePrefix(u))
+		}
+		var h HostInfo
+		h.buildNetworks(myVpnNetworksTable, &c)
+		return func(addr string) NetworkType {
+			nwType, _ := h.networks.Lookup(netip.MustParseAddr(addr))
+			return nwType
+		}
+	}
+
+	// Unsafe networks containing our vpn networks: only the overlap is marked, the peer's own
+	// addresses stay vpn
+	l := lookup("1.2.0.0/16", "fd00::/16")
+	assert.Equal(t, NetworkTypeVPN, l("1.2.3.9"))
+	assert.Equal(t, NetworkTypeVPN, l("fd00:1::9"))
+	assert.Equal(t, NetworkTypeUnsafeVPNOverlap, l("1.2.3.10"))
+	assert.Equal(t, NetworkTypeUnsafeVPNOverlap, l("fd00:1::10"))
+	assert.Equal(t, NetworkTypeUnsafe, l("1.2.5.5"))
+	assert.Equal(t, NetworkTypeUnsafe, l("fd00:2::1"))
+
+	// Unsafe network inside one of our vpn networks: all of it is overlap
+	l = lookup("1.2.3.128/25")
+	assert.Equal(t, NetworkTypeUnsafeVPNOverlap, l("1.2.3.200"))
+	assert.Equal(t, NetworkTypeVPN, l("1.2.3.9"))
+
+	// Unsafe network equal to the peer's own address: the overlap does not replace it
+	l = lookup("1.2.3.9/32")
+	assert.Equal(t, NetworkTypeVPN, l("1.2.3.9"))
+
+	// Unsafe network with no overlap: unchanged
+	l = lookup("192.168.0.0/16")
+	assert.Equal(t, NetworkTypeUnsafe, l("192.168.1.1"))
 }

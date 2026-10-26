@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `service` package now works over an IPv6 overlay. It added only an IPv4 route, only the cert's first
   network (always labeled IPv4), and handed every inbound packet to gvisor as IPv4, so IPv6 dials failed and
   IPv6 replies were dropped.
+- A peer whose certificate carries an unsafe network overlapping the overlay could send packets as any node in
+  it: the firewall accepted any source inside the unsafe network. A source address inside this node's own
+  networks must now be the sending peer's own; through an unsafe network it is dropped, counted as a dropped
+  remote address. A peer whose unsafe network deliberately covers this node's overlay range therefore no
+  longer delivers packets from non-nebula hosts in that range either.
 - Signing a v2 certificate with an empty name, a name longer than 253 bytes, or an empty group now fails.
   These certificates were signed successfully but could not be loaded.
 - `create-tunnel -address <ip:port>` panicked on a nil RemoteList and, over the ssh debug server, took nebula

@@ -233,6 +233,9 @@ const (
 	NetworkTypeVPNPeer
 	// NetworkTypeUnsafe is a network from Certificate.UnsafeNetworks()
 	NetworkTypeUnsafe
+	// NetworkTypeUnsafeVPNOverlap is the overlap between a network from Certificate.UnsafeNetworks()
+	// and one of the vpnNetworks in our certificate
+	NetworkTypeUnsafeVPNOverlap
 )
 
 type HostInfo struct {
@@ -896,6 +899,25 @@ func (i *HostInfo) buildNetworks(myVpnNetworksTable *bart.Lite, c cert.Certifica
 	}
 
 	i.networks = new(bart.Table[NetworkType])
+	for _, network := range c.UnsafeNetworks() {
+		// Mark where an unsafe network overlaps our vpn networks, the firewall must not let the
+		// peer send from vpn addresses that belong to other nodes
+		if myVpnNetworksTable.LookupPrefix(network) {
+			// The unsafe network is inside one of our vpn networks, all of it is overlap.
+			// Ex: vpn network 10.1.0.0/16, unsafe network 10.1.2.0/24, all of 10.1.2.0/24 is overlap
+			i.networks.Insert(network, NetworkTypeUnsafeVPNOverlap)
+		} else {
+			// Any of our vpn networks inside the unsafe network are the overlap, the rest is unsafe.
+			// Ex: vpn network 10.1.0.0/16, unsafe network 10.0.0.0/8, 10.1.0.0/16 is overlap and the rest of 10.0.0.0/8 is unsafe.
+			// On the other hand, an unsafe network assignment of 192.168.0.0/16 would have no overlap.
+			i.networks.Insert(network, NetworkTypeUnsafe)
+			for overlap := range myVpnNetworksTable.Subnets(network) {
+				i.networks.Insert(overlap, NetworkTypeUnsafeVPNOverlap)
+			}
+		}
+	}
+
+	// Insert the peer's own addresses last so an overlap of the same prefix can't replace them
 	for _, network := range c.Networks() {
 		nprefix := netip.PrefixFrom(network.Addr(), network.Addr().BitLen())
 		if myVpnNetworksTable.Contains(network.Addr()) {
@@ -903,10 +925,6 @@ func (i *HostInfo) buildNetworks(myVpnNetworksTable *bart.Lite, c cert.Certifica
 		} else {
 			i.networks.Insert(nprefix, NetworkTypeVPNPeer)
 		}
-	}
-
-	for _, network := range c.UnsafeNetworks() {
-		i.networks.Insert(network, NetworkTypeUnsafe)
 	}
 }
 

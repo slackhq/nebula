@@ -277,6 +277,58 @@ func TestFirewall_Drop(t *testing.T) {
 	require.NoError(t, fw.Drop(p, true, &h, cp, nil))
 }
 
+// TestFirewall_DropOverlaySourceThroughUnsafeNetwork: a peer whose unsafe network
+// overlaps our overlay may not send as another node of it. Its own address and sources
+// outside the overlay still pass through the unsafe network, and outbound to such an
+// address, where the address is a destination, is not the firewall's to refuse here.
+func TestFirewall_DropOverlaySourceThroughUnsafeNetwork(t *testing.T) {
+	l := test.NewLogger()
+	myVpnNetworksTable := new(bart.Lite)
+	myVpnNetworksTable.Insert(netip.MustParsePrefix("1.2.3.0/24"))
+
+	me := dummyCert{name: "me", networks: []netip.Prefix{netip.MustParsePrefix("1.2.3.4/24")}}
+	// A router for 1.2.0.0/16, which contains the whole overlay.
+	peer := dummyCert{
+		name:           "router",
+		networks:       []netip.Prefix{netip.MustParsePrefix("1.2.3.9/24")},
+		unsafeNetworks: []netip.Prefix{netip.MustParsePrefix("1.2.0.0/16")},
+		groups:         []string{"default-group"},
+	}
+	h := HostInfo{
+		ConnectionState: &ConnectionState{
+			peerCert: &cert.CachedCertificate{Certificate: &peer, InvertedGroups: map[string]struct{}{"default-group": {}}},
+		},
+		vpnAddrs: []netip.Addr{netip.MustParseAddr("1.2.3.9")},
+	}
+	h.buildNetworks(myVpnNetworksTable, &peer)
+
+	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, &me)
+	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"any"}, "", "", "", "", ""))
+	cp := cert.NewCAPool()
+	packet := func(remote string) firewall.Packet {
+		return firewall.Packet{
+			LocalAddr:  netip.MustParseAddr("1.2.3.4"),
+			RemoteAddr: netip.MustParseAddr(remote),
+			LocalPort:  10,
+			RemotePort: 90,
+			Protocol:   iputil.IPProtocolUDP,
+		}
+	}
+
+	// Another node's overlay address, through the unsafe network: refused.
+	assert.Equal(t, ErrUnsafeVPNOverlap, fw.Drop(packet("1.2.3.10"), true, &h, cp, nil))
+	assert.Equal(t, int64(1), fw.incomingMetrics.droppedRemoteAddr.Count())
+
+	// The peer's own address, and an address outside the overlay it routes for: served.
+	require.NoError(t, fw.Drop(packet("1.2.3.9"), true, &h, cp, nil))
+	require.NoError(t, fw.Drop(packet("1.2.5.5"), true, &h, cp, nil))
+
+	// Outbound to the overlay address via the router is not refused here; it meets the
+	// outbound rules as before.
+	resetConntrack(fw)
+	assert.Equal(t, ErrNoMatchingRule, fw.Drop(packet("1.2.3.10"), false, &h, cp, nil))
+}
+
 func TestFirewall_DropV6(t *testing.T) {
 	ob := &bytes.Buffer{}
 	l := test.NewLoggerWithOutput(ob)
