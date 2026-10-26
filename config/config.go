@@ -370,12 +370,16 @@ func (c *C) get(k string, v any) any {
 func (c *C) resolve(path string, direct bool) error {
 	i, err := os.Stat(path)
 	if err != nil {
+		if direct {
+			return fmt.Errorf("failed to stat config file at %s: %w", path, err)
+		}
+		// log and skip so one bad entry does not abort a multi-file config reload.
+		c.l.Warn("failed to stat config entry, skipping", "path", path, "error", err)
 		return nil
 	}
 
 	if !i.IsDir() {
-		c.addFile(path, direct)
-		return nil
+		return c.addFile(path, direct)
 	}
 
 	paths, err := readDirNames(path)
@@ -400,7 +404,7 @@ func (c *C) addFile(path string, direct bool) error {
 		return nil
 	}
 
-	ap, err := filepath.Abs(path)
+	ap, err := filepathAbs(path)
 	if err != nil {
 		return err
 	}
@@ -408,6 +412,9 @@ func (c *C) addFile(path string, direct bool) error {
 	c.files = append(c.files, ap)
 	return nil
 }
+
+// filepathAbs is swappable so tests can exercise the addFile error path.
+var filepathAbs = filepath.Abs
 
 func (c *C) parseRaw(b []byte) error {
 	var m map[string]any
