@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"net"
 	"net/netip"
 	"strings"
@@ -257,9 +256,6 @@ func (s *Service) Listen(network, address string) (net.Listener, error) {
 	}
 	if addr.Port == 0 {
 		return nil, errors.New("specific port required, got 0")
-	}
-	if addr.Port < 0 || addr.Port >= math.MaxUint16 {
-		return nil, fmt.Errorf("invalid port %d", addr.Port)
 	}
 	port := uint16(addr.Port)
 
