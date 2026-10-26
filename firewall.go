@@ -1053,6 +1053,13 @@ func convertRule(l *slog.Logger, p any, table string, i int) (rule, error) {
 		r.Groups = []string{singleGroup}
 	}
 
+	// A null group would otherwise leave the rule matching any host, likely from a template that rendered nothing
+	for _, k := range []string{"group", "groups"} {
+		if g, ok := m[k]; ok && g == nil && len(r.Groups) == 0 && r.Host == "" && r.Cidr == "" {
+			return r, fmt.Errorf("%s is null and no host, group, or cidr was provided, use `host: any` to match any host", k)
+		}
+	}
+
 	return r, nil
 }
 

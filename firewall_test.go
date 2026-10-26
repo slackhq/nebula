@@ -1566,6 +1566,23 @@ func TestAddFirewallRulesFromConfig(t *testing.T) {
 		assert.Equal(t, "a", mf.lastCall.host)
 	}
 
+	// Test a null group or groups is refused when nothing else limits the hosts, it would match any host
+	for _, key := range []string{"group", "groups"} {
+		for _, other := range []string{"ca_name", "ca_sha", "local_cidr"} {
+			conf = config.NewC(test.NewLogger())
+			mf = &mockFirewall{}
+			conf.Settings["firewall"] = map[string]any{"inbound": []any{map[string]any{"port": "1", "proto": "any", key: nil, other: "x"}}}
+			require.EqualError(t, AddFirewallRulesFromConfig(l, true, conf, mf), "firewall.inbound rule #0; "+key+" is null and no host, group, or cidr was provided, use `host: any` to match any host", "%s with %s", key, other)
+		}
+	}
+
+	// Test a null group alongside groups uses the groups
+	conf = config.NewC(test.NewLogger())
+	mf = &mockFirewall{}
+	conf.Settings["firewall"] = map[string]any{"inbound": []any{map[string]any{"port": "1", "proto": "any", "group": nil, "groups": []any{"a"}, "ca_name": "x"}}}
+	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf))
+	assert.Equal(t, []string{"a"}, mf.lastCall.groups)
+
 	// Test Add error
 	conf = config.NewC(test.NewLogger())
 	mf = &mockFirewall{}
