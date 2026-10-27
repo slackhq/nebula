@@ -237,18 +237,7 @@ const (
 
 // hostDNS turns the `dns` stanza into goals for a dnsconfig.Manager.
 //
-// One Manager lives for the process. Recover creates it with a Clear goal,
-// which removes whatever a previous run under the same identity left behind,
-// with or without a `dns` stanza; Start then records the goal the config asks
-// for on the same Manager, and dns.enabled toggles it between Set and Clear
-// across reloads. The identity is fixed for the Manager's life, so
-// dns.identity needs a restart. Restore closes it, which removes everything it
-// installed. Where dnsconfig would refuse every attempt, nothing is created:
-// an enabled stanza is warned about once and host DNS is left unmanaged.
-//
-// Set and Clear record a goal and return at once, so the lifecycle never waits
-// on an OS call. Restore is the exception: it reverts the host, bounded by
-// dnsconfig.DefaultShutdownTimeout.
+// We maintain a single Manager for the lifetime of nebula.
 type hostDNS struct {
 	l *slog.Logger
 	// newManager is for testing; nil means newDNSConfigManager.
@@ -267,9 +256,8 @@ type hostDNS struct {
 	mu     sync.Mutex
 	runCfg hostDNSConfig
 	// state is used to track where we sit relative to the Manager. Start
-	// moves it to started, Restore moves it to stopped. A reload outside that
-	// window only loads its configuration, so nothing reaches the host before
-	// the tun exists or after the resolver path is gone.
+	// moves it to started, Restore moves it to stopped. A reload when in New
+	// or Stopped only loads config, but doesn't try to do anything.
 	state hostDNSState
 
 	// mgr is built on the first goal. mgrOpts is what it was built from; a
@@ -380,7 +368,7 @@ func (s *hostDNS) convergeLocked() error {
 	return s.applyLocked(s.runCfg.dns)
 }
 
-// applyLocked makes desired the host DNS goal.
+// applyLocked updates dnsconfig's goal if necessary.
 func (s *hostDNS) applyLocked(desired dnsconfig.Config) error {
 	if err := s.ensureManagerLocked(); err != nil {
 		if errors.Is(err, errHostDNSUnsupported) {
@@ -413,11 +401,8 @@ func (s *hostDNS) applyLocked(desired dnsconfig.Config) error {
 	return nil
 }
 
-// deactivateLocked makes removing this identity's host DNS config the goal,
-// including anything a prior run left behind: dnsconfig finds that by
-// identity, so this is also how a start recovers from a crash. On a host where
-// every attempt would be refused it is a quiet no-op: there is nothing to say
-// to an embedder that never asked for host DNS.
+// deactivateLocked tells dnsconfig to remove our state, including anything
+// left behind by a prior run.
 func (s *hostDNS) deactivateLocked() error {
 	if err := s.ensureManagerLocked(); err != nil {
 		if errors.Is(err, errHostDNSUnsupported) {
@@ -436,10 +421,8 @@ func (s *hostDNS) deactivateLocked() error {
 	return nil
 }
 
-// ensureManagerLocked builds the Manager if there is none, which costs
-// nothing: it touches the host only when it has a goal to act on. On a host
-// dnsconfig would refuse every attempt for it returns errHostDNSUnsupported
-// and builds nothing.
+// ensureManagerLocked builds the Manager if there is none. Note that the
+// Manager won't do anything until we give it a goal.
 func (s *hostDNS) ensureManagerLocked() error {
 	if s.mgr != nil {
 		return nil
@@ -469,11 +452,9 @@ var errHostDNSUnsupported = errors.New("host DNS configuration is not supported 
 // hostDNSNewTimeout bounds manager construction, which initializes the backend.
 const hostDNSNewTimeout = 5 * time.Second
 
-// newDNSConfigManager builds a dnsconfig.Manager, or reports why none can
-// work here. dnsconfig has no backend outside macOS and Windows, and the
-// darwin one needs root for the dynamic store, /etc/resolver and its lock
-// directory. Windows wants LocalSystem or elevation, which dnsconfig checks
-// and warns about itself at construction.
+// newDNSConfigManager builds a dnsconfig.Manager, or reports an error if
+// we can't, except on Windows where we rely on dnsconfig itself reporting
+// the error.
 func newDNSConfigManager(o dnsconfig.Options) (*dnsconfig.Manager, error) {
 	switch dnsconfig.Detect() {
 	case dnsconfig.BackendNoop:
@@ -489,9 +470,8 @@ func newDNSConfigManager(o dnsconfig.Options) (*dnsconfig.Manager, error) {
 }
 
 // Restore puts the host's previous DNS configuration back and releases the
-// Manager. Call it while the nameservers are still reachable, before the
-// tunnels and tun go away. It is idempotent and safe to call when nothing was
-// ever applied, and on a nil hostDNS.
+// Manager. Call it before the tunnels and tun go away. It is idempotent and
+// safe to call when nothing was ever applied, and on a nil hostDNS.
 func (s *hostDNS) Restore() {
 	if s == nil {
 		return
@@ -515,7 +495,7 @@ func (s *hostDNS) closeManagerLocked() {
 	err := mgr.Close()
 	switch {
 	case err != nil:
-		s.l.Warn("failed to revert host DNS config; the next run under the same identity removes what was left behind",
+		s.l.Warn("failed to revert host DNS config; rerun with the same identity to try again",
 			"identity", s.mgrOpts.Identity, "error", err)
 	case errors.Is(mgr.Status().LastError, dnsconfig.ErrManagerAlreadyRunning):
 		s.l.Warn("host DNS identity is held by another running process; not updating host DNS", "identity", s.mgrOpts.Identity)
