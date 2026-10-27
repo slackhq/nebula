@@ -243,7 +243,9 @@ type hostDNS struct {
 	// newManager is for testing; nil means newDNSConfigManager.
 	newManager func(dnsconfig.Options) (*dnsconfig.Manager, error)
 	// warnedUnsupported is whether an enabled stanza has been told this host
-	// can't be configured; once is enough.
+	// can't be configured. It primarily exists for testing, but also serves
+	// to avoid logging multiple times in the case where it's never going to
+	// work.
 	warnedUnsupported bool
 	// tunDisabled is whether this process runs without a tun device. It is
 	// read once at construction: tun.disabled only takes effect on restart,
@@ -251,8 +253,8 @@ type hostDNS struct {
 	tunDisabled bool
 
 	// mu serializes Recover, Start, Restore, and the reload callback. It is
-	// held across Restore, which is the one path here that blocks, so a reload
-	// landing during a Restore can not reinstall what Restore is removing.
+	// held across restore to prevent a reload from landing, and meddling with
+	// Restore's work.
 	mu     sync.Mutex
 	runCfg hostDNSConfig
 	// state is used to track where we sit relative to the Manager. Start
@@ -260,9 +262,8 @@ type hostDNS struct {
 	// or Stopped only loads config, but doesn't try to do anything.
 	state hostDNSState
 
-	// mgr is built on the first goal. mgrOpts is what it was built from; a
-	// reload that moves the identity is reported as needing a restart, since
-	// the Manager fixes it for its life.
+	// mgr is built lazily, when we first need it. mgrOpts is what it was built
+	// from, so we can log things appropriately.
 	mgr     *dnsconfig.Manager
 	mgrOpts hostDNSOptions
 }
