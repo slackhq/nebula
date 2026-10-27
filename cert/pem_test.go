@@ -2,6 +2,7 @@ package cert
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/pem"
 	"strings"
 	"testing"
@@ -422,4 +423,46 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 	assert.Nil(t, k)
 	assert.Equal(t, rest, invalidPem)
 	require.EqualError(t, err, "input did not contain a valid PEM encoded block")
+}
+
+// The split loaders split a key as its banner says, not by its size.
+func TestUnmarshalSplitKeyFromPEM(t *testing.T) {
+	for _, curve := range []Curve{Curve_CURVE25519, Curve_P256} {
+		t.Run(curve.String(), func(t *testing.T) {
+			var pub, priv []byte
+			if curve == Curve_P256 {
+				pub, priv = P256Keypair()
+			} else {
+				pub, priv = X25519Keypair()
+			}
+			pqPub, pqPriv, err := DefaultPQSuite.GenerateKey(false)
+			require.NoError(t, err)
+
+			k, rest, err := UnmarshalSplitPrivateKeyFromPEM(MarshalPrivateKeyToPEM(curve, priv))
+			require.NoError(t, err)
+			assert.Empty(t, rest)
+			assert.Equal(t, SplitKey{Curve: curve, Classical: priv}, k)
+			assert.Equal(t, priv, k.Bytes())
+
+			composite := append(bytes.Clone(priv), pqPriv...)
+			k, _, err = UnmarshalSplitPrivateKeyFromPEM(MarshalPQPrivateKeyToPEM(curve, DefaultPQSuite, composite))
+			require.NoError(t, err)
+			assert.Equal(t, SplitKey{Curve: curve, Classical: priv, PQ: pqPriv}, k)
+			assert.Equal(t, composite, k.Bytes())
+
+			k, _, err = UnmarshalSplitPublicKeyFromPEM(MarshalPublicKeyToPEM(curve, pub))
+			require.NoError(t, err)
+			assert.Equal(t, SplitKey{Curve: curve, Classical: pub}, k)
+
+			k, _, err = UnmarshalSplitPublicKeyFromPEM(MarshalPQPublicKeyToPEM(curve, DefaultPQSuite, append(bytes.Clone(pub), pqPub...)))
+			require.NoError(t, err)
+			assert.Equal(t, SplitKey{Curve: curve, Classical: pub, PQ: pqPub}, k)
+
+			// A key of the other kind is refused, as by the unsplit loaders.
+			_, _, err = UnmarshalSplitPrivateKeyFromPEM(MarshalPublicKeyToPEM(curve, pub))
+			require.Error(t, err)
+			_, _, err = UnmarshalSplitPublicKeyFromPEM(MarshalPrivateKeyToPEM(curve, priv))
+			require.Error(t, err)
+		})
+	}
 }

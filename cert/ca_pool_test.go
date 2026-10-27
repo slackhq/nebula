@@ -345,7 +345,7 @@ func TestCertificateV1_VerifyP256(t *testing.T) {
 
 	// Create a copy of the cert and swap to the alternate form for the signature
 	nc := c.Copy()
-	b, err := p256.Swap(c.Signature())
+	b, err := p256.Swap(c.Signature().Classical)
 	require.NoError(t, err)
 	require.NoError(t, nc.(*certificateV1).setSignature(b))
 
@@ -588,7 +588,7 @@ func TestCertificateV2_VerifyP256(t *testing.T) {
 
 	// Create a copy of the cert and swap to the alternate form for the signature
 	nc := c.Copy()
-	b, err := p256.Swap(c.Signature())
+	b, err := p256.Swap(c.Signature().Classical)
 	require.NoError(t, err)
 	require.NoError(t, nc.(*certificateV2).setSignature(b))
 

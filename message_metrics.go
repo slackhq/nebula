@@ -52,10 +52,11 @@ func (m *MessageMetrics) TxExhausted(i int64) {
 func newMessageMetrics() *MessageMetrics {
 	gen := func(t string) [][]metrics.Counter {
 		// Handshake subtypes are sparse: the fragmented ones sit at 0x80 and up. The gaps are nil and count as other.
-		handshake := make([]metrics.Counter, header.HandshakeXXPSK0Fragmented+1)
+		handshake := make([]metrics.Counter, header.HandshakeIXHybridMLKEM1024Fragmented+1)
 		handshake[header.HandshakeIXPSK0] = metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.handshake_ixpsk0", t), nil)
 		handshake[header.HandshakeIXPSK0Fragmented] = metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.handshake_ixpsk0_fragmented", t), nil)
 		handshake[header.HandshakeXXPSK0Fragmented] = metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.handshake_xxpsk0_fragmented", t), nil)
+		handshake[header.HandshakeIXHybridMLKEM1024Fragmented] = metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.handshake_ixhybridmlkem1024_fragmented", t), nil)
 		return [][]metrics.Counter{
 			handshake,
 			nil,

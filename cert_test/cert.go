@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"io"
 	"net/netip"
+	"testing"
 	"time"
 
 	"github.com/slackhq/nebula/cert"
@@ -25,6 +26,16 @@ var testCertNow = time.Now().Round(time.Second)
 
 // NewTestCaCert will create a new ca certificate
 func NewTestCaCert(version cert.Version, curve cert.Curve, before, after time.Time, networks, unsafeNetworks []netip.Prefix, groups []string) (cert.Certificate, []byte, []byte, []byte) {
+	return newTestCaCert(version, curve, before, after, networks, unsafeNetworks, groups, false)
+}
+
+// NewTestV3CaCertWithoutV2Form is NewTestCaCert for a version 3 CA without a v2 form, whose host certificates
+// NewTestCert then makes without one too.
+func NewTestV3CaCertWithoutV2Form(curve cert.Curve, before, after time.Time, networks, unsafeNetworks []netip.Prefix, groups []string) (cert.Certificate, []byte, []byte, []byte) {
+	return newTestCaCert(cert.Version3, curve, before, after, networks, unsafeNetworks, groups, true)
+}
+
+func newTestCaCert(version cert.Version, curve cert.Curve, before, after time.Time, networks, unsafeNetworks []netip.Prefix, groups []string, omitV2Form bool) (cert.Certificate, []byte, []byte, []byte) {
 	var err error
 	var pub, priv []byte
 
@@ -41,6 +52,10 @@ func NewTestCaCert(version cert.Version, curve cert.Curve, before, after time.Ti
 		priv = privk.D.FillBytes(make([]byte, 32))
 	default:
 		// There is no default to allow the underlying lib to respond with an error
+	}
+
+	if version == cert.Version3 {
+		pub, priv = appendPQSigningKey(pub, priv)
 	}
 
 	if before.IsZero() {
@@ -61,6 +76,10 @@ func NewTestCaCert(version cert.Version, curve cert.Curve, before, after time.Ti
 		UnsafeNetworks: unsafeNetworks,
 		Groups:         groups,
 		IsCA:           true,
+		OmitV2Form:     omitV2Form,
+	}
+	if version == cert.Version3 {
+		t.PQSuite = cert.DefaultPQSuite
 	}
 
 	c, err := t.Sign(nil, curve, priv)
@@ -97,6 +116,10 @@ func NewTestCert(v cert.Version, curve cert.Curve, ca cert.Certificate, key []by
 		panic("unknown curve")
 	}
 
+	if v == cert.Version3 {
+		pub, priv = appendPQKey(ca, pub, priv)
+	}
+
 	nc := &cert.TBSCertificate{
 		Version:        v,
 		Curve:          curve,
@@ -108,6 +131,9 @@ func NewTestCert(v cert.Version, curve cert.Curve, ca cert.Certificate, key []by
 		NotAfter:       time.Unix(after.Unix(), 0),
 		PublicKey:      pub,
 		IsCA:           false,
+		PQSuite:        cert.PQSuiteOf(ca),
+		// A v3 host certificate has a v2 form when its CA does.
+		OmitV2Form: v == cert.Version3 && cert.V2Form(ca) == nil,
 	}
 
 	c, err := nc.Sign(ca, ca.Curve(), key)
@@ -120,6 +146,9 @@ func NewTestCert(v cert.Version, curve cert.Curve, ca cert.Certificate, key []by
 		panic(err)
 	}
 
+	if v == cert.Version3 {
+		return c, pub, cert.MarshalPQPrivateKeyToPEM(curve, cert.PQSuiteOf(ca), priv), pem
+	}
 	return c, pub, cert.MarshalPrivateKeyToPEM(curve, priv), pem
 }
 
@@ -135,6 +164,9 @@ func NewTestCertDifferentVersion(c cert.Certificate, v cert.Version, ca cert.Cer
 		NotAfter:       time.Unix(c.NotAfter().Unix(), 0),
 		PublicKey:      c.PublicKey(),
 		IsCA:           false,
+		PQSuite:        cert.PQSuiteOf(ca),
+		// A v3 host certificate has a v2 form when its CA does.
+		OmitV2Form: v == cert.Version3 && cert.V2Form(ca) == nil,
 	}
 
 	c, err := nc.Sign(ca, ca.Curve(), key)
@@ -148,6 +180,24 @@ func NewTestCertDifferentVersion(c cert.Certificate, v cert.Version, ca cert.Cer
 	}
 
 	return c, pem
+}
+
+// appendPQSigningKey makes a classical CA keypair into a version 3 composite one with a fresh key of the default suite.
+func appendPQSigningKey(pub, priv []byte) ([]byte, []byte) {
+	pqPub, pqPriv, err := cert.DefaultPQSuite.GenerateKey(true)
+	if err != nil {
+		panic(err)
+	}
+	return append(pub, pqPub...), append(priv, pqPriv...)
+}
+
+// appendPQKey makes a classical host keypair into a version 3 composite one with a fresh key of the CA's suite.
+func appendPQKey(ca cert.Certificate, pub, priv []byte) ([]byte, []byte) {
+	pqPub, pqPriv, err := cert.PQSuiteOf(ca).GenerateKey(false)
+	if err != nil {
+		panic(err)
+	}
+	return append(pub, pqPub...), append(priv, pqPriv...)
 }
 
 func X25519Keypair() ([]byte, []byte) {
@@ -199,7 +249,7 @@ func (d *DummyCert) Networks() []netip.Prefix                      { return d.Ne
 func (d *DummyCert) NotAfter() time.Time                           { return d.NotAfter_ }
 func (d *DummyCert) NotBefore() time.Time                          { return d.NotBefore_ }
 func (d *DummyCert) PublicKey() []byte                             { return d.PublicKey_ }
-func (d *DummyCert) Signature() []byte                             { return d.Signature_ }
+func (d *DummyCert) Signature() cert.Signatures                    { return cert.Signatures{Classical: d.Signature_} }
 func (d *DummyCert) UnsafeNetworks() []netip.Prefix                { return d.UnsafeNetworks_ }
 func (d *DummyCert) Fingerprint() (string, error)                  { return "", nil }
 func (d *DummyCert) CheckSignature(key []byte) bool                { return false }
@@ -223,6 +273,15 @@ func NewTestCAPool(cas ...cert.Certificate) *cert.CAPool {
 		}
 	}
 	return pool
+}
+
+// SkipWithoutPQ skips a test that needs the default post-quantum suite when this build can not run it, as under the
+// FIPS 140-3 Go Cryptographic Module v1.0.0, which has no ML-DSA.
+func SkipWithoutPQ(t testing.TB) {
+	t.Helper()
+	if err := cert.DefaultPQSuite.Available(); err != nil {
+		t.Skip(err)
+	}
 }
 
 // WithCurve re-encodes a curve25519 v2 certificate PEM as one carrying curve, the way a certificate for a curve a newer

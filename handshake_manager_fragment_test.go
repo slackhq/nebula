@@ -53,7 +53,7 @@ func newFragTestManager(t *testing.T) (*HandshakeManager, *captureConn) {
 	c, _, keyPEM, _ := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, ca, caKey, "me", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")}, nil, nil)
 	key, _, curve, err := cert.UnmarshalPrivateKeyFromPEM(keyPEM)
 	require.NoError(t, err)
-	cs, err := newCertState(cert.Version2, nil, c, false, curve, key, "aes")
+	cs, err := newCertState(cert.Version2, nil, c, nil, false, curve, key, "aes")
 	require.NoError(t, err)
 	p := &PKI{}
 	p.cs.Store(cs)
@@ -621,7 +621,7 @@ func feedMsg2(t *testing.T, hh *HandshakeHostInfo, p []byte) (*fragment.Assembly
 	t.Helper()
 	fh, sym, err := fragment.Parse(p[header.Len:])
 	require.NoError(t, err)
-	a := hh.slotFor(fh)
+	a := hh.msg2.slotFor(fh)
 	require.NotNil(t, a)
 	ready, err := a.Add(fh, sym)
 	require.NoError(t, err)
@@ -672,7 +672,7 @@ func TestMsg2Slots(t *testing.T) {
 		msg, err := a.Decode(nil)
 		require.NoError(t, err)
 		got = msg
-		hh.dropSlot(a)
+		hh.msg2.drop(a)
 	}
 	require.Equal(t, msgB, got)
 

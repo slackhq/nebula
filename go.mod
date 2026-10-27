@@ -6,9 +6,9 @@ require (
 	dario.cat/mergo v1.0.2
 	filippo.io/bigmod v0.1.0
 	github.com/DefinedNet/netlink v1.3.2-dn.1
+	github.com/DefinedNet/noise v0.0.0-00010101000000-000000000000
 	github.com/Microsoft/go-winio v0.6.4
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
-	github.com/flynn/noise v1.1.0
 	github.com/gaissmai/bart v0.30.0
 	github.com/gogo/protobuf v1.3.2
 	github.com/google/gopacket v1.1.19
@@ -48,3 +48,5 @@ require (
 	golang.org/x/exp v0.0.0-20250711185948-6ae5c78190dc // indirect
 	golang.org/x/time v0.15.0 // indirect
 )
+
+replace github.com/DefinedNet/noise => /home/jack/work/git/DefinedNet-noise

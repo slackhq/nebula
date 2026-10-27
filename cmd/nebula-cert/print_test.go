@@ -86,7 +86,7 @@ func Test_printCert(t *testing.T) {
 	err = printCert([]string{"-path", tf.Name()}, ob, eb)
 	fp, _ := c.Fingerprint()
 	pk := hex.EncodeToString(c.PublicKey())
-	sig := hex.EncodeToString(c.Signature())
+	sig := hex.EncodeToString(c.Signature().Classical)
 	require.NoError(t, err)
 	assert.Equal(
 		t,
@@ -171,7 +171,7 @@ func Test_printCert(t *testing.T) {
 	err = printCert([]string{"-json", "-path", tf.Name()}, ob, eb)
 	fp, _ = c.Fingerprint()
 	pk = hex.EncodeToString(c.PublicKey())
-	sig = hex.EncodeToString(c.Signature())
+	sig = hex.EncodeToString(c.Signature().Classical)
 	require.NoError(t, err)
 	assert.Equal(
 		t,

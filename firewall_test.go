@@ -11,6 +11,7 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/iputil"
@@ -1333,7 +1334,7 @@ func TestNewFirewallFromConfig(t *testing.T) {
 	l := test.NewLogger()
 	// Test a bad rule definition
 	c := &dummyCert{}
-	cs, err := newCertState(cert.Version2, nil, c, false, cert.Curve_CURVE25519, nil, "aes")
+	cs, err := newCertState(cert.Version2, nil, c, nil, false, cert.Curve_CURVE25519, nil, "aes")
 	require.NoError(t, err)
 
 	conf := config.NewC(test.NewLogger())
@@ -1888,4 +1889,61 @@ func resetConntrack(fw *Firewall) {
 	fw.Conntrack.Lock()
 	fw.Conntrack.Conns = map[firewall.Packet]*conn{}
 	fw.Conntrack.Unlock()
+}
+
+// A version 3 certificate's CA answers to both its fingerprints in ca_sha rules: the v2 form's, which is what the
+// certificate names as issuer, and its own. A v2 certificate only to the v2 one.
+func TestFirewall_CAShaV3(t *testing.T) {
+	cert_test.SkipWithoutPQ(t)
+	l := test.NewLogger()
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version3, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	host, _, _, _ := cert_test.NewTestCert(cert.Version3, cert.Curve_CURVE25519, ca, caKey, "host", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("1.2.3.4/24")}, nil, nil)
+	cp := cert.NewCAPool()
+	require.NoError(t, cp.AddCA(ca))
+	require.NoError(t, cp.AddCA(cert.V2Form(ca)))
+	v3Sha, err := ca.Fingerprint()
+	require.NoError(t, err)
+	v2Sha, err := cert.V2Form(ca).Fingerprint()
+	require.NoError(t, err)
+
+	myVpnNetworksTable := new(bart.Lite)
+	myVpnNetworksTable.Insert(netip.MustParsePrefix("1.1.1.1/8"))
+	p := firewall.Packet{
+		LocalAddr:  netip.MustParseAddr("1.2.3.4"),
+		RemoteAddr: netip.MustParseAddr("1.2.3.4"),
+		LocalPort:  10,
+		RemotePort: 90,
+		Protocol:   iputil.IPProtocolUDP,
+	}
+
+	for _, tc := range []struct {
+		name  string
+		c     cert.Certificate
+		caSha string
+		match bool
+	}{
+		{"v3 by v2 sha", host, v2Sha, true},
+		{"v3 by v3 sha", host, v3Sha, true},
+		{"v2 form by v2 sha", cert.V2Form(host), v2Sha, true},
+		{"v2 form by v3 sha", cert.V2Form(host), v3Sha, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cc, err := cp.VerifyCertificate(time.Now(), tc.c)
+			require.NoError(t, err)
+			h := HostInfo{
+				ConnectionState: &ConnectionState{peerCert: cc},
+				vpnAddrs:        []netip.Addr{netip.MustParseAddr("1.2.3.4")},
+			}
+			h.buildNetworks(myVpnNetworksTable, tc.c)
+
+			fw := NewFirewall(l, time.Second, time.Minute, time.Hour, tc.c)
+			require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, nil, "", "", "", "", tc.caSha))
+			err = fw.Drop(p, true, &h, cp, nil)
+			if tc.match {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, ErrNoMatchingRule)
+			}
+		})
+	}
 }

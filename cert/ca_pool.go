@@ -39,6 +39,8 @@ func NewCAPoolFromPEM(caPEMs []byte) (*CAPool, error) {
 
 // NewCAPoolFromPEMReader will create a new CA pool from the provided reader.
 // The reader must contain a PEM-encoded set of nebula certificates.
+// A version 3 CA whose post-quantum suite this build can not run is skipped like a CA of a version or curve this
+// build does not know, so a bundle can carry v3 CAs for nodes that have them; SkippedCertificates lists it.
 func NewCAPoolFromPEMReader(r io.Reader) (*CAPool, error) {
 	pool := NewCAPool()
 
@@ -59,7 +61,7 @@ func NewCAPoolFromPEMReader(r io.Reader) (*CAPool, error) {
 		}
 
 		c, err := unmarshalCertificateBlock(block)
-		if errors.Is(err, ErrUnknownVersion) {
+		if errors.Is(err, ErrUnknownVersion) || errors.Is(err, ErrPQUnavailable) {
 			skipped = append(skipped, fmt.Errorf("certificate %d: %w", i, err))
 			continue
 		} else if err != nil {
@@ -212,11 +214,34 @@ func (ncp *CAPool) VerifyCertificate(now time.Time, c Certificate) (*CachedCerti
 		return nil, ErrBlockListed
 	}
 
+	// Blocking the v2 form of a version 3 certificate blocks the certificate too.
+	var v2Fps []string
+	if v2 := V2Form(c); v2 != nil {
+		v2Fp, err := v2.Fingerprint()
+		if err != nil {
+			return nil, fmt.Errorf("could not calculate v2 fingerprint to verify: %w", err)
+		}
+		v2Fp2, err := CalculateAlternateFingerprint(v2)
+		if err != nil {
+			return nil, fmt.Errorf("could not calculate alternate v2 fingerprint to verify: %w", err)
+		}
+		v2Fps = append(v2Fps, v2Fp)
+		if v2Fp2 != "" {
+			v2Fps = append(v2Fps, v2Fp2)
+		}
+		for _, f := range v2Fps {
+			if ncp.IsBlocklisted(f) {
+				return nil, ErrBlockListed
+			}
+		}
+	}
+
 	cc := CachedCertificate{
 		Certificate:       c,
 		InvertedGroups:    make(map[string]struct{}),
 		Fingerprint:       fp,
 		fingerprint2:      fp2,
+		v2Fingerprints:    v2Fps,
 		signerFingerprint: signer.Fingerprint,
 	}
 
@@ -233,6 +258,11 @@ func (ncp *CAPool) VerifyCachedCertificate(now time.Time, c *CachedCertificate) 
 	// Check any available alternate fingerprint forms for this certificate, re P256 high-s/low-s
 	if c.fingerprint2 != "" && ncp.IsBlocklisted(c.fingerprint2) {
 		return ErrBlockListed
+	}
+	for _, f := range c.v2Fingerprints {
+		if ncp.IsBlocklisted(f) {
+			return ErrBlockListed
+		}
 	}
 
 	_, err := ncp.verify(c.Certificate, now, c.Fingerprint, c.signerFingerprint)
@@ -253,6 +283,10 @@ func (ncp *CAPool) verify(c Certificate, now time.Time, certFp string, signerFp 
 		return nil, ErrCurveMismatch
 	}
 
+	if PQSuiteOf(signer.Certificate) != PQSuiteOf(c) {
+		return nil, ErrPQSuiteMismatch
+	}
+
 	if signer.Certificate.Expired(now) {
 		return nil, ErrRootExpired
 	}
@@ -271,6 +305,21 @@ func (ncp *CAPool) verify(c Certificate, now time.Time, certFp string, signerFp 
 	}
 	if !c.CheckSignature(signer.Certificate.PublicKey()) {
 		return nil, ErrSignatureMismatch
+	}
+
+	// The v2 form of a version 3 certificate must be one the v2 form of its CA issued, so both forms name the same CA.
+	if v2 := V2Form(c); v2 != nil {
+		signerV2 := V2Form(signer.Certificate)
+		if signerV2 == nil {
+			return nil, ErrNoV2FormCA
+		}
+		want, err := signerV2.Fingerprint()
+		if err != nil {
+			return nil, err
+		}
+		if v2.Issuer() != want {
+			return nil, ErrFingerprintMismatch
+		}
 	}
 
 	err = CheckCAConstraints(signer.Certificate, c)

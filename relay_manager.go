@@ -120,7 +120,7 @@ func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hh *Handshak
 					InitiatorRelayIndex: idx,
 				}
 
-				switch relayHostInfo.GetCert().Certificate.Version() {
+				switch protocolVersion(relayHostInfo.GetCert().Certificate.Version()) {
 				case cert.Version1:
 					if !f.myVpnAddrs[0].Is4() {
 						hl.Error("can not establish v1 relay with a v6 network because the relay is not running a current nebula version")
@@ -179,7 +179,7 @@ func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hh *Handshak
 				InitiatorRelayIndex: existingRelay.LocalIndex,
 			}
 
-			switch relayHostInfo.GetCert().Certificate.Version() {
+			switch protocolVersion(relayHostInfo.GetCert().Certificate.Version()) {
 			case cert.Version1:
 				if !f.myVpnAddrs[0].Is4() {
 					hl.Error("can not establish v1 relay with a v6 network because the relay is not running a current nebula version")
@@ -365,6 +365,8 @@ func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f
 	}
 	// Do I need to complete the relays now?
 	if relay.Type == TerminalType {
+		// The relay I asked for is up; a handshake waiting on it can go now.
+		f.handshakeManager.relayEstablished(relay.PeerAddr, h, relay)
 		return
 	}
 	// I'm the middle man. Let the initiator know that the I've established the relay they requested.

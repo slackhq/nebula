@@ -53,6 +53,7 @@ type HandshakeConfig struct {
 	retries       int64
 	triggerBuffer int
 	fragment      fragmentConfig
+	pq            pqHandshakeConfig
 
 	messageMetrics *MessageMetrics
 }
@@ -87,6 +88,13 @@ type HandshakeManager struct {
 	// their address under load or before a big answer.
 	fragTable *fragment.Table[fragKey, fragSource]
 	cookies   *fragCookies
+
+	// pq holds the post-quantum settings, which change on reload.
+	pq atomic.Pointer[pqHandshakeConfig]
+	// pqPeers holds vpn addresses that completed a post-quantum handshake, for sticky mode.
+	pqPeers sync.Map
+	// hybrid holds hybrid handshakes waiting on their third message.
+	hybrid hybridState
 }
 
 type HandshakeHostInfo struct {
@@ -103,9 +111,15 @@ type HandshakeHostInfo struct {
 	hostinfo *HostInfo
 	machine  *handshake.Machine // The handshake state machine, set during stage 0 (initiator) or beginHandshake (responder multi-message)
 
-	sender         *fragment.Sender        // msg1 as fragments, when it travels so
-	msg2           [fragMsg2Slots]msg2Slot // msg2 fragments being reassembled, per responder; an array, one slot is used nearly always
-	cookieResendAt time.Time               // last resend prompted by a cookie reply
+	sender         *fragment.Sender // msg1 as fragments, when it travels so
+	msg2           msg2Slots        // msg2 fragments being reassembled, per responder
+	cookieResendAt time.Time        // last resend prompted by a cookie reply
+
+	pq     *pqAttempt // The initiator's post-quantum attempt, pending alongside the classical one
+	lastPQ bool       // Whether the latest attempt was post-quantum
+	noPQ   bool       // The post-quantum attempt failed for good, only classical is left
+
+	responder *hybridResponder // Set for a responder's hybrid handshake waiting for msg3
 }
 
 func (hh *HandshakeHostInfo) cachePacket(l *slog.Logger, t header.MessageType, st header.MessageSubType, packet []byte, f packetCallback, m *cachedPacketMetrics) {
@@ -131,6 +145,15 @@ func (hh *HandshakeHostInfo) cachePacket(l *slog.Logger, t header.MessageType, s
 			)
 		}
 	}
+}
+
+// v2FingerprintAttr logs the fingerprint of a version 3 certificate's v2 form, the one to blocklist to block both
+// forms. It is empty, and so not logged, for any other version.
+func v2FingerprintAttr(cc *cert.CachedCertificate) slog.Attr {
+	if fp := cc.V2Fingerprint(); fp != "" {
+		return slog.String("v2Fingerprint", fp)
+	}
+	return slog.Attr{}
 }
 
 // ecmpGateways remembers whether each gateway of a multi-gateway route is up. A gateway is down once a handshake with
@@ -229,7 +252,10 @@ func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *Light
 		metricRejectedBlocklisted: metrics.GetOrRegisterCounter("handshake_manager.rejected.blocklisted", nil),
 		ecmpGateways:              newECMPGateways(),
 		l:                         l,
+		hybrid:                    newHybridState(),
 	}
+	pq := config.pq
+	hm.pq.Store(&pq)
 	frag := config.fragment
 	hm.frag.Store(&frag)
 	// A completed msg1 drops the repair fragments trailing its attempt, which arrive within the repair delay, and is
@@ -255,6 +281,8 @@ func (hm *HandshakeManager) Run(ctx context.Context) {
 			hm.NextOutboundHandshakeTimerTick(now)
 			hm.fragTable.Expire(now)
 			hm.cookies.tick(now)
+			hm.expireHybridResponders(now)
+			hm.tickHybridConfirms(now)
 		}
 	}
 }
@@ -263,9 +291,14 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 	// Gate on known handshake subtypes. Unknown subtypes (or future ones we
 	// don't yet support) are dropped here rather than silently routed through
 	// the IX path. Add a case when introducing a new pattern.
+	pattern := handshakePattern(h.Subtype)
 	switch h.Subtype {
-	case header.HandshakeIXPSK0, header.HandshakeIXPSK0Fragmented:
+	case header.HandshakeIXPSK0, header.HandshakeIXPSK0Fragmented, header.HandshakeIXHybridMLKEM1024Fragmented:
 		// supported
+	case header.HandshakeIXHybridMLKEM1024:
+		// a hybrid handshake only travels as fragments
+		hm.l.Debug("dropping unfragmented hybrid handshake", "from", via)
+		return
 	default:
 		hm.l.Debug("dropping handshake with unsupported subtype",
 			"from", via, "subtype", h.Subtype)
@@ -280,8 +313,14 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 		}
 	}
 
+	if pattern == header.HandshakeIXPSK0 && h.MessageCounter == 1 && hm.pqRequired() {
+		hm.l.Debug("dropping classical handshake, post-quantum handshakes are required", "from", via)
+		return
+	}
+
 	if _, fragmented := header.FragmentedPattern(h.Subtype); fragmented {
-		if hm.fragConfig().mode == fragmentNever {
+		// A hybrid handshake travels as fragments whatever handshakes.fragment says, it has no other way to go.
+		if hm.fragConfig().mode == fragmentNever && pattern != header.HandshakeIXHybridMLKEM1024 {
 			hm.l.Debug("dropping fragmented handshake, handshakes.fragment is never", "from", via)
 			return
 		}
@@ -349,6 +388,9 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 				"style": header.SubTypeName(header.Handshake, hh.machine.Subtype()),
 			})
 		}
+		if hh.pq != nil {
+			fields = append(fields, "pqInitiatorIndex", hh.pq.index)
+		}
 		hh.hostinfo.logger(hm.l).Info("Handshake timed out", fields...)
 		hm.metricTimedOut.Inc(1)
 		hm.ecmpGateways.markDown(vpnIp)
@@ -359,21 +401,6 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 	// Increment the counter to increase our delay, linear backoff
 	hh.counter++
 
-	// Check if we have a handshake packet to transmit yet
-	if !hh.ready {
-		if !hm.buildStage0Packet(hh) {
-			hm.OutboundHandshakeTimer.Add(vpnIp, hm.config.tryInterval*time.Duration(hh.counter))
-			return
-		}
-	}
-
-	// TODO: this hardcodes "always retransmit stage 0", which is correct for
-	// IX (the initiator only ever sends one packet, msg1) but wrong the
-	// moment a 3+ message pattern lands. The retry loop should resend the
-	// most recent outgoing message, not always stage 0. That implies
-	// HandshakeHostInfo tracking a single "currentOutbound" packet (bytes +
-	// header metadata) that gets replaced as the handshake progresses,
-	// instead of indexing into HandshakePacket.
 	remotes := hostinfo.remotes.CopyAddrs(hm.mainHostMap.GetPreferredRanges())
 	remotesHaveChanged := !slices.Equal(remotes, hh.lastRemotes)
 
@@ -384,20 +411,58 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		return
 	}
 
-	// msg1 as fragments offers fresh symbols every attempt: now goes out at once, later after the repair delay.
-	now, later, err := hh.stage0Packets()
-	if err != nil {
-		hostinfo.logger(hm.l).Error("Failed to fragment handshake", "error", err)
-		hm.OutboundHandshakeTimer.Add(vpnIp, hm.config.tryInterval*time.Duration(hh.counter))
-		return
-	}
-	subtype := hh.machine.Subtype()
-	if hh.sender != nil {
-		// A sender only exists for a subtype with a fragmented form.
-		subtype, _ = header.FragmentedSubtype(subtype)
+	// Pick this attempt's style and make sure its first message exists. msg1 as fragments offers fresh symbols every
+	// attempt: now goes out at once, later after the repair delay. A post-quantum attempt always travels so.
+	var now, later [][]byte
+	var machine *handshake.Machine
+	var subtype header.MessageSubType
+	hh.lastPQ = hm.usePQ(hh, vpnIp, lighthouseTriggered)
+	if hh.lastPQ {
+		if hh.pq == nil && !hm.buildPQAttempt(hh) {
+			hm.OutboundHandshakeTimer.Add(vpnIp, hm.config.tryInterval*time.Duration(hh.counter))
+			return
+		}
+		var err error
+		now, later, err = hh.pq.packets()
+		if err != nil {
+			hostinfo.logger(hm.l).Error("Failed to fragment handshake", "error", err)
+			hm.OutboundHandshakeTimer.Add(vpnIp, hm.config.tryInterval*time.Duration(hh.counter))
+			return
+		}
+		machine = hh.pq.machine
+		// A hybrid handshake only travels as fragments.
+		subtype, _ = header.FragmentedSubtype(machine.Subtype())
+	} else {
+		if !hh.ready {
+			if !hm.buildStage0Packet(hh) {
+				hm.OutboundHandshakeTimer.Add(vpnIp, hm.config.tryInterval*time.Duration(hh.counter))
+				return
+			}
+		}
+
+		// TODO: this hardcodes "always retransmit stage 0", which is correct for
+		// IX (the initiator only ever sends one packet, msg1) but wrong the
+		// moment a 3+ message pattern lands. The retry loop should resend the
+		// most recent outgoing message, not always stage 0. That implies
+		// HandshakeHostInfo tracking a single "currentOutbound" packet (bytes +
+		// header metadata) that gets replaced as the handshake progresses,
+		// instead of indexing into HandshakePacket.
+		var err error
+		now, later, err = hh.stage0Packets()
+		if err != nil {
+			hostinfo.logger(hm.l).Error("Failed to fragment handshake", "error", err)
+			hm.OutboundHandshakeTimer.Add(vpnIp, hm.config.tryInterval*time.Duration(hh.counter))
+			return
+		}
+		machine = hh.machine
+		subtype = machine.Subtype()
+		if hh.sender != nil {
+			// A sender only exists for a subtype with a fragmented form.
+			subtype, _ = header.FragmentedSubtype(subtype)
+		}
 	}
 	hsFields := m{
-		"stage": uint64(hh.machine.MessageIndex()),
+		"stage": uint64(machine.MessageIndex()),
 		"style": header.SubTypeName(header.Handshake, subtype),
 	}
 
@@ -559,6 +624,13 @@ var (
 // ErrLocalIndexCollision if we already have an entry in the main or pending
 // hostmap for the hostinfo.localIndexId.
 func (hm *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket uint8, f *Interface) (*HostInfo, error) {
+	return hm.checkAndComplete(hostinfo, handshakePacket, f, false)
+}
+
+// checkAndComplete is CheckAndComplete. committed means the initiator has shown it
+// uses this tunnel, as a hybrid msg3 does, so an existing tunnel is replaced even
+// when its handshake is newer.
+func (hm *HandshakeManager) checkAndComplete(hostinfo *HostInfo, handshakePacket uint8, f *Interface, committed bool) (*HostInfo, error) {
 	hm.mainHostMap.Lock()
 	defer hm.mainHostMap.Unlock()
 	hm.Lock()
@@ -575,7 +647,7 @@ func (hm *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket
 		}
 
 		// Is this a newer handshake?
-		if existingHostInfo.lastHandshakeTime >= hostinfo.lastHandshakeTime && !existingHostInfo.ConnectionState.initiator {
+		if !committed && existingHostInfo.lastHandshakeTime >= hostinfo.lastHandshakeTime && !existingHostInfo.ConnectionState.initiator {
 			return existingHostInfo, ErrExistingHostInfo
 		}
 
@@ -669,6 +741,10 @@ func (hm *HandshakeManager) DeleteHostInfo(hostinfo *HostInfo) {
 func (hm *HandshakeManager) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 	for _, addr := range hostinfo.vpnAddrs {
 		if cur, ok := hm.vpnIps[addr]; ok && cur.hostinfo == hostinfo {
+			// A PQ attempt holds its own index alongside the hostinfo's.
+			if idx := cur.pqIndex(); idx != 0 && hm.indexes[idx] == cur {
+				delete(hm.indexes, idx)
+			}
 			delete(hm.vpnIps, addr)
 		}
 	}
@@ -779,9 +855,8 @@ func hsTimeout(tries int64, interval time.Duration) time.Duration {
 	return time.Duration(tries / 2 * ((2 * int64(interval)) + (tries-1)*int64(interval)))
 }
 
-// buildStage0Packet creates the initial handshake packet for the initiator.
-func (hm *HandshakeManager) buildStage0Packet(hh *HandshakeHostInfo) bool {
-	cs := hm.f.pki.getCertState()
+// initiatingVersion picks the certificate version to initiate a handshake with.
+func (hm *HandshakeManager) initiatingVersion(hh *HandshakeHostInfo, cs *CertState) cert.Version {
 	v := cs.DefaultVersion()
 	if hh.initiatingVersionOverride != cert.VersionPre1 {
 		v = hh.initiatingVersionOverride
@@ -793,6 +868,13 @@ func (hm *HandshakeManager) buildStage0Packet(hh *HandshakeHostInfo) bool {
 			}
 		}
 	}
+	return v
+}
+
+// buildStage0Packet creates the initial handshake packet for the initiator.
+func (hm *HandshakeManager) buildStage0Packet(hh *HandshakeHostInfo) bool {
+	cs := hm.f.pki.getCertState()
+	v := hm.initiatingVersion(hh, cs)
 
 	cred := cs.GetCredential(v)
 	if cred == nil {
@@ -842,6 +924,38 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 	cs := f.pki.getCertState()
 
 	v := cs.DefaultVersion()
+	// A reassembled msg1 arrives with the header of its fragments, so h may name the fragmented subtype.
+	pattern := handshakePattern(h.Subtype)
+	allocIndex := func() (uint32, error) { return generateIndex(f.l) }
+
+	// A hybrid responder answers with its v3 certificate and has to wait for msg3,
+	// so its index is registered right away for msg3 to find.
+	var pending *HandshakeHostInfo
+	if handshake.IsHybrid(pattern) {
+		// A retry of a msg1 a pending responder already answered gets that msg2 again, not a second handshake.
+		if hm.resendPendingHybrid(via, packet, in) {
+			return
+		}
+		v = cert.Version3
+		pending = &HandshakeHostInfo{
+			hostinfo: &HostInfo{
+				HandshakePacket: make(map[uint8][]byte, 0),
+				relayState: RelayState{
+					relays:         nil,
+					relayForByAddr: map[netip.Addr]*Relay{},
+					relayForByIdx:  map[uint32]*Relay{},
+				},
+			},
+			startTime: time.Now(),
+			responder: &hybridResponder{},
+		}
+		// The index is visible to msg3 as soon as it is allocated, so hold the
+		// entry until it is filled in.
+		pending.Lock()
+		defer pending.Unlock()
+		allocIndex = func() (uint32, error) { return hm.allocateIndex(pending) }
+	}
+
 	if cs.GetCredential(v) == nil {
 		f.l.Error("Unable to handshake with host because no certificate is available",
 			"from", via, "certVersion", v)
@@ -850,8 +964,8 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 
 	machine, err := handshake.NewMachine(
 		v, cs.GetCredential,
-		hm.certVerifier(), func() (uint32, error) { return generateIndex(f.l) },
-		false, header.HandshakeIXPSK0,
+		hm.certVerifier(), allocIndex,
+		false, pattern,
 	)
 	if err != nil {
 		f.l.Error("Failed to create handshake machine", "from", via, "error", err)
@@ -860,12 +974,20 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 
 	response, result, err := machine.ProcessPacket(nil, packet)
 	if err != nil {
+		if pending != nil {
+			hm.DeleteHostInfo(pending.hostinfo)
+		}
 		level := slog.LevelError
 		if errors.Is(err, cert.ErrBlockListed) {
 			level = slog.LevelDebug
 			hm.metricRejectedBlocklisted.Inc(1)
 		}
 		f.l.Log(context.Background(), level, "Failed to process handshake packet", "from", via, "error", err)
+		return
+	}
+
+	if result == nil && pending != nil {
+		hm.awaitMsg3(via, pending, machine, packet, response, in)
 		return
 	}
 
@@ -890,6 +1012,13 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 	// Validate peer identity
 	vpnAddrs, anyVpnAddrsInCommon, ok := hm.validatePeerCert(via, remoteCert)
 	if !ok {
+		return
+	}
+
+	// A classical attempt crossing the peer's hybrid one goes unanswered.
+	if !handshake.IsHybrid(machine.Subtype()) && hm.crossesHybrid(vpnAddrs, time.Now()) {
+		f.l.Debug("Ignoring classical handshake that crossed a hybrid one",
+			"vpnAddrs", vpnAddrs, "from", via, "window", hm.hybridWindow())
 		return
 	}
 
@@ -923,6 +1052,7 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		"certName", remoteCert.Certificate.Name(),
 		"certVersion", remoteCert.Certificate.Version(),
 		"fingerprint", remoteCert.Fingerprint,
+		v2FingerprintAttr(remoteCert),
 		"issuer", remoteCert.Certificate.Issuer(),
 		"initiatorIndex", result.RemoteIndex,
 		"responderIndex", result.LocalIndex,
@@ -946,7 +1076,7 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 
 	existing, err := hm.CheckAndComplete(hostinfo, handshakePacketStage0, f)
 	if err != nil {
-		hm.handleCheckAndCompleteError(err, existing, hostinfo, via, in)
+		hm.handleCheckAndCompleteError(err, existing, hostinfo, via, machine.Subtype(), in)
 		return
 	}
 
@@ -961,23 +1091,32 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 
 // continueHandshake feeds an incoming packet to an existing pending handshake Machine.
 func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostInfo, packet []byte) {
-	f := hm.f
-
 	hh.Lock()
 	defer hh.Unlock()
 
-	// Re-verify hh is still tracked. Between queryIndex returning and us taking
-	// hh.Lock, handleOutbound may have timed out and deleted it. Once we hold
-	// hh.Lock no other deleter can race our index: handleOutbound also takes
-	// hh.Lock first, and handleRecvError targets a main-hostmap entry with a
-	// different localIndexId.
-	hm.RLock()
-	cur, ok := hm.indexes[hh.hostinfo.localIndexId]
-	hm.RUnlock()
-	if !ok || cur != hh {
+	if !hm.stillPending(hh, hh.hostinfo.localIndexId) {
 		return
 	}
+	hm.processResponse(via, hh, hh.machine, packet)
+}
 
+// stillPending re-verifies hh is still tracked under index. Between queryIndex
+// returning and the caller taking hh.Lock, handleOutbound may have timed out and
+// deleted it. Once hh.Lock is held no other deleter can race the index:
+// handleOutbound also takes hh.Lock first, and handleRecvError targets a
+// main-hostmap entry with a different localIndexId. The caller must hold hh.Lock.
+func (hm *HandshakeManager) stillPending(hh *HandshakeHostInfo, index uint32) bool {
+	hm.RLock()
+	defer hm.RUnlock()
+	cur, ok := hm.indexes[index]
+	return ok && cur == hh
+}
+
+// processResponse runs a responder's message through one of the initiator's
+// pending attempts and completes the tunnel when the handshake finishes. The
+// caller must hold hh.Lock.
+func (hm *HandshakeManager) processResponse(via ViaSender, hh *HandshakeHostInfo, machine *handshake.Machine, packet []byte) {
+	f := hm.f
 	hostinfo := hh.hostinfo
 	if !via.IsRelayed {
 		if !f.lightHouse.GetRemoteAllowList().AllowAll(hostinfo.vpnAddrs, via.UdpAddr.Addr()) {
@@ -987,7 +1126,6 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		}
 	}
 
-	machine := hh.machine
 	if machine == nil {
 		f.l.Error("No handshake machine available for continuation",
 			"vpnAddrs", hostinfo.vpnAddrs, "from", via)
@@ -1001,22 +1139,28 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 			hm.metricRejectedBlocklisted.Inc(1)
 		}
 		// Recoverable errors are routine noise, log at Debug. Fatal errors get a Warn.
-		if machine.Failed() {
+		if !machine.Failed() {
+			f.l.Debug("Failed to process handshake packet",
+				"vpnAddrs", hostinfo.vpnAddrs, "from", via, "error", err)
+		} else if hh.pq != nil && machine == hh.pq.machine && !hm.pqRequired() {
+			// A post-quantum attempt can fail where the classical one would not, a v3
+			// certificate from a CA only trusted in its v2 form for one. Keep going
+			// with classical alone.
+			f.l.Warn("Failed to process post-quantum handshake packet, continuing with classical",
+				"vpnAddrs", hostinfo.vpnAddrs, "from", via, "error", err)
+			hm.abandonPQ(hh)
+		} else {
 			f.l.Warn("Failed to process handshake packet, abandoning",
 				"vpnAddrs", hostinfo.vpnAddrs, "from", via, "error", err)
 			hm.DeleteHostInfo(hostinfo)
-		} else {
-			f.l.Debug("Failed to process handshake packet",
-				"vpnAddrs", hostinfo.vpnAddrs, "from", via, "error", err)
 		}
 		return
 	}
 
-	if response != nil {
-		hm.sendHandshakeResponse(via, response, hostinfo, false, msg1Info{validated: true})
-	}
-
 	if result == nil {
+		if response != nil {
+			hm.sendHandshakeResponse(via, response, hostinfo, false, msg1Info{validated: true})
+		}
 		return
 	}
 
@@ -1064,6 +1208,7 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 				"certName", remoteCert.Certificate.Name(),
 				"certVersion", remoteCert.Certificate.Version(),
 				"fingerprint", remoteCert.Fingerprint,
+				v2FingerprintAttr(remoteCert),
 				"issuer", remoteCert.Certificate.Issuer(),
 				"handshake", m{"stage": uint64(machine.MessageIndex()), "style": header.SubTypeName(header.Handshake, machine.Subtype())},
 			)
@@ -1087,6 +1232,7 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 			"certName", remoteCert.Certificate.Name(),
 			"certVersion", remoteCert.Certificate.Version(),
 			"fingerprint", remoteCert.Fingerprint,
+			v2FingerprintAttr(remoteCert),
 			"issuer", remoteCert.Certificate.Issuer(),
 			"handshake", m{"stage": uint64(machine.MessageIndex()), "style": header.SubTypeName(header.Handshake, machine.Subtype())},
 		)
@@ -1115,6 +1261,7 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		"certName", remoteCert.Certificate.Name(),
 		"certVersion", remoteCert.Certificate.Version(),
 		"fingerprint", remoteCert.Fingerprint,
+		v2FingerprintAttr(remoteCert),
 		"issuer", remoteCert.Certificate.Issuer(),
 		"initiatorIndex", result.LocalIndex,
 		"responderIndex", result.RemoteIndex,
@@ -1126,7 +1273,16 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	hostinfo.vpnAddrs = vpnAddrs
 	hostinfo.buildNetworks(f.myVpnNetworksTable, remoteCert.Certificate)
 
+	// The classical and PQ attempts each hold an index; keep the one that won.
+	hm.settleIndex(hh, result.LocalIndex)
 	hm.Complete(hostinfo, f)
+	hm.notePQPeer(machine.Subtype(), vpnAddrs)
+
+	// A three message pattern finishes with our msg3, which goes out before any
+	// cached packets do and keeps going until the responder is heard from.
+	if response != nil {
+		hm.startHybridConfirm(via, hostinfo, response, result.MessageIndex)
+	}
 
 	if len(hh.packetStore) > 0 {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
@@ -1180,6 +1336,7 @@ func (hm *HandshakeManager) validatePeerCert(via ViaSender, remoteCert *cert.Cac
 				"certName", remoteCert.Certificate.Name(),
 				"certVersion", remoteCert.Certificate.Version(),
 				"fingerprint", remoteCert.Fingerprint,
+				v2FingerprintAttr(remoteCert),
 				"issuer", remoteCert.Certificate.Issuer(),
 			)
 			return nil, false, false
@@ -1226,11 +1383,14 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 		"initiatorIndex", hostinfo.remoteIndexId,
 		"responderIndex", hostinfo.localIndexId,
 	}
-	if peerCert := hostinfo.ConnectionState.peerCert; peerCert != nil {
+	if hostinfo.ConnectionState == nil {
+		// A hybrid responder answers msg1 before it has keys.
+	} else if peerCert := hostinfo.ConnectionState.peerCert; peerCert != nil {
 		logFields = append(logFields,
 			"certName", peerCert.Certificate.Name(),
 			"certVersion", peerCert.Certificate.Version(),
 			"fingerprint", peerCert.Fingerprint,
+			v2FingerprintAttr(peerCert),
 			"issuer", peerCert.Certificate.Issuer(),
 		)
 	}
@@ -1247,7 +1407,8 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 	}
 
 	now, later := [][]byte{msg}, [][]byte(nil)
-	if hm.shouldFragment(len(msg), in.fragmented) {
+	// A hybrid response travels as fragments whatever handshakes.fragment says, it has no other way to go.
+	if handshake.IsHybrid(subtype) || hm.shouldFragment(len(msg), in.fragmented) {
 		now, later, err = fragmentResponse(msg, hostinfo, in.budget())
 		// Fragments, or a budget to fit them in, are only reached for a subtype with a fragmented form.
 		fragmented, _ := header.FragmentedSubtype(subtype)
@@ -1285,10 +1446,10 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 // This only fires from the responder-side beginHandshake path, after the
 // peer cert has been validated and ConnectionState populated, so peerCert
 // is always non-nil for the cases that log it.
-func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hostinfo *HostInfo, via ViaSender, in msg1Info) {
+func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hostinfo *HostInfo, via ViaSender, subtype header.MessageSubType, in msg1Info) {
 	f := hm.f
 	peerCert := hostinfo.ConnectionState.peerCert
-	hsFields := m{"stage": uint64(1), "style": header.SubTypeName(header.Handshake, header.HandshakeIXPSK0)}
+	hsFields := m{"stage": uint64(1), "style": header.SubTypeName(header.Handshake, subtype)}
 
 	switch err {
 	case ErrAlreadySeen:
@@ -1309,6 +1470,7 @@ func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hos
 			"certName", peerCert.Certificate.Name(),
 			"certVersion", peerCert.Certificate.Version(),
 			"fingerprint", peerCert.Fingerprint,
+			v2FingerprintAttr(peerCert),
 			"issuer", peerCert.Certificate.Issuer(),
 			"oldHandshakeTime", existing.lastHandshakeTime,
 			"newHandshakeTime", hostinfo.lastHandshakeTime,
@@ -1325,6 +1487,7 @@ func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hos
 			"certName", peerCert.Certificate.Name(),
 			"certVersion", peerCert.Certificate.Version(),
 			"fingerprint", peerCert.Fingerprint,
+			v2FingerprintAttr(peerCert),
 			"issuer", peerCert.Certificate.Issuer(),
 			"localIndex", hostinfo.localIndexId,
 			"initiatorIndex", hostinfo.remoteIndexId,
@@ -1340,6 +1503,7 @@ func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hos
 			"certName", peerCert.Certificate.Name(),
 			"certVersion", peerCert.Certificate.Version(),
 			"fingerprint", peerCert.Fingerprint,
+			v2FingerprintAttr(peerCert),
 			"issuer", peerCert.Certificate.Issuer(),
 			"initiatorIndex", hostinfo.remoteIndexId,
 			"responderIndex", hostinfo.localIndexId,

@@ -17,7 +17,6 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/util"
 
-	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
@@ -542,10 +541,7 @@ func (f *Interface) reloadDisconnectInvalid(c *config.C) {
 
 func (f *Interface) reloadFirewall(c *config.C, r *config.Reload) {
 	cs := f.pki.getCertState()
-	curCert := cs.getCertificate(cert.Version2)
-	if curCert == nil {
-		curCert = cs.getCertificate(cert.Version1)
-	}
+	curCert := cs.ownCertificate()
 
 	// Compare with what the running firewall was built from, not the last config, so a firewall that failed to build
 	// is tried again. The cert is the one this reload brought, PKI registers its reload callback before this one
@@ -677,9 +673,12 @@ func (f *Interface) statsEmitter() func() {
 		certInitiatingVersion.Update(int64(defaultCrt.Version()))
 
 		// Report the max certificate version we are capable of using
-		if certState.v2Cert != nil {
+		switch {
+		case certState.v3Cert != nil:
+			certMaxVersion.Update(int64(certState.v3Cert.Version()))
+		case certState.v2Cert != nil:
 			certMaxVersion.Update(int64(certState.v2Cert.Version()))
-		} else {
+		default:
 			certMaxVersion.Update(int64(certState.v1Cert.Version()))
 		}
 	}

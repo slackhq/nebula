@@ -1,0 +1,61 @@
+NebulaV3 DEFINITIONS AUTOMATIC TAGS ::= BEGIN
+
+IMPORTS Curve, Details FROM Nebula;
+
+PQSuite ::= ENUMERATED {
+    -- 0 is never valid
+    mlkem1024-mldsa87 (1) -- hosts carry ML-KEM-1024 keys, CAs carry ML-DSA-87 keys and sign with ML-DSA-87
+}
+
+-- The constants of the composite signature, see CertificateV3. Every byte of M' is ASCII but for len(ctx) and the hash.
+compositeSignaturePrefix VisibleString ::= "CompositeAlgorithmSignatures2025"
+signatureContext VisibleString ::= "nebula certificate v3"
+
+-- One Label per pair of algorithms, the suite's signature algorithm and the curve's. Both are nebula's own:
+-- draft-ietf-lamps-pq-composite-sigs registers no pair of ML-DSA-87 with Ed25519 or ECDSA P256.
+labelMLDSA87-Ed25519 VisibleString ::= "NEBULA-CERTV3-MLDSA87-Ed25519-SHA512" -- mlkem1024-mldsa87, curve25519
+labelMLDSA87-ECDSA-P256 VisibleString ::= "NEBULA-CERTV3-MLDSA87-ECDSA-P256-SHA512" -- mlkem1024-mldsa87, p256
+
+-- A version 3 certificate is a version 2 certificate's components extended with post-quantum keys. With signature
+-- present, its first components are exactly a version 2 Certificate, its v2 form, which a v3 holder presents to peers
+-- that only speak v2, and whose issuer, in details, names the CA's v2 form. Without signature there is no v2 form and
+-- details name no issuer: the certificate is for v3 peers only. A host certificate has a v2 form only if its CA has
+-- one. Whether it has one is fixed by the CA: both signatures of the whole certificate cover signature and details.
+--
+-- The maximum size of a certificate must not exceed 65536 bytes
+CertificateV3 ::= SEQUENCE {
+    -- details.issuer is the sha256 of the CA's v2 form; present if and only if the certificate is a host certificate
+    -- with a v2 form
+    details [0] Details,
+    curve [1] Curve DEFAULT curve25519,
+    -- the classical public key
+    publicKey [2] OCTET STRING,
+    -- signature(details + curve + publicKey) using the appropriate method for curve, by the CA's v2 form, as in v2.
+    -- Present if and only if the certificate has a v2 form, for v2 interop only.
+    signature [3] OCTET STRING OPTIONAL,
+
+    -- always present, the issuing CA has the same suite
+    pqSuite [4] PQSuite,
+
+    -- sha256 of the issuing version 3 CA certificate, required if isCA is false, if isCA is true then it must not be present
+    issuer [5] OCTET STRING (SIZE (32)) OPTIONAL,
+
+    -- the suite's KEM public key for hosts, its signature public key for CAs
+    pqPublicKey [6] OCTET STRING,
+
+    -- The issuing CA signs the whole certificate with both of its keys, as a composite signature following
+    -- draft-ietf-lamps-pq-composite-sigs. Both signatures sign the same message
+    --   M' = compositeSignaturePrefix || Label || len(ctx) || ctx || SHA-512(M)
+    -- where Label is the label of the certificate's suite and curve (labelMLDSA87-Ed25519 or labelMLDSA87-ECDSA-P256),
+    -- ctx is signatureContext, len(ctx) is its length as one byte
+    -- M is the encoding of every component above (including signature when present) with curve always present.
+    -- There is no extension point: anything new is a new suite or version, which parsers refuse rather than skip.
+
+    -- the classical signature of M' using the appropriate method for curve, low-s for p256
+    classicalSignature [7] OCTET STRING,
+
+    -- the suite's signature of M', with Label as its ML-DSA context
+    pqSignature [8] OCTET STRING
+}
+
+END

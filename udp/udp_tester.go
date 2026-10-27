@@ -85,8 +85,11 @@ type TesterConn struct {
 
 func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 	c := &TesterConn{
-		RxPackets: make(chan *Packet, 10),
-		TxPackets: make(chan *Packet, 10),
+		// A fragmented handshake message is a burst of a dozen packets. The
+		// router moves packets one at a time, so if both directions held fewer
+		// than a burst each, two bursts crossing would deadlock it.
+		RxPackets: make(chan *Packet, 64),
+		TxPackets: make(chan *Packet, 64),
 		done:      make(chan struct{}),
 		l:         l,
 	}

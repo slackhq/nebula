@@ -14,12 +14,14 @@ const (
 	VersionPre1 Version = 0
 	Version1    Version = 1
 	Version2    Version = 2
+	Version3    Version = 3
 )
 
 type Certificate interface {
 	// Version defines the underlying certificate structure and wire protocol version
 	// Version1 certificates are ipv4 only and uses protobuf serialization
 	// Version2 certificates are ipv4 or ipv6 and uses asn.1 serialization
+	// Version3 certificates extend a Version2 certificate with post-quantum keys and signatures
 	Version() Version
 
 	// Name is the human-readable name that identifies this certificate.
@@ -66,9 +68,9 @@ type Certificate interface {
 	// Curve identifies which curve was used for the PublicKey and Signature.
 	Curve() Curve
 
-	// Signature is the cryptographic seal for all the details of this certificate.
-	// CheckSignature can be used to verify that the details of this certificate are valid.
-	Signature() []byte
+	// Signature is the cryptographic seal for all the details of this certificate, every signature the issuing CA
+	// made over it. CheckSignature can be used to verify that the details of this certificate are valid.
+	Signature() Signatures
 
 	// CheckSignature will check that the certificate Signature() matches the
 	// computed signature. A true result means this certificate has not been tampered with.
@@ -105,6 +107,17 @@ type Certificate interface {
 	Copy() Certificate
 }
 
+// Signatures are the signatures the issuing CA made over a certificate.
+type Signatures struct {
+	// Classical is the signature made with the curve of the certificate. Every certificate has one. For a version 3
+	// certificate it is the signature of its v2 form, and covers only the fields of that.
+	Classical []byte
+
+	// PQ is the post-quantum signature of a version 3 certificate, made with the signature algorithm of its PQSuite
+	// over every other field, the classical signature included. It is nil for every other version.
+	PQ []byte
+}
+
 // CachedCertificate represents a verified certificate with some cached fields to improve
 // performance.
 type CachedCertificate struct {
@@ -115,6 +128,18 @@ type CachedCertificate struct {
 
 	// A place to store a 2nd fingerprint if the certificate could have one, such as with P256
 	fingerprint2 string
+
+	// The fingerprints of a version 3 certificate's v2 form, which the blocklist also applies to
+	v2Fingerprints []string
+}
+
+// V2Fingerprint returns the fingerprint of a version 3 certificate's v2 form, the one to blocklist to block both
+// forms, or "" for any other version.
+func (cc *CachedCertificate) V2Fingerprint() string {
+	if len(cc.v2Fingerprints) == 0 {
+		return ""
+	}
+	return cc.v2Fingerprints[0]
 }
 
 func (cc *CachedCertificate) String() string {
@@ -143,6 +168,8 @@ func Recombine(v Version, rawCertBytes, publicKey []byte, curve Curve) (Certific
 		c, err = unmarshalCertificateV1(rawCertBytes, publicKey)
 	case Version2:
 		c, err = unmarshalCertificateV2(rawCertBytes, publicKey, curve)
+	case Version3:
+		c, err = unmarshalCertificateV3(rawCertBytes, publicKey, curve)
 	default:
 		return nil, ErrUnknownVersion
 	}
@@ -165,8 +192,14 @@ func CalculateAlternateFingerprint(c Certificate) (string, error) {
 		return "", nil
 	}
 
+	// A version 3 certificate has no second form: both of its signatures cover the v2 form's, and its own classical
+	// signature must be low-s. The pool checks the fingerprints of its v2 form separately.
+	if c.Version() == Version3 {
+		return "", nil
+	}
+
 	nc := c.Copy()
-	b, err := p256.Swap(nc.Signature())
+	b, err := p256.Swap(nc.Signature().Classical)
 	if err != nil {
 		return "", err
 	}

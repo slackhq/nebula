@@ -19,11 +19,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/flynn/noise"
+	"github.com/DefinedNet/noise"
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/handshake"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/util"
 )
@@ -40,6 +41,15 @@ type CertState struct {
 
 	v2Cert       cert.Certificate
 	v2Credential *handshake.Credential
+
+	// v3Cert, when present, is what v2Cert is the v2 form of. It is only used by
+	// hybrid handshakes, every other handshake presents v2Cert.
+	v3Cert       cert.Certificate
+	v3Credential *handshake.Credential
+
+	// fingerprints holds the fingerprint of each certificate above by version, so a tunnel can tell whether it was
+	// built on the current one without hashing a certificate.
+	fingerprints map[cert.Version]string
 
 	initiatingVersion cert.Version
 	privateKey        []byte
@@ -163,64 +173,85 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 	}
 
 	if currentState != nil {
-		if newState.v1Cert != nil {
-			if currentState.v1Cert == nil {
-				//adding certs is fine, actually. Networks-in-common confirmed in newCertState().
-			} else {
-				// did IP in cert change? if so, don't set
-				if !slices.Equal(currentState.v1Cert.Networks(), newState.v1Cert.Networks()) {
-					return util.NewContextualError(
-						"Networks in new cert was different from old",
-						m{"new_networks": newState.v1Cert.Networks(), "old_networks": currentState.v1Cert.Networks(), "cert_version": cert.Version1},
-						errCertNeedsRestart,
-					)
-				}
-
-				if currentState.v1Cert.Curve() != newState.v1Cert.Curve() {
-					return util.NewContextualError(
-						"Curve in new v1 cert was different from old",
-						m{"new_curve": newState.v1Cert.Curve(), "old_curve": currentState.v1Cert.Curve(), "cert_version": cert.Version1},
-						errCertNeedsRestart,
-					)
-				}
-			}
-		}
-
-		if newState.v2Cert != nil {
-			if currentState.v2Cert == nil {
-				//adding certs is fine, actually
-			} else {
-				// did IP in cert change? if so, don't set
-				if !slices.Equal(currentState.v2Cert.Networks(), newState.v2Cert.Networks()) {
-					return util.NewContextualError(
-						"Networks in new cert was different from old",
-						m{"new_networks": newState.v2Cert.Networks(), "old_networks": currentState.v2Cert.Networks(), "cert_version": cert.Version2},
-						errCertNeedsRestart,
-					)
-				}
-
-				if currentState.v2Cert.Curve() != newState.v2Cert.Curve() {
-					return util.NewContextualError(
-						"Curve in new cert was different from old",
-						m{"new_curve": newState.v2Cert.Curve(), "old_curve": currentState.v2Cert.Curve(), "cert_version": cert.Version2},
-						errCertNeedsRestart,
-					)
-				}
-			}
-
-		} else if currentState.v2Cert != nil {
-			//newState.v1Cert is non-nil bc empty certstates aren't permitted
-			if newState.v1Cert == nil {
-				return util.NewContextualError("v1 and v2 certs are nil, this should be impossible", nil, err)
-			}
-			//if we're going to v1-only, we need to make sure we didn't orphan any v2-cert vpnaddrs
-			if !slices.Equal(currentState.v2Cert.Networks(), newState.v1Cert.Networks()) {
+		if !currentState.classicalCapable() || !newState.classicalCapable() {
+			// A v3 certificate without a v2 form stands alone, so compare whatever certificate each state takes its
+			// networks from.
+			oldCrt, newCrt := currentState.ownCertificate(), newState.ownCertificate()
+			if !slices.Equal(oldCrt.Networks(), newCrt.Networks()) {
 				return util.NewContextualError(
-					"Removing a V2 cert is not permitted unless it has identical networks to the new V1 cert",
-					m{"new_v1_networks": newState.v1Cert.Networks(), "old_v2_networks": currentState.v2Cert.Networks()},
+					"Networks in new cert was different from old",
+					m{"new_networks": newCrt.Networks(), "old_networks": oldCrt.Networks(), "cert_version": newCrt.Version()},
 					errCertNeedsRestart,
 				)
 			}
+			if oldCrt.Curve() != newCrt.Curve() {
+				return util.NewContextualError(
+					"Curve in new cert was different from old",
+					m{"new_curve": newCrt.Curve(), "old_curve": oldCrt.Curve(), "cert_version": newCrt.Version()},
+					errCertNeedsRestart,
+				)
+			}
+		} else {
+			if newState.v1Cert != nil {
+				if currentState.v1Cert == nil {
+					//adding certs is fine, actually. Networks-in-common confirmed in newCertState().
+				} else {
+					// did IP in cert change? if so, don't set
+					if !slices.Equal(currentState.v1Cert.Networks(), newState.v1Cert.Networks()) {
+						return util.NewContextualError(
+							"Networks in new cert was different from old",
+							m{"new_networks": newState.v1Cert.Networks(), "old_networks": currentState.v1Cert.Networks(), "cert_version": cert.Version1},
+							errCertNeedsRestart,
+						)
+					}
+
+					if currentState.v1Cert.Curve() != newState.v1Cert.Curve() {
+						return util.NewContextualError(
+							"Curve in new v1 cert was different from old",
+							m{"new_curve": newState.v1Cert.Curve(), "old_curve": currentState.v1Cert.Curve(), "cert_version": cert.Version1},
+							errCertNeedsRestart,
+						)
+					}
+				}
+			}
+
+			if newState.v2Cert != nil {
+				if currentState.v2Cert == nil {
+					//adding certs is fine, actually
+				} else {
+					// did IP in cert change? if so, don't set
+					if !slices.Equal(currentState.v2Cert.Networks(), newState.v2Cert.Networks()) {
+						return util.NewContextualError(
+							"Networks in new cert was different from old",
+							m{"new_networks": newState.v2Cert.Networks(), "old_networks": currentState.v2Cert.Networks(), "cert_version": cert.Version2},
+							errCertNeedsRestart,
+						)
+					}
+
+					if currentState.v2Cert.Curve() != newState.v2Cert.Curve() {
+						return util.NewContextualError(
+							"Curve in new cert was different from old",
+							m{"new_curve": newState.v2Cert.Curve(), "old_curve": currentState.v2Cert.Curve(), "cert_version": cert.Version2},
+							errCertNeedsRestart,
+						)
+					}
+				}
+
+			} else if currentState.v2Cert != nil {
+				//newState.v1Cert is non-nil bc empty certstates aren't permitted
+				if newState.v1Cert == nil {
+					return util.NewContextualError("v1 and v2 certs are nil, this should be impossible", nil, err)
+				}
+				//if we're going to v1-only, we need to make sure we didn't orphan any v2-cert vpnaddrs
+				if !slices.Equal(currentState.v2Cert.Networks(), newState.v1Cert.Networks()) {
+					return util.NewContextualError(
+						"Removing a V2 cert is not permitted unless it has identical networks to the new V1 cert",
+						m{"new_v1_networks": newState.v1Cert.Networks(), "old_v2_networks": currentState.v2Cert.Networks()},
+						errCertNeedsRestart,
+					)
+				}
+			}
+
 		}
 	}
 
@@ -258,6 +289,15 @@ func (cs *CertState) GetDefaultCertificate() cert.Certificate {
 // DefaultVersion returns the preferred cert version for initiating handshakes.
 func (cs *CertState) DefaultVersion() cert.Version { return cs.initiatingVersion }
 
+// hybridSubtype returns the hybrid handshake subtype for the KEM of the v3
+// certificate's suite, false without a v3 certificate.
+func (cs *CertState) hybridSubtype() (header.MessageSubType, bool) {
+	if cs.v3Cert == nil {
+		return 0, false
+	}
+	return handshake.HybridSubtype(cert.PQSuiteOf(cs.v3Cert))
+}
+
 // GetCredential returns the pre-computed handshake credential for the given version, or nil.
 func (cs *CertState) GetCredential(v cert.Version) *handshake.Credential {
 	switch v {
@@ -265,8 +305,34 @@ func (cs *CertState) GetCredential(v cert.Version) *handshake.Credential {
 		return cs.v1Credential
 	case cert.Version2:
 		return cs.v2Credential
+	case cert.Version3:
+		return cs.v3Credential
 	}
 	return nil
+}
+
+// getFingerprint returns the fingerprint of the certificate for the given version, or "".
+func (cs *CertState) getFingerprint(v cert.Version) string {
+	return cs.fingerprints[v]
+}
+
+// ownCertificate is the certificate this node's addresses, networks and firewall come from: the v2 one when it is
+// loaded, being a superset of the v1, else the v1, else a v3 certificate without a v2 form, the only kind that stands
+// alone. Whenever a v3 certificate has a v2 form, the two share every detail. It is nil only when no certificate is
+// loaded, which a running nebula never has.
+func (cs *CertState) ownCertificate() cert.Certificate {
+	for _, v := range []cert.Version{cert.Version2, cert.Version1, cert.Version3} {
+		if c := cs.getCertificate(v); c != nil {
+			return c
+		}
+	}
+	return nil
+}
+
+// classicalCapable reports whether this node holds a certificate for classical handshakes, a v1 or v2 one. A node with
+// only a v3 certificate without a v2 form speaks hybrid handshakes alone.
+func (cs *CertState) classicalCapable() bool {
+	return cs == nil || cs.v1Cert != nil || cs.v2Cert != nil
 }
 
 func (cs *CertState) getCertificate(v cert.Version) cert.Certificate {
@@ -275,9 +341,21 @@ func (cs *CertState) getCertificate(v cert.Version) cert.Certificate {
 		return cs.v1Cert
 	case cert.Version2:
 		return cs.v2Cert
+	case cert.Version3:
+		return cs.v3Cert
 	}
 
 	return nil
+}
+
+// protocolVersion is the version of the messages spoken over a tunnel built on a
+// certificate of version v. Version 3 only changes the handshake, everything
+// after it is version 2.
+func protocolVersion(v cert.Version) cert.Version {
+	if v == cert.Version3 {
+		return cert.Version2
+	}
+	return v
 }
 
 // newCipherSuite builds the noise.CipherSuite for the given curve and cipher.
@@ -329,7 +407,14 @@ func (cs *CertState) MarshalJSON() ([]byte, error) {
 		msg = append(msg, b)
 	}
 
-	if cs.v2Cert != nil {
+	// A v3 certificate shows its v2 form's fingerprint itself.
+	if cs.v3Cert != nil {
+		b, err := cs.v3Cert.MarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		msg = append(msg, b)
+	} else if cs.v2Cert != nil {
 		b, err := cs.v2Cert.MarshalJSON()
 		if err != nil {
 			return nil, err
@@ -348,7 +433,7 @@ func newCertStateFromConfig(l *slog.Logger, c *config.C, cipher string) (*CertSt
 		return nil, errors.New("no pki.key path or PEM data provided")
 	}
 
-	rawKey, curve, isPkcs11, err := loadPrivateKey(privPathOrPEM)
+	rawKey, classicalKey, curve, isPkcs11, err := loadPrivateKey(privPathOrPEM)
 	if err != nil {
 		return nil, err
 	}
@@ -371,7 +456,7 @@ func newCertStateFromConfig(l *slog.Logger, c *config.C, cipher string) (*CertSt
 		}
 	}
 
-	var v1, v2 cert.Certificate
+	var v1, v2, v3 cert.Certificate
 	var skipped []error
 	scanner := cert.NewPEMScanner(bytes.NewReader(rawCert))
 	for i := 1; scanner.Scan(); i++ {
@@ -401,6 +486,11 @@ func newCertStateFromConfig(l *slog.Logger, c *config.C, cipher string) (*CertSt
 				return nil, fmt.Errorf("v2 certificate already found in pki.cert")
 			}
 			v2 = crt
+		case cert.Version3:
+			if v3 != nil {
+				return nil, fmt.Errorf("v3 certificate already found in pki.cert")
+			}
+			v3 = crt
 		default:
 			return nil, fmt.Errorf("unknown certificate version %v", crt.Version())
 		}
@@ -409,7 +499,29 @@ func newCertStateFromConfig(l *slog.Logger, c *config.C, cipher string) (*CertSt
 		return nil, fmt.Errorf("error while unmarshaling pki.cert: %w: %w", cert.ErrInvalidPEMBlock, err)
 	}
 
-	if v1 == nil && v2 == nil {
+	if v3 != nil {
+		// A v3 certificate brings its own v2 form, if it has one. Listing that too is fine, anything else is a mistake.
+		form := cert.V2Form(v3)
+		if form == nil && (v1 != nil || v2 != nil) {
+			return nil, errors.New("the v3 certificate in pki.cert has no v2 form, it can not be listed with v1 or v2 certificates")
+		}
+		if v2 != nil {
+			want, err := form.Fingerprint()
+			if err != nil {
+				return nil, err
+			}
+			got, err := v2.Fingerprint()
+			if err != nil {
+				return nil, err
+			}
+			if want != got {
+				return nil, errors.New("the v2 certificate in pki.cert is not the v2 form of the v3 certificate")
+			}
+		}
+		v2 = form
+	}
+
+	if v1 == nil && v2 == nil && v3 == nil {
 		if len(skipped) > 0 {
 			return nil, fmt.Errorf("no valid certificates found in pki.cert, skipped: %w", errors.Join(skipped...))
 		}
@@ -422,6 +534,10 @@ func newCertStateFromConfig(l *slog.Logger, c *config.C, cipher string) (*CertSt
 		// We do this to avoid having to configure it specifically in the config file
 		useInitiatingVersion = 2
 	}
+	if v1 == nil && v2 == nil {
+		// A v3 certificate without a v2 form speaks only hybrid handshakes.
+		useInitiatingVersion = 3
+	}
 
 	rawInitiatingVersion := c.GetUint32("pki.initiating_version", useInitiatingVersion)
 	var initiatingVersion cert.Version
@@ -432,15 +548,37 @@ func newCertStateFromConfig(l *slog.Logger, c *config.C, cipher string) (*CertSt
 		}
 		initiatingVersion = cert.Version1
 	case 2:
+		if v2 == nil {
+			return nil, fmt.Errorf("can not use pki.initiating_version 2 without a v2 certificate in pki.cert")
+		}
 		initiatingVersion = cert.Version2
+	case 3:
+		if v1 != nil || v2 != nil {
+			return nil, fmt.Errorf("pki.initiating_version 3 is for a v3 certificate without a v2 form, which needs no setting")
+		}
+		initiatingVersion = cert.Version3
 	default:
 		return nil, fmt.Errorf("unknown pki.initiating_version: %v", rawInitiatingVersion)
 	}
 
-	return newCertState(initiatingVersion, v1, v2, isPkcs11, curve, rawKey, cipher)
+	// Post-quantum handshakes are hybrid only, so requiring them without a v3
+	// certificate would leave this node unable to reach anyone.
+	if v3 == nil && c.GetBool("handshakes.pq.require", false) {
+		return nil, errors.New("handshakes.pq.require needs a version 3 certificate in pki.cert")
+	}
+
+	// A composite key also serves v1 and v2 certificates alone, through its classical half.
+	if v3 == nil {
+		rawKey = classicalKey
+	}
+
+	return newCertState(initiatingVersion, v1, v2, v3, isPkcs11, curve, rawKey, cipher)
 }
 
-func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, privateKeyCurve cert.Curve, privateKey []byte, cipher string) (*CertState, error) {
+// newCertState builds the handshake credentials. v3, when present, must be what v2 is the v2 form of, or alone when it
+// has no v2 form. privateKey is then the composite key, classical || the seed of the KEM of v3's suite, and v1 and v2
+// get its classical half.
+func newCertState(dv cert.Version, v1, v2, v3 cert.Certificate, pkcs11backed bool, privateKeyCurve cert.Curve, privateKey []byte, cipher string) (*CertState, error) {
 	cs := CertState{
 		privateKey:               privateKey,
 		pkcs11Backed:             pkcs11backed,
@@ -448,6 +586,18 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 		myVpnNetworksTable:       new(bart.Lite),
 		myVpnAddrsTable:          new(bart.Lite),
 		myVpnBroadcastAddrsTable: new(bart.Lite),
+		fingerprints:             map[cert.Version]string{},
+	}
+
+	for _, c := range []cert.Certificate{v1, v2, v3} {
+		if c == nil {
+			continue
+		}
+		fp, err := c.Fingerprint()
+		if err != nil {
+			return nil, fmt.Errorf("error computing the fingerprint of the v%d certificate: %w", c.Version(), err)
+		}
+		cs.fingerprints[c.Version()] = fp
 	}
 
 	if v1 != nil && v2 != nil {
@@ -466,11 +616,38 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 		cs.initiatingVersion = dv
 	}
 
+	classicalKey := privateKey
+	if v3 != nil {
+		if pkcs11backed {
+			return nil, errors.New("v3 certificates need their private key in pki.key, not a PKCS#11 token")
+		}
+		if err := v3.VerifyPrivateKey(privateKeyCurve, privateKey); err != nil {
+			return nil, fmt.Errorf("private key is not a pair with public key in v3 nebula cert: %w", err)
+		}
+		suite := cert.PQSuiteOf(v3)
+		// The key was checked against the certificate, so it splits.
+		classicalKey, _, _ = suite.SplitPrivateKey(false, privateKey)
+		if _, ok := handshake.HybridSubtype(suite); !ok {
+			return nil, fmt.Errorf("v3 nebula cert uses post-quantum suite %v, which no hybrid handshake supports", suite)
+		}
+
+		v3hs, err := v3.MarshalForHandshakes()
+		if err != nil {
+			return nil, fmt.Errorf("error marshalling v3 certificate for handshake: %w", err)
+		}
+		ncs, err := newCipherSuite(v3.Curve(), false, cipher, fips140.Enforced())
+		if err != nil {
+			return nil, err
+		}
+		cs.v3Cert = v3
+		cs.v3Credential = handshake.NewCredential(v3, v3hs, privateKey, ncs)
+	}
+
 	if v1 != nil {
 		if pkcs11backed {
 			//NOTE: We do not currently have a method to verify a public private key pair when the private key is in an hsm
 		} else {
-			if err := v1.VerifyPrivateKey(privateKeyCurve, privateKey); err != nil {
+			if err := v1.VerifyPrivateKey(privateKeyCurve, classicalKey); err != nil {
 				return nil, fmt.Errorf("private key is not a pair with public key in nebula cert: %w", err)
 			}
 		}
@@ -484,7 +661,7 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 			return nil, err
 		}
 		cs.v1Cert = v1
-		cs.v1Credential = handshake.NewCredential(v1, v1hs, privateKey, ncs)
+		cs.v1Credential = handshake.NewCredential(v1, v1hs, classicalKey, ncs)
 
 		if cs.initiatingVersion == 0 {
 			cs.initiatingVersion = cert.Version1
@@ -495,7 +672,7 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 		if pkcs11backed {
 			//NOTE: We do not currently have a method to verify a public private key pair when the private key is in an hsm
 		} else {
-			if err := v2.VerifyPrivateKey(privateKeyCurve, privateKey); err != nil {
+			if err := v2.VerifyPrivateKey(privateKeyCurve, classicalKey); err != nil {
 				return nil, fmt.Errorf("private key is not a pair with public key in nebula cert: %w", err)
 			}
 		}
@@ -509,21 +686,18 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 			return nil, err
 		}
 		cs.v2Cert = v2
-		cs.v2Credential = handshake.NewCredential(v2, v2hs, privateKey, ncs)
+		cs.v2Credential = handshake.NewCredential(v2, v2hs, classicalKey, ncs)
 
 		if cs.initiatingVersion == 0 {
 			cs.initiatingVersion = cert.Version2
 		}
 	}
 
-	var crt cert.Certificate
-	crt = cs.getCertificate(cert.Version2)
-	if crt == nil {
-		// v2 certificates are a superset, only look at v1 if its all we have
-		crt = cs.getCertificate(cert.Version1)
+	if cs.initiatingVersion == 0 && v3 != nil {
+		cs.initiatingVersion = cert.Version3
 	}
 
-	for _, network := range crt.Networks() {
+	for _, network := range cs.ownCertificate().Networks() {
 		cs.myVpnNetworks = append(cs.myVpnNetworks, network)
 		cs.myVpnNetworksTable.Insert(network)
 
@@ -541,30 +715,28 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 	return &cs, nil
 }
 
-func loadPrivateKey(privPathOrPEM string) (rawKey []byte, curve cert.Curve, isPkcs11 bool, err error) {
+// loadPrivateKey reads pki.key. rawKey is the whole key, the composite one for a v3 certificate, and classicalKey its
+// classical half, all of a classical key. For a PKCS#11 key both are its URI.
+func loadPrivateKey(privPathOrPEM string) (rawKey, classicalKey []byte, curve cert.Curve, isPkcs11 bool, err error) {
 	var pemPrivateKey []byte
 	if strings.Contains(privPathOrPEM, "-----BEGIN") {
 		pemPrivateKey = []byte(privPathOrPEM)
 		privPathOrPEM = "<inline>"
-		rawKey, _, curve, err = cert.UnmarshalPrivateKeyFromPEM(pemPrivateKey)
-		if err != nil {
-			return nil, curve, false, fmt.Errorf("error while unmarshaling pki.key %s: %s", privPathOrPEM, err)
-		}
 	} else if strings.HasPrefix(privPathOrPEM, "pkcs11:") {
 		rawKey = []byte(privPathOrPEM)
-		return rawKey, cert.Curve_P256, true, nil
+		return rawKey, rawKey, cert.Curve_P256, true, nil
 	} else {
 		pemPrivateKey, err = os.ReadFile(privPathOrPEM)
 		if err != nil {
-			return nil, curve, false, fmt.Errorf("unable to read pki.key file %s: %s", privPathOrPEM, err)
-		}
-		rawKey, _, curve, err = cert.UnmarshalPrivateKeyFromPEM(pemPrivateKey)
-		if err != nil {
-			return nil, curve, false, fmt.Errorf("error while unmarshaling pki.key %s: %s", privPathOrPEM, err)
+			return nil, nil, curve, false, fmt.Errorf("unable to read pki.key file %s: %s", privPathOrPEM, err)
 		}
 	}
 
-	return
+	key, _, err := cert.UnmarshalSplitPrivateKeyFromPEM(pemPrivateKey)
+	if err != nil {
+		return nil, nil, key.Curve, false, fmt.Errorf("error while unmarshaling pki.key %s: %s", privPathOrPEM, err)
+	}
+	return key.Bytes(), key.Classical, key.Curve, false, nil
 }
 
 func loadCertificate(b []byte) (cert.Certificate, []byte, error) {

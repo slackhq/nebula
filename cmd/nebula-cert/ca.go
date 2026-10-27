@@ -37,6 +37,8 @@ type caFlags struct {
 	argonParallelism *uint
 	encryption       *bool
 	version          *uint
+	pqSuite          *string
+	noV2Form         *bool
 
 	curve  *string
 	p11url *string
@@ -71,7 +73,9 @@ func newCaFlags() *caFlags {
 	cf := caFlags{set: flag.NewFlagSet("ca", flag.ContinueOnError)}
 	cf.set.Usage = func() {}
 	cf.name = cf.set.String("name", "", "Required: name of the certificate authority")
-	cf.version = cf.set.Uint("version", uint(cert.Version2), "Optional: version of the certificate format to use")
+	cf.version = cf.set.Uint("version", uint(cert.Version2), "Optional: version of the certificate format to use. Version 3 adds a post-quantum key, for post-quantum certificates")
+	cf.pqSuite = pqSuiteFlag(cf.set, "Optional: post-quantum suite of a version 3 CA, which the certificates it signs share")
+	cf.noV2Form = cf.set.Bool("no-v2-form", false, "Optional: make a version 3 CA without a v2 form. It then signs only version 3 certificates without one, for networks where every node has a version 3 certificate")
 	cf.duration = cf.set.Duration("duration", time.Duration(time.Hour*8760), "Optional: amount of time the certificate should be valid for. Valid time units are seconds: \"s\", minutes: \"m\", hours: \"h\"")
 	cf.outKeyPath = cf.set.String("out-key", "ca.key", "Optional: path to write the private key to")
 	cf.outCertPath = cf.set.String("out-crt", "ca.crt", "Optional: path to write the certificate to")
@@ -160,8 +164,18 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 	}
 
 	version := cert.Version(*cf.version)
-	if version != cert.Version1 && version != cert.Version2 {
-		return newHelpErrorf("-version must be either %v or %v", cert.Version1, cert.Version2)
+	if version != cert.Version1 && version != cert.Version2 && version != cert.Version3 {
+		return newHelpErrorf("-version must be %v, %v or %v", cert.Version1, cert.Version2, cert.Version3)
+	}
+	if version == cert.Version3 && isP11 {
+		return newHelpErrorf("-version 3 can not be used with -pkcs11, the post-quantum key has to be in out-key")
+	}
+	if *cf.noV2Form && version != cert.Version3 {
+		return newHelpErrorf("-no-v2-form is only for -version 3")
+	}
+	suite, err := parsePQSuiteFlag(cf.set, *cf.pqSuite, version == cert.Version3, "is only for -version 3")
+	if err != nil {
+		return err
 	}
 
 	var networks []netip.Prefix
@@ -295,6 +309,13 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		default:
 			return fmt.Errorf("invalid curve: %s", *cf.curve)
 		}
+
+		if version == cert.Version3 {
+			pub, rawPriv, err = appendPQSigningKey(suite, pub, rawPriv)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	t := &cert.TBSCertificate{
@@ -308,6 +329,10 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		PublicKey:      pub,
 		IsCA:           true,
 		Curve:          curve,
+	}
+	if version == cert.Version3 {
+		t.PQSuite = suite
+		t.OmitV2Form = *cf.noV2Form
 	}
 
 	if !isP11 && !isStdio(*cf.outKeyPath) {
@@ -336,13 +361,18 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 			return fmt.Errorf("error while signing: %s", err)
 		}
 
-		if *cf.encryption {
+		switch {
+		case *cf.encryption && version == cert.Version3:
+			b, err = cert.EncryptAndMarshalPQSigningPrivateKey(curve, suite, rawPriv, passphrase, kdfParams)
+		case *cf.encryption:
 			b, err = cert.EncryptAndMarshalSigningPrivateKey(curve, rawPriv, passphrase, kdfParams)
-			if err != nil {
-				return fmt.Errorf("error while encrypting out-key: %s", err)
-			}
-		} else {
+		case version == cert.Version3:
+			b = cert.MarshalPQSigningPrivateKeyToPEM(curve, suite, rawPriv)
+		default:
 			b = cert.MarshalSigningPrivateKeyToPEM(curve, rawPriv)
+		}
+		if err != nil {
+			return fmt.Errorf("error while encrypting out-key: %s", err)
 		}
 
 		err = writeOutput(*cf.outKeyPath, b, 0600, out)
