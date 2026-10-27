@@ -425,6 +425,40 @@ tun:
   # SO_RCVBUFFORCE is used to avoid having to raise the system wide max. Not reloadable.
   #use_system_route_table_buffer_size: 0
 
+# EXPERIMENTAL: this option may change or disappear in the future.
+# The dns section configures this host's OS resolver to send queries to a user specified DNS server.
+#
+# macOS and Windows only, it requires running with elevated privileges.
+#dns:
+  # enabled turns host DNS configuration on. Default false.
+  #enabled: false
+
+  # A list of DNS server IPs to send matching queries to. Required.
+  #nameservers:
+  #  - 192.168.100.1
+
+  # match_domains restricts `nameservers` to just the specified suffixes.
+  #
+  # Setting it to an explicitly empty list attempts to redirect all resolution
+  # to the specified nameservers. If unset, it defaults to search_domains.
+  #match_domains:
+  #  - mesh.example.com
+
+  # search_domains is a list of domains that will be tried when handling requests for a bare label.
+  # These must fall under a configured match_domains entry. If no match_domains is specified, it
+  # defaults to search_domains.
+  #search_domains:
+  #  - mesh.example.com
+
+  # identity is used to prevent multiple consumers of the dnsconfig library from stepping on
+  # each other's toes (this includes multiple instances of nebula.) At startup nebula removes
+  # any host DNS configuration a previous run under this identity left behind, such as after
+  # a crash, whether or not `enabled` is set.
+  #
+  # It must start with a lowercase letter or digit and hold only lowercase letters, digits, '.',
+  # '_' and '-', up to 63 characters.
+  #identity: nebula
+
 # Configure logging level
 logging:
   # trace, debug, info, warn, or error. Default is info and is reloadable.
