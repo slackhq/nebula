@@ -278,6 +278,58 @@ func TestFirewall_Drop(t *testing.T) {
 	require.NoError(t, fw.Drop(p, true, &h, cp, nil))
 }
 
+// TestFirewall_DropOverlaySourceThroughUnsafeNetwork: a peer whose unsafe network
+// overlaps our overlay may not send as another node of it. Its own address and sources
+// outside the overlay still pass through the unsafe network, and outbound to such an
+// address, where the address is a destination, is not the firewall's to refuse here.
+func TestFirewall_DropOverlaySourceThroughUnsafeNetwork(t *testing.T) {
+	l := test.NewLogger()
+	myVpnNetworksTable := new(bart.Lite)
+	myVpnNetworksTable.Insert(netip.MustParsePrefix("1.2.3.0/24"))
+
+	me := dummyCert{name: "me", networks: []netip.Prefix{netip.MustParsePrefix("1.2.3.4/24")}}
+	// A router for 1.2.0.0/16, which contains the whole overlay.
+	peer := dummyCert{
+		name:           "router",
+		networks:       []netip.Prefix{netip.MustParsePrefix("1.2.3.9/24")},
+		unsafeNetworks: []netip.Prefix{netip.MustParsePrefix("1.2.0.0/16")},
+		groups:         []string{"default-group"},
+	}
+	h := HostInfo{
+		ConnectionState: &ConnectionState{
+			peerCert: &cert.CachedCertificate{Certificate: &peer, InvertedGroups: map[string]struct{}{"default-group": {}}},
+		},
+		vpnAddrs: []netip.Addr{netip.MustParseAddr("1.2.3.9")},
+	}
+	h.buildNetworks(myVpnNetworksTable, &peer)
+
+	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, &me)
+	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"any"}, "", "", "", "", ""))
+	cp := cert.NewCAPool()
+	packet := func(remote string) firewall.Packet {
+		return firewall.Packet{
+			LocalAddr:  netip.MustParseAddr("1.2.3.4"),
+			RemoteAddr: netip.MustParseAddr(remote),
+			LocalPort:  10,
+			RemotePort: 90,
+			Protocol:   iputil.IPProtocolUDP,
+		}
+	}
+
+	// Another node's overlay address, through the unsafe network: refused.
+	assert.Equal(t, ErrUnsafeVPNOverlap, fw.Drop(packet("1.2.3.10"), true, &h, cp, nil))
+	assert.Equal(t, int64(1), fw.incomingMetrics.droppedRemoteAddr.Count())
+
+	// The peer's own address, and an address outside the overlay it routes for: served.
+	require.NoError(t, fw.Drop(packet("1.2.3.9"), true, &h, cp, nil))
+	require.NoError(t, fw.Drop(packet("1.2.5.5"), true, &h, cp, nil))
+
+	// Outbound to the overlay address via the router is not refused here; it meets the
+	// outbound rules as before.
+	resetConntrack(fw)
+	assert.Equal(t, ErrNoMatchingRule, fw.Drop(packet("1.2.3.10"), false, &h, cp, nil))
+}
+
 func TestFirewall_DropV6(t *testing.T) {
 	ob := &bytes.Buffer{}
 	l := test.NewLoggerWithOutput(ob)
@@ -1464,6 +1516,73 @@ func TestAddFirewallRulesFromConfig(t *testing.T) {
 	conf.Settings["firewall"] = map[string]any{"inbound": []any{map[string]any{"port": "1", "proto": "any", "groups": []string{"a", "b"}}}}
 	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: true, proto: firewall.ProtoAny, startPort: 1, endPort: 1, groups: []string{"a", "b"}, ip: "", localIp: ""}, mf.lastCall)
+
+	// Test group and groups values that used to crash or become a group that matches nothing: an empty array,
+	// a null, an array, or a map is rejected
+	badGroups := []struct {
+		key   string
+		value any
+		err   string
+	}{
+		{"group", []any{}, "group should contain a single value, an empty array was provided"},
+		{"group", []any{nil}, "group should contain a single value, a null was provided"},
+		{"group", []any{[]any{"a"}}, "group should contain a single value, an array was provided"},
+		{"group", map[string]any{"a": "b"}, "group should contain a single value, a map was provided"},
+		{"groups", []any{nil}, "groups entry #0 should contain a single value, a null was provided"},
+		{"groups", []any{"a", []any{"b"}}, "groups entry #1 should contain a single value, an array was provided"},
+		{"groups", []any{map[string]any{"a": "b"}}, "groups entry #0 should contain a single value, a map was provided"},
+		{"groups", map[string]any{"a": "b"}, "groups should contain an array or a single value, a map was provided"},
+		{"group", 1.1, "group should contain a single value, 1.1 was read as a float64, quote it to use it as a group name"},
+		{"group", []any{1.1}, "group should contain a single value, 1.1 was read as a float64, quote it to use it as a group name"},
+		{"groups", []any{"a", 1.1}, "groups entry #1 should contain a single value, 1.1 was read as a float64, quote it to use it as a group name"},
+		{"groups", time.Date(2001, 12, 14, 0, 0, 0, 0, time.UTC), "groups should contain an array or a single value, 2001-12-14 00:00:00 +0000 UTC was read as a time.Time, quote it to use it as a group name"},
+	}
+	for _, tc := range badGroups {
+		conf = config.NewC(test.NewLogger())
+		mf = &mockFirewall{}
+		conf.Settings["firewall"] = map[string]any{"inbound": []any{map[string]any{"port": "1", "proto": "any", tc.key: tc.value}}}
+		require.EqualError(t, AddFirewallRulesFromConfig(l, true, conf, mf), "firewall.inbound rule #0; "+tc.err, "%s: %v", tc.key, tc.value)
+	}
+
+	// Test int and bool groups entries are read as strings
+	conf = config.NewC(test.NewLogger())
+	mf = &mockFirewall{}
+	conf.Settings["firewall"] = map[string]any{"inbound": []any{map[string]any{"port": "1", "proto": "any", "groups": []any{1, true}}}}
+	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf))
+	assert.Equal(t, []string{"1", "true"}, mf.lastCall.groups)
+
+	conf = config.NewC(test.NewLogger())
+	mf = &mockFirewall{}
+	conf.Settings["firewall"] = map[string]any{"inbound": []any{map[string]any{"port": "1", "proto": "any", "group": 1}}}
+	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf))
+	assert.Equal(t, []string{"1"}, mf.lastCall.groups)
+
+	// Test a null group or groups is the same as not providing it
+	for _, key := range []string{"group", "groups"} {
+		conf = config.NewC(test.NewLogger())
+		mf = &mockFirewall{}
+		conf.Settings["firewall"] = map[string]any{"inbound": []any{map[string]any{"port": "1", "proto": "any", key: nil, "host": "a"}}}
+		require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf))
+		assert.Empty(t, mf.lastCall.groups)
+		assert.Equal(t, "a", mf.lastCall.host)
+	}
+
+	// Test a null group or groups is refused when nothing else limits the hosts, it would match any host
+	for _, key := range []string{"group", "groups"} {
+		for _, other := range []string{"ca_name", "ca_sha", "local_cidr"} {
+			conf = config.NewC(test.NewLogger())
+			mf = &mockFirewall{}
+			conf.Settings["firewall"] = map[string]any{"inbound": []any{map[string]any{"port": "1", "proto": "any", key: nil, other: "x"}}}
+			require.EqualError(t, AddFirewallRulesFromConfig(l, true, conf, mf), "firewall.inbound rule #0; "+key+" is null and no host, group, or cidr was provided, use `host: any` to match any host", "%s with %s", key, other)
+		}
+	}
+
+	// Test a null group alongside groups uses the groups
+	conf = config.NewC(test.NewLogger())
+	mf = &mockFirewall{}
+	conf.Settings["firewall"] = map[string]any{"inbound": []any{map[string]any{"port": "1", "proto": "any", "group": nil, "groups": []any{"a"}, "ca_name": "x"}}}
+	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf))
+	assert.Equal(t, []string{"a"}, mf.lastCall.groups)
 
 	// Test Add error
 	conf = config.NewC(test.NewLogger())

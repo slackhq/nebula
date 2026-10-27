@@ -33,7 +33,7 @@ func pqConfig(initiate, accept, sticky bool) m {
 
 // isHybrid reports whether h is a hybrid handshake message.
 func isHybrid(h *header.H) bool {
-	return header.HandshakePattern(h.Subtype) == header.HandshakeIXHybridMLKEM1024
+	return h.Subtype == header.HandshakeIXHybridMLKEM1024 || h.Subtype == header.HandshakeIXHybridMLKEM1024Fragmented
 }
 
 // handshakeTally counts handshake packets by style as the router moves them.
@@ -253,7 +253,8 @@ func TestPQCookieUnderLoad(t *testing.T) {
 	t.Log("Flood them with the first fragment of msg1s nobody will finish")
 	for i := range 512 {
 		from := netip.AddrPortFrom(netip.AddrFrom4([4]byte{198, 18, byte(i >> 8), byte(i)}), 4242)
-		s, err := fragment.NewSender(make([]byte, 2000), header.HandshakeIXHybridMLKEM1024|header.HandshakeFragmented, 0, 1, uint32(i+1))
+		pkt := header.Encode(make([]byte, header.Len, header.Len+2000), header.Version, header.Handshake, header.HandshakeIXHybridMLKEM1024, 0, 1)
+		s, err := fragment.NewSender(append(pkt, make([]byte, 2000)...), uint32(i+1))
 		require.NoError(t, err)
 		pkts, _, err := s.Attempt(0)
 		require.NoError(t, err)

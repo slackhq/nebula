@@ -16,11 +16,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const hybridFragmented = header.HandshakeIXHybridMLKEM1024 | header.HandshakeFragmented
+const hybridFragmented = header.HandshakeIXHybridMLKEM1024Fragmented
 
-func newPQTestManager(t *testing.T) (*HandshakeManager, *recordingConn) {
+// hsPacket is a handshake packet of n zero bytes after its header.
+func hsPacket(subtype header.MessageSubType, remoteIndex uint32, counter uint64, n int) []byte {
+	pkt := header.Encode(make([]byte, header.Len, header.Len+n), header.Version, header.Handshake, subtype, remoteIndex, counter)
+	return append(pkt, make([]byte, n)...)
+}
+
+func newPQTestManager(t *testing.T) (*HandshakeManager, *captureConn) {
 	l := test.NewLogger()
-	conn := &recordingConn{}
+	conn := &captureConn{}
 	cfg := defaultHandshakeConfig
 	cfg.pq = pqHandshakeConfig{initiate: true, accept: true}
 	// Repair fragments go out with the data ones, so a test sees a whole send at once.
@@ -55,11 +61,11 @@ func TestPQHandleCookie(t *testing.T) {
 	hm, conn := newPQTestManager(t)
 	via := ViaSender{UdpAddr: netip.MustParseAddrPort("192.0.2.1:4242")}
 
-	s, err := fragment.NewSender(make([]byte, 2000), hybridFragmented, 0, 1, 99)
+	s, err := fragment.NewSender(hsPacket(header.HandshakeIXHybridMLKEM1024, 0, 1, 2000), 99)
 	require.NoError(t, err)
 	_, _, err = s.Attempt(2)
 	require.NoError(t, err)
-	hh := &HandshakeHostInfo{hostinfo: &HostInfo{}, pq: &pqAttempt{index: 99, sender: s, subtype: header.HandshakeIXHybridMLKEM1024}}
+	hh := &HandshakeHostInfo{hostinfo: &HostInfo{}, lastRemotes: []netip.AddrPort{via.UdpAddr}, pq: &pqAttempt{index: 99, sender: s, subtype: header.HandshakeIXHybridMLKEM1024}}
 	hm.indexes[99] = hh
 
 	reply := make([]byte, header.Len, fragCookieReplyLen)
@@ -177,7 +183,7 @@ func TestPQMsg2(t *testing.T) {
 	hm.indexes[41] = hh
 	hm.indexes[42] = hh
 
-	s, err := fragment.NewSender(make([]byte, 9625), hybridFragmented, 42, 2, 1001)
+	s, err := fragment.NewSender(hsPacket(header.HandshakeIXHybridMLKEM1024, 42, 2, 9625), 1001)
 	require.NoError(t, err)
 	now, _, err := s.Attempt(0)
 	require.NoError(t, err)
@@ -206,7 +212,7 @@ func TestPQMsg2(t *testing.T) {
 
 	t.Run("a classical msg2 naming the post-quantum index is dropped", func(t *testing.T) {
 		pkt := msg2Fragments(t, make([]byte, 2000), 1001)[0]
-		header.Encode(pkt, header.Version, header.Handshake, ixFragmented, 42, 2)
+		header.Encode(pkt, header.Version, header.Handshake, header.HandshakeIXPSK0Fragmented, 42, 2)
 		var h header.H
 		require.NoError(t, h.Parse(pkt))
 		hm.handleFragment(ViaSender{}, pkt, &h)
@@ -245,7 +251,7 @@ func TestPQNeedsV3(t *testing.T) {
 	conf = config.NewC(l)
 	conf.Settings["pki"] = map[string]any{"cert": string(certPEM), "key": string(keyPEM)}
 	conf.Settings["handshakes"] = map[string]any{"pq": map[string]any{"require": true}}
-	_, err = newCertStateFromConfig(conf, "aes")
+	_, err = newCertStateFromConfig(test.NewLogger(), conf, "aes")
 	require.ErrorContains(t, err, "handshakes.pq.require needs a version 3 certificate")
 }
 
@@ -295,18 +301,6 @@ func TestPQRequiredWithoutV2Form(t *testing.T) {
 	}
 }
 
-// A responder still waiting for msg3 holds its index, so a repeated msg1 is answered with its msg2.
-func TestStillAnsweringPendingResponder(t *testing.T) {
-	cert_test.SkipWithoutPQ(t)
-	hm, _ := newPQTestManager(t)
-	pending := &HostInfo{localIndexId: 4444}
-	assert.False(t, hm.stillAnswering(pending))
-	hm.indexes[pending.localIndexId] = &HandshakeHostInfo{hostinfo: pending, responder: &hybridResponder{}}
-	assert.True(t, hm.stillAnswering(pending))
-	hm.indexes[pending.localIndexId] = &HandshakeHostInfo{hostinfo: &HostInfo{localIndexId: 4444}}
-	assert.False(t, hm.stillAnswering(pending), "another hostinfo under the same index does not count")
-}
-
 // A hybrid handshake travels as fragments whatever handshakes.fragment says: with never, a hybrid msg1 still reaches
 // the fragment table and a hybrid response still goes as fragments.
 func TestHybridIgnoresFragmentNever(t *testing.T) {
@@ -315,7 +309,7 @@ func TestHybridIgnoresFragmentNever(t *testing.T) {
 	hm.frag.Store(&fragmentConfig{mode: fragmentNever})
 	via := ViaSender{UdpAddr: netip.MustParseAddrPort("192.0.2.1:4242")}
 
-	s, err := fragment.NewSender(make([]byte, 8000), hybridFragmented, 0, 1, 77)
+	s, err := fragment.NewSender(hsPacket(header.HandshakeIXHybridMLKEM1024, 0, 1, 8000), 77)
 	require.NoError(t, err)
 	now, _, err := s.Attempt(0)
 	require.NoError(t, err)
@@ -355,7 +349,7 @@ func TestPQRequireDropsClassical(t *testing.T) {
 	hm.pq.Store(&pqHandshakeConfig{initiate: true, accept: true, require: true})
 	via := ViaSender{UdpAddr: netip.MustParseAddrPort("192.0.2.1:4242")}
 
-	s, err := fragment.NewSender(make([]byte, 3000), ixFragmented, 0, 1, 78)
+	s, err := fragment.NewSender(hsPacket(header.HandshakeIXPSK0, 0, 1, 3000), 78)
 	require.NoError(t, err)
 	now, _, err := s.Attempt(0)
 	require.NoError(t, err)

@@ -223,8 +223,8 @@ func TestPQ_Extend(t *testing.T) {
 			assert.Equal(t, lead, printed[:len(lead)])
 
 			// Someone else's key does not extend this host.
-			require.NoError(t, keygen([]string{"-version", "3", "-out-key", p("other.key"), "-out-pub", p("other.pub")}, ob, eb))
-			require.ErrorContains(t, pqExtend([]string{"-in-crt", p("host.crt"), "-in-pub", p("other.pub"), "-ca-crt", p("ca3.crt"), "-ca-key", p("ca3.key"), "-out-crt", p("bad.crt")}, ob, eb, pw), "does not extend the key")
+			require.NoError(t, keygen([]string{"-version", "3", "-out-key", p("stranger.key"), "-out-pub", p("stranger.pub")}, ob, eb))
+			require.ErrorContains(t, pqExtend([]string{"-in-crt", p("host.crt"), "-in-pub", p("stranger.pub"), "-ca-crt", p("ca3.crt"), "-ca-key", p("ca3.key"), "-out-crt", p("bad.crt")}, ob, eb, pw), "does not extend the key")
 
 			// Nor does the v2 CA key, or a v3 certificate.
 			require.ErrorContains(t, pqExtend([]string{"-in-crt", p("host.crt"), "-in-pub", p("host3.pub"), "-ca-crt", p("ca3.crt"), "-ca-key", p("ca.key"), "-out-crt", p("bad.crt")}, ob, eb, pw), "does not match ca-key")

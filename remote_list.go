@@ -302,6 +302,10 @@ type RemoteList struct {
 	// shouldAdd is a nillable function that decides if x should be added to addrs.
 	shouldAdd func(vpnAddrs []netip.Addr, x netip.Addr) bool
 
+	// v4Only keeps IPv6 addresses out of addrs, because our socket cannot send to them. The cache still holds them,
+	// a lighthouse answers queries from it.
+	v4Only bool
+
 	// This is a list of remotes that we have tried to handshake with and have returned from the wrong vpn ip.
 	// They should not be tried again during a handshake
 	badRemotes []netip.AddrPort
@@ -703,7 +707,7 @@ func (r *RemoteList) unlockedCollect() {
 			}
 		}
 
-		if c.v6 != nil {
+		if c.v6 != nil && !r.v4Only {
 			if c.v6.learned != nil {
 				u := protoV6AddrPortToNetAddrPort(c.v6.learned)
 				if !r.unlockedIsBad(u) {
@@ -731,6 +735,9 @@ func (r *RemoteList) unlockedCollect() {
 
 	dnsAddrs := r.hr.GetAddrs()
 	for _, addr := range dnsAddrs {
+		if r.v4Only && !addr.Addr().Is4() {
+			continue
+		}
 		if r.shouldAdd == nil || r.shouldAdd(r.vpnAddrs, addr.Addr()) {
 			if !r.unlockedIsBad(addr) {
 				addrs = append(addrs, addr)

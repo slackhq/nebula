@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/slackhq/nebula/cert"
@@ -59,63 +60,67 @@ func Test_keygen(t *testing.T) {
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
 
-	// create temp key file
-	keyF, err := os.CreateTemp("", "test.key")
-	require.NoError(t, err)
-	defer os.Remove(keyF.Name())
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "test.key")
+	pubPath := filepath.Join(dir, "test.pub")
 
 	// failed pub write
 	ob.Reset()
 	eb.Reset()
-	args = []string{"-out-pub", "/do/not/write/pleasepub", "-out-key", keyF.Name()}
+	args = []string{"-out-pub", "/do/not/write/pleasepub", "-out-key", keyPath}
 	require.EqualError(t, keygen(args, ob, eb), "error while writing out-pub: open /do/not/write/pleasepub: "+NoSuchDirError)
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
 
-	// create temp pub file
-	pubF, err := os.CreateTemp("", "test.pub")
-	require.NoError(t, err)
-	defer os.Remove(pubF.Name())
-
 	// test proper keygen
+	require.NoError(t, os.Remove(keyPath))
 	ob.Reset()
 	eb.Reset()
-	args = []string{"-out-pub", pubF.Name(), "-out-key", keyF.Name()}
+	args = []string{"-out-pub", pubPath, "-out-key", keyPath}
 	require.NoError(t, keygen(args, ob, eb))
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
 
 	// read cert and key files
-	rb, _ := os.ReadFile(keyF.Name())
+	rb, _ := os.ReadFile(keyPath)
 	lKey, b, curve, err := cert.UnmarshalPrivateKeyFromPEM(rb)
 	assert.Equal(t, cert.Curve_CURVE25519, curve)
 	assert.Empty(t, b)
 	require.NoError(t, err)
 	assert.Len(t, lKey, 32)
 
-	rb, _ = os.ReadFile(pubF.Name())
+	rb, _ = os.ReadFile(pubPath)
 	lPub, b, curve, err := cert.UnmarshalPublicKeyFromPEM(rb)
 	assert.Equal(t, cert.Curve_CURVE25519, curve)
 	assert.Empty(t, b)
 	require.NoError(t, err)
 	assert.Len(t, lPub, 32)
+
+	// test that we won't overwrite existing key or pub files
+	keyBefore, err := os.ReadFile(keyPath)
+	require.NoError(t, err)
+	require.EqualError(t, keygen(args, ob, eb), "refusing to overwrite existing key: "+keyPath)
+	keyAfter, err := os.ReadFile(keyPath)
+	require.NoError(t, err)
+	assert.Equal(t, keyBefore, keyAfter)
+
+	require.NoError(t, os.Remove(keyPath))
+	require.EqualError(t, keygen(args, ob, eb), "refusing to overwrite existing public key: "+pubPath)
+	_, err = os.Stat(keyPath)
+	assert.True(t, os.IsNotExist(err), "key must not be written when pub is refused")
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 }
 
 func Test_keygen_stdio(t *testing.T) {
-	keyF, err := os.CreateTemp("", "test.key")
-	require.NoError(t, err)
-	os.Remove(keyF.Name())
-	defer os.Remove(keyF.Name())
-
-	pubF, err := os.CreateTemp("", "test.pub")
-	require.NoError(t, err)
-	os.Remove(pubF.Name())
-	defer os.Remove(pubF.Name())
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "test.key")
+	pubPath := filepath.Join(dir, "test.pub")
 
 	// out-pub on stdout, out-key on disk
 	ob := &bytes.Buffer{}
 	eb := &bytes.Buffer{}
-	require.NoError(t, keygen([]string{"-out-pub", "-", "-out-key", keyF.Name()}, ob, eb))
+	require.NoError(t, keygen([]string{"-out-pub", "-", "-out-key", keyPath}, ob, eb))
 	assert.Empty(t, eb.String())
 	lPub, _, curve, err := cert.UnmarshalPublicKeyFromPEM(ob.Bytes())
 	require.NoError(t, err)
@@ -123,10 +128,10 @@ func Test_keygen_stdio(t *testing.T) {
 	assert.Len(t, lPub, 32)
 
 	// out-key on stdout, out-pub on disk
-	os.Remove(keyF.Name())
+	require.NoError(t, os.Remove(keyPath))
 	ob.Reset()
 	eb.Reset()
-	require.NoError(t, keygen([]string{"-out-pub", pubF.Name(), "-out-key", "-"}, ob, eb))
+	require.NoError(t, keygen([]string{"-out-pub", pubPath, "-out-key", "-"}, ob, eb))
 	assert.Empty(t, eb.String())
 	lKey, _, curve, err := cert.UnmarshalPrivateKeyFromPEM(ob.Bytes())
 	require.NoError(t, err)

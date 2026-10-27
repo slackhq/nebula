@@ -146,6 +146,7 @@ type fakeConn struct {
 
 func (c *fakeConn) Rebind() error                             { c.rebinds++; return nil }
 func (c *fakeConn) LocalAddr() (netip.AddrPort, error)        { return netip.AddrPort{}, nil }
+func (c *fakeConn) IPv4Only() bool                            { return false }
 func (c *fakeConn) ListenOut(_ udp.EncReader, _ func()) error { return nil }
 func (c *fakeConn) WriteTo(_ []byte, _ netip.AddrPort) error  { return nil }
 func (c *fakeConn) WriteBatch(bufs [][]byte, _ []netip.AddrPort) (int, error) {

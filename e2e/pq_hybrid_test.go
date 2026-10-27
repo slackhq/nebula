@@ -35,8 +35,8 @@ func (ht *hybridTally) observe(p *udp.Packet) {
 	}
 	ht.Lock()
 	defer ht.Unlock()
-	switch header.HandshakePattern(h.Subtype) {
-	case header.HandshakeIXHybridMLKEM1024:
+	switch h.Subtype {
+	case header.HandshakeIXHybridMLKEM1024, header.HandshakeIXHybridMLKEM1024Fragmented:
 		ht.hybrid++
 		ht.maxLen = max(ht.maxLen, len(p.Data))
 		if h.MessageCounter == 3 {

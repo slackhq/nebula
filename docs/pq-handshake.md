@@ -293,8 +293,10 @@ flynn/noise) before this can merge.
 ### Three messages in the manager
 
 - **Responder.** After msg2 the responder keeps the handshake pending under its local index, the
-  multi-message responder the manager lacked before. A repeated msg1 maps to it through the
-  answered-msg1 cache and gets msg2 resent with fresh symbols. msg3's fragments name
+  multi-message responder the manager lacked before. A repeated msg1, the same bytes the
+  initiator keeps resending, is matched to the pending entry holding it and gets msg2 resent
+  with fresh symbols; one reaching a tunnel msg3 already completed is answered from that tunnel,
+  as a classical repeat is. msg3's fragments name
   the responder's index, so they reach the pending entry and never the pre-authentication table;
   its reassembly is capped at 4 KiB. Until msg3 verifies, data for that index is dropped quietly:
   a RecvError would tear down the initiator's new tunnel. On completing, the responder sends an
@@ -358,7 +360,7 @@ Hybrid messages travel as fragmented handshakes, described in
 [fragmented-handshakes.md](fragmented-handshakes.md): the wire format, the erasure code, the
 receiver rules, the amplification budget and the cookies are the ones a classical message too big
 for one packet uses. A hybrid message is always fragmented. Its subtype on the wire is
-`ix_hybrid_mlkem1024 | 0x80`, `handshakes.fragment` does not apply to it (under `never` a node
+`ix_hybrid_mlkem1024_fragmented` (0x83), `handshakes.fragment` does not apply to it (under `never` a node
 still sends and reassembles hybrid fragments, there being no other way for them to go), and an
 unfragmented hybrid message is dropped. What hybrid adds:
 
@@ -373,11 +375,11 @@ unfragmented hybrid message is dropped. What hybrid adds:
   the peer speaks post-quantum (see [Rollout](#rollout)).
 - **Before reassembly**, a responder that does not accept post-quantum handshakes, has no v3
   certificate, or whose suite uses another KEM drops a hybrid msg1.
-- **Repeats.** A pending responder still holds its index, so a repeated msg1 is answered with its
-  cached msg2 while it waits for msg3, as an established tunnel's is.
+- **Repeats.** A pending responder keeps the msg1 it answered, so a repeat of it is answered with
+  the cached msg2 while it waits for msg3, as an established tunnel's is.
 - **Per-path resends** of a cached msg2 mean a recently answered msg1 replayed from spoofed
   sources draws one cached msg2 to each, at about 1.2-1.4x the bytes sent and never over 3x, for
-  as long as the answered msg1 is remembered (the handshake timeout). Accepted (2026-10-15):
+  as long as the pending entry or the tunnel holding that msg1 lasts. Accepted (2026-10-15):
   classical IX already resends its stored msg2 to any source that replays msg1, with no clock at
   all, and a per-handshake clock is what broke a path that only works one way.
 - **Injected symbols** can stop a fragmented handshake where they could not stop an unfragmented
@@ -389,7 +391,7 @@ unfragmented hybrid message is dropped. What hybrid adds:
 A hybrid responder that answered msg1 keeps a pending entry, keyed by its local index, until
 msg3 arrives or the handshake timeout (5.5 s by default) passes. msg1 is cleartext and nothing
 covers `e` or `Time`, so from one captured v3 msg1 an attacker can mint distinct valid msg1s
-with a fresh `e` and a bumped `Time`. Each misses the answered-msg1 cache, costs the responder
+with a fresh `e` and a bumped `Time`. Each is a new msg1 to the responder and costs it
 the whole msg1 (two signature verifications, two encapsulations, four DH operations, the
 certificate checks) and a pending entry, and the fragment table stays near empty because a
 complete burst arrives together, so cookies are never demanded and spoofed sources work.

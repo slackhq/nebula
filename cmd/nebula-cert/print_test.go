@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/cert_test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -217,6 +218,22 @@ func Test_printCert(t *testing.T) {
 	assert.Empty(t, eb.String())
 	assert.Equal(t, []byte{0x89, 'P', 'N', 'G'}, ob.Bytes()[:4])
 	assert.NotContains(t, ob.String(), `"details"`)
+}
+
+// A certificate for a curve a newer nebula added can't be used, but print still shows it
+func Test_printCertUnknownCurve(t *testing.T) {
+	_, _, _, caPEM := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	tf, err := os.CreateTemp("", "print-cert")
+	require.NoError(t, err)
+	defer os.Remove(tf.Name())
+	_, err = tf.Write(cert_test.WithCurve(caPEM, cert.Curve(2)))
+	require.NoError(t, err)
+
+	ob := &bytes.Buffer{}
+	eb := &bytes.Buffer{}
+	require.NoError(t, printCert([]string{"-json", "-path", tf.Name()}, ob, eb))
+	assert.Contains(t, ob.String(), `"curve":"2"`)
+	assert.Empty(t, eb.String())
 }
 
 // NewTestCaCert will generate a CA cert

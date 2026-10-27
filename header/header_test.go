@@ -96,8 +96,10 @@ func TestTypeMap(t *testing.T) {
 		Test:        &subTypeTestMap,
 		CloseTunnel: &subTypeNoneMap,
 		Handshake: {
-			HandshakeIXPSK0:            "ix_psk0",
-			HandshakeIXHybridMLKEM1024: "ix_hybrid_mlkem1024",
+			HandshakeIXPSK0:                      "ix_psk0",
+			HandshakeIXPSK0Fragmented:            "ix_psk0_fragmented",
+			HandshakeIXHybridMLKEM1024:           "ix_hybrid_mlkem1024",
+			HandshakeIXHybridMLKEM1024Fragmented: "ix_hybrid_mlkem1024_fragmented",
 		},
 		Control: &subTypeNoneMap,
 	}, subTypeMap)
@@ -107,10 +109,6 @@ func TestTypeMap(t *testing.T) {
 // subtype. IsValidSubType was reimplemented as an explicit switch; this keeps
 // the original behavior around so we can prove the switch is equivalent to it.
 func mapIsValidSubType(t MessageType, s MessageSubType) bool {
-	// Any handshake pattern may also travel fragmented.
-	if t == Handshake {
-		s = HandshakePattern(s)
-	}
 	if n, ok := subTypeMap[t]; ok {
 		if _, ok := (*n)[s]; ok {
 			return true
@@ -127,12 +125,13 @@ func TestIsValidSubType(t *testing.T) {
 	assert.False(t, IsValidSubType(Message, 2))
 
 	assert.True(t, IsValidSubType(Handshake, HandshakeIXPSK0))
-	assert.True(t, IsValidSubType(Handshake, HandshakeIXPSK0|HandshakeFragmented), "any pattern may travel fragmented")
-	assert.False(t, IsValidSubType(Handshake, HandshakeXXPSK0|HandshakeFragmented))
-	assert.True(t, IsValidSubType(Handshake, HandshakeIXHybridMLKEM1024|HandshakeFragmented))
-	// 2 was the unreleased ix_psk2_mlkem1024 and stays reserved.
+	assert.True(t, IsValidSubType(Handshake, HandshakeIXPSK0Fragmented))
+	assert.False(t, IsValidSubType(Handshake, HandshakeXXPSK0Fragmented), "a pattern that is not valid is not valid fragmented either")
+	assert.True(t, IsValidSubType(Handshake, HandshakeIXHybridMLKEM1024))
+	assert.True(t, IsValidSubType(Handshake, HandshakeIXHybridMLKEM1024Fragmented))
+	// 2 was the unreleased ix_psk2_mlkem1024 and stays reserved, fragmented or not.
 	assert.False(t, IsValidSubType(Handshake, 2))
-	assert.False(t, IsValidSubType(Handshake, 2|HandshakeFragmented))
+	assert.False(t, IsValidSubType(Handshake, 0x82))
 	// HandshakeXXPSK0 is defined but not a wire-valid subtype.
 	assert.False(t, IsValidSubType(Handshake, HandshakeXXPSK0))
 
@@ -183,14 +182,29 @@ func TestHeader_MarshalJSON(t *testing.T) {
 }
 
 func TestHandshakeFragmented(t *testing.T) {
-	st := HandshakeIXPSK0 | HandshakeFragmented
-	assert.True(t, IsFragmented(st))
-	assert.False(t, IsFragmented(HandshakeIXPSK0))
-	assert.Equal(t, HandshakeIXPSK0, HandshakePattern(st))
-	assert.Equal(t, HandshakeIXPSK0, HandshakePattern(HandshakeIXPSK0))
-	assert.Equal(t, "ix_psk0_fragmented", SubTypeName(Handshake, st))
+	for _, c := range []struct{ pattern, fragmented MessageSubType }{
+		{HandshakeIXPSK0, HandshakeIXPSK0Fragmented},
+		{HandshakeXXPSK0, HandshakeXXPSK0Fragmented},
+		{HandshakeIXHybridMLKEM1024, HandshakeIXHybridMLKEM1024Fragmented},
+	} {
+		st, ok := FragmentedSubtype(c.pattern)
+		assert.True(t, ok)
+		assert.Equal(t, c.fragmented, st)
+		p, ok := FragmentedPattern(c.fragmented)
+		assert.True(t, ok)
+		assert.Equal(t, c.pattern, p)
+
+		_, ok = FragmentedPattern(c.pattern)
+		assert.False(t, ok, "an unfragmented subtype has no fragmented pattern")
+		_, ok = FragmentedSubtype(c.fragmented)
+		assert.False(t, ok, "a fragmented subtype has no fragmented form of its own")
+	}
+	_, ok := FragmentedSubtype(0x7f)
+	assert.False(t, ok)
+
+	assert.Equal(t, "ix_psk0_fragmented", SubTypeName(Handshake, HandshakeIXPSK0Fragmented))
 	assert.Equal(t, "ix_psk0", SubTypeName(Handshake, HandshakeIXPSK0))
-	assert.Equal(t, "ix_hybrid_mlkem1024_fragmented", SubTypeName(Handshake, HandshakeIXHybridMLKEM1024|HandshakeFragmented))
-	assert.Equal(t, "unknown", SubTypeName(Handshake, 0x7f|HandshakeFragmented))
-	assert.Equal(t, "unknown", SubTypeName(Message, MessageNone|HandshakeFragmented), "only handshakes fragment")
+	assert.Equal(t, "unknown", SubTypeName(Handshake, HandshakeXXPSK0Fragmented), "named once XX is")
+	assert.Equal(t, "ix_hybrid_mlkem1024_fragmented", SubTypeName(Handshake, HandshakeIXHybridMLKEM1024Fragmented))
+	assert.Equal(t, "unknown", SubTypeName(Message, 0x80), "only handshakes fragment")
 }

@@ -12,9 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fragmented handshakes: a handshake message too big for one packet, from a certificate with many groups, names or
   networks, is sent as Reed-Solomon coded fragments that each fit the IPv6 minimum MTU, rather than relying on IP
   fragmentation. `handshakes.fragment` (`auto`, `always`, `never`) chooses when, and `handshakes.repair_delay` how
-  long repair fragments trail. A node reassembles fragments unless set to `never`; an older peer can not, but the
-  oversized packet it could have read needed IP fragmentation to arrive. See `docs/fragmented-handshakes.md`.
+  long repair fragments trail: a tenth of `handshakes.try_interval` unless set, and under half of it. A node
+  reassembles fragments unless set to `never`; an older peer can not, but the oversized packet it could have read
+  needed IP fragmentation to arrive. See `docs/fragmented-handshakes.md`.
+- New handshake subtypes on the wire: `ix_psk0_fragmented` (0x80) marks the fragments of an IX handshake message and
+  the cookie replies a responder sends before it keeps state, and 0x81 is reserved for XX. An older node drops both
+  as unsupported subtypes.
+- Message metrics `messages.{tx,rx}.handshake_ixpsk0_fragmented` and `messages.{tx,rx}.handshake_xxpsk0_fragmented`
+  count fragment packets and cookie replies apart from `handshake_ixpsk0`.
 
+- `service.Listen` supports `tcp6` and follows `net.Listen` address family semantics for `tcp`, `tcp4` and `tcp6`.
 - A control socket that provides access to all of the ssh debug server's commands along with support
   for running `nebula ctl <command>` as a client from the CLI.
 - An info socket that serves the `identity` command over HTTP: `GET /v1/identity` for this node,
@@ -29,8 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a CA too when `-in-pq-key` passes the version 3 key of its first extension.
   The v2 form is optional: `nebula-cert ca -version 3 -no-v2-form` makes a CA, and `nebula-cert sign -no-v2-form` a
   certificate, for networks where every node has a version 3 certificate. A node holding one speaks only hybrid
-  handshakes. Hybrid handshakes always travel as fragmented handshakes, whatever `handshakes.fragment` says. See
-  `docs/pq-handshake.md`.
+  handshakes. Hybrid handshakes always travel as fragmented handshakes, whatever `handshakes.fragment` says: on the
+  wire they are `ix_hybrid_mlkem1024_fragmented` (0x83), counted by
+  `messages.{tx,rx}.handshake_ixhybridmlkem1024_fragmented`. See `docs/pq-handshake.md`.
 
 ### Changed
 
@@ -44,6 +52,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   post-quantum one; a version 3 certificate's are those of the whole certificate, its v2 form's are
   `cert.V2Form(c).Signature()`. Callers that want the old value of a v1 or v2 certificate use `.Classical`.
 
+### Changed
+
+- `nebula-cert keygen` refuses to overwrite an existing `-out-key` or `-out-pub` file, matching `ca` and `sign`.
+  Overwriting kept the old file's mode, so a key written over a world-readable file stayed world-readable.
+
 ### Removed
 
 - The SSH debug server's `start-cpu-profile`, `stop-cpu-profile`, `save-heap-profile`, `save-mutex-profile`, and
@@ -51,12 +64,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A packet for an `unsafe_routes` entry with several gateways now waits for the handshake with the gateway its flow
+  hashes to, as with a single gateway, instead of going to another gateway that had a tunnel. Once the handshake
+  completed, the rest of the flow went to the gateway it hashes to, which reset TCP connections it had never seen.
+  A gateway is passed over only after a handshake with it times out or its tunnel is found dead, until a handshake
+  with it succeeds. A connection that started on another gateway while its own was passed over is still reset when
+  its own gateway comes back, including one started in the single handshake between that gateway recovering and
+  Nebula noticing.
+- A node whose UDP socket is IPv4, as with the default `listen.host` of `0.0.0.0`, no longer tries to handshake,
+  roam or punch to a peer's IPv6 addresses, which it could never send to, or advertise its own IPv6 interface
+  addresses, which it could never receive on.
+- The `service` package now works over an IPv6 overlay. It added only an IPv4 route, only the cert's first
+  network (always labeled IPv4), and handed every inbound packet to gvisor as IPv4, so IPv6 dials failed and
+  IPv6 replies were dropped.
+- A peer whose certificate carries an unsafe network overlapping the overlay could send packets as any node in
+  it: the firewall accepted any source inside the unsafe network. A source address inside this node's own
+  networks must now be the sending peer's own; through an unsafe network it is dropped, counted as a dropped
+  remote address. A peer whose unsafe network deliberately covers this node's overlay range therefore no
+  longer delivers packets from non-nebula hosts in that range either.
 - Signing a v2 certificate with an empty name, a name longer than 253 bytes, or an empty group now fails.
   These certificates were signed successfully but could not be loaded.
 - `create-tunnel -address <ip:port>` panicked on a nil RemoteList and, over the ssh debug server, took nebula
   down with it. A hostinfo returned by StartHandshake had no RemoteList until the handshake loop's first
   pass attached one, and `create-tunnel -address` set the remote before that. The list is now attached when
   the handshake starts, so a pending hostinfo never exists without one.
+- A firewall rule with `group: []`, `groups:` with no value, or a `groups` entry that isn't a string, such as
+  `groups: [1, 2]`, no longer crashes Nebula on startup or reload. A null `group` or `groups` means none was
+  provided. An unquoted int or bool group, such as `group: 7`, is still read as a string but logs a warning to
+  quote it, since YAML has already turned a value like `007` into `7`. A float, a date, an empty array, a null
+  entry, a nested array, or a map is rejected with an error.
 
 ## [1.11.1] - 2026-08-21
 

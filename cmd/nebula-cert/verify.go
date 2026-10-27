@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -21,7 +22,7 @@ func newVerifyFlags() *verifyFlags {
 	vf := verifyFlags{set: flag.NewFlagSet("verify", flag.ContinueOnError)}
 	vf.set.Usage = func() {}
 	vf.caPath = vf.set.String("ca", "", "Required: path to a file containing one or more ca certificates")
-	vf.certPath = vf.set.String("crt", "", "Required: path to a file containing a single certificate")
+	vf.certPath = vf.set.String("crt", "", "Required: path to a file containing one or more certificates")
 	return &vf
 }
 
@@ -54,9 +55,14 @@ func verify(args []string, out io.Writer, errOut io.Writer) error {
 	defer caReader.Close()
 
 	caPool, err := cert.NewCAPoolFromPEMReader(caReader)
-	// Expired CAs, and v3 CAs this build can not run, are left out of the pool; certificates they signed fail below.
-	if err != nil && !errors.Is(err, cert.ErrExpired) && !errors.Is(err, cert.ErrPQUnavailable) {
+	if caPool == nil {
 		return fmt.Errorf("error while adding ca cert to pool: %w", err)
+	}
+	for _, e := range cert.SkippedCertificates(err) {
+		fmt.Fprintf(errOut, "skipping ca: %s\n", e)
+	}
+	if len(caPool.CAs) == 0 {
+		return errors.New("no valid CA certificates present")
 	}
 
 	rawCert, err := readInput("crt", *vf.certPath, &claims)
@@ -64,24 +70,38 @@ func verify(args []string, out io.Writer, errOut io.Writer) error {
 		return fmt.Errorf("unable to read crt: %w", err)
 	}
 	var errs []error
-	for {
-		if len(rawCert) == 0 {
-			break
-		}
-		c, extra, err := cert.UnmarshalCertificateFromPEM(rawCert)
-		if err != nil {
+	var checked int
+	scanner := cert.NewPEMScanner(bytes.NewReader(rawCert))
+	for i := 1; scanner.Scan(); i++ {
+		c, _, err := cert.UnmarshalCertificateFromPEM(scanner.Bytes())
+		if errors.Is(err, cert.ErrUnknownVersion) {
+			fmt.Fprintf(errOut, "skipping crt: certificate %d: %s\n", i, err)
+			continue
+		} else if err != nil {
 			return fmt.Errorf("error while parsing crt: %w", err)
 		}
-		rawCert = extra
+		if err := cert.CheckKnownCurve(c); err != nil {
+			fmt.Fprintf(errOut, "skipping crt: certificate %d: %s\n", i, err)
+			continue
+		}
+		checked++
 		_, err = caPool.VerifyCertificate(time.Now(), c)
 		if err != nil {
 			switch {
 			case errors.Is(err, cert.ErrCaNotFound):
-				errs = append(errs, fmt.Errorf("error while verifying certificate v%d %s with issuer %s: %w", c.Version(), c.Name(), c.Issuer(), err))
+				errs = append(errs, fmt.Errorf("error while verifying certificate v%d %s with issuer %s: %w", c.Version(), cert.QuoteName(c.Name()), c.Issuer(), err))
 			default:
 				errs = append(errs, fmt.Errorf("error while verifying certificate %+v: %w", c, err))
 			}
 		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("error while parsing crt: %w: %w", cert.ErrInvalidPEMBlock, err)
+	}
+
+	if checked == 0 {
+		return errors.New("no valid certificates found in crt")
 	}
 
 	return errors.Join(errs...)

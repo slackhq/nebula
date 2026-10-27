@@ -1,10 +1,12 @@
 package cert
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 
@@ -12,6 +14,14 @@ import (
 )
 
 var ErrTruncatedPEMBlock = errors.New("truncated PEM block")
+
+// NewPEMScanner returns a bufio.Scanner over each PEM block in r, with room for a certificate of MaxCertificateSize.
+func NewPEMScanner(r io.Reader) *bufio.Scanner {
+	s := bufio.NewScanner(r)
+	s.Buffer(nil, 2*MaxCertificateSize)
+	s.Split(SplitPEM)
+	return s
+}
 
 // SplitPEM is a split function for bufio.Scanner that returns each PEM block.
 func SplitPEM(data []byte, atEOF bool) (advance int, token []byte, err error) {
@@ -251,7 +261,8 @@ func UnmarshalCertificateFromPEM(b []byte) (Certificate, []byte, error) {
 }
 
 // unmarshalCertificateBlock decodes a single PEM block into a certificate.
-// It expects a Nebula certificate banner and returns ErrInvalidPEMCertificateBanner otherwise.
+// It returns ErrUnknownVersion for a "NEBULA CERTIFICATE V" banner it does not know, a newer version most likely, and
+// ErrInvalidPEMCertificateBanner for anything else.
 func unmarshalCertificateBlock(block *pem.Block) (Certificate, error) {
 	switch block.Type {
 	// Implementations must validate the resulting certificate contains valid information
@@ -262,8 +273,18 @@ func unmarshalCertificateBlock(block *pem.Block) (Certificate, error) {
 	case CertificateV3Banner:
 		return unmarshalCertificateV3(block.Bytes, nil, Curve_CURVE25519)
 	default:
-		return nil, ErrInvalidPEMCertificateBanner
+		if strings.HasPrefix(block.Type, CertificateBanner+" V") {
+			return nil, fmt.Errorf("%w: %s", ErrUnknownVersion, quoteBanner(block.Type))
+		}
+		return nil, fmt.Errorf("%w: %s", ErrInvalidPEMCertificateBanner, quoteBanner(block.Type))
 	}
+}
+
+// maxBannerLen caps how much of an unrecognized PEM banner goes into an error, the input may not be trusted.
+const maxBannerLen = 64
+
+func quoteBanner(banner string) string {
+	return quoteCapped(banner, maxBannerLen)
 }
 
 func marshalCertPublicKeyToPEM(c Certificate) []byte {

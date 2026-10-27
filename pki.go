@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"bytes"
 	"crypto/fips140"
 	"crypto/sha256"
 	"encoding/binary"
@@ -166,7 +167,7 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 		cipher = currentState.cipher
 	}
 
-	newState, err := newCertStateFromConfig(c, cipher)
+	newState, err := newCertStateFromConfig(p.l, c, cipher)
 	if err != nil {
 		return util.NewContextualError("Could not load client cert", nil, err)
 	}
@@ -424,7 +425,7 @@ func (cs *CertState) MarshalJSON() ([]byte, error) {
 	return json.Marshal(msg)
 }
 
-func newCertStateFromConfig(c *config.C, cipher string) (*CertState, error) {
+func newCertStateFromConfig(l *slog.Logger, c *config.C, cipher string) (*CertState, error) {
 	var err error
 
 	privPathOrPEM := c.GetString("pki.key", "")
@@ -455,11 +456,18 @@ func newCertStateFromConfig(c *config.C, cipher string) (*CertState, error) {
 		}
 	}
 
-	var crt, v1, v2, v3 cert.Certificate
-	for {
+	var v1, v2, v3 cert.Certificate
+	var skipped []error
+	scanner := cert.NewPEMScanner(bytes.NewReader(rawCert))
+	for i := 1; scanner.Scan(); i++ {
 		// Load the certificate
-		crt, rawCert, err = loadCertificate(rawCert)
-		if err != nil {
+		crt, _, err := loadCertificate(scanner.Bytes())
+		if errors.Is(err, cert.ErrUnknownVersion) || errors.Is(err, cert.ErrUnknownCurve) {
+			err = fmt.Errorf("certificate %d: %w", i, err)
+			l.Warn("Skipping a certificate in pki.cert that this version of nebula does not support", "error", err)
+			skipped = append(skipped, err)
+			continue
+		} else if err != nil {
 			return nil, err
 		}
 
@@ -486,10 +494,9 @@ func newCertStateFromConfig(c *config.C, cipher string) (*CertState, error) {
 		default:
 			return nil, fmt.Errorf("unknown certificate version %v", crt.Version())
 		}
-
-		if len(rawCert) == 0 || strings.TrimSpace(string(rawCert)) == "" {
-			break
-		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error while unmarshaling pki.cert: %w: %w", cert.ErrInvalidPEMBlock, err)
 	}
 
 	if v3 != nil {
@@ -515,6 +522,9 @@ func newCertStateFromConfig(c *config.C, cipher string) (*CertState, error) {
 	}
 
 	if v1 == nil && v2 == nil && v3 == nil {
+		if len(skipped) > 0 {
+			return nil, fmt.Errorf("no valid certificates found in pki.cert, skipped: %w", errors.Join(skipped...))
+		}
 		return nil, errors.New("no certificates found in pki.cert")
 	}
 
@@ -731,8 +741,14 @@ func loadPrivateKey(privPathOrPEM string) (rawKey, classicalKey []byte, curve ce
 
 func loadCertificate(b []byte) (cert.Certificate, []byte, error) {
 	c, b, err := cert.UnmarshalCertificateFromPEM(b)
-	if err != nil {
+	if errors.Is(err, cert.ErrUnknownVersion) {
+		return nil, b, err
+	} else if err != nil {
 		return nil, b, fmt.Errorf("error while unmarshaling pki.cert: %w", err)
+	}
+
+	if err := cert.CheckKnownCurve(c); err != nil {
+		return nil, b, err
 	}
 
 	if c.Expired(time.Now()) {
@@ -770,14 +786,15 @@ func loadCAPoolFromConfig(l *slog.Logger, c *config.C) (*cert.CAPool, error) {
 	defer caReader.Close()
 
 	caPool, err := cert.NewCAPoolFromPEMReader(caReader)
-	if errors.Is(err, cert.ErrPQUnavailable) {
-		// A bundle shared with v3 nodes stays usable here, without its v3 CAs.
-		l.Warn("Leaving version 3 CA certificates out of the CA pool, this build can not verify them", "error", err)
-		if len(caPool.CAs) == 0 {
-			return nil, errors.New("no valid CA certificates present")
-		}
+	if caPool == nil {
+		return nil, fmt.Errorf("error while adding CA certificate to CA trust store: %w", err)
 	}
-	if errors.Is(err, cert.ErrExpired) {
+
+	if err != nil {
+		for _, e := range cert.SkippedCertificates(err) {
+			l.Warn("Skipping a CA certificate that this version of nebula does not support", "error", e)
+		}
+
 		var expired int
 		for _, crt := range caPool.CAs {
 			if crt.Certificate.Expired(time.Now()) {
@@ -789,9 +806,6 @@ func loadCAPoolFromConfig(l *slog.Logger, c *config.C) (*cert.CAPool, error) {
 		if expired >= len(caPool.CAs) {
 			return nil, errors.New("no valid CA certificates present")
 		}
-
-	} else if err != nil && !errors.Is(err, cert.ErrPQUnavailable) {
-		return nil, fmt.Errorf("error while adding CA certificate to CA trust store: %s", err)
 	}
 
 	bl := c.GetStringSlice("pki.blocklist", []string{})

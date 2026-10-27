@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"time"
 
 	"github.com/slackhq/nebula/cert"
@@ -206,7 +207,7 @@ func (hm *HandshakeManager) buildPQAttempt(hh *HandshakeHostInfo) bool {
 		return false
 	}
 
-	sender, err := fragment.NewSender(msg[header.Len:], subtype|header.HandshakeFragmented, 0, 1, pq.index)
+	sender, err := fragment.NewSender(msg, pq.index)
 	if err != nil {
 		hm.f.l.Error("Failed to fragment handshake",
 			"vpnAddrs", hh.hostinfo.vpnAddrs, "error", err)
@@ -296,7 +297,7 @@ func (hm *HandshakeManager) acceptHybrid(via ViaSender, h *header.H) bool {
 	case !hasV3:
 		hm.l.Debug("dropping hybrid handshake, no v3 certificate to answer it with", "from", via)
 		return false
-	case header.HandshakePattern(h.Subtype) != mine:
+	case handshakePattern(h.Subtype) != mine:
 		// The peer's suite uses another KEM. Like a peer without PQ, it
 		// falls back to classical unless either side requires PQ.
 		hm.l.Debug("dropping hybrid handshake, our v3 certificate's suite uses another KEM", "from", via,
@@ -309,10 +310,6 @@ func (hm *HandshakeManager) acceptHybrid(via ViaSender, h *header.H) bool {
 // continuePQ collects msg2 fragments for the initiator's PQ attempt, one slot
 // per responder FragID, and processes the first msg2 to complete.
 func (hm *HandshakeManager) continuePQ(via ViaSender, hh *HandshakeHostInfo, h *header.H, fh fragment.Header, sym []byte) {
-	if int(fh.MsgLen) > fragMaxMsgLen {
-		return
-	}
-
 	hh.Lock()
 	defer hh.Unlock()
 
@@ -369,6 +366,11 @@ func (hm *HandshakeManager) handlePQCookie(via ViaSender, hh *HandshakeHostInfo,
 	pq.sender.SetCookie(c)
 	pq.heard = true
 
+	// As in handleCookie: a reply from an address the attempt was not sent to only sets the cookie, an immediate
+	// resend to it would aim the whole msg1 at whatever address a forged reply claims.
+	if !via.IsRelayed && !slices.Contains(hh.lastRemotes, via.UdpAddr) {
+		return
+	}
 	now := time.Now()
 	if now.Sub(pq.cookieResendAt) < hm.config.tryInterval {
 		return
@@ -378,8 +380,15 @@ func (hm *HandshakeManager) handlePQCookie(via ViaSender, hh *HandshakeHostInfo,
 	if err != nil {
 		return
 	}
-	hm.messageMetrics.Tx(header.Handshake, pq.subtype|header.HandshakeFragmented, int64(len(pkts)+len(later)))
-	if err := hm.sendFragmented(pkts, later, hm.sendTo(via)); err != nil {
+	send, err := hm.sendTo(via)
+	if err != nil {
+		hm.l.Debug("Failed to resend handshake with cookie", "to", via, "error", err)
+		return
+	}
+	// A hybrid handshake only travels as fragments.
+	fragmented, _ := header.FragmentedSubtype(pq.subtype)
+	hm.messageMetrics.Tx(header.Handshake, fragmented, int64(len(pkts)+len(later)))
+	if err := hm.sendFragmented(pkts, later, send); err != nil {
 		hm.l.Debug("Failed to resend handshake with cookie", "to", via, "error", err)
 	}
 }

@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -118,6 +119,39 @@ func (hm *HandshakeManager) crossesHybrid(vpnAddrs []netip.Addr, now time.Time) 
 	return false
 }
 
+// resendPendingHybrid answers a repeat of a msg1 a pending responder already answered with its msg2 again, fresh
+// symbols on the path this copy came by, rather than starting a second handshake for it. It reports whether it did.
+func (hm *HandshakeManager) resendPendingHybrid(via ViaSender, packet []byte, in msg1Info) bool {
+	var hostinfo *HostInfo
+	hm.RLock()
+	for _, hh := range hm.hybrid.responders {
+		if bytes.Equal(hh.hostinfo.HandshakePacket[handshakePacketStage0], packet[header.Len:]) {
+			hostinfo = hh.hostinfo
+			break
+		}
+	}
+	hm.RUnlock()
+	if hostinfo == nil {
+		return false
+	}
+	if msg := hostinfo.HandshakePacket[handshakePacketStage2]; msg != nil {
+		hm.sendHandshakeResponse(via, msg, hostinfo, true, in)
+	}
+	return true
+}
+
+// completedBy returns the tunnel to addr that msg1 packet already made, or nil.
+func (hm *HandshakeManager) completedBy(addr netip.Addr, packet []byte) *HostInfo {
+	hm.mainHostMap.RLock()
+	defer hm.mainHostMap.RUnlock()
+	for _, hostinfo := range hm.mainHostMap.unlockedGetHostList(addr) {
+		if bytes.Equal(hostinfo.HandshakePacket[handshakePacketStage0], packet[header.Len:]) {
+			return hostinfo
+		}
+	}
+	return nil
+}
+
 // awaitMsg3 keeps a responder's hybrid handshake pending after msg1, and sends
 // msg2. hh is already in the indexes under the local index the Machine
 // allocated.
@@ -134,6 +168,15 @@ func (hm *HandshakeManager) awaitMsg3(via ViaSender, hh *HandshakeHostInfo, mach
 	vpnAddrs, anyVpnAddrsInCommon, ok := hm.validatePeerCert(via, remoteCert)
 	if !ok {
 		hm.DeleteHostInfo(hostinfo)
+		return
+	}
+	// A repeat of a msg1 whose tunnel is already up, the initiator having retried before msg2 reached it, is answered
+	// with the msg2 it already has, as a classical repeat is.
+	if existing := hm.completedBy(vpnAddrs[0], packet); existing != nil {
+		hm.DeleteHostInfo(hostinfo)
+		if msg := existing.HandshakePacket[handshakePacketStage2]; msg != nil {
+			hm.sendHandshakeResponse(via, msg, existing, true, in)
+		}
 		return
 	}
 	var rh header.H
@@ -382,10 +425,16 @@ func (hm *HandshakeManager) startHybridConfirm(via ViaSender, hostinfo *HostInfo
 	if err := h.Parse(msg3); err != nil {
 		return
 	}
-	subtype := h.Subtype | header.HandshakeFragmented
-	s, err := fragment.NewSender(msg3[header.Len:], subtype, h.RemoteIndex, h.MessageCounter, hostinfo.localIndexId)
+	// A hybrid handshake only travels as fragments.
+	subtype, _ := header.FragmentedSubtype(h.Subtype)
+	s, err := fragment.NewSender(msg3, hostinfo.localIndexId)
 	if err != nil {
 		hostinfo.logger(hm.l).Error("Failed to fragment handshake", "error", err)
+		return
+	}
+	send, err := hm.sendTo(via)
+	if err != nil {
+		hostinfo.logger(hm.l).Error("Failed to send handshake message", "error", err)
 		return
 	}
 
@@ -394,7 +443,7 @@ func (hm *HandshakeManager) startHybridConfirm(via ViaSender, hostinfo *HostInfo
 		hostinfo:     hostinfo,
 		subtype:      subtype,
 		sender:       s,
-		send:         hm.sendTo(via),
+		send:         send,
 		handshakeLen: handshakeLen,
 		deadline:     now.Add(hsTimeout(hm.config.retries, hm.config.tryInterval)),
 		next:         now.Add(hm.config.tryInterval),
