@@ -93,7 +93,7 @@ func Run(args []string) int {
 		fmt.Fprintf(os.Stderr, "\nRun `nebula ctl help` for the available commands.\n")
 	}
 
-	own, cmdArgs := localapi.SplitCommandLine(fs, args)
+	own, cmdArgs := splitLine(fs, args)
 	if err := fs.Parse(own); err != nil {
 		// fs has already printed the usage, or the problem. Asking for help is not a
 		// failure, and a script that chains on `nebula ctl -h` should not see one.
@@ -115,44 +115,7 @@ func Run(args []string) int {
 
 	client := &localapi.Client{Path: path}
 
-	// Ask the daemon what it serves before parsing anything. The flags belong to the
-	// command, which lives over there, so this is what lets the CLI keep its usual shape
-	// while the wire protocol stays a named-parameter API rather than a shipped argv.
-	schema, err := client.Describe()
-	if err != nil {
-		// A daemon that answered was reached, and what it said, or that it could not be
-		// read, is the whole message.
-		var refused *localapi.DaemonError
-		var unread *localapi.ReplyError
-		if errors.As(err, &refused) || errors.As(err, &unread) {
-			fmt.Fprintf(os.Stderr, "nebula: %s\n", err)
-			return 1
-		}
-
-		// Otherwise the operating system said why, and it is passed on as it came: a
-		// permission denied or a missing socket says more about what to do than a
-		// guess at the operator's setup would.
-		fmt.Fprintf(os.Stderr, "nebula: could not reach the control socket at %s: %s\n", path, err)
-		return 1
-	}
-
-	req, printedHelp, err := localapi.ParseCommandLine(schema, cmdArgs, "nebula "+Word, os.Stdout)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "nebula: %s\n", err)
-		return 1
-	}
-
-	if printedHelp {
-		return 0
-	}
-
-	res, err := client.Invoke(string(req.Name), req.Params, req.Args, localapi.WireFormat(req.Format))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "nebula: %s\n", err)
-		return 1
-	}
-
-	out := res.Render(req.Format)
+	out, err := client.InvokeLine(cmdArgs, "nebula "+Word, os.Stdout)
 	if out != "" {
 		fmt.Fprint(os.Stdout, out)
 		if !strings.HasSuffix(out, "\n") {
@@ -160,22 +123,78 @@ func Run(args []string) int {
 		}
 	}
 
-	// Error set is the one failure signal, whether the request never ran or the command
-	// ran and refused. A refusal asked for in JSON has already gone to stdout as the
-	// {ok, reason} object, and is not said again on stderr; the exit status carries it.
-	if res.Error == "" {
+	if err == nil {
 		return 0
 	}
 
-	if len(res.Result) == 0 && len(res.Text) == 0 {
-		msg := res.Error
-		if !strings.HasSuffix(msg, "\n") {
-			msg += "\n"
-		}
-		fmt.Fprint(os.Stderr, msg)
+	// A JSON refusal is already on stdout.
+	if out != "" {
+		return 1
 	}
 
+	// Refusals are printed as is; other errors get a prefix.
+	var refused *localapi.DaemonError
+	if !errors.As(err, &refused) {
+		fmt.Fprintf(os.Stderr, "nebula: %s\n", err)
+		return 1
+	}
+
+	msg := refused.Msg
+	if !strings.HasSuffix(msg, "\n") {
+		msg += "\n"
+	}
+	fmt.Fprint(os.Stderr, msg)
 	return 1
+}
+
+// splitLine splits args into the client's flags (own) and the command line (cmd).
+// Before the command word every flag is the client's. After it, only flags defined on fs
+// are lifted, which is safe because commands can't declare reserved client flags. A "--"
+// after the command word ends lifting.
+func splitLine(fs *flag.FlagSet, args []string) (own, cmd []string) {
+	seenCommand := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+
+		if a == "--" {
+			if seenCommand {
+				return own, append(cmd, args[i:]...)
+			}
+			seenCommand = true
+			continue
+		}
+
+		if !seenCommand {
+			if len(a) < 2 || a[0] != '-' {
+				seenCommand = true
+				cmd = append(cmd, a)
+				continue
+			}
+
+			own = append(own, a)
+			if f, hasValue := commands.LookupArg(fs, a); f != nil && !hasValue && !commands.IsBoolFlag(f) && i+1 < len(args) {
+				i++
+				own = append(own, args[i])
+			}
+			continue
+		}
+
+		if len(a) >= 2 && a[0] == '-' {
+			// Parsed as ParseArgs would, so lifted values match the server's reading.
+			if f, hasValue := commands.LookupArg(fs, a); f != nil {
+				own = append(own, a)
+				if !hasValue && !commands.IsBoolFlag(f) && i+1 < len(args) {
+					i++
+					own = append(own, args[i])
+				}
+				continue
+			}
+		}
+
+		cmd = append(cmd, a)
+	}
+
+	return own, cmd
 }
 
 // resolveSocket decides which socket to talk to. It never searches: the answer is the
