@@ -19,21 +19,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// recordingConn captures what is written to it.
-type recordingConn struct {
+// captureConn captures what is written to it.
+type captureConn struct {
 	udp.NoopConn
 	sync.Mutex
 	sent [][]byte
 }
 
-func (c *recordingConn) WriteTo(b []byte, _ netip.AddrPort) error {
+func (c *captureConn) WriteTo(b []byte, _ netip.AddrPort) error {
 	c.Lock()
 	defer c.Unlock()
 	c.sent = append(c.sent, append([]byte(nil), b...))
 	return nil
 }
 
-func (c *recordingConn) take() [][]byte {
+func (c *captureConn) take() [][]byte {
 	c.Lock()
 	defer c.Unlock()
 	s := c.sent
@@ -41,10 +41,10 @@ func (c *recordingConn) take() [][]byte {
 	return s
 }
 
-func newFragTestManager(t *testing.T) (*HandshakeManager, *recordingConn) {
+func newFragTestManager(t *testing.T) (*HandshakeManager, *captureConn) {
 	t.Helper()
 	l := test.NewLogger()
-	conn := &recordingConn{}
+	conn := &captureConn{}
 	cfg := defaultHandshakeConfig
 	// Repair fragments go out with the data ones, so a test sees a whole send at once.
 	cfg.fragment = fragmentConfig{}

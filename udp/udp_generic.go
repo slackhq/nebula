@@ -22,7 +22,8 @@ import (
 
 type GenericConn struct {
 	*net.UDPConn
-	l *slog.Logger
+	l    *slog.Logger
+	isV4 bool
 }
 
 var _ Conn = &GenericConn{}
@@ -34,7 +35,15 @@ func NewGenericListener(l *slog.Logger, s Settings) (Conn, error) {
 		return nil, err
 	}
 	if uc, ok := pc.(*net.UDPConn); ok {
-		return &GenericConn{UDPConn: uc, l: l}, nil
+		c := &GenericConn{UDPConn: uc, l: l}
+		// Go picks the socket's family from the listen address and the platform, an IPv4 local address means it
+		// opened an IPv4 socket
+		la, err := c.LocalAddr()
+		if err != nil {
+			return nil, err
+		}
+		c.isV4 = la.Addr().Is4()
+		return c, nil
 	}
 	return nil, fmt.Errorf("Unexpected PacketConn: %T %#v", pc, pc)
 }
@@ -55,6 +64,10 @@ func (u *GenericConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, er
 		}
 	}
 	return written, nil
+}
+
+func (u *GenericConn) IPv4Only() bool {
+	return u.isV4
 }
 
 func (u *GenericConn) LocalAddr() (netip.AddrPort, error) {

@@ -89,10 +89,10 @@ func TestSamePathIgnoresCase(t *testing.T) {
 
 // TestAccessChangedIgnoresTheMode: only the group is in a pipe's security descriptor.
 func TestAccessChangedIgnoresTheMode(t *testing.T) {
-	g := Group{Name: "Users", ID: "S-1-5-32-545"}
-	assert.False(t, accessChanged(Access{Mode: 0660, Group: g}, Access{Mode: 0666, Group: g}))
-	assert.True(t, accessChanged(Access{Mode: 0660, Group: g}, Access{Mode: 0660}))
-	assert.True(t, accessChanged(Access{Mode: 0600}, Access{Mode: 0600, Group: g}))
+	g := Group{name: "Users", id: "S-1-5-32-545"}
+	assert.False(t, accessChanged(Access{mode: 0660, group: g}, Access{mode: 0666, group: g}))
+	assert.True(t, accessChanged(Access{mode: 0660, group: g}, Access{mode: 0660}))
+	assert.True(t, accessChanged(Access{mode: 0600}, Access{mode: 0600, group: g}))
 }
 
 // TestDefaultPathIsProtected pins the default name to the namespace only administrators
@@ -163,7 +163,7 @@ func TestListenRefused(t *testing.T) {
 // promises a non-administrator.
 func TestListenProtectedName(t *testing.T) {
 	path := protectedPrefix + "nebula-test-" + t.Name()
-	ln, err := listen(path, ownerOnly())
+	ln, err := listen(path, OwnerOnly())
 	if !isAdministrator() {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "requires an administrator")
@@ -192,7 +192,7 @@ func TestListenProtectedName(t *testing.T) {
 // is this account, or Administrators when the test is elevated.
 func TestDialAcceptsOwnPipe(t *testing.T) {
 	path := pipePrefix + "nebula-test-" + t.Name()
-	ln, err := listen(path, ownerOnly())
+	ln, err := listen(path, OwnerOnly())
 	require.NoError(t, err)
 	t.Cleanup(func() { ln.Close() })
 
@@ -216,12 +216,12 @@ func TestDialAcceptsOwnPipe(t *testing.T) {
 // served alongside, or in place of, the daemon.
 func TestListenRefusesHeldName(t *testing.T) {
 	path := pipePrefix + "nebula-test-" + t.Name()
-	first, err := listen(path, ownerOnly())
+	first, err := listen(path, OwnerOnly())
 	require.NoError(t, err)
 	t.Cleanup(func() { first.Close() })
 
 	var second net.Listener
-	second, err = listen(path, ownerOnly())
+	second, err = listen(path, OwnerOnly())
 	if second != nil {
 		second.Close()
 	}

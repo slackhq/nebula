@@ -389,3 +389,23 @@ func Test_CloseTunnelEvictsWithoutPendingHandshake(t *testing.T) {
 	assert.NotContains(t, f.hostMap.Hosts, vpnAddr)
 	assert.NotContains(t, f.lightHouse.addrMap, vpnAddr)
 }
+
+func TestECMPGateways(t *testing.T) {
+	g := newECMPGateways()
+	gw := netip.MustParseAddr("10.128.0.2")
+	other := netip.MustParseAddr("10.128.0.9")
+
+	// A timeout for an address the routing path never asked about is not kept, so the table only ever holds gateways
+	g.markDown(other)
+	assert.Empty(t, g.up)
+
+	assert.True(t, g.isUp(gw), "a gateway seen for the first time is up")
+	assert.Len(t, g.up, 1)
+
+	g.markDown(gw)
+	assert.False(t, g.isUp(gw))
+
+	g.markUp(other, gw)
+	assert.True(t, g.isUp(gw), "a completed handshake marks the gateway up")
+	assert.Len(t, g.up, 1)
+}

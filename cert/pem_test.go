@@ -2,6 +2,7 @@ package cert
 
 import (
 	"bufio"
+	"encoding/pem"
 	"strings"
 	"testing"
 
@@ -118,7 +119,7 @@ bzBEr00kERQxxTzTsH8cpYEgRoipvmExvg8WP8NdAJEYJosB
 	cert, rest, err = UnmarshalCertificateFromPEM(rest)
 	assert.Nil(t, cert)
 	assert.Equal(t, rest, invalidPem)
-	require.EqualError(t, err, "bytes did not contain a proper certificate banner")
+	require.EqualError(t, err, `bytes did not contain a proper certificate banner: "NOT A NEBULA CERTIFICATE"`)
 
 	// Fail due to invalid PEM format, because
 	// it's missing the requisite pre-encapsulation boundary.
@@ -126,6 +127,26 @@ bzBEr00kERQxxTzTsH8cpYEgRoipvmExvg8WP8NdAJEYJosB
 	assert.Nil(t, cert)
 	assert.Equal(t, rest, invalidPem)
 	require.EqualError(t, err, "input did not contain a valid PEM encoded block")
+}
+
+func TestUnmarshalCertificateFromPEM_UnknownBanner(t *testing.T) {
+	block := func(banner string) []byte {
+		return pem.EncodeToMemory(&pem.Block{Type: banner, Bytes: []byte{0x30, 0x00}})
+	}
+
+	_, _, err := UnmarshalCertificateFromPEM(block("NEBULA CERTIFICATE V9"))
+	require.ErrorIs(t, err, ErrUnknownVersion)
+	require.EqualError(t, err, `certificate version unrecognized: "NEBULA CERTIFICATE V9"`)
+
+	// The banner is quoted and capped so a hostile one can't flood or mangle the output
+	_, _, err = UnmarshalCertificateFromPEM(block("NEBULA CERTIFICATE V\x1b[31m" + strings.Repeat("A", 100)))
+	require.ErrorIs(t, err, ErrUnknownVersion)
+	require.EqualError(t, err, `certificate version unrecognized: "NEBULA CERTIFICATE V\x1b[31m`+strings.Repeat("A", 39)+`"...`)
+
+	// A mistyped banner is a mistake, not a newer version
+	_, _, err = UnmarshalCertificateFromPEM(block("NEBULA CERTIFICATES"))
+	require.ErrorIs(t, err, ErrInvalidPEMCertificateBanner)
+	require.NotErrorIs(t, err, ErrUnknownVersion)
 }
 
 func TestUnmarshalSigningPrivateKeyFromPEM(t *testing.T) {

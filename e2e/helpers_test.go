@@ -271,24 +271,6 @@ func newServer(caCrt []cert.Certificate, certs []cert.Certificate, key []byte, o
 	return control, vpnNetworks, udpAddr, c
 }
 
-type doneCb func()
-
-func deadline(t *testing.T, seconds time.Duration) doneCb {
-	timeout := time.After(seconds * time.Second)
-	done := make(chan bool)
-	go func() {
-		select {
-		case <-timeout:
-			t.Fatal("Test did not finish in time")
-		case <-done:
-		}
-	}()
-
-	return func() {
-		done <- true
-	}
-}
-
 func assertTunnel(t testing.TB, vpnIpA, vpnIpB netip.Addr, controlA, controlB *nebula.Control, r *router.R) {
 	// Send a packet from them to me
 	controlB.InjectTunPacket(BuildTunUDPPacket(vpnIpA, 80, vpnIpB, 90, []byte("Hi from B")))
