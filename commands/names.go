@@ -19,7 +19,6 @@ const (
 	ListPendingHostmap    Name = "list-pending-hostmap"
 	LogFormat             Name = "log-format"
 	LogLevel              Name = "log-level"
-	Logout                Name = "logout"
 	PrintCert             Name = "print-cert"
 	PrintRelays           Name = "print-relays"
 	PrintTunnel           Name = "print-tunnel"

@@ -137,8 +137,8 @@ func prettyParam(w http.ResponseWriter, r *http.Request) (pretty bool, ok bool) 
 	return pretty, true
 }
 
-// marshalJSON encodes v the way -json and -pretty print it over ssh, a newline after,
-// so a program reading both surfaces sees one shape.
+// marshalJSON encodes v the way nebula ctl prints it with -json and -pretty, a newline
+// after, so a program reading both surfaces sees one shape.
 func marshalJSON(v any, pretty bool) ([]byte, error) {
 	var b []byte
 	var err error

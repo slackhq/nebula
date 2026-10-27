@@ -28,8 +28,8 @@ func TestReloadCommandReportsTheResult(t *testing.T) {
 		}
 	})
 
-	// reload reports what happened. A reload that failed is a refusal, exit 1 over ssh;
-	// one that merely needs a restart is not.
+	// reload reports what happened. A reload that failed is a refusal; one that merely
+	// needs a restart is not.
 	reload := func(failed bool) string {
 		res := runReload(l, c)
 		assert.Equal(t, !failed, res.OK)

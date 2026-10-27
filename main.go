@@ -17,7 +17,6 @@ import (
 	"github.com/slackhq/nebula/cpupick"
 	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/overlay"
-	"github.com/slackhq/nebula/sshd"
 	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
 	"go.yaml.in/yaml/v3"
@@ -105,18 +104,8 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	// command cannot reach one of them without reaching the others.
 	cmdRegistry := commands.New()
 
-	ssh, err := sshd.NewSSHServer(ctx, l.With("subsystem", "sshd"), cmdRegistry)
-	if err != nil {
-		return nil, util.ContextualizeIfNeeded("Error while creating SSH server", err)
-	}
-	wireSSHReload(l, ssh, c)
-	var sshStart func()
 	if c.GetBool("sshd.enabled", false) {
-		sshStart, err = configSSH(l, ssh, c, nil)
-		if err != nil {
-			l.Warn("Failed to configure sshd, ssh debugging will not be available", "error", err)
-			sshStart = nil
-		}
+		l.Warn("The ssh debug server has been removed and sshd is ignored; use nebula ctl instead")
 	}
 
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -388,7 +377,6 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		l:                      l,
 		ctx:                    ctx,
 		cancel:                 cancel,
-		sshStart:               sshStart,
 		statsStart:             stats.Start,
 		dnsStart:               ds.Start,
 		lighthouseStart:        lightHouse.StartUpdateWorker,

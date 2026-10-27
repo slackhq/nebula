@@ -9,15 +9,12 @@ import (
 	"slices"
 	"strings"
 	"sync"
-
-	"github.com/anmitsu/go-shlex"
 )
 
 // Registry holds a set of commands.
 //
-// It is safe for concurrent use. Commands may be registered while surfaces are serving
-// from the registry: the ssh server clones it per session and the control socket filters
-// it per request, and either may overlap a Register.
+// It is safe for concurrent use. Commands may be registered while a surface is serving
+// from the registry.
 type Registry struct {
 	mu       sync.RWMutex
 	commands map[Name]*Command
@@ -30,21 +27,6 @@ type Registry struct {
 	// a command they can name. It is supplied by whoever built the filter, because why a
 	// surface declines a command is that surface's business, not the registry's.
 	reason string
-
-	// DefaultFormat decides how a result is rendered when the command line named no
-	// format. It sees the command and its Result, and applies to values and refusals
-	// alike: the registry does not special-case either. The renderer is shared between
-	// surfaces; what each asks for by default is not, so the surface that owns this
-	// registry sets it. Nil means text.
-	DefaultFormat func(c *Command, r Result) Format
-}
-
-// defaultFormatFor resolves the surface's default for c's Result.
-func (r *Registry) defaultFormatFor(c *Command, res Result) Format {
-	if r.DefaultFormat == nil {
-		return FormatText
-	}
-	return r.DefaultFormat(c, res)
 }
 
 // New returns an empty Registry with only `help` available.
@@ -105,8 +87,8 @@ func writeCommandList(cmds []CommandSchema, w io.Writer) error {
 }
 
 // WriteCommandHelp renders one command's usage. It is the single rendering of a
-// CommandSchema for a person: the daemon uses it for `help <command>` on both surfaces,
-// and a client that already holds the schema uses it for `-h`, so the two cannot drift.
+// CommandSchema for a person: the daemon uses it for `help <command>`, and a client that
+// already holds the schema uses it for `-h`, so the two cannot drift.
 func WriteCommandHelp(c CommandSchema, w io.Writer) error {
 	if _, err := fmt.Fprintf(w, "%s - %s\n", c.Name, c.Short); err != nil {
 		return err
@@ -175,21 +157,6 @@ func (r *Registry) Get(name Name) *Command {
 	return r.commands[name]
 }
 
-// Match returns the names of every command starting with prefix, sorted, as strings for
-// a prompt to complete and print.
-func (r *Registry) Match(prefix string) []string {
-	cmds := make([]string, 0)
-	r.mu.RLock()
-	for n := range r.commands {
-		if strings.HasPrefix(string(n), prefix) {
-			cmds = append(cmds, string(n))
-		}
-	}
-	r.mu.RUnlock()
-	slices.Sort(cmds)
-	return cmds
-}
-
 // All returns every registered command sorted by name, which is the order help lists
 // them and the schema describes them.
 func (r *Registry) All() []*Command {
@@ -201,25 +168,6 @@ func (r *Registry) All() []*Command {
 	return cmds
 }
 
-// Clone returns a copy holding the same commands.
-//
-// help is re-registered on the copy rather than carried over, because the source's help
-// is bound to the source and would list its commands, not the copy's, once a caller
-// registers something on the copy.
-func (r *Registry) Clone() *Registry {
-	r.mu.RLock()
-	out := &Registry{
-		commands:      maps.Clone(r.commands),
-		full:          r.full,
-		reason:        r.reason,
-		DefaultFormat: r.DefaultFormat,
-	}
-	r.mu.RUnlock()
-
-	out.registerHelp()
-	return out
-}
-
 // Filter returns a filtered copy of the registry.
 //
 // Keep should return true for commands that should be included in the copy.
@@ -227,7 +175,7 @@ func (r *Registry) Clone() *Registry {
 // reason says, to an operator who names a command the copy left out, why this surface
 // does not serve it; "" leaves the registry to say only that it does not.
 func (r *Registry) Filter(keep func(*Command) bool, reason string) *Registry {
-	out := &Registry{commands: map[Name]*Command{}, full: r, reason: reason, DefaultFormat: r.DefaultFormat}
+	out := &Registry{commands: map[Name]*Command{}, full: r, reason: reason}
 
 	for _, cmd := range r.All() {
 		if keep(cmd) {
@@ -238,57 +186,6 @@ func (r *Registry) Filter(keep func(*Command) bool, reason string) *Registry {
 	// Bind help to the filtered set so it only advertises what this surface serves.
 	out.registerHelp()
 	return out
-}
-
-// Dispatch parses a command line and runs it, reporting problems to w. The error is for
-// the caller to log, not to show; see RunFunc and Failure.
-func (r *Registry) Dispatch(line string, w Output) error {
-	// A line shlex cannot split, an unbalanced quote. Reported on Err so the output
-	// stream stays parseable.
-	args, err := shlex.Split(line, true)
-	if err != nil {
-		msg := "could not parse the command line: " + err.Error()
-		if _, err := fmt.Fprintln(w.Err, msg); err != nil {
-			return err
-		}
-		return &Failure{Msg: msg}
-	}
-
-	return r.DispatchArgs(args, w)
-}
-
-// DispatchArgs runs an already tokenized command line. The error is as for Dispatch.
-//
-// An empty line and an unknown command both end up running `help`, the first with the
-// arguments help itself would take; `<command> -h` is answered by the command's own
-// FlagSet, with the same rendering, in execLine.
-func (r *Registry) DispatchArgs(args []string, w Output) error {
-	if len(args) == 0 {
-		args = []string{"help"}
-	}
-
-	c := r.Get(Name(args[0]))
-	if c == nil {
-		if err := r.unavailable(Name(args[0])); err != nil {
-			// Saying why, rather than "did not understand", keeps the rule legible and
-			// points at a surface that will actually run the command.
-			_, _ = fmt.Fprintln(w.Err, err)
-			return err
-		}
-
-		// Only the first word was looked up, so only it is named.
-		msg := fmt.Sprintf("did not understand: %s", args[0])
-		if _, err := fmt.Fprintln(w.Out, msg); err != nil {
-			return err
-		}
-
-		if err := r.DispatchArgs([]string{"help"}, w); err != nil {
-			return err
-		}
-		return &Failure{Msg: msg}
-	}
-
-	return r.execLine(c, args[1:], w)
 }
 
 // unavailable explains why name cannot be run here when this registry was filtered from
