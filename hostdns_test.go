@@ -11,6 +11,7 @@ import (
 	"github.com/DefinedNet/dnsconfig"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/test"
+	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -35,13 +36,13 @@ dns:
 `
 
 func TestLoadHostDNSConfig_disabled(t *testing.T) {
-	cfg, err := loadHostDNSConfig(newHostDNSTestConfig(t, `lighthouse: {}`))
+	cfg, err := loadHostDNSConfig(newHostDNSTestConfig(t, `lighthouse: {}`), false)
 	require.NoError(t, err)
 	assert.False(t, cfg.enabled)
 	assert.Equal(t, defaultHostDNSIdentity, cfg.Identity, "a disabled stanza still names its identity")
 
 	// The resolver keys are not even looked at while disabled.
-	cfg, err = loadHostDNSConfig(newHostDNSTestConfig(t, "dns:\n  enabled: false\n  nameservers: [not an ip]\n"))
+	cfg, err = loadHostDNSConfig(newHostDNSTestConfig(t, "dns:\n  enabled: false\n  nameservers: [not an ip]\n"), false)
 	require.NoError(t, err)
 	assert.False(t, cfg.enabled)
 	assert.True(t, cfg.dns.IsZero())
@@ -56,7 +57,7 @@ dns:
   search_domains: [mesh.example.com]
 tun:
   dev: utun7
-`))
+`), false)
 	require.NoError(t, err)
 	assert.True(t, cfg.enabled)
 	assert.Equal(t, "utun7", cfg.Interface)
@@ -72,14 +73,14 @@ dns:
   enabled: true
   nameservers: [192.168.100.1]
   match_domains: []
-`))
+`), false)
 	require.NoError(t, err)
 	assert.Empty(t, cfg.dns.MatchDomains)
 	assert.False(t, cfg.dns.IsSplit())
 }
 
 func TestLoadHostDNSConfig_matchDomainsDefaultToSearchDomains(t *testing.T) {
-	cfg, err := loadHostDNSConfig(newHostDNSTestConfig(t, hostDNSEnabledYAML))
+	cfg, err := loadHostDNSConfig(newHostDNSTestConfig(t, hostDNSEnabledYAML), false)
 	require.NoError(t, err)
 	assert.Equal(t, []netip.Addr{netip.MustParseAddr("192.168.100.1")}, cfg.dns.Nameservers)
 	assert.Equal(t, []string{"mesh.example.com"}, cfg.dns.SearchDomains)
@@ -87,11 +88,11 @@ func TestLoadHostDNSConfig_matchDomainsDefaultToSearchDomains(t *testing.T) {
 }
 
 func TestLoadHostDNSConfig_identity(t *testing.T) {
-	cfg, err := loadHostDNSConfig(newHostDNSTestConfig(t, "dns:\n  identity: nebula-two\n"))
+	cfg, err := loadHostDNSConfig(newHostDNSTestConfig(t, "dns:\n  identity: nebula-two\n"), false)
 	require.NoError(t, err)
 	assert.Equal(t, "nebula-two", cfg.Identity)
 
-	_, err = loadHostDNSConfig(newHostDNSTestConfig(t, "dns:\n  identity: Nebula\n"))
+	_, err = loadHostDNSConfig(newHostDNSTestConfig(t, "dns:\n  identity: Nebula\n"), false)
 	require.ErrorContains(t, err, "dns.identity is not usable")
 }
 
@@ -111,18 +112,57 @@ func TestLoadHostDNSConfig_errors(t *testing.T) {
 			"root domain"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := loadHostDNSConfig(newHostDNSTestConfig(t, tc.raw))
+			_, err := loadHostDNSConfig(newHostDNSTestConfig(t, tc.raw), false)
 			require.ErrorContains(t, err, tc.want)
 		})
 	}
 }
 
+// TestLoadHostDNSConfig_joinsErrors checks that loading keeps going after a key fails, so one bad stanza reports
+// every problem at once, and that a lone error reaches the caller unwrapped.
+func TestLoadHostDNSConfig_joinsErrors(t *testing.T) {
+	_, err := loadHostDNSConfig(newHostDNSTestConfig(t, `
+dns:
+  enabled: true
+  nameservers: [192.168.100.1, nope, 192.168.100.1:53]
+  search_domains: ["", a.example]
+  match_domains: ["."]
+`), true)
+	require.Error(t, err)
+	for _, want := range []string{
+		"dns.enabled requires a tun device, but tun.disabled is true",
+		"entry 2 in dns.nameservers is not an IP address",
+		"entry 3 in dns.nameservers is not an IP address",
+		"entry 1 in dns.search_domains is empty",
+		"entry 1 in dns.match_domains is the root domain",
+	} {
+		require.ErrorContains(t, err, want)
+	}
+
+	// A broken search_domains is the thing to fix; the fallback rule is not mentioned
+	_, err = loadHostDNSConfig(newHostDNSTestConfig(t, "dns:\n  enabled: true\n  nameservers: [192.168.100.1]\n  search_domains: [\"\"]\n"), false)
+	require.ErrorContains(t, err, "entry 1 in dns.search_domains is empty")
+	assert.NotContains(t, err.Error(), "dns requires search_domains or match_domains")
+
+	// A lone error is not wrapped in a join, so the caller's type switch still sees it
+	_, err = loadHostDNSConfig(newHostDNSTestConfig(t, "dns:\n  enabled: true\n  nameservers: [nope]\n  match_domains: [a.example]\n"), false)
+	ce, ok := err.(*util.ContextualError) //nolint:errorlint // the caller's type switch does not unwrap either
+	require.True(t, ok, "a lone error must reach the caller unwrapped")
+	assert.Equal(t, "entry 1 in dns.nameservers is not an IP address", ce.Context)
+	assert.Equal(t, m{"addr": "nope"}, ce.Fields)
+
+	// Names themselves are dnsconfig's to judge, once the stanza is otherwise whole
+	_, err = loadHostDNSConfig(newHostDNSTestConfig(t, "dns:\n  enabled: true\n  nameservers: [192.168.100.1]\n  search_domains: [-nope.example]\n"), false)
+	require.ErrorContains(t, err, "dns is not a valid DNS configuration")
+	assert.ErrorContains(t, err, `SearchDomains[0] ("-nope.example") is not a valid domain`)
+}
+
 func TestLoadHostDNSConfig_listWrittenAsAScalar(t *testing.T) {
-	_, err := loadHostDNSConfig(newHostDNSTestConfig(t, "dns:\n  enabled: true\n  nameservers: 192.168.100.1\n  search_domains: [a.example]\n"))
+	_, err := loadHostDNSConfig(newHostDNSTestConfig(t, "dns:\n  enabled: true\n  nameservers: 192.168.100.1\n  search_domains: [a.example]\n"), false)
 	require.ErrorContains(t, err, "dns.nameservers must be a list")
 
 	// A one entry match_domains missing its dash must not read as the catch-all
-	_, err = loadHostDNSConfig(newHostDNSTestConfig(t, "dns:\n  enabled: true\n  nameservers: [192.168.100.1]\n  match_domains: a.example\n"))
+	_, err = loadHostDNSConfig(newHostDNSTestConfig(t, "dns:\n  enabled: true\n  nameservers: [192.168.100.1]\n  match_domains: a.example\n"), false)
 	require.ErrorContains(t, err, "dns.match_domains must be a list")
 }
 
@@ -136,6 +176,21 @@ func newTestHostDNS(t *testing.T, c *config.C) *hostDNS {
 	s.force = dnsconfig.BackendNoop
 	t.Cleanup(s.Restore)
 	return s
+}
+
+func TestHostDNS_tunDisabledIsFixedAtStart(t *testing.T) {
+	c := newHostDNSTestConfig(t, hostDNSEnabledYAML+"tun:\n  disabled: true\n")
+	_, err := newHostDNSFromConfig(context.Background(), test.NewLogger(), c)
+	require.ErrorContains(t, err, "requires a tun device")
+
+	// A disabled stanza loads, and tun.disabled only takes effect on restart, so flipping it on a reload does not
+	// make a device appear
+	c = newHostDNSTestConfig(t, "dns:\n  enabled: false\ntun:\n  disabled: true\n")
+	s := newTestHostDNS(t, c)
+	s.Start()
+	res := c.ReloadConfigString(hostDNSEnabledYAML + "tun:\n  disabled: false\n")
+	assert.True(t, res.Failed)
+	assert.False(t, s.runCfg.enabled)
 }
 
 func TestHostDNS_recoverThenStart(t *testing.T) {

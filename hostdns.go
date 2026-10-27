@@ -13,6 +13,7 @@ import (
 
 	"github.com/DefinedNet/dnsconfig"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/util"
 )
 
 // This file turns the `dns` stanza into a host DNS configuration and applies it
@@ -34,12 +35,12 @@ type hostDNSConfig struct {
 type hostDNSOptions struct {
 	// Identity scopes this instance's DNS artifacts, cleanup, and the
 	// cross-process lock inside dnsconfig. It must be stable across restarts
-	// and distinct for every process on the host that manages DNS.
+	// and distinct for dnsconfig Manager on the host.
 	Identity string
 
 	// Interface is the tun device's name, which Windows needs to write DNS
 	// settings. It is tun.dev, which is fixed for the life of the process,
-	// so a Manager can be built with it before the device exists.
+	// that means a Manager can be built with it before the device exists.
 	Interface string
 }
 
@@ -52,13 +53,15 @@ type hostDNSGoal struct {
 // loadHostDNSConfig reads and validates the `dns` stanza. It does not ask
 // whether this host can honour it. A disabled stanza ignores the resolver
 // keys.
-func loadHostDNSConfig(c *config.C) (hostDNSConfig, error) {
+//
+// tunDisabled is whether this process runs without a tun device.
+func loadHostDNSConfig(c *config.C, tunDisabled bool) (hostDNSConfig, error) {
 	var cfg hostDNSConfig
 	var err error
 	if cfg.hostDNSOptions, err = loadIdentityConfig(c); err != nil {
 		return cfg, err
 	}
-	if cfg.hostDNSGoal, err = loadHostDNSGoal(c); err != nil {
+	if cfg.hostDNSGoal, err = loadHostDNSGoal(c, tunDisabled); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -74,24 +77,43 @@ func loadIdentityConfig(c *config.C) (hostDNSOptions, error) {
 }
 
 // loadHostDNSGoal reads dns.enabled and, when it is on, the desired resolver
-// configuration.
-func loadHostDNSGoal(c *config.C) (hostDNSGoal, error) {
+// configuration. It keeps checking after a key fails, so one bad stanza can
+// report several problems at once.
+func loadHostDNSGoal(c *config.C, tunDisabled bool) (hostDNSGoal, error) {
 	g := hostDNSGoal{enabled: c.GetBool("dns.enabled", false)}
 	if !g.enabled {
 		return g, nil
 	}
 
-	var err error
-	if g.dns.Nameservers, err = parseDNSNameservers(c); err != nil {
+	var tunErr, nameserversErr, domainsErr error
+	if tunDisabled {
+		tunErr = errors.New("dns.enabled requires a tun device, but tun.disabled is true")
+	}
+	g.dns.Nameservers, nameserversErr = parseDNSNameservers(c)
+	g.dns.SearchDomains, g.dns.MatchDomains, domainsErr = parseDNSDomainLists(c)
+	if err := joinDNSErrors(tunErr, nameserversErr, domainsErr); err != nil {
 		return hostDNSGoal{}, err
 	}
-	if g.dns.SearchDomains, g.dns.MatchDomains, err = parseDNSDomainLists(c); err != nil {
-		return hostDNSGoal{}, err
-	}
+
 	if err := g.dns.Validate(); err != nil {
-		return hostDNSGoal{}, err
+		return hostDNSGoal{}, util.NewContextualError("dns is not a valid DNS configuration", nil, err)
 	}
 	return g, nil
+}
+
+// joinDNSErrors reports a batch of validation failures as one error.
+//
+// A lone error is handed back unwrapped rather than joined, and no errors at
+// all is nil.
+func joinDNSErrors(errs ...error) error {
+	errs = slices.DeleteFunc(slices.Clone(errs), func(err error) bool { return err == nil })
+	switch len(errs) {
+	case 0:
+		return nil
+	case 1:
+		return errs[0]
+	}
+	return errors.Join(errs...)
 }
 
 func parseDNSNameservers(c *config.C) ([]netip.Addr, error) {
@@ -103,50 +125,92 @@ func parseDNSNameservers(c *config.C) ([]netip.Addr, error) {
 		return nil, errors.New("dns.nameservers must have at least one entry")
 	}
 
+	var errs []error
 	out := make([]netip.Addr, 0, len(raw))
 	for i, rawAddr := range raw {
 		addr, err := netip.ParseAddr(rawAddr)
 		if err != nil {
-			return nil, fmt.Errorf("entry %v in dns.nameservers is not an IP address: %s", i+1, rawAddr)
+			errs = append(errs, util.NewContextualError(
+				fmt.Sprintf("entry %v in dns.nameservers is not an IP address", i+1),
+				m{"addr": rawAddr},
+				err,
+			))
+			continue
 		}
 		out = append(out, addr)
 	}
+
+	if len(errs) > 0 {
+		return nil, joinDNSErrors(errs...)
+	}
+
 	return out, nil
 }
 
 // parseDNSDomains reads a list of domain suffixes at key k. Entries are handed
-// to dnsconfig as written: it validates, compares and publishes them
-// case-insensitively and with or without the trailing dot.
+// to dnsconfig as written: it compares and publishes them case-insensitively
+// and with or without the trailing dot.
 func parseDNSDomains(c *config.C, k string) ([]string, error) {
 	// Strict because no match domains is the explicit opt in to catch-all DNS:
 	// GetStringSlice would read "match_domains: mesh.example.com", a one entry
 	// list missing its dash, as no match domains at all and silently point
 	// every query on the host at dns.nameservers.
-	return getStringSliceStrict(c, k)
+	raw, err := getStringSliceStrict(c, k)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	var errs []error
+	for i, domain := range raw {
+		switch domain {
+		case "":
+			errs = append(errs, fmt.Errorf("entry %v in %s is empty", i+1, k))
+		case ".":
+			// Don't allow '.'. If the user wants to take over everything, they should
+			// explicitly configure no match_domains.
+			errs = append(errs, fmt.Errorf(`entry %v in %s is the root domain; set "match_domains: []" to send every query to dns.nameservers`, i+1, k))
+		}
+	}
+
+	if len(errs) > 0 {
+		return nil, joinDNSErrors(errs...)
+	}
+
+	return raw, nil
 }
 
 // parseDNSDomainLists reads dns.search_domains and dns.match_domains. We read
 // them together so we can properly handle the fallback behavior when search_domains
 // is specified but match_domains is not.
 func parseDNSDomainLists(c *config.C) (search, match []string, err error) {
-	if search, err = parseDNSDomains(c, "dns.search_domains"); err != nil {
-		return nil, nil, err
+	var errs []error
+
+	search, err = parseDNSDomains(c, "dns.search_domains")
+	if err != nil {
+		errs = append(errs, err)
 	}
 
 	switch {
 	case c.IsSet("dns.match_domains"):
-		if match, err = parseDNSDomains(c, "dns.match_domains"); err != nil {
-			return nil, nil, err
+		match, err = parseDNSDomains(c, "dns.match_domains")
+		if err != nil {
+			errs = append(errs, err)
 		}
 
+	case len(errs) > 0:
+		// search_domains is what needs fixing; say nothing else about it.
+
 	case len(search) == 0:
-		return nil, nil, errors.New(`dns requires search_domains or match_domains; set "match_domains: []" to send every query to dns.nameservers`)
+		errs = append(errs, errors.New(`dns requires search_domains or match_domains; set "match_domains: []" to send every query to dns.nameservers`))
 
 	default:
 		match = slices.Clone(search)
 	}
 
-	return search, match, nil
+	return search, match, joinDNSErrors(errs...)
 }
 
 // parseDNSIdentity loads the identity we use for tracking our changes to the local
@@ -210,6 +274,10 @@ type hostDNS struct {
 	// force selects the dnsconfig backend, the zero value detects the native
 	// one. Tests force the no-op backend.
 	force dnsconfig.BackendKind
+	// tunDisabled is whether this process runs without a tun device. It is
+	// read once at construction: tun.disabled only takes effect on restart,
+	// so we don't need to track it through reloads.
+	tunDisabled bool
 
 	// mu serializes Recover, Start, Restore, and the reload callback. It is
 	// held across Restore, which is the one path here that blocks, so a reload
@@ -232,8 +300,9 @@ type hostDNS struct {
 // newHostDNSFromConfig builds a hostDNS and registers a reload callback.
 func newHostDNSFromConfig(ctx context.Context, l *slog.Logger, c *config.C) (*hostDNS, error) {
 	s := &hostDNS{
-		ctx: ctx,
-		l:   l.With("subsystem", "host_dns"),
+		ctx:         ctx,
+		l:           l.With("subsystem", "host_dns"),
+		tunDisabled: c.GetBool("tun.disabled", false),
 	}
 
 	// What we can tell up front about whether this host can be configured at
@@ -250,7 +319,7 @@ func newHostDNSFromConfig(ctx context.Context, l *slog.Logger, c *config.C) (*ho
 		}
 	}
 
-	cfg, err := loadHostDNSConfig(c)
+	cfg, err := loadHostDNSConfig(c, s.tunDisabled)
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +337,7 @@ func newHostDNSFromConfig(ctx context.Context, l *slog.Logger, c *config.C) (*ho
 
 // reload loads the configuration a HUP delivered and states its goal.
 func (s *hostDNS) reload(c *config.C) error {
-	cfg, err := loadHostDNSConfig(c)
+	cfg, err := loadHostDNSConfig(c, s.tunDisabled)
 	if err != nil {
 		return err
 	}

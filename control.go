@@ -169,7 +169,7 @@ func (c *Control) Stop() {
 	c.state = StateStopping
 	c.stateLock.Unlock()
 
-	// Restore the host's DNS before anything else comes down: cleanup wants the nameservers reachable until it returns
+	// Restore the host's DNS before anything else comes down.
 	c.restoreHostDNS()
 
 	// Closing tunnels can be slow with a large hostmap, don't hold the lock for it
