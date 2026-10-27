@@ -71,8 +71,9 @@ func TestSetBufferAboveSysctlMax(t *testing.T) {
 // TestReloadConfigBufferLogLevel checks that a clamped buffer is a Warn, and a
 // buffer that fits is still the Info it always was.
 func TestReloadConfigBufferLogLevel(t *testing.T) {
+	// "too big" has to clear both limits, they are not always equal.
 	sysMax := readSysctlInt(t, "/proc/sys/net/core/rmem_max")
-	if wmax := readSysctlInt(t, "/proc/sys/net/core/wmem_max"); wmax < sysMax {
+	if wmax := readSysctlInt(t, "/proc/sys/net/core/wmem_max"); wmax > sysMax {
 		sysMax = wmax
 	}
 	cases := []struct {
