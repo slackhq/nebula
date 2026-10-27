@@ -10,8 +10,8 @@ type batchWriter interface {
 }
 
 // SendBatch accumulates encrypted UDP packets and flushes them via WriteBatch.
-// One SendBatch is owned by each listenIn goroutine; no locking is needed.
-// Slots are backed by an Arena (see its docs)
+// Each reader goroutine owns its own SendBatch; no locking is needed.
+// Slots can borrow receive buffers or be backed by an Arena (see its docs).
 type SendBatch struct {
 	out   batchWriter
 	bufs  [][]byte

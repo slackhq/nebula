@@ -5,11 +5,14 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/pem"
 	"io"
 	"net/netip"
 	"time"
 
 	"github.com/slackhq/nebula/cert"
+	"golang.org/x/crypto/cryptobyte"
+	"golang.org/x/crypto/cryptobyte/asn1"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/ed25519"
 )
@@ -231,4 +234,33 @@ func NewTestCAPool(cas ...cert.Certificate) *cert.CAPool {
 		}
 	}
 	return pool
+}
+
+// WithCurve re-encodes a curve25519 v2 certificate PEM as one carrying curve, the way a certificate for a curve a newer
+// nebula added would look. Its signature no longer verifies.
+func WithCurve(certPEM []byte, curve cert.Curve) []byte {
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		panic("not a PEM block")
+	}
+
+	in := cryptobyte.String(block.Bytes)
+	var body, details, publicKey, signature cryptobyte.String
+	if !in.ReadASN1(&body, asn1.SEQUENCE) ||
+		!body.ReadASN1Element(&details, asn1.Tag(0).Constructed().ContextSpecific()) ||
+		!body.ReadASN1Element(&publicKey, asn1.Tag(2).ContextSpecific()) ||
+		!body.ReadASN1Element(&signature, asn1.Tag(3).ContextSpecific()) {
+		panic("not a curve25519 v2 certificate")
+	}
+
+	var b cryptobyte.Builder
+	b.AddASN1(asn1.SEQUENCE, func(b *cryptobyte.Builder) {
+		b.AddBytes(details)
+		b.AddASN1(asn1.Tag(1).ContextSpecific(), func(b *cryptobyte.Builder) {
+			b.AddUint8(uint8(curve))
+		})
+		b.AddBytes(publicKey)
+		b.AddBytes(signature)
+	})
+	return pem.EncodeToMemory(&pem.Block{Type: block.Type, Bytes: b.BytesOrPanic()})
 }

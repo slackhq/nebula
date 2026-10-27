@@ -86,6 +86,18 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 		}
 	}
 
+	if !isP11 && !isStdio(*cf.outKeyPath) {
+		if _, err := os.Stat(*cf.outKeyPath); err == nil {
+			return fmt.Errorf("refusing to overwrite existing key: %s", *cf.outKeyPath)
+		}
+	}
+
+	if !isStdio(*cf.outPubPath) {
+		if _, err := os.Stat(*cf.outPubPath); err == nil {
+			return fmt.Errorf("refusing to overwrite existing public key: %s", *cf.outPubPath)
+		}
+	}
+
 	var claims ioClaims
 	if err := reserveOutputs(&claims,
 		"out-key", *cf.outKeyPath,

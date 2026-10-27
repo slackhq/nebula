@@ -53,6 +53,7 @@ type ringBuffer struct {
 
 type RIOConn struct {
 	isOpen  atomic.Bool
+	isV4    bool
 	l       *slog.Logger
 	sock    windows.Handle
 	rx, tx  ringBuffer
@@ -65,7 +66,8 @@ func NewRIOListener(l *slog.Logger, addr netip.Addr, port int) (*RIOConn, error)
 		return nil, errors.New("could not initialize winrio")
 	}
 
-	u := &RIOConn{l: l}
+	// An IPv4 addr is bound as IPv4-mapped, which leaves the dual stack socket only able to reach IPv4
+	u := &RIOConn{l: l, isV4: addr.Unmap().Is4()}
 
 	err := u.bind(l, &windows.SockaddrInet6{Addr: addr.As16(), Port: port})
 	if err != nil {
@@ -330,6 +332,10 @@ func (u *RIOConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error)
 		}
 	}
 	return written, nil
+}
+
+func (u *RIOConn) IPv4Only() bool {
+	return u.isV4
 }
 
 func (u *RIOConn) LocalAddr() (netip.AddrPort, error) {

@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"crypto/fips140"
+	"encoding/pem"
 	"fmt"
 	"net/netip"
 	"strings"
@@ -175,7 +176,7 @@ func TestPKIReloadRestartRequired(t *testing.T) {
 	assert.False(t, res.RestartRequired)
 
 	// A cert that can't be read is a failure, and a restart wouldn't help
-	res = c3.ReloadConfigString(strings.Replace(pkiConfig("aes", "10.1.0.2/24"), "cert: \"", "cert: \"garbage", 1))
+	res = c3.ReloadConfigString(strings.Replace(pkiConfig("aes", "10.1.0.2/24"), "cert: \"", "cert: \"-----BEGIN NEBULA CERTIFICATE V2-----\\ngarbage\\n-----END NEBULA CERTIFICATE V2-----\\n", 1))
 	require.NoError(t, res.Err)
 	assert.True(t, res.Failed)
 	assert.False(t, res.RestartRequired)
@@ -290,7 +291,7 @@ func TestNewCertStateFromConfig_Hybrid(t *testing.T) {
 	load := func(certPEM, keyPEM []byte) (*CertState, error) {
 		c := config.NewC(test.NewLogger())
 		require.NoError(t, c.LoadString(fmt.Sprintf("pki:\n  cert: %q\n  key: %q\n", certPEM, keyPEM)))
-		return newCertStateFromConfig(c, "aes")
+		return newCertStateFromConfig(test.NewLogger(), c, "aes")
 	}
 
 	cs, err := load(certPEM, keyPEM)
@@ -309,4 +310,91 @@ func TestNewCertStateFromConfig_Hybrid(t *testing.T) {
 	_, _, otherKeyPEM, _ := cert_test.NewTestCert(cert.Version1, cert.Curve_CURVE25519, classicalCA, classicalCAKey, "other", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.2/16")}, nil, nil)
 	_, err = load(certPEM, otherKeyPEM)
 	require.ErrorContains(t, err, "not a pair")
+}
+
+// A newer nebula may add certificate versions, a pki.ca bundle shared with it keeps working and the ones we can't use
+// are skipped with a warning
+func TestLoadCAPoolSkipsUnsupported(t *testing.T) {
+	ca, _, _, caPEM := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	fp, err := ca.Fingerprint()
+	require.NoError(t, err)
+	_, _, _, expiredPEM := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now().Add(-2*time.Hour), time.Now().Add(-time.Hour), nil, nil, nil)
+	newVersionPEM := pem.EncodeToMemory(&pem.Block{Type: "NEBULA CERTIFICATE V9", Bytes: []byte{0x30, 0x00}})
+
+	load := func(ca []byte) (*cert.CAPool, error) {
+		c := config.NewC(test.NewLogger())
+		require.NoError(t, c.LoadString(fmt.Sprintf("pki:\n  ca: %q\n", ca)))
+		return loadCAPoolFromConfig(test.NewLogger(), c)
+	}
+
+	pool, err := load(append(append([]byte{}, newVersionPEM...), caPEM...))
+	require.NoError(t, err)
+	assert.Len(t, pool.CAs, 1)
+	assert.Contains(t, pool.CAs, fp)
+
+	_, err = load(newVersionPEM)
+	require.EqualError(t, err, "no valid CA certificates present")
+
+	_, err = load(append(append([]byte{}, expiredPEM...), newVersionPEM...))
+	require.EqualError(t, err, "no valid CA certificates present")
+
+	// A CA for a newer curve is skipped the same way
+	pool, err = load(append(append([]byte{}, cert_test.WithCurve(caPEM, cert.Curve(9))...), caPEM...))
+	require.NoError(t, err)
+	assert.Len(t, pool.CAs, 1)
+	assert.Contains(t, pool.CAs, fp)
+
+	// Anything else is fatal and keeps its cause
+	_, err = load([]byte("-----BEGIN CERTIFICATE-----\nMAA=\n-----END CERTIFICATE-----\n"))
+	require.ErrorIs(t, err, cert.ErrInvalidPEMCertificateBanner)
+}
+
+// pki.cert may hold certificates for versions a newer nebula added, we use the ones we can and skip the rest
+func TestPKICertSkipsUnsupported(t *testing.T) {
+	ca, _, caKey, caPEM := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	_, _, keyPEM, certPEM := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, ca, caKey, "host", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.2/24")}, nil, nil)
+	newVersionPEM := pem.EncodeToMemory(&pem.Block{Type: "NEBULA CERTIFICATE V9", Bytes: []byte{0x30, 0x00}})
+	_, _, _, otherPEM := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, ca, caKey, "host", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.2/24")}, nil, nil)
+	newCurvePEM := cert_test.WithCurve(otherPEM, cert.Curve(9))
+
+	load := func(crt []byte) (*PKI, error) {
+		c := config.NewC(test.NewLogger())
+		require.NoError(t, c.LoadString(fmt.Sprintf("pki:\n  ca: %q\n  cert: %q\n  key: %q\n", caPEM, crt, keyPEM)))
+		return NewPKIFromConfig(test.NewLogger(), c)
+	}
+
+	for _, crt := range [][]byte{
+		append(append([]byte{}, newVersionPEM...), certPEM...),
+		append(append([]byte{}, certPEM...), newVersionPEM...),
+		append(append([]byte{}, newCurvePEM...), certPEM...),
+	} {
+		p, err := load(crt)
+		require.NoError(t, err)
+		assert.Equal(t, cert.Version2, p.getCertState().initiatingVersion)
+	}
+
+	// With nothing left the error says which certificates were skipped and why
+	_, err := load(append(append([]byte{}, newVersionPEM...), newCurvePEM...))
+	require.ErrorIs(t, err, cert.ErrUnknownVersion)
+	require.ErrorIs(t, err, cert.ErrUnknownCurve)
+	require.ErrorContains(t, err, "no valid certificates found in pki.cert")
+	require.ErrorContains(t, err, "certificate 1: certificate version unrecognized")
+	require.ErrorContains(t, err, `certificate 2: "host": certificate curve unrecognized: 9`)
+
+	// Anything after the last certificate that isn't one is still an error, as is a block that never ends
+	_, err = load(append(append([]byte{}, certPEM...), "trailing garbage\n"...))
+	require.ErrorIs(t, err, cert.ErrInvalidPEMBlock)
+	require.ErrorIs(t, err, cert.ErrTruncatedPEMBlock)
+	_, err = load(append(append([]byte{}, certPEM...), "-----BEGIN NEBULA CERTIFICATE V2-----\nAAAA\n"...))
+	require.ErrorIs(t, err, cert.ErrInvalidPEMBlock)
+	require.ErrorIs(t, err, cert.ErrTruncatedPEMBlock)
+
+	// A newer curve is skipped before anything else is checked, the same as a newer version that can't be parsed
+	_, _, _, netCAPEM := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.0/16")}, nil, nil)
+	_, err = load(cert_test.WithCurve(netCAPEM, cert.Curve(9)))
+	require.ErrorIs(t, err, cert.ErrUnknownCurve)
+	oldCA, _, oldCAKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now().Add(-3*time.Hour), time.Now().Add(time.Hour), nil, nil, nil)
+	_, _, _, expiredHostPEM := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, oldCA, oldCAKey, "host", time.Now().Add(-2*time.Hour), time.Now().Add(-time.Hour), []netip.Prefix{netip.MustParsePrefix("10.1.0.2/24")}, nil, nil)
+	_, err = load(append(append([]byte{}, cert_test.WithCurve(expiredHostPEM, cert.Curve(9))...), certPEM...))
+	require.NoError(t, err)
 }

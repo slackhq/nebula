@@ -25,8 +25,8 @@ messages are always several packets long, and works the same for classical ones.
 
 Under `auto` and `always` a node reassembles fragments from others. `handshakes.repair_delay` is
 how long repair fragments trail the data fragments; unset, it is a tenth of
-`handshakes.try_interval` (10ms by default), which keeps it well inside the receiver's quiet
-period of half a retry interval. Both settings reload. With message metrics on
+`handshakes.try_interval` (10ms by default), and it must be under half of it, the quiet period a
+receiver keeps after completing a message. Both settings reload. With message metrics on
 (`stats.message_metrics`), fragment packets and cookie replies are counted in
 `messages.{tx,rx}.handshake_ixpsk0_fragmented` (and `handshake_xxpsk0_fragmented`), apart from
 the single-packet `handshake_ixpsk0`, and hybrid handshakes in `handshake_ixhybrid_fragmented`.
@@ -126,8 +126,9 @@ Implemented in `handshake/fragment` (`Sender`, `Assembly`, and the capped `Table
   supplies fresh symbols.
 - msg1 entries, from senders not yet authenticated, live in a table keyed by (source address or
   relay index, FragID) with a total memory cap of 4 MiB and 1024 entries, per-source quotas of 32
-  (/32 for IPv4, /64 for IPv6, one relay channel), enough for a busy NAT or a /64 of hosts, a sliding TTL of 3 s refreshed by progress,
-  and random eviction under pressure.
+  (/32 for IPv4, /64 for IPv6, one relay channel; a sender with a valid cookie counts against its
+  own address and port instead), a sliding TTL of 3 s refreshed by progress, and random eviction
+  under pressure.
 - msg2 reassembly attaches to the pending handshake found by RemoteIndex, in two slots keyed by
   the responder's FragID. When a stale lighthouse address for the peer belongs to another host
   now, both hosts answer the same msg1, and their interleaved bursts would wipe each other out
@@ -162,6 +163,10 @@ Retry and the SCTP state cookie:
   carry a valid cookie. One without is answered with a cookie reply and leaves no state.
   Fragments that already belong to an entry need one too, so an attacker can not hold old entries
   open.
+- A fragment without a cookie from a prefix whose quota is full gets a cookie reply too, however
+  empty the table. Anyone sharing a prefix (a carrier NAT, an office NAT, a provider's /64), or
+  spoofing one, can fill its quota with a few junk fragments every few seconds; a cookie moves a
+  real sender onto a quota of its own address and port, which the junk can not reach.
 - A cookie is `HMAC-SHA-512(secret, source address and port, relay channel, FragID)` truncated to
   16 bytes. The secret rotates every 2 minutes, on the handshake manager's clock whether or not
   cookies are in use, and the previous one is still accepted, so a cookie is good for 2 to 4

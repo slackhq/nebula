@@ -390,6 +390,8 @@ type rxContext struct {
 	hostmapCache map[uint32]*HostInfo
 	lhh          *LightHouseHandler
 	ctCache      *firewall.ConntrackCacheTicker
+	// relayBatch holds forwarded relay packets, which borrow their receive buffers until flushed
+	relayBatch *batch.SendBatch
 }
 
 func newRxContext(f *Interface, q int) *rxContext {
@@ -402,6 +404,7 @@ func newRxContext(f *Interface, q int) *rxContext {
 		hostmapCache: map[uint32]*HostInfo{},
 		lhh:          f.lightHouse.NewRequestHandler(),
 		ctCache:      firewall.NewConntrackCacheTicker(f.ctx, f.l, f.conntrackCacheTimeout),
+		relayBatch:   batch.NewSendBatch(f.writers[q], batch.SendBatchCap, 0),
 	}
 }
 
@@ -420,6 +423,7 @@ func (f *Interface) listenOut(i int) {
 	}
 
 	flusher := func() {
+		f.flushSendBatch(rxc.relayBatch, i)
 		if err := f.batchers[i].Flush(); err != nil {
 			f.l.Error("Failed to flush tun coalescer", "error", err)
 		}
