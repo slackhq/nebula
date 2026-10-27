@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/DefinedNet/noise"
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
 )
 
@@ -19,11 +20,19 @@ type subtypeInfo struct {
 	pattern noise.HandshakePattern
 	msgs    []msgFlags
 
-	// kem is the KEM of a hybrid pattern, nil for any other. Hybrid patterns
-	// carry composite static keys and need certificates on the hybrid curve on
-	// both sides; every other pattern refuses them.
+	// kem is the KEM of a post-quantum pattern, hybrid or KEM-only, nil for
+	// any other.
 	kem noise.KEMFunc
+
+	// curve reports whether certificates on a curve go with this pattern. Each
+	// post-quantum pattern takes its own curve, and the classical one the
+	// classical curves; a handshake never mixes them.
+	curve func(cert.Curve) bool
 }
+
+func onClassicalCurve(c cert.Curve) bool { return !cert.IsPostQuantum(c) }
+func onHybridCurve(c cert.Curve) bool    { return c == cert.Curve_P384_MLKEM1024_MLDSA87 }
+func onPureCurve(c cert.Curve) bool      { return c == cert.Curve_MLKEM1024_MLDSA87 }
 
 // subtypeInfos defines the noise pattern and message content layout for each
 // handshake subtype.
@@ -31,6 +40,7 @@ var subtypeInfos = map[header.MessageSubType]subtypeInfo{
 	// IX: 2 messages, both carry payload and cert
 	header.HandshakeIXPSK0: {
 		pattern: noise.HandshakeIX,
+		curve:   onClassicalCurve,
 		msgs: []msgFlags{
 			{expectsPayload: true, expectsCert: true},
 			{expectsPayload: true, expectsCert: true},
@@ -51,6 +61,26 @@ var subtypeInfos = map[header.MessageSubType]subtypeInfo{
 	header.HandshakeIXHybrid: {
 		pattern: noise.HandshakeHybridIX,
 		kem:     KEMMLKEM1024,
+		curve:   onHybridCurve,
+		msgs: []msgFlags{
+			{expectsPayload: true, expectsCert: true},
+			{expectsPayload: true, expectsCert: true},
+			{},
+		},
+	},
+
+	// pqIX of PQNoise (eprint.iacr.org/2022/539), ML-KEM-1024 alone:
+	//   msg1 (I->R): e, s              payload + cert
+	//   msg2 (R->I): ekem, skem, s     payload + cert
+	//   msg3 (I->R): skem
+	// e and s are ML-KEM-1024 encapsulation keys, s the certificate's public
+	// key, and every secret comes from a KEM. Authentication works as in the
+	// hybrid pattern: the responder's when msg3 decrypts, the initiator's when
+	// the first packet under the new keys does.
+	header.HandshakeIXPQ: {
+		pattern: noise.HandshakePQIX,
+		kem:     KEMMLKEM1024,
+		curve:   onPureCurve,
 		msgs: []msgFlags{
 			{expectsPayload: true, expectsCert: true},
 			{expectsPayload: true, expectsCert: true},
@@ -72,9 +102,10 @@ var subtypeInfos = map[header.MessageSubType]subtypeInfo{
 	//},
 }
 
-// IsHybrid reports whether subtype is a hybrid handshake, one that needs
-// certificates on the hybrid curve.
-func IsHybrid(subtype header.MessageSubType) bool {
+// IsPostQuantum reports whether subtype is a post-quantum handshake, hybrid or
+// KEM-only: three messages, too big for one packet, and certificates on that
+// pattern's post-quantum curve.
+func IsPostQuantum(subtype header.MessageSubType) bool {
 	return subtypeInfos[subtype].kem != nil
 }
 

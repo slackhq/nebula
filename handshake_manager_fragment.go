@@ -39,7 +39,7 @@ const (
 )
 
 // fragmentMode says when this node sends its own classical handshake messages as fragments. It reassembles fragments
-// of them from others unless the mode is never. Hybrid handshakes always travel as fragments, they have no other way.
+// of them from others unless the mode is never. Post-quantum handshakes always travel as fragments, they have no other way.
 type fragmentMode int
 
 const (
@@ -120,12 +120,12 @@ func (hm *HandshakeManager) reloadFragment(c *config.C, r *config.Reload) {
 	)
 }
 
-// shouldFragment decides whether a handshake message goes as fragments: always for a hybrid one, always or never as
+// shouldFragment decides whether a handshake message goes as fragments: always for a post-quantum one, always or never as
 // configured for a classical one, and otherwise when it does not fit one packet or answers a msg1 that came as
 // fragments, whose sender can reassemble them. A message to a peer that can not reassemble goes as fragments anyway
 // when it does not fit, since a packet that size would need IP fragmentation, which too many paths drop.
 func (hm *HandshakeManager) shouldFragment(subtype header.MessageSubType, msgLen int, answeringFragments bool) bool {
-	if handshake.IsHybrid(patternOf(subtype)) {
+	if handshake.IsPostQuantum(patternOf(subtype)) {
 		return true
 	}
 	switch hm.fragConfig().mode {
@@ -354,7 +354,7 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 		}
 
 	case 3:
-		if handshake.IsHybrid(patternOf(h.Subtype)) {
+		if handshake.IsPostQuantum(patternOf(h.Subtype)) {
 			hm.continueHybridResponder(via, h, fh, sym)
 		}
 	}

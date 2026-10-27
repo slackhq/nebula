@@ -83,6 +83,12 @@ const (
 	// subtype only names the reassembled message the handshake Machine reads.
 	HandshakeIXHybrid           MessageSubType = 3
 	HandshakeIXHybridFragmented MessageSubType = 0x83
+
+	// HandshakeIXPQ is PQNoise's pqIX, for certificates on the post-quantum
+	// curve: IX made of ML-KEM-1024 alone, with no DH. Like ix_hybrid it takes
+	// three messages and always travels as fragments, HandshakeIXPQFragmented.
+	HandshakeIXPQ           MessageSubType = 4
+	HandshakeIXPQFragmented MessageSubType = 0x84
 )
 
 // FragmentedSubtype returns the subtype a handshake message of this pattern carries as fragments, and false for a
@@ -95,6 +101,8 @@ func FragmentedSubtype(pattern MessageSubType) (MessageSubType, bool) {
 		return HandshakeXXPSK0Fragmented, true
 	case HandshakeIXHybrid:
 		return HandshakeIXHybridFragmented, true
+	case HandshakeIXPQ:
+		return HandshakeIXPQFragmented, true
 	default:
 		return 0, false
 	}
@@ -110,6 +118,8 @@ func FragmentedPattern(st MessageSubType) (MessageSubType, bool) {
 		return HandshakeXXPSK0, true
 	case HandshakeIXHybridFragmented:
 		return HandshakeIXHybrid, true
+	case HandshakeIXPQFragmented:
+		return HandshakeIXPQ, true
 	default:
 		return 0, false
 	}
@@ -138,6 +148,8 @@ var subTypeMap = map[MessageType]*map[MessageSubType]string{
 		HandshakeIXPSK0Fragmented:   "ix_psk0_fragmented",
 		HandshakeIXHybrid:           "ix_hybrid",
 		HandshakeIXHybridFragmented: "ix_hybrid_fragmented",
+		HandshakeIXPQ:               "ix_pq",
+		HandshakeIXPQFragmented:     "ix_pq_fragmented",
 	},
 	Control: &subTypeNoneMap,
 }
@@ -249,7 +261,8 @@ func IsValidSubType(t MessageType, s MessageSubType) bool {
 		return s == MessageNone || s == MessageRelay
 	case Handshake:
 		// ix_hybrid is valid here; the handshake manager drops one that is not fragmented.
-		return s == HandshakeIXPSK0 || s == HandshakeIXPSK0Fragmented || s == HandshakeIXHybrid || s == HandshakeIXHybridFragmented
+		return s == HandshakeIXPSK0 || s == HandshakeIXPSK0Fragmented || s == HandshakeIXHybrid || s == HandshakeIXHybridFragmented ||
+			s == HandshakeIXPQ || s == HandshakeIXPQFragmented
 	case Test:
 		return s == TestReply || s == TestRequest
 	case Control, CloseTunnel, RecvError, LightHouse:

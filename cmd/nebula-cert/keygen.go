@@ -26,7 +26,7 @@ func newKeygenFlags() *keygenFlags {
 	cf.set.Usage = func() {}
 	cf.outPubPath = cf.set.String("out-pub", "", "Required: path to write the public key to")
 	cf.outKeyPath = cf.set.String("out-key", "", "Required: path to write the private key to")
-	cf.curve = cf.set.String("curve", defaultCurve(), "ECDH Curve (25519, P256, "+hybridCurveFlag+")")
+	cf.curve = cf.set.String("curve", defaultCurve(), "ECDH Curve (25519, P256, "+hybridCurveFlag+", "+pureCurveFlag+")")
 	cf.p11url = p11Flag(cf.set)
 	return &cf
 }
@@ -81,6 +81,16 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 				return fmt.Errorf("error while generating hybrid keys: %s", err)
 			}
 			curve = cert.Curve_P384_MLKEM1024_MLDSA87
+		case pureCurveFlag, cert.CurveName(cert.Curve_MLKEM1024_MLDSA87):
+			if err := cert.HybridAvailable(); err != nil {
+				return err
+			}
+			var err error
+			pub, rawPriv, err = cert.GeneratePureKeypair()
+			if err != nil {
+				return fmt.Errorf("error while generating post-quantum keys: %s", err)
+			}
+			curve = cert.Curve_MLKEM1024_MLDSA87
 		default:
 			return fmt.Errorf("invalid curve: %s", *cf.curve)
 		}

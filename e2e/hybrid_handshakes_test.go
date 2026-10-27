@@ -21,7 +21,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const hybridCurve = cert.Curve_P384_MLKEM1024_MLDSA87
+const (
+	hybridCurve = cert.Curve_P384_MLKEM1024_MLDSA87
+	pureCurve   = cert.Curve_MLKEM1024_MLDSA87
+)
 
 // hybridConfig is the config every hybrid node in these tests starts from: repair fragments go right behind the data,
 // which keeps the router's packet order deterministic.
@@ -29,9 +32,16 @@ func hybridConfig() m {
 	return m{"handshakes": m{"repair_delay": "0s"}}
 }
 
-// isHybrid reports whether h is a hybrid handshake packet, a fragment or a cookie reply.
+// isHybrid reports whether h is a post-quantum handshake packet, hybrid or pure, a fragment or a cookie reply.
 func isHybrid(h *header.H) bool {
-	return h != nil && (h.Subtype == header.HandshakeIXHybrid || h.Subtype == header.HandshakeIXHybridFragmented)
+	if h == nil {
+		return false
+	}
+	switch h.Subtype {
+	case header.HandshakeIXHybrid, header.HandshakeIXHybridFragmented, header.HandshakeIXPQ, header.HandshakeIXPQFragmented:
+		return true
+	}
+	return false
 }
 
 // hybridTally counts handshake packets by pattern and message.
@@ -70,26 +80,32 @@ func isRelayed(p *udp.Packet) bool {
 	return outer.Parse(p.Data) == nil && outer.Type == header.Message && outer.Subtype == header.MessageRelay
 }
 
-// hybridCA signs the certificates of hybrid nodes.
+// hybridCA signs the certificates of nodes on a post-quantum curve, the hybrid one unless made by newPQCA.
 type hybridCA struct {
-	ca  cert.Certificate
-	key []byte
+	curve cert.Curve
+	ca    cert.Certificate
+	key   []byte
 }
 
 func newHybridCA(t *testing.T) hybridCA {
+	t.Helper()
+	return newPQCA(t, hybridCurve)
+}
+
+func newPQCA(t *testing.T, curve cert.Curve) hybridCA {
 	t.Helper()
 	if err := cert.HybridAvailable(); err != nil {
 		t.Skip(err)
 	}
 	now := time.Now()
-	c, _, key, _ := cert_test.NewTestCaCert(cert.Version2, hybridCurve, now, now.Add(10*time.Minute), nil, nil, []string{})
-	return hybridCA{ca: c, key: key}
+	c, _, key, _ := cert_test.NewTestCaCert(cert.Version2, curve, now, now.Add(10*time.Minute), nil, nil, []string{})
+	return hybridCA{curve: curve, ca: c, key: key}
 }
 
-// server starts a node on the hybrid curve, with a v2 hybrid certificate signed by the CA, which it trusts.
+// server starts a node on the CA's curve, with a v2 certificate signed by the CA, which it trusts.
 func (ca hybridCA) server(name, network string, overrides m) (*nebula.Control, []netip.Prefix, netip.AddrPort) {
 	nets := []netip.Prefix{netip.MustParsePrefix(network)}
-	c, _, keyPEM, _ := cert_test.NewTestCert(cert.Version2, hybridCurve, ca.ca, ca.key, name, ca.ca.NotBefore(), ca.ca.NotAfter(), nets, nil, []string{})
+	c, _, keyPEM, _ := cert_test.NewTestCert(cert.Version2, ca.curve, ca.ca, ca.key, name, ca.ca.NotBefore(), ca.ca.NotAfter(), nets, nil, []string{})
 	control, vpn, udpAddr, _ := newServer([]cert.Certificate{ca.ca}, []cert.Certificate{c}, keyPEM, overrides)
 	return control, vpn, udpAddr
 }
@@ -97,7 +113,12 @@ func (ca hybridCA) server(name, network string, overrides m) (*nebula.Control, [
 // newHybridPair builds two hybrid nodes, me initiating to them.
 func newHybridPair(t *testing.T, mine, theirs m) (myControl, theirControl *nebula.Control, myVpn, theirVpn []netip.Prefix, myUdp, theirUdp netip.AddrPort, r *router.R) {
 	t.Helper()
-	ca := newHybridCA(t)
+	return newPQPair(t, newHybridCA(t), mine, theirs)
+}
+
+// newPQPair builds two nodes on the CA's curve, me initiating to them.
+func newPQPair(t *testing.T, ca hybridCA, mine, theirs m) (myControl, theirControl *nebula.Control, myVpn, theirVpn []netip.Prefix, myUdp, theirUdp netip.AddrPort, r *router.R) {
+	t.Helper()
 	myControl, myVpn, myUdp = ca.server("me", "10.128.0.1/24", mine)
 	theirControl, theirVpn, theirUdp = ca.server("them", "10.128.0.2/24", theirs)
 	myControl.InjectLightHouseAddr(theirVpn[0].Addr(), theirUdp)
@@ -134,7 +155,17 @@ func peerCurve(t *testing.T, c *nebula.Control, vpnAddr netip.Addr) cert.Curve {
 
 func TestHybridHandshake(t *testing.T) {
 	t.Parallel()
-	myControl, theirControl, myVpn, theirVpn, myUdp, theirUdp, r := newHybridPair(t, hybridConfig(), hybridConfig())
+	testPQHandshake(t, newHybridCA(t), 8+9+2)
+}
+
+// TestPureHandshake is TestHybridHandshake on the post-quantum curve, ML-KEM-1024 alone: msg1 is a little smaller.
+func TestPureHandshake(t *testing.T) {
+	t.Parallel()
+	testPQHandshake(t, newPQCA(t, pureCurve), 7+9+2)
+}
+
+func testPQHandshake(t *testing.T, ca hybridCA, minFragments int) {
+	myControl, theirControl, myVpn, theirVpn, myUdp, theirUdp, r := newPQPair(t, ca, hybridConfig(), hybridConfig())
 	defer r.RenderFlow()
 
 	var tally hybridTally
@@ -150,7 +181,7 @@ func TestHybridHandshake(t *testing.T) {
 
 	assertUdpPacket(t, []byte("Hi from me"), theirControl.GetFromTun(true), myVpn[0].Addr(), theirVpn[0].Addr(), 80, 80)
 	assert.Zero(t, tally.classical, "a hybrid node makes hybrid handshakes only")
-	assert.GreaterOrEqual(t, tally.hybrid, 8+9+2, "all three messages travel as several fragments")
+	assert.GreaterOrEqual(t, tally.hybrid, minFragments, "all three messages travel as several fragments")
 	assert.Positive(t, tally.msg3)
 	assert.LessOrEqual(t, tally.maxLen, fragment.MaxPacketLen)
 	assert.Zero(t, recvErrors)
@@ -160,8 +191,8 @@ func TestHybridHandshake(t *testing.T) {
 	for _, c := range []*nebula.Control{myControl, theirControl} {
 		assert.Empty(t, c.ListHostmapIndexes(true), "no pending index may outlive the handshake")
 	}
-	assert.Equal(t, hybridCurve, peerCurve(t, myControl, theirVpn[0].Addr()))
-	assert.Equal(t, hybridCurve, peerCurve(t, theirControl, myVpn[0].Addr()))
+	assert.Equal(t, ca.curve, peerCurve(t, myControl, theirVpn[0].Addr()))
+	assert.Equal(t, ca.curve, peerCurve(t, theirControl, myVpn[0].Addr()))
 
 	myControl.Stop()
 	theirControl.Stop()
@@ -312,7 +343,15 @@ func TestHybridNeverConfirmed(t *testing.T) {
 
 func TestHybridRelays(t *testing.T) {
 	t.Parallel()
-	ca := newHybridCA(t)
+	testPQRelays(t, newHybridCA(t))
+}
+
+func TestPureRelays(t *testing.T) {
+	t.Parallel()
+	testPQRelays(t, newPQCA(t, pureCurve))
+}
+
+func testPQRelays(t *testing.T, ca hybridCA) {
 	useRelays := hybridConfig()
 	useRelays["relay"] = m{"use_relays": true}
 	amRelay := hybridConfig()
@@ -351,7 +390,7 @@ func TestHybridRelays(t *testing.T) {
 	assertUdpPacket(t, []byte("Hi from me"), theirControl.GetFromTun(true), myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), 80, 80)
 	assert.Positive(t, relayedMsg3, "msg3 goes through the relay too")
 	assert.Zero(t, relayedClassical)
-	assert.Equal(t, hybridCurve, peerCurve(t, myControl, theirVpnIpNet[0].Addr()))
+	assert.Equal(t, ca.curve, peerCurve(t, myControl, theirVpnIpNet[0].Addr()))
 	r.RenderHostmaps("Final hostmaps", myControl, relayControl, theirControl)
 
 	myControl.Stop()
@@ -740,4 +779,46 @@ func TestHybridCookieUnderLoad(t *testing.T) {
 
 	myControl.Stop()
 	theirControl.Stop()
+}
+
+// TestPureAndHybridNeverMeet has a node on the post-quantum curve and one on the hybrid curve try to reach each other,
+// each way. Like classical and hybrid nodes, they never form a tunnel.
+func TestPureAndHybridNeverMeet(t *testing.T) {
+	t.Parallel()
+	hca, pca := newHybridCA(t), newPQCA(t, pureCurve)
+	trustBoth := func() m {
+		cfg := hybridConfig()
+		b1, _ := hca.ca.MarshalPEM()
+		b2, _ := pca.ca.MarshalPEM()
+		cfg["pki"] = m{"ca": string(b1) + string(b2)}
+		return cfg
+	}
+	hybridControl, hybridVpn, hybridUdp := hca.server("hybrid", "10.128.0.1/24", trustBoth())
+	pureControl, pureVpn, pureUdp := pca.server("pure", "10.128.0.2/24", trustBoth())
+	hybridControl.InjectLightHouseAddr(pureVpn[0].Addr(), pureUdp)
+	pureControl.InjectLightHouseAddr(hybridVpn[0].Addr(), hybridUdp)
+	r := router.NewR(t, hybridControl, pureControl)
+	defer r.RenderFlow()
+	hybridControl.Start()
+	pureControl.Start()
+
+	var msg2 int
+	route := func(to *nebula.Control) bool {
+		return routeUntilTunnelData(t, r, to, time.Second, func(p *udp.Packet, _ *nebula.Control) router.ExitType {
+			if h, _ := handshakeOf(p); h != nil && h.MessageCounter >= 2 {
+				msg2++
+			}
+			return router.KeepRouting
+		})
+	}
+	hybridControl.InjectTunPacket(BuildTunUDPPacket(pureVpn[0].Addr(), 80, hybridVpn[0].Addr(), 80, []byte("Hi from hybrid")))
+	assert.False(t, route(pureControl))
+	pureControl.InjectTunPacket(BuildTunUDPPacket(hybridVpn[0].Addr(), 80, pureVpn[0].Addr(), 80, []byte("Hi from pure")))
+	assert.False(t, route(hybridControl))
+	assert.Zero(t, msg2, "neither msg1 was answered")
+	assert.Nil(t, hybridControl.GetHostInfoByVpnAddr(pureVpn[0].Addr(), false))
+	assert.Nil(t, pureControl.GetHostInfoByVpnAddr(hybridVpn[0].Addr(), false))
+
+	hybridControl.Stop()
+	pureControl.Stop()
 }

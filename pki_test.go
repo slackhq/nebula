@@ -81,6 +81,19 @@ func TestNewCipherSuite(t *testing.T) {
 			wantName: "P384_ChaChaPoly_SHA512",
 		},
 		{
+			name:     "post-quantum aesgcm has no DH and takes SHA-512",
+			curve:    cert.Curve_MLKEM1024_MLDSA87,
+			cipher:   "aesgcm",
+			wantName: "AESGCM_SHA512",
+		},
+		{
+			name:            "post-quantum aesgcm, enforced is allowed",
+			curve:           cert.Curve_MLKEM1024_MLDSA87,
+			cipher:          "aesgcm",
+			fips140Enforced: true,
+			wantName:        "AESGCM_SHA512",
+		},
+		{
 			name:            "hybrid aesgcm, enforced is allowed",
 			curve:           cert.Curve_P384_MLKEM1024_MLDSA87,
 			cipher:          "aesgcm",

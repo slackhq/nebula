@@ -66,6 +66,43 @@ can not carry it.
 
 Sizes: a host certificate is about 6.5 KB, a CA certificate about 7.5 KB.
 
+## The post-quantum curve
+
+A second curve, `MLKEM1024_MLDSA87` (`-curve MLKEM1024-MLDSA87`), uses CNSA 2.0's algorithms and
+nothing else: no classical half to fall back on, and no composite signature.
+
+| Use | Algorithm | Standard | CNSA |
+|---|---|---|---|
+| Host key agreement | ML-KEM-1024 | FIPS 203 | 2.0 |
+| CA signature | ML-DSA-87, pure, context `nebula certificate` | FIPS 204 | 2.0 |
+| Noise hash, fingerprints | SHA-512 | FIPS 180-4 | 2.0 |
+
+- **Host keys**: the public key is the ML-KEM-1024 encapsulation key (1568 bytes), the private key
+  its 64 byte seed. **CA keys**: the ML-DSA-87 public key (2592 bytes), the private key its 32 byte
+  seed. A signature is one ML-DSA-87 signature (4627 bytes), hedged, over the v2 signing input
+  with the context string `nebula certificate`.
+- **Handshake**: `ix_pq` (subtype 4, on the wire always as 0x84) runs PQNoise's `pqIX`
+  (eprint.iacr.org/2022/539) from DefinedNet/noise with a KEM-only cipher suite, protocol name
+  `Noise_pqIX_MLKEM1024_AESGCM_SHA512`:
+
+  ```
+  -> e, s
+  <- ekem, skem, s
+  -> skem
+  ```
+
+  `e` and `s` are ML-KEM-1024 encapsulation keys and every secret comes from a KEM. The noise
+  implementation is checked against nyquist, PQNoise's reference implementation, in both
+  directions. Authentication works as in the hybrid pattern: the responder authenticates the
+  initiator when msg3 decrypts, the initiator the responder when the first packet under the new
+  keys does. The manager treats it as it treats `ix_hybrid`: three messages, always fragmented.
+- Sizes: msg1 7892 B (k=7), msg2 9511 B (k=9), msg3 1600 B (k=2) for the minimal certificate.
+- Cost: a full handshake takes 1.1 ms of CPU, both sides together, against 4.6 ms on the hybrid
+  curve and 0.6 ms classical (Threadripper 7970X). The hybrid curve's extra is P-384, which Go
+  runs in generic code.
+- One curve per node applies here too: post-quantum, hybrid and classical nodes never reach each
+  other.
+
 ## A node on the hybrid curve
 
 A node's certificates share one curve, as they always have: `pki.cert` holds a version 2

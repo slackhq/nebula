@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fingerprints. Version 2 certificates only. Like any curve it is the node's only one: a node on it makes hybrid
   handshakes and nothing else, and can not reach classical nodes. `nebula-cert ca`, `keygen` and
   `sign -curve P384-MLKEM1024-MLDSA87` make the CAs, keys and certificates. See `docs/pq-handshake.md`.
+- Post-quantum handshakes on a second curve, `MLKEM1024_MLDSA87`, CNSA 2.0's algorithms alone: ML-KEM-1024 hosts,
+  ML-DSA-87 CAs and PQNoise's `pqIX` handshake (`ix_pq`), with no classical half. `-curve MLKEM1024-MLDSA87`.
 
 - `service.Listen` supports `tcp6` and follows `net.Listen` address family semantics for `tcp`, `tcp4` and `tcp6`.
 - A control socket that provides access to all of the ssh debug server's commands along with support

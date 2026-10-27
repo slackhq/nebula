@@ -100,6 +100,8 @@ func TestTypeMap(t *testing.T) {
 			HandshakeIXPSK0Fragmented:   "ix_psk0_fragmented",
 			HandshakeIXHybrid:           "ix_hybrid",
 			HandshakeIXHybridFragmented: "ix_hybrid_fragmented",
+			HandshakeIXPQ:               "ix_pq",
+			HandshakeIXPQFragmented:     "ix_pq_fragmented",
 		},
 		Control: &subTypeNoneMap,
 	}, subTypeMap)
@@ -127,6 +129,7 @@ func TestIsValidSubType(t *testing.T) {
 	assert.True(t, IsValidSubType(Handshake, HandshakeIXPSK0))
 	assert.True(t, IsValidSubType(Handshake, HandshakeIXPSK0Fragmented))
 	assert.True(t, IsValidSubType(Handshake, HandshakeIXHybridFragmented))
+	assert.True(t, IsValidSubType(Handshake, HandshakeIXPQFragmented))
 	assert.True(t, IsValidSubType(Handshake, HandshakeIXHybrid), "named, but the handshake manager drops it unfragmented")
 	// 2 was the unreleased ix_psk2_mlkem1024 and stays reserved.
 	assert.False(t, IsValidSubType(Handshake, 2))
@@ -185,6 +188,7 @@ func TestHandshakeFragmented(t *testing.T) {
 		{HandshakeIXPSK0, HandshakeIXPSK0Fragmented},
 		{HandshakeXXPSK0, HandshakeXXPSK0Fragmented},
 		{HandshakeIXHybrid, HandshakeIXHybridFragmented},
+		{HandshakeIXPQ, HandshakeIXPQFragmented},
 	} {
 		st, ok := FragmentedSubtype(c.pattern)
 		assert.True(t, ok)

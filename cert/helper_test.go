@@ -40,6 +40,11 @@ func NewTestCaCert(version Version, curve Curve, before, after time.Time, networ
 		if err != nil {
 			panic(err)
 		}
+	case Curve_MLKEM1024_MLDSA87:
+		pub, priv, err = GeneratePureSigningKeypair()
+		if err != nil {
+			panic(err)
+		}
 	default:
 		// There is no default to allow the underlying lib to respond with an error
 	}
@@ -101,6 +106,12 @@ func NewTestCert(v Version, curve Curve, ca Certificate, key []byte, name string
 	case Curve_P384_MLKEM1024_MLDSA87:
 		var err error
 		pub, priv, err = GenerateHybridKeypair()
+		if err != nil {
+			panic(err)
+		}
+	case Curve_MLKEM1024_MLDSA87:
+		var err error
+		pub, priv, err = GeneratePureKeypair()
 		if err != nil {
 			panic(err)
 		}
