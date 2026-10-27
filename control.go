@@ -54,11 +54,11 @@ type Control struct {
 	sshStart               func()
 	statsStart             func()
 	dnsStart               func()
+	hostDNSStart           func()
+	hostDNSRestore         func()
 	lighthouseStart        func()
 	networkChangeStart     func(rebind func())
 	connectionManagerStart func(context.Context)
-	hostDNSStart           func()
-	hostDNSRestore         func()
 }
 
 type ControlHostInfo struct {
@@ -109,6 +109,9 @@ func (c *Control) Start() error {
 	if c.dnsStart != nil {
 		go c.dnsStart()
 	}
+	if c.hostDNSStart != nil {
+		go c.hostDNSStart()
+	}
 	if c.networkChangeStart != nil {
 		go c.networkChangeStart(c.RebindUDPServer)
 	}
@@ -117,9 +120,6 @@ func (c *Control) Start() error {
 	}
 	if c.lighthouseStart != nil {
 		c.lighthouseStart()
-	}
-	if c.hostDNSStart != nil {
-		go c.hostDNSStart()
 	}
 
 	c.f.triggerShutdown = func() { go c.Stop() }
