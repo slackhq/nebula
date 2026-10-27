@@ -13,19 +13,7 @@ See the [v1.12.0](https://github.com/slackhq/nebula/milestone/29?closed=1) miles
 
 ### Breaking
 
-- Building Nebula, or embedding it as a library, now requires go v1.27.2, which the gvisor update requires. (#1940)
-- Embedders: reload callbacks registered with `config.C.RegisterReloadCallback` now take
-  `(*config.C, *config.Reload)`, and `ReloadConfig` and `ReloadConfigString` return a `config.ReloadResult`.
-  `ReloadConfigString` used to return an `error`, it is now the result's `Err`. (#1935)
-- Embedders: `overlay.Device` no longer embeds `io.ReadWriteCloser` and replaced `NewMultiQueueReader` and
-  `SupportsMultiqueue` with `Queues`, reads and writes go through the `tio.Queue`s it returns. `udp.Conn` gained
-  `WriteBatch`, which must be safe for concurrent use, and `IPv4Only`, `ListenOut` takes a flush callback, and
-  `ReloadConfig` takes a `*config.Reload`. `udp.NewListener` and `udp.NewGenericListener` take a `udp.Settings`. This
-  only matters if you implement your own device or conn, or create the udp listener yourself.
-  (#1704, #1935, #1971, #1991)
-- Embedders: the ssh debug commands moved to the new `commands` package. `sshd.RegisterCommand` and `sshd.Command`
-  are gone and `sshd.NewSSHServer` takes a `*commands.Registry`. `firewall.ProtoTCP`, `ProtoUDP`, `ProtoICMP` and
-  `ProtoICMPv6` are now `iputil.IPProtocol*`. (#1958, #1864)
+- Building Nebula, or embedding it as a library, now requires go v1.27.3. (#1940, #2028)
 - Firewall rule `group` and `groups` values that were silently turned into strings are now rejected on startup and
   reload: unquoted floats (`group: 1.10` used to match the group `1.1`), dates, maps, nested arrays, and a null `group`
   or `groups` when no `host`, other group, or `cidr` limits the rule. Quote group names. Unquoted ints and bools
@@ -39,6 +27,21 @@ See the [v1.12.0](https://github.com/slackhq/nebula/milestone/29?closed=1) miles
   as `{"ok":false,"reason":...}`. `version -json` prints `{"version":...}` and `print-cert -json -raw` prints
   `{"pem":...}`. Every command accepts `-json` and `-pretty`. (#1959, #1975)
 - `nebula` and `nebula-service` refuse to start when given an argument that isn't a flag instead of ignoring it. (#1975)
+
+#### Embedders
+
+- Reload callbacks registered with `config.C.RegisterReloadCallback` now take
+  `(*config.C, *config.Reload)`, and `ReloadConfig` and `ReloadConfigString` return a `config.ReloadResult`.
+  `ReloadConfigString` used to return an `error`, it is now the result's `Err`. (#1935)
+- `overlay.Device` no longer embeds `io.ReadWriteCloser` and replaced `NewMultiQueueReader` and
+  `SupportsMultiqueue` with `Queues`, reads and writes go through the `tio.Queue`s it returns. `udp.Conn` gained
+  `WriteBatch`, which must be safe for concurrent use, and `IPv4Only`, `ListenOut` takes a flush callback, and
+  `ReloadConfig` takes a `*config.Reload`. `udp.NewListener` and `udp.NewGenericListener` take a `udp.Settings`. This
+  only matters if you implement your own device or conn, or create the udp listener yourself.
+  (#1704, #1935, #1971, #1991)
+- The ssh debug commands moved to the new `commands` package. `sshd.RegisterCommand` and `sshd.Command`
+  are gone and `sshd.NewSSHServer` takes a `*commands.Registry`. `firewall.ProtoTCP`, `ProtoUDP`, `ProtoICMP` and
+  `ProtoICMPv6` are now `iputil.IPProtocol*`. (#1958, #1864)
 
 ### Added
 
@@ -55,13 +58,17 @@ See the [v1.12.0](https://github.com/slackhq/nebula/milestone/29?closed=1) miles
   are not supported in them. The boringcrypto builds are deprecated and will be removed in the next release. (#1696)
 - Local APIs under `local_api`. A control socket, on by default and only reachable by the user nebula runs as and root
   (SYSTEM and Administrators on Windows), or a group named in `local_api.control.group`, serves every ssh debug
-  command, with `nebula ctl <command>` as its client and `localapi.Client.InvokeLine` for embedders. An opt-in info
+  command, with `nebula ctl <command>` as its client. An opt-in info
   socket serves the new `identity` command over HTTP: `GET /v1/identity` for this node, `GET /v1/identity/<vpn addr>`
   for the host owning an address, and `/pem` under either for the certificate. When running more than one instance on
   a host give each its own `local_api.control.socket`, otherwise `nebula ctl` reaches whichever instance bound the
-  default path first. (#1975, #1988, #2025)
-- On macOS, embedders can hand Nebula a utun fd the host already configured with `overlay.NewFdDeviceFromConfig`,
-  Nebula leaves its addressing, MTU and routes to the host. (#1890)
+  default path first. (#1975, #1988)
+
+#### Embedders
+
+- On macOS, hand Nebula a utun fd the host already configured with `overlay.NewFdDeviceFromConfig`, Nebula leaves its
+  addressing, MTU and routes to the host. (#1890)
+- `localapi.Client.InvokeLine` runs a control socket command line the way `nebula ctl` does. (#2025)
 
 ### Changed
 
@@ -119,10 +126,6 @@ See the [v1.12.0](https://github.com/slackhq/nebula/milestone/29?closed=1) miles
   or punch to a peer's IPv6 addresses, or advertise its own IPv6 interface addresses. (#1991)
 - `remote_allow_list` is applied before capping a host's addresses at the max remotes limit, so denied addresses no
   longer crowd out allowed ones. (#1985)
-- The `service` package now works over an IPv6 overlay, and `service.Listen` supports `tcp6` and follows `net.Listen`
-  address family semantics for `tcp`, `tcp4` and `tcp6`. (#2004)
-- `service` no longer stalls new connections to every port when a listener isn't accepting, closes its listeners and
-  netstack on shutdown, and can listen on port 65535. (#1939, #1954, #2003)
 - A firewall rule with `group: []`, `groups:` with no value, or a non-string `groups` entry no longer crashes Nebula
   on startup or reload. (#1912)
 - A `firewall.conntrack` timeout of zero or less is now a config error, zero and small negative values crashed. (#1984)
@@ -145,8 +148,14 @@ See the [v1.12.0](https://github.com/slackhq/nebula/milestone/29?closed=1) miles
   instead of staying at the system default. (#1929)
 - A tunnel now requests a fresh hole punch after every UDP rebind, it could miss one after an exact multiple of 256
   rebinds. (#1820)
-- `nebula -test`, or an embedder calling Main with a config test, no longer leaves the lighthouse and DNS resolver
-  goroutines running. (#1889)
+
+#### Embedders
+
+- The `service` package now works over an IPv6 overlay, and `service.Listen` supports `tcp6` and follows `net.Listen`
+  address family semantics for `tcp`, `tcp4` and `tcp6`. (#2004)
+- `service` no longer stalls new connections to every port when a listener isn't accepting, closes its listeners and
+  netstack on shutdown, and can listen on port 65535. (#1939, #1954, #2003)
+- Calling `Main` with a config test no longer leaves the lighthouse and DNS resolver goroutines running. (#1889)
 
 ## [1.11.2] - 2026-09-21
 
