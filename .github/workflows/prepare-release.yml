@@ -1,0 +1,121 @@
+name: Prepare release
+on:
+  push:
+    branches:
+      - master
+      - 'release-*'
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+concurrency:
+  group: prepare-release-${{ github.ref_name }}
+jobs:
+
+  prepare-release:
+    name: Tag a merged release, then open or update the release PR
+    runs-on: ubuntu-latest
+    env:
+      # Without a RELEASE_TOKEN secret, pushes from this job don't trigger workflows: a maintainer approves the checks
+      # on the PRs it opens, and release.yml is dispatched rather than fired by the tag.
+      GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+      HAS_RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN != '' }}
+    steps:
+
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.RELEASE_TOKEN || github.token }}
+
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version: '1.27'
+        check-latest: true
+
+    # A merged release PR leaves a version file whose tag doesn't exist yet. Checking for that, rather than for the
+    # merge event, also catches a release whose run was cancelled or failed.
+    - name: Tag a merged release
+      id: tag
+      run: |
+        version=$(go tool -modfile=tools/go.mod changie latest)
+        if [ -n "$(git ls-remote --tags origin "refs/tags/$version")" ]
+        then
+          exit 0
+        fi
+        commit=$(git log -1 --format=%H --diff-filter=A -- ".changes/$version.md")
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git tag -a "$version" -m "${version#v} Release" "$commit"
+        git push origin "$version"
+        if [ "$HAS_RELEASE_TOKEN" != true ]
+        then
+          gh workflow run release.yml --ref "$version"
+        fi
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+    # A backport keeps its change file's name, so the files a patch release batched are still unreleased on master
+    # under the same names. Without this, the next minor release would list them again.
+    - name: Sync a patch release to master
+      if: steps.tag.outputs.version && github.ref_name != 'master'
+      env:
+        VERSION: ${{ steps.tag.outputs.version }}
+        COMMIT: ${{ steps.tag.outputs.commit }}
+      run: |
+        batched=$(git diff --name-only --diff-filter=D "$COMMIT^" "$COMMIT" -- .changes/unreleased)
+        head="changie-sync/$VERSION"
+        git switch -c "$head" origin/master
+        git checkout "$VERSION" -- ".changes/$VERSION.md"
+        for f in $batched
+        do
+          git rm --quiet --ignore-unmatch "$f"
+        done
+        go tool -modfile=tools/go.mod changie merge
+        git add -A .changes CHANGELOG.md
+        git commit -m "Add the $VERSION changelog to master"
+        git push --force origin "$head"
+        if ! gh pr view "$head" --json state --jq .state | grep -q OPEN
+        then
+          gh pr create --base master --head "$head" --title "Add the $VERSION changelog to master" \
+            --body "Copies \`.changes/$VERSION.md\` from \`$GITHUB_REF_NAME\` and removes the change files it batched."
+        fi
+
+    - name: Batch the next release
+      id: batch
+      env:
+        # A release branch only ships patch releases, whatever kinds its change files are.
+        BUMP: ${{ github.ref_name == 'master' && 'auto' || 'patch' }}
+      run: |
+        git switch --detach "$GITHUB_SHA"
+        if ! ls .changes/unreleased/*.yaml >/dev/null 2>&1
+        then
+          exit 0
+        fi
+        changie() { go tool -modfile=tools/go.mod changie "$@"; }
+        version=$(changie next "$BUMP")
+        changie batch "$version"
+        changie merge
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
+    - name: Push the release branch and open its PR
+      if: steps.batch.outputs.version
+      env:
+        BASE: ${{ github.ref_name }}
+        VERSION: ${{ steps.batch.outputs.version }}
+      run: |
+        head="changie-release/$BASE"
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git switch -C "$head"
+        git add -A .changes CHANGELOG.md
+        git commit -m "$VERSION changelog"
+        git push --force origin "$head"
+
+        body=$(printf 'Merging this PR tags `%s` on `%s`, which runs the release workflow.\n\n%s\n' \
+          "$VERSION" "$BASE" "$(tail -n +3 ".changes/$VERSION.md")")
+        if gh pr view "$head" --json state --jq .state | grep -q OPEN
+        then
+          gh pr edit "$head" --title "$VERSION changelog" --body "$body"
+        else
+          gh pr create --base "$BASE" --head "$head" --title "$VERSION changelog" --body "$body"
+        fi

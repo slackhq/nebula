@@ -1,0 +1,5 @@
+kind: Changed
+body: |-
+  `nebula-cert keygen` refuses to overwrite an existing `-out-key` or `-out-pub` file, matching `ca` and `sign`.
+  Overwriting kept the old file's mode, so a key written over a world-readable file stayed world-readable.
+time: 2026-10-26T12:00:03-05:00

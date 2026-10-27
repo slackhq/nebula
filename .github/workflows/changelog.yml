@@ -1,0 +1,42 @@
+name: Changelog
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+jobs:
+
+  changelog:
+    name: Check change files
+    runs-on: ubuntu-latest
+    steps:
+
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        fetch-depth: 0
+
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version: '1.27'
+        check-latest: true
+
+    # Release and sync PRs batch change files rather than add them. Dependency bumps ship without an entry unless
+    # someone writes one.
+    - name: Require a change file
+      if: >-
+        !startsWith(github.head_ref, 'changie-')
+        && !contains(github.event.pull_request.labels.*.name, 'skip-changelog')
+        && !contains(github.event.pull_request.labels.*.name, 'dependencies')
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: |
+        if [ -z "$(git diff --name-only --diff-filter=A "$BASE_SHA" HEAD -- .changes/unreleased)" ]
+        then
+          echo "::error::Add a change file with 'make changelog', or label the PR skip-changelog if users won't notice it."
+          exit 1
+        fi
+
+    - name: Render unreleased changes
+      run: |
+        if ls .changes/unreleased/*.yaml >/dev/null 2>&1
+        then
+          go tool -modfile=tools/go.mod changie batch auto --dry-run
+        fi

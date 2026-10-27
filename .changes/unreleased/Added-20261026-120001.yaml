@@ -1,0 +1,5 @@
+kind: Added
+body: |-
+  A control socket that provides access to all of the ssh debug server's commands along with support
+  for running `nebula ctl <command>` as a client from the CLI.
+time: 2026-10-26T12:00:01-05:00

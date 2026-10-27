@@ -1,0 +1,4 @@
+kind: Added
+body: |-
+  `service.Listen` supports `tcp6` and follows `net.Listen` address family semantics for `tcp`, `tcp4` and `tcp6`.
+time: 2026-10-26T12:00:00-05:00
