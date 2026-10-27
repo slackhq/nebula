@@ -75,6 +75,10 @@ type batchWriter struct {
 
 	// entryPkts[e] is the number of packets packed into entry e.
 	entryPkts []int
+
+	// plainUntil is the bufs index below which planRun packs one packet per entry,
+	// set to replay a GSO run the route refused as plain datagrams.
+	plainUntil int
 }
 
 func newBatchWriter(fd int, isV4 bool, l *slog.Logger, offloadsEnabled bool) *batchWriter {
@@ -204,6 +208,7 @@ func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, er
 	// A destination the kernel rejects results in us dropping that entry (one packet, or one same-destination GSO run).
 	// We count what actually made it out rather than returning an error.
 	written := 0
+	w.plainUntil = 0
 
 	i := 0
 	for i < len(bufs) {
@@ -294,6 +299,14 @@ func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, er
 				i = w.entryEnd[done] - w.entryPkts[done]
 				break
 			}
+			// EMSGSIZE on a superpacket means a segment is larger than the route's MTU, usually a learned path MTU.
+			// A plain datagram that large is fragmented instead, so replay the run as one-packet entries and keep GSO
+			// for everything else. EINVAL is the kernel refusing to segment a run in other ways, replaying it is as safe.
+			if w.entryPkts[done] >= 2 && (errors.Is(serr, unix.EMSGSIZE) || errors.Is(serr, unix.EINVAL)) {
+				i = w.entryEnd[done] - w.entryPkts[done]
+				w.plainUntil = w.entryEnd[done]
+				break
+			}
 			// Any other zero-sent error is a per-entry failure.
 			// Transient errnos (EINTR, ENOBUFS) were already retried inside sendFn.
 			// These packets are doomed. Log them and move on.
@@ -319,7 +332,7 @@ func (w *batchWriter) planRun(bufs [][]byte, addrs []netip.AddrPort, start, iovB
 		return 0, 0
 	}
 	segSize := len(bufs[start])
-	if !w.gsoSupported || segSize == 0 || segSize > maxGSOBytes {
+	if !w.gsoSupported || start < w.plainUntil || segSize == 0 || segSize > maxGSOBytes {
 		return 1, segSize
 	}
 	dst := addrs[start]

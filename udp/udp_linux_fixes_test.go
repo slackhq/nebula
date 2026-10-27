@@ -12,6 +12,8 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
 
@@ -612,6 +614,42 @@ func TestWriteBatchEIODisablesGSOAndReplays(t *testing.T) {
 	want := []int{1, 3}
 	if len(entryCounts) != len(want) || entryCounts[0] != want[0] || entryCounts[1] != want[1] {
 		t.Errorf("sendmmsg entry counts = %v, want %v", entryCounts, want)
+	}
+}
+
+// TestWriteBatchEMSGSIZEReplaysRunPlain: a GSO run the route refuses for size is replayed as plain datagrams, the
+// kernel fragments those, while GSO stays on for the other runs in the batch.
+func TestWriteBatchEMSGSIZEReplaysRunPlain(t *testing.T) {
+	for _, errno := range []unix.Errno{unix.EMSGSIZE, unix.EINVAL} {
+		a := netip.MustParseAddrPort("127.0.0.1:4242")
+		b := netip.MustParseAddrPort("127.0.0.2:4242")
+		bufs := [][]byte{make([]byte, 1400), make([]byte, 1400), make([]byte, 1400), make([]byte, 1200), make([]byte, 1200)}
+		addrs := []netip.AddrPort{a, a, a, b, b}
+
+		w := newRewindTestWriter()
+		var entryPkts [][]int
+		refuse := true
+		w.sendFn = func(start, n int) (int, error) {
+			entryPkts = append(entryPkts, slices.Clone(w.entryPkts[start:start+n]))
+			if refuse {
+				refuse = false
+				return -1, &net.OpError{Op: "sendmmsg", Err: errno}
+			}
+			return n, nil
+		}
+
+		written, err := w.WriteBatch(bufs, addrs)
+		require.NoError(t, err, errno)
+		assert.Equal(t, len(bufs), written, errno)
+		assert.True(t, w.gsoSupported, "%v must not disable GSO", errno)
+		assert.Equal(t, [][]int{{3, 2}, {1, 1, 1, 2}}, entryPkts, errno)
+
+		// The next batch to the same destination tries GSO again
+		entryPkts = nil
+		written, err = w.WriteBatch(bufs[:3], addrs[:3])
+		require.NoError(t, err, errno)
+		assert.Equal(t, 3, written, errno)
+		assert.Equal(t, [][]int{{3}}, entryPkts, errno)
 	}
 }
 
