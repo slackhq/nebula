@@ -332,3 +332,16 @@ func mustParsePrefixUnmapped(s string) netip.Prefix {
 	prefix := netip.MustParsePrefix(s)
 	return netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits())
 }
+
+func TestUnmarshalCertificateV1_UnknownCurve(t *testing.T) {
+	ca, _, _, _ := NewTestCaCert(Version1, Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	c := ca.Copy().(*certificateV1)
+	c.details.curve = Curve(9)
+	b, err := c.Marshal()
+	require.NoError(t, err)
+
+	// It still parses so tools can show it, it is refused where it would be used
+	got, err := unmarshalCertificateV1(b, nil)
+	require.NoError(t, err)
+	assert.Equal(t, Curve(9), got.Curve())
+}

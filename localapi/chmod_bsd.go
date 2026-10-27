@@ -33,7 +33,7 @@ func applyAccess(path string, acc Access) error {
 		return &os.PathError{Op: "chown", Path: path, Err: err}
 	}
 
-	if err := unix.Fchmodat(unix.AT_FDCWD, path, uint32(acc.Mode.Perm()), unix.AT_SYMLINK_NOFOLLOW); err != nil {
+	if err := unix.Fchmodat(unix.AT_FDCWD, path, uint32(acc.mode.Perm()), unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		return &os.PathError{Op: "chmod", Path: path, Err: err}
 	}
 

@@ -133,6 +133,17 @@ func (c *Control) GetRebindEpochFor(vpnAddr netip.Addr) (uint32, bool) {
 	return h.state.Load() >> stateEpochShift, true
 }
 
+// HasPendingHandshake reports whether a handshake with vpnIp is in progress. Unlike GetHostInfoByVpnAddr it reads no
+// fields of the pending hostinfo, which the handshake is still writing.
+func (c *Control) HasPendingHandshake(vpnIp netip.Addr) bool {
+	return c.f.handshakeManager.queryVpnIp(vpnIp) != nil
+}
+
+// HasTunnel reports whether we have an established tunnel with vpnIp.
+func (c *Control) HasTunnel(vpnIp netip.Addr) bool {
+	return c.f.hostMap.QueryVpnAddr(vpnIp) != nil
+}
+
 func (c *Control) KillPendingTunnel(vpnIp netip.Addr) bool {
 	hostinfo := c.f.handshakeManager.QueryVpnAddr(vpnIp)
 	if hostinfo == nil {

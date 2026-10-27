@@ -494,7 +494,8 @@ logging:
   #fragment: auto
 
   # repair_delay is how long repair fragments trail the data fragments of a fragmented message. It defaults to a
-  # tenth of try_interval, and should stay well below half of it. Reloadable.
+  # tenth of try_interval and must be under half of it, the quiet period a receiver keeps after completing a message.
+  # Reloadable.
   #repair_delay: 10ms
 
 # Tunnel manager settings

@@ -34,11 +34,11 @@ func TestLookupGroupIDOnWindows(t *testing.T) {
 // full access, plus the group with what a client needs and nothing generic, so a
 // member cannot create an instance of the pipe; see pipeClientAccess.
 func TestSDDLAdmitsTheGroup(t *testing.T) {
-	sddl, err := sddlFor(ownerOnly())
+	sddl, err := sddlFor(OwnerOnly())
 	require.NoError(t, err)
 	assert.NotContains(t, sddl, "S-1-5-32-545")
 
-	sddl, err = sddlFor(Access{Mode: groupSocketMode, Group: Group{Name: "Users", ID: "S-1-5-32-545"}})
+	sddl, err = sddlFor(Access{mode: groupSocketMode, group: Group{name: "Users", id: "S-1-5-32-545"}})
 	require.NoError(t, err)
 	assert.Contains(t, sddl, "(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x120083;;;S-1-5-32-545)")
 	assert.Zero(t, pipeClientAccess&windows.FILE_APPEND_DATA, "FILE_APPEND_DATA is FILE_CREATE_PIPE_INSTANCE on a pipe")

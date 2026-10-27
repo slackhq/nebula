@@ -42,7 +42,7 @@ func newHybridPeers(t *testing.T) (ca cert.Certificate, responder, initiator hyb
 }
 
 // newHybridTestManager is newFragTestManager for a responder on the hybrid curve that trusts ca.
-func newHybridTestManager(t *testing.T, ca cert.Certificate, cs *CertState) (*HandshakeManager, *recordingConn) {
+func newHybridTestManager(t *testing.T, ca cert.Certificate, cs *CertState) (*HandshakeManager, *captureConn) {
 	t.Helper()
 	hm, conn := newFragTestManager(t)
 	hm.f.pki.cs.Store(cs)

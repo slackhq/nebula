@@ -185,3 +185,28 @@ func CalculateAlternateFingerprint(c Certificate) (string, error) {
 	}
 	return nc.Fingerprint()
 }
+
+// Known is false for curves this version of nebula can not use, likely ones a newer version added.
+func (c Curve) Known() bool {
+	return c == Curve_CURVE25519 || c == Curve_P256 || c == Curve_P384_MLKEM1024_MLDSA87 || c == Curve_MLKEM1024_MLDSA87
+}
+
+// CheckKnownCurve returns an ErrUnknownCurve if c is for a curve this version of nebula can not use.
+func CheckKnownCurve(c Certificate) error {
+	if c.Curve().Known() {
+		return nil
+	}
+	return fmt.Errorf("%s: %w: %d", QuoteName(c.Name()), ErrUnknownCurve, c.Curve())
+}
+
+// QuoteName quotes a certificate name for an error or log line, the certificate may not be trusted.
+func QuoteName(name string) string {
+	return quoteCapped(name, MaxNameLength)
+}
+
+func quoteCapped(s string, max int) string {
+	if len(s) > max {
+		return fmt.Sprintf("%q...", s[:max])
+	}
+	return fmt.Sprintf("%q", s)
+}

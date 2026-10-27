@@ -86,6 +86,12 @@ func fragmentConfigFrom(c *config.C, tryInterval time.Duration) (fragmentConfig,
 	if cfg.repairDelay < 0 {
 		return cfg, fmt.Errorf("handshakes.repair_delay must not be negative")
 	}
+	// A responder drops a completed msg1's fragments for half a retry interval. Repair fragments trailing by more than
+	// that open an entry that never completes and holds a quota slot until it expires.
+	if cfg.repairDelay >= tryInterval/2 {
+		return cfg, fmt.Errorf("handshakes.repair_delay must be under half of handshakes.try_interval (%v), not %v",
+			tryInterval/2, cfg.repairDelay)
+	}
 	return cfg, nil
 }
 
@@ -205,9 +211,11 @@ type fragKey struct {
 	fragID uint32
 }
 
-// fragSource groups msg1 reassemblies for the per-source quota: an IPv4 /32, an IPv6 /64, or one relay channel.
+// fragSource groups msg1 reassemblies for the per-source quota: an IPv4 /32, an IPv6 /64, or one relay channel, and
+// for a sender that showed a cookie, its own address and port.
 type fragSource struct {
 	prefix netip.Prefix
+	addr   netip.AddrPort
 	relay  uint32
 }
 
@@ -312,11 +320,22 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 		now := time.Now()
 		key, src := fragKeyFor(via, fh.FragID)
 		validated := via.IsRelayed || (fh.HasCookie() && hm.cookies.valid(key, fh.Cookie, now))
+		if validated && !via.IsRelayed {
+			// A cookie proves the address, so it counts against a quota of its own: whatever the rest of its prefix
+			// sends, real or spoofed, can not crowd it out.
+			src = fragSource{addr: via.UdpAddr}
+		}
 		if hm.fragTable.Load() >= fragCookieLoad && !validated {
 			hm.sendCookie(via, h.Subtype, fh.FragID, key, len(packet), now)
 			return
 		}
 		res, err := hm.fragTable.Add(key, src, now, fh, sym)
+		if errors.Is(err, fragment.ErrSourceQuota) && !validated {
+			// The prefix is full, which anyone sharing it can arrange with a few fragments. Ask for a cookie, as under
+			// load, rather than turn every handshake from the prefix away.
+			hm.sendCookie(via, h.Subtype, fh.FragID, key, len(packet), now)
+			return
+		}
 		if err != nil {
 			hm.l.Debug("dropping handshake fragment", "from", via, "error", err)
 			return

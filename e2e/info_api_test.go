@@ -49,7 +49,7 @@ func TestIdentityOverTheInfoAPI(t *testing.T) {
 	// Before the tunnel is up their address is unknown to us.
 	path := infoSocket(t)
 	info := localapi.NewInfoServer(NewTestLogger(), myControl.InfoHandler())
-	require.NoError(t, info.Rebind(context.Background(), path, localapi.Access{Mode: 0600}))
+	require.NoError(t, info.Rebind(context.Background(), path, localapi.OwnerOnly()))
 	t.Cleanup(info.Stop)
 
 	status, body := test.HTTPGet(t, path, "/v1/identity/"+theirVpnIpNet[0].Addr().String())

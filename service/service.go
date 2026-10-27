@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"net"
 	"net/netip"
 	"strings"
@@ -44,8 +43,15 @@ type Service struct {
 		sync.Mutex
 
 		closed    bool
-		listeners map[uint16]*tcpListener
+		listeners map[listenerKey]*tcpListener
 	}
+}
+
+// listenerKey identifies the address family and port an incoming connection is
+// delivered by. A dual-stack listener is registered under both families.
+type listenerKey struct {
+	proto tcpip.NetworkProtocolNumber
+	port  uint16
 }
 
 func New(control *nebula.Control) (_ *Service, reterr error) {
@@ -72,7 +78,7 @@ func New(control *nebula.Control) (_ *Service, reterr error) {
 	s := Service{
 		control: control,
 	}
-	s.mu.listeners = map[uint16]*tcpListener{}
+	s.mu.listeners = map[listenerKey]*tcpListener{}
 
 	s.ipstack = stack.New(stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
@@ -94,23 +100,36 @@ func New(control *nebula.Control) (_ *Service, reterr error) {
 		return nil, fmt.Errorf("could not create netstack NIC: %v", tcpipProblem)
 	}
 	ipv4Subnet, _ := tcpip.NewSubnet(tcpip.AddrFrom4([4]byte{0x00, 0x00, 0x00, 0x00}), tcpip.MaskFrom(strings.Repeat("\x00", 4)))
+	ipv6Subnet, _ := tcpip.NewSubnet(tcpip.AddrFrom16([16]byte{}), tcpip.MaskFrom(strings.Repeat("\x00", 16)))
 	s.ipstack.SetRouteTable([]tcpip.Route{
 		{
 			Destination: ipv4Subnet,
 			NIC:         nicID,
 		},
+		{
+			Destination: ipv6Subnet,
+			NIC:         nicID,
+		},
 	})
 
-	ipNet := device.Networks()
-	pa := tcpip.ProtocolAddress{
-		AddressWithPrefix: tcpip.AddrFromSlice(ipNet[0].Addr().AsSlice()).WithPrefix(),
-		Protocol:          ipv4.ProtocolNumber,
-	}
-	if err := s.ipstack.AddProtocolAddress(nicID, pa, stack.AddressProperties{
-		PEB:        stack.CanBePrimaryEndpoint, // zero value default
-		ConfigType: stack.AddressConfigStatic,  // zero value default
-	}); err != nil {
-		return nil, fmt.Errorf("error creating IP: %s", err)
+	// A v2 cert can carry several networks, possibly of both families, and each
+	// needs its own address on the NIC for that family to work
+	for _, ipNet := range device.Networks() {
+		pa := tcpip.ProtocolAddress{
+			AddressWithPrefix: tcpip.AddrFromSlice(ipNet.Addr().AsSlice()).WithPrefix(),
+			Protocol:          getProtocolNumber(ipNet.Addr()),
+		}
+		if err := s.ipstack.AddProtocolAddress(nicID, pa, stack.AddressProperties{
+			PEB:        stack.CanBePrimaryEndpoint, // zero value default
+			ConfigType: stack.AddressConfigStatic,  // zero value default
+		}); err != nil {
+			// A certificate may list one address under several prefix lengths,
+			// and the netstack only holds the host address.
+			if _, ok := err.(*tcpip.ErrDuplicateAddress); ok {
+				continue
+			}
+			return nil, fmt.Errorf("error creating IP %s: %s", ipNet.Addr(), err)
+		}
 	}
 
 	const tcpReceiveBufferSize = 0
@@ -141,10 +160,20 @@ func New(control *nebula.Control) (_ *Service, reterr error) {
 				s.control.Stop()
 				return err
 			}
+			var proto tcpip.NetworkProtocolNumber
+			switch header.IPVersion(buf[:n]) {
+			case header.IPv4Version:
+				proto = header.IPv4ProtocolNumber
+			case header.IPv6Version:
+				proto = header.IPv6ProtocolNumber
+			default:
+				// Not an IP packet, nothing in the stack can use it
+				continue
+			}
 			packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
 				Payload: buffer.MakeWithData(bytes.Clone(buf[:n])),
 			})
-			linkEP.InjectInbound(header.IPv4ProtocolNumber, packetBuf)
+			linkEP.InjectInbound(proto, packetBuf)
 
 			if ctx.Err() != nil {
 				return nil
@@ -243,32 +272,42 @@ func (s *Service) Dial(network, address string) (net.Conn, error) {
 }
 
 // Listen listens on the provided address. Currently only TCP with wildcard
-// addresses are supported.
+// addresses are supported. As with net.Listen, "tcp4" accepts only IPv4
+// connections, "tcp6" only IPv6, and "tcp" both. A "tcp4" and a "tcp6"
+// listener may share a port, but a "tcp" listener claims the port for both
+// families. Connections of a family with no listener on the port are reset.
 func (s *Service) Listen(network, address string) (net.Listener, error) {
-	if network != "tcp" && network != "tcp4" {
+	var protos []tcpip.NetworkProtocolNumber
+	switch network {
+	case "tcp":
+		protos = []tcpip.NetworkProtocolNumber{ipv4.ProtocolNumber, ipv6.ProtocolNumber}
+	case "tcp4":
+		protos = []tcpip.NetworkProtocolNumber{ipv4.ProtocolNumber}
+	case "tcp6":
+		protos = []tcpip.NetworkProtocolNumber{ipv6.ProtocolNumber}
+	default:
 		return nil, errors.New("only tcp is supported")
 	}
 	addr, err := net.ResolveTCPAddr(network, address)
 	if err != nil {
 		return nil, err
 	}
-	if addr.IP != nil && !bytes.Equal(addr.IP, []byte{0, 0, 0, 0}) {
+	if addr.IP != nil && !addr.IP.IsUnspecified() {
 		return nil, fmt.Errorf("only wildcard address supported, got %q %v", address, addr.IP)
 	}
 	if addr.Port == 0 {
 		return nil, errors.New("specific port required, got 0")
 	}
-	if addr.Port < 0 || addr.Port >= math.MaxUint16 {
-		return nil, fmt.Errorf("invalid port %d", addr.Port)
-	}
 	port := uint16(addr.Port)
 
 	l := &tcpListener{
-		port:   port,
 		s:      s,
 		addr:   addr,
 		accept: make(chan net.Conn),
 		closed: make(chan struct{}),
+	}
+	for _, proto := range protos {
+		l.keys = append(l.keys, listenerKey{proto: proto, port: port})
 	}
 
 	s.mu.Lock()
@@ -277,10 +316,14 @@ func (s *Service) Listen(network, address string) (net.Listener, error) {
 	if s.mu.closed {
 		return nil, net.ErrClosed
 	}
-	if _, ok := s.mu.listeners[port]; ok {
-		return nil, fmt.Errorf("already listening on port %d", port)
+	for _, key := range l.keys {
+		if _, ok := s.mu.listeners[key]; ok {
+			return nil, fmt.Errorf("%s port %d already in use", network, port)
+		}
 	}
-	s.mu.listeners[port] = l
+	for _, key := range l.keys {
+		s.mu.listeners[key] = l
+	}
 
 	return l, nil
 }
@@ -320,8 +363,13 @@ func (s *Service) closeListeners() {
 func (s *Service) tcpHandler(r *tcp.ForwarderRequest) {
 	endpointID := r.ID()
 
+	key := listenerKey{proto: ipv4.ProtocolNumber, port: endpointID.LocalPort}
+	if endpointID.LocalAddress.Len() == net.IPv6len {
+		key.proto = ipv6.ProtocolNumber
+	}
+
 	s.mu.Lock()
-	l, ok := s.mu.listeners[endpointID.LocalPort]
+	l, ok := s.mu.listeners[key]
 	s.mu.Unlock()
 	if !ok {
 		r.Complete(true)

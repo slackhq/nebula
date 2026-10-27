@@ -64,7 +64,7 @@ func applyAccess(path string, acc Access) error {
 		return &os.PathError{Op: "chown", Path: path, Err: err}
 	}
 
-	perm := uint32(acc.Mode.Perm())
+	perm := uint32(acc.mode.Perm())
 	err = unix.Chmod(held, perm)
 	if err == unix.ENOENT {
 		err = unix.Fchmodat(unix.AT_FDCWD, path, perm, unix.AT_SYMLINK_NOFOLLOW)

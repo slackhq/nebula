@@ -19,21 +19,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// recordingConn captures what is written to it.
-type recordingConn struct {
+// captureConn captures what is written to it.
+type captureConn struct {
 	udp.NoopConn
 	sync.Mutex
 	sent [][]byte
 }
 
-func (c *recordingConn) WriteTo(b []byte, _ netip.AddrPort) error {
+func (c *captureConn) WriteTo(b []byte, _ netip.AddrPort) error {
 	c.Lock()
 	defer c.Unlock()
 	c.sent = append(c.sent, append([]byte(nil), b...))
 	return nil
 }
 
-func (c *recordingConn) take() [][]byte {
+func (c *captureConn) take() [][]byte {
 	c.Lock()
 	defer c.Unlock()
 	s := c.sent
@@ -41,10 +41,10 @@ func (c *recordingConn) take() [][]byte {
 	return s
 }
 
-func newFragTestManager(t *testing.T) (*HandshakeManager, *recordingConn) {
+func newFragTestManager(t *testing.T) (*HandshakeManager, *captureConn) {
 	t.Helper()
 	l := test.NewLogger()
-	conn := &recordingConn{}
+	conn := &captureConn{}
 	cfg := defaultHandshakeConfig
 	// Repair fragments go out with the data ones, so a test sees a whole send at once.
 	cfg.fragment = fragmentConfig{}
@@ -122,7 +122,11 @@ func TestFragmentConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 7*time.Millisecond, cfg.repairDelay, "a configured repair delay overrides it")
 
-	for _, bad := range []string{"handshakes: {fragment: sometimes}", "handshakes: {repair_delay: -1ms}"} {
+	for _, bad := range []string{
+		"handshakes: {fragment: sometimes}",
+		"handshakes: {repair_delay: -1ms}",
+		"handshakes: {repair_delay: 50ms}", // half the default retry interval, the receiver's quiet period
+	} {
 		c := config.NewC(test.NewLogger())
 		require.NoError(t, c.LoadString(bad))
 		_, err := fragmentConfigFrom(c, DefaultHandshakeTryInterval)
@@ -143,6 +147,10 @@ func TestFragmentConfig(t *testing.T) {
 		res = c.ReloadConfigString("handshakes: {fragment: always}")
 		require.NoError(t, res.Err)
 		assert.Equal(t, hm.config.tryInterval/repairDelayDivisor, hm.fragConfig().repairDelay, "unset, it follows the retry interval in effect")
+
+		res = c.ReloadConfigString("handshakes: {fragment: always, repair_delay: 60ms}")
+		require.NoError(t, res.Err)
+		assert.True(t, res.Failed, "a repair delay past the quiet period fails the reload")
 
 		res = c.ReloadConfigString("handshakes: {fragment: sometimes}")
 		require.NoError(t, res.Err)
@@ -449,6 +457,50 @@ func TestFragCookieUnderLoad(t *testing.T) {
 		hm.handleFragment(via, p, h)
 		assert.Len(t, conn.take(), 1)
 	})
+}
+
+// A prefix whose quota is full, which anyone sharing it can arrange with a few junk fragments, asks for a cookie rather
+// than turning every handshake from it away, and a sender with a cookie counts against a quota of its own.
+func TestFragSourceQuotaAsksForCookie(t *testing.T) {
+	hm, conn := newFragTestManager(t)
+	via := ViaSender{UdpAddr: netip.MustParseAddrPort("192.0.2.1:4242")}
+
+	// Junk from the rest of the /32: one fragment each of messages that never complete.
+	for i := range fragTableConfig.MaxPerSource {
+		p, h := msg1Fragment(t, uint32(9000+i), nil)
+		hm.handleFragment(ViaSender{UdpAddr: netip.AddrPortFrom(via.UdpAddr.Addr(), uint16(5000+i))}, p, h)
+	}
+	require.Empty(t, conn.take(), "the junk fits the quota")
+	require.Less(t, hm.fragTable.Load(), fragCookieLoad, "and is nowhere near loading the table")
+	full := hm.fragTable.Len()
+
+	p, h := msg1Fragment(t, 7, nil)
+	hm.handleFragment(via, p, h)
+	sent := conn.take()
+	require.Len(t, sent, 1, "a cookie reply")
+	require.Len(t, sent[0], fragCookieReplyLen)
+	assert.Equal(t, full, hm.fragTable.Len(), "and no state")
+	var cookie fragment.Cookie
+	copy(cookie[:], sent[0][header.Len:])
+
+	p, h = msg1Fragment(t, 7, &cookie)
+	hm.handleFragment(via, p, h)
+	assert.Empty(t, conn.take())
+	assert.Equal(t, full+1, hm.fragTable.Len(), "the cookie gets it in past the full prefix")
+
+	// The address with a cookie has a quota of its own, and once that is full nothing more is asked of it.
+	for i := 1; i < fragTableConfig.MaxPerSource; i++ {
+		fragID := uint32(7 + i)
+		c := hm.cookies.make(fragKey{addr: via.UdpAddr, fragID: fragID}, time.Now())
+		p, h := msg1Fragment(t, fragID, &c)
+		hm.handleFragment(via, p, h)
+	}
+	assert.Equal(t, full+fragTableConfig.MaxPerSource, hm.fragTable.Len())
+	c := hm.cookies.make(fragKey{addr: via.UdpAddr, fragID: 100}, time.Now())
+	p, h = msg1Fragment(t, 100, &c)
+	hm.handleFragment(via, p, h)
+	assert.Equal(t, full+fragTableConfig.MaxPerSource, hm.fragTable.Len(), "a full address is turned away")
+	assert.Empty(t, conn.take(), "without another cookie")
 }
 
 // never turns fragment support off: msg1 fragments and cookie replies are dropped unread, as a node without it would.

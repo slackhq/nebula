@@ -27,7 +27,7 @@ func serveInfo(t *testing.T, h http.Handler, mode os.FileMode) (*InfoServer, str
 
 	path := testSocket(t)
 	s := NewInfoServer(test.NewLogger(), h)
-	require.NoError(t, s.Rebind(context.Background(), path, Access{Mode: mode}))
+	require.NoError(t, s.Rebind(context.Background(), path, Access{mode: mode}))
 	t.Cleanup(s.Stop)
 	return s, path
 }
@@ -110,7 +110,7 @@ func TestInfoModeChangeRefusesASwappedSocket(t *testing.T) {
 	require.NoError(t, os.Remove(path))
 	require.NoError(t, os.Symlink(target, path))
 
-	err := s.Rebind(context.Background(), path, Access{Mode: 0666})
+	err := s.Rebind(context.Background(), path, Access{mode: 0666})
 	require.ErrorContains(t, err, "is not a socket")
 	fi, err := os.Stat(target)
 	require.NoError(t, err)
@@ -140,11 +140,11 @@ func TestInfoConfig(t *testing.T) {
 
 	cfg, err = load(t, "local_api:\n  info:\n    enabled: true\n    socket: /run/nebula/info.sock\n")
 	require.NoError(t, err)
-	assert.Equal(t, infoConfig{Enabled: true, Path: "/run/nebula/info.sock", Access: Access{Mode: 0600}}, cfg)
+	assert.Equal(t, infoConfig{Enabled: true, Path: "/run/nebula/info.sock", Access: Access{mode: 0600}}, cfg)
 
 	cfg, err = load(t, "local_api:\n  info:\n    enabled: true\n    socket: /run/nebula/info.sock\n    socket_mode: \"0660\"\n")
 	require.NoError(t, err)
-	assert.Equal(t, infoConfig{Enabled: true, Path: "/run/nebula/info.sock", Access: Access{Mode: 0660}}, cfg)
+	assert.Equal(t, infoConfig{Enabled: true, Path: "/run/nebula/info.sock", Access: Access{mode: 0660}}, cfg)
 
 	_, err = load(t, "local_api:\n  info:\n    enabled: true\n    socket: run/info.sock\n")
 	require.Error(t, err, "a relative socket path is refused rather than resolved against anything")
