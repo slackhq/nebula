@@ -1,0 +1,39 @@
+name: Publish release
+on:
+  pull_request:
+    types: [closed]
+    branches:
+    - master
+permissions:
+  actions: write
+  contents: write
+jobs:
+
+  publish:
+    name: Tag the merged release PR
+    if: >-
+      github.event.pull_request.merged
+      && github.head_ref == 'release'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        ref: ${{ github.event.pull_request.merge_commit_sha }}
+        fetch-depth: 0
+
+    - uses: knope-dev/action@19617851f9f13ab2f27a05989c55efb18aca3675 # v2.1.2
+      with:
+        version: 0.23.2
+
+    - name: Create the tag and GitHub release
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: knope release --verbose
+
+    # A tag created with GITHUB_TOKEN doesn't start release.yml's tag push trigger.
+    - name: Build and upload the binaries
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: gh workflow run release.yml --ref "v$(sed -n '1s|.*// v||p' go.mod)"

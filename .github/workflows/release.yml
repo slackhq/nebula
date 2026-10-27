@@ -2,6 +2,7 @@ on:
   push:
     tags:
     - 'v[0-9]+.[0-9]+.[0-9]*'
+  workflow_dispatch:
 
 name: Create release and upload binaries
 
@@ -296,8 +297,14 @@ jobs:
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
           cd artifacts
-          gh release create \
-            --verify-tag \
-            --title "Release ${GITHUB_REF_NAME}" \
-            "${GITHUB_REF_NAME}" \
-            SHASUM256.txt *-latest/*.zip *-latest/*.tar.gz
+          # publish-release.yml creates the release with its changelog notes before dispatching this workflow.
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1
+          then
+            gh release upload --clobber "${GITHUB_REF_NAME}" SHASUM256.txt *-latest/*.zip *-latest/*.tar.gz
+          else
+            gh release create \
+              --verify-tag \
+              --title "Release ${GITHUB_REF_NAME}" \
+              "${GITHUB_REF_NAME}" \
+              SHASUM256.txt *-latest/*.zip *-latest/*.tar.gz
+          fi

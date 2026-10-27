@@ -1,0 +1,5 @@
+---
+default: patch
+---
+
+A packet for an `unsafe_routes` entry with several gateways now waits for the handshake with the gateway its flow hashes to, as with a single gateway, instead of going to another gateway that had a tunnel. Once the handshake completed, the rest of the flow went to the gateway it hashes to, which reset TCP connections it had never seen. A gateway is passed over only after a handshake with it times out or its tunnel is found dead, until a handshake with it succeeds. A connection that started on another gateway while its own was passed over is still reset when its own gateway comes back, including one started in the single handshake between that gateway recovering and Nebula noticing.
