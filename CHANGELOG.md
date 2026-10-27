@@ -7,57 +7,163 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-10-27
+
+See the [v1.12.0](https://github.com/slackhq/nebula/milestone/29?closed=1) milestone for a complete list of changes.
+
+### Breaking
+
+- Building Nebula, or embedding it as a library, now requires go v1.27.2, which the gvisor update requires. (#1940)
+- Embedders: reload callbacks registered with `config.C.RegisterReloadCallback` now take
+  `(*config.C, *config.Reload)`, and `ReloadConfig` and `ReloadConfigString` return a `config.ReloadResult`.
+  `ReloadConfigString` used to return an `error`, it is now the result's `Err`. (#1935)
+- Embedders: `overlay.Device` no longer embeds `io.ReadWriteCloser` and replaced `NewMultiQueueReader` and
+  `SupportsMultiqueue` with `Queues`, reads and writes go through the `tio.Queue`s it returns. `udp.Conn` gained
+  `WriteBatch`, which must be safe for concurrent use, and `IPv4Only`, `ListenOut` takes a flush callback, and
+  `ReloadConfig` takes a `*config.Reload`. `udp.NewListener` and `udp.NewGenericListener` take a `udp.Settings`. This
+  only matters if you implement your own device or conn, or create the udp listener yourself.
+  (#1704, #1935, #1971, #1991)
+- Embedders: the ssh debug commands moved to the new `commands` package. `sshd.RegisterCommand` and `sshd.Command`
+  are gone and `sshd.NewSSHServer` takes a `*commands.Registry`. `firewall.ProtoTCP`, `ProtoUDP`, `ProtoICMP` and
+  `ProtoICMPv6` are now `iputil.IPProtocol*`. (#1958, #1864)
+- Firewall rule `group` and `groups` values that were silently turned into strings are now rejected on startup and
+  reload: unquoted floats (`group: 1.10` used to match the group `1.1`), dates, maps, nested arrays, and a null `group`
+  or `groups` when no `host`, other group, or `cidr` limits the rule. Quote group names. Unquoted ints and bools
+  still work but log a warning. (#1912, #2017)
+- A `pki.blocklist` entry that isn't a hex SHA-256 fingerprint now refuses to start and fails a reload.
+  Entries are now compared case insensitively. (#1964)
+- On Linux, Nebula refuses a `tun.dev` that already exists, including a persistent device created ahead of time with
+  `ip tuntap add` or systemd-networkd. Remove it and let Nebula create the device. (#1704)
+- `tun.mtu`, and any route `mtu`, above 8937 is capped to 8937 with a warning so relayed packets always fit. (#1899)
+- SSH debug server commands now exit with status 1 when they refuse, and with `-json` or `-pretty` report the refusal
+  as `{"ok":false,"reason":...}`. `version -json` prints `{"version":...}` and `print-cert -json -raw` prints
+  `{"pem":...}`. Every command accepts `-json` and `-pretty`. (#1959, #1975)
+- `nebula` and `nebula-service` refuse to start when given an argument that isn't a flag instead of ignoring it. (#1975)
+
 ### Added
 
-- `service.Listen` supports `tcp6` and follows `net.Listen` address family semantics for `tcp`, `tcp4` and `tcp6`.
-- A control socket that provides access to all of the ssh debug server's commands along with support
-  for running `nebula ctl <command>` as a client from the CLI.
-- An info socket that serves the `identity` command over HTTP: `GET /v1/identity` for this node,
-  `GET /v1/identity/<vpn addr>` for the host owning an address, and `/pem` under either for the certificate.
-- A top-level `dns` stanza allowing nebula to update the host's DNS resolver. See `examples/config.yml`
-  for more information.
+- Linux tun offloads (TSO/USO) and UDP GSO/GRO, off by default. Enable with `tun.use_offloads` and
+  `listen.udp_offloads`. (#1704, #1858, #2023)
+- Batch outbound UDP sends, up to 128 packets per `sendmmsg` call on Linux. (#1704)
+- On Linux with `routines` above 1, pin each routine's thread to a CPU, preferring performance cores and spreading
+  co-located instances apart. Controlled by `tun.pin_threads` (default `true`), `tun.pin_threads_key` (`pid`, the
+  default, or `port`) and `tun.cpu_affinity`. These and `listen.udp_offloads` need a restart.
+  (#1704, #1861)
+- Native go FIPS 140-3 mode, no CGO required. `make fips140` and `make release-fips140` build binaries that only run
+  in FIPS 140-only mode and only allow P256 certificates and AES. `nebula-cert ca` and `keygen` default to
+  `-curve P256` in those builds. Encrypted CA keys (`nebula-cert ca -encrypt`, or `sign` with an encrypted `-ca-key`)
+  are not supported in them. The boringcrypto builds are deprecated and will be removed in the next release. (#1696)
+- Local APIs under `local_api`. A control socket, on by default and only reachable by the user nebula runs as and root
+  (SYSTEM and Administrators on Windows), or a group named in `local_api.control.group`, serves every ssh debug
+  command, with `nebula ctl <command>` as its client and `localapi.Client.InvokeLine` for embedders. An opt-in info
+  socket serves the new `identity` command over HTTP: `GET /v1/identity` for this node, `GET /v1/identity/<vpn addr>`
+  for the host owning an address, and `/pem` under either for the certificate. When running more than one instance on
+  a host give each its own `local_api.control.socket`, otherwise `nebula ctl` reaches whichever instance bound the
+  default path first. (#1975, #1988, #2025)
+- On macOS, embedders can hand Nebula a utun fd the host already configured with `overlay.NewFdDeviceFromConfig`,
+  Nebula leaves its addressing, MTU and routes to the host. (#1890)
 
 ### Changed
 
+- A config reload logs one line saying whether it completed, completed with errors, or needs a restart and for which
+  keys. The `reload` debug command prints the same and fails when the reload had errors. A reload is now reported as
+  failed when a config entry is skipped with a warning, or for a startup only value that would fail a restart, like
+  an unknown `cipher`. (#1935, #1952, #1953)
+- Certificates in `pki.ca` and `pki.cert` from a newer version of Nebula are skipped with a warning instead of failing
+  startup. Nebula still fails if nothing usable is left. `nebula-cert verify` skips certificates in `-ca` and `-crt`
+  it doesn't support with a warning, and fails if none are left. (#1999)
+- Relay hosts batch the packets they forward. (#1971)
+- A relay drops a relay request that names a different source than the peer that sent it. (#1980)
+- Lighthouse queries never block the caller, a full queue drops the query and counts it in
+  `lighthouse.query.dropped`. `handshakes.query_buffer` now defaults to `1024`, up from `64`. (#1910)
+- `static_host_map` hostnames keep their last good addresses when a lookup fails, other than a not found answer,
+  including across a reload, resolve in parallel, and re-resolve when a handshake to the host starts.
+  `static_map.lookup_timeout` now defaults to `5s`, up from `250ms`. (#1982)
+- `tun.tx_queue` now defaults to `5000`, up from `500`. (#1928)
+- On macOS, the utun gets its vpn address as a /32 or /128 and Nebula routes the vpn network to it explicitly, so other
+  VPNs can't take over the overlay route. (#1931)
+- On macOS, an `unsafe_routes` entry another interface already routes is added once that route goes away and steps
+  aside when it comes back, and the warning names the interface. This includes `0.0.0.0/0`, which used to do nothing
+  on a Mac and is now installed whenever the default route goes away, like when Wi-Fi drops. A reload restores an
+  unsafe route deleted by hand. (#1925, #1942)
+- On Windows, the nebula adapter no longer registers its addresses in DNS. (#1914)
+- Quoted `metric` and via `weight` values in `tun.unsafe_routes` are now honored, a quoted metric used to become `0`
+  and a quoted weight failed to load. Nebula warns when a route is listed more than once. (#1924)
 - `nebula-cert keygen` refuses to overwrite an existing `-out-key` or `-out-pub` file, matching `ca` and `sign`.
-  Overwriting kept the old file's mode, so a key written over a world-readable file stayed world-readable.
+  Overwriting kept the old file's mode, so a key written over a world-readable file stayed world-readable. Devices and
+  fifos, like `/dev/stdout`, are still written to. (#1966, #2019)
+- Reduce log spam from failing sends by logging them at most once a second, with a count of the ones skipped. (#1915)
+- Reduce log spam from blocklisted hosts handshaking with us and invalid inbound packets by logging them at debug,
+  blocklisted handshakes are counted in `handshake_manager.rejected.blocklisted`. (#1961, #1969, #1970)
+- Lighthouses ignore host queries for their own overlay addresses. (#1866)
+- IPv6 packets with more than 8 extension headers are now dropped. (#1704, #1883)
+- Use about 10MB less memory by no longer linking gopacket outside of tests. (#1864)
+- Various dependency updates. (#1827, #1828, #1829, #1846, #1847, #1859, #1860, #1875, #1876, #1894, #1904, #1937, #1938,
+  #2015, #2016)
 
 ### Removed
 
 - The SSH debug server's `start-cpu-profile`, `stop-cpu-profile`, `save-heap-profile`, `save-mutex-profile`, and
-  `mutex-profile-fraction` commands, and `sshd.sandbox_dir`, which is now ignored if set.
+  `mutex-profile-fraction` commands, and `sshd.sandbox_dir`, which is now ignored if set. Profiling will return as a
+  config option in a future release, see #913. (#1965)
 
 ### Fixed
 
+- Inbound packets that arrive through a peer's unsafe network with a source inside this node's vpn networks are
+  dropped, matching outbound, where traffic to those addresses has always gone directly to the host that owns them
+  instead of through an unsafe route. (#1986)
 - A packet for an `unsafe_routes` entry with several gateways now waits for the handshake with the gateway its flow
-  hashes to, as with a single gateway, instead of going to another gateway that had a tunnel. Once the handshake
-  completed, the rest of the flow went to the gateway it hashes to, which reset TCP connections it had never seen.
-  A gateway is passed over only after a handshake with it times out or its tunnel is found dead, until a handshake
-  with it succeeds. A connection that started on another gateway while its own was passed over is still reset when
-  its own gateway comes back, including one started in the single handshake between that gateway recovering and
-  Nebula noticing.
-- A node whose UDP socket is IPv4, as with the default `listen.host` of `0.0.0.0`, no longer tries to handshake,
-  roam or punch to a peer's IPv6 addresses, which it could never send to, or advertise its own IPv6 interface
-  addresses, which it could never receive on.
-- The `service` package now works over an IPv6 overlay. It added only an IPv4 route, only the cert's first
-  network (always labeled IPv4), and handed every inbound packet to gvisor as IPv4, so IPv6 dials failed and
-  IPv6 replies were dropped.
-- A peer whose certificate carries an unsafe network overlapping the overlay could send packets as any node in
-  it: the firewall accepted any source inside the unsafe network. A source address inside this node's own
-  networks must now be the sending peer's own; through an unsafe network it is dropped, counted as a dropped
-  remote address. A peer whose unsafe network deliberately covers this node's overlay range therefore no
-  longer delivers packets from non-nebula hosts in that range either.
-- Signing a v2 certificate with an empty name, a name longer than 253 bytes, or an empty group now fails.
-  These certificates were signed successfully but could not be loaded.
-- `create-tunnel -address <ip:port>` panicked on a nil RemoteList and, over the ssh debug server, took nebula
-  down with it. A hostinfo returned by StartHandshake had no RemoteList until the handshake loop's first
-  pass attached one, and `create-tunnel -address` set the remote before that. The list is now attached when
-  the handshake starts, so a pending hostinfo never exists without one.
-- A firewall rule with `group: []`, `groups:` with no value, or a `groups` entry that isn't a string, such as
-  `groups: [1, 2]`, no longer crashes Nebula on startup or reload. A null `group` or `groups` means none was
-  provided. An unquoted int or bool group, such as `group: 7`, is still read as a string but logs a warning to
-  quote it, since YAML has already turned a value like `007` into `7`. A float, a date, an empty array, a null
-  entry, a nested array, or a map is rejected with an error.
+  hashes to instead of going to another gateway that had a tunnel. Once the handshake completed the rest of the flow
+  moved, which reset connections on gateways that track them, such as NAT or a stateful firewall. (#2013)
+- A node whose UDP socket is IPv4, as with the default `listen.host` of `0.0.0.0`, no longer tries to handshake, roam
+  or punch to a peer's IPv6 addresses, or advertise its own IPv6 interface addresses. (#1991)
+- `remote_allow_list` is applied before capping a host's addresses at the max remotes limit, so denied addresses no
+  longer crowd out allowed ones. (#1985)
+- The `service` package now works over an IPv6 overlay, and `service.Listen` supports `tcp6` and follows `net.Listen`
+  address family semantics for `tcp`, `tcp4` and `tcp6`. (#2004)
+- `service` no longer stalls new connections to every port when a listener isn't accepting, closes its listeners and
+  netstack on shutdown, and can listen on port 65535. (#1939, #1954, #2003)
+- A firewall rule with `group: []`, `groups:` with no value, or a non-string `groups` entry no longer crashes Nebula
+  on startup or reload. (#1912)
+- A `firewall.conntrack` timeout of zero or less is now a config error, zero and small negative values crashed. (#1984)
+- `create-tunnel -address <ip:port>` no longer crashes Nebula. (#1909)
+- Signing a v2 certificate with an empty name, a name longer than 253 bytes, or an empty group now fails. These
+  certificates were signed successfully but could not be loaded. (#1967)
+- A firewall reload after a failed one is retried instead of being seen as unchanged. (#1955)
+- On Linux, a reload that only changes `tun.mtu` no longer removes every route. (#1918)
+- The firewall, handshake, udp and certificate gauges follow `stats.interval` on reload, and a stuck graphite send
+  times out instead of hanging stats. (#1919, #1920)
+- Relays we advertise are recomputed when `relay.am_relay` changes and sent to the lighthouses right away. (#1916, #1917)
+- sshd is only restarted on reload when its config or host key changed, so open sessions, including the one that ran
+  `reload`, are no longer dropped. (#1923, #1948)
+- Don't delete routes Nebula never installed on macOS and the BSDs. (#1933)
+- On Windows, reloads and restarts no longer fail on routes the adapter already has. (#1924)
+- A `tun.unsafe_routes` `metric`, `mtu` or via `weight` that isn't an int or string is a config error instead of a
+  crash. (#1924)
+- On Linux, shutdown waits for the udp and tun readers to exit before closing their fds. (#1979)
+- On Linux without CAP_NET_ADMIN, `listen.read_buffer` and `listen.write_buffer` fall back to the system limited size
+  instead of staying at the system default. (#1929)
+- A tunnel now requests a fresh hole punch after every UDP rebind, it could miss one after an exact multiple of 256
+  rebinds. (#1820)
+- `nebula -test`, or an embedder calling Main with a config test, no longer leaves the lighthouse and DNS resolver
+  goroutines running. (#1889)
+
+## [1.11.2] - 2026-09-21
+
+See the [v1.11.2](https://github.com/slackhq/nebula/milestone/31?closed=1) milestone for a complete list of changes.
+
+### Fixed
+
+- Windows tracks NLMTU per address family and Nebula only ever set it for `AF_INET`, so the IPv6 MTU on every
+  Windows adapter sat at the adapter default of 65535 regardless of `tun.mtu` and the stack could hand Nebula
+  packets far larger than configured. An IPv6 enabled overlay with `tun.mtu` under 1280 now refuses to start,
+  matching the other platforms. (#1871)
+- Android 11+ denies `bind()` on netlink route sockets inside the app sandbox, so local address discovery
+  failed and an Android node advertised no underlay addresses, leaving peers on the same LAN to reach it only
+  at the address a lighthouse observed. (#1881)
+- Recompute the transport checksum on packets a host sends to its own overlay address. On macOS the kernel
+  leaves the checksum unfinished for hardware offload, which does not survive the trip through userspace, so
+  TCP and UDP to a host's own IPv6 overlay address were dropped as corrupt. (#1862)
 
 ## [1.11.1] - 2026-08-21
 
@@ -947,7 +1053,9 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.11.1...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.12.0...HEAD
+[1.12.0]: https://github.com/slackhq/nebula/releases/tag/v1.12.0
+[1.11.2]: https://github.com/slackhq/nebula/releases/tag/v1.11.2
 [1.11.1]: https://github.com/slackhq/nebula/releases/tag/v1.11.1
 [1.11.0]: https://github.com/slackhq/nebula/releases/tag/v1.11.0
 [1.10.3]: https://github.com/slackhq/nebula/releases/tag/v1.10.3
