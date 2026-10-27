@@ -64,7 +64,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	// Host DNS recovery is the one thing that touches the system this early: a previous run that crashed
 	// may have left the resolver pointed at stale DNS configuration, and we want to clean that up in case
 	// we're stuck in some kind of crash loop.
-	hd, err := newHostDNSFromConfig(ctx, l, c)
+	hd, err := newHostDNSFromConfig(l, c)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to configure host DNS", err)
 	}

@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/DefinedNet/dnsconfig"
 	"github.com/slackhq/nebula/config"
@@ -249,14 +250,12 @@ const (
 // on an OS call. Restore is the exception: it reverts the host, bounded by
 // dnsconfig.DefaultShutdownTimeout.
 type hostDNS struct {
-	ctx context.Context
-	l   *slog.Logger
-	// force selects the dnsconfig backend, the zero value detects the native
-	// one. Tests force the no-op backend.
-	force dnsconfig.BackendKind
-	// warnedUnusable is whether an enabled stanza has been told this host
+	l *slog.Logger
+	// newManager is for testing; nil means newDNSConfigManager.
+	newManager func(dnsconfig.Options) (*dnsconfig.Manager, error)
+	// warnedUnsupported is whether an enabled stanza has been told this host
 	// can't be configured; once is enough.
-	warnedUnusable bool
+	warnedUnsupported bool
 	// tunDisabled is whether this process runs without a tun device. It is
 	// read once at construction: tun.disabled only takes effect on restart,
 	// so we don't need to track it through reloads.
@@ -281,9 +280,8 @@ type hostDNS struct {
 }
 
 // newHostDNSFromConfig builds a hostDNS and registers a reload callback.
-func newHostDNSFromConfig(ctx context.Context, l *slog.Logger, c *config.C) (*hostDNS, error) {
+func newHostDNSFromConfig(l *slog.Logger, c *config.C) (*hostDNS, error) {
 	s := &hostDNS{
-		ctx:         ctx,
 		l:           l.With("subsystem", "host_dns"),
 		tunDisabled: c.GetBool("tun.disabled", false),
 	}
@@ -379,42 +377,21 @@ func (s *hostDNS) convergeLocked() error {
 		// how a start with the stanza off recovers what a crash left behind.
 		return s.deactivateLocked()
 	}
-	if err := s.unusable(); err != nil {
-		// Unrecoverable, and not a reason to keep the tunnel down: the same
-		// stanza may be doing its job on the mesh's other hosts.
-		if !s.warnedUnusable {
-			s.l.Warn("host DNS configuration is not supported on this host; leaving host DNS unmanaged", "reason", err)
-			s.warnedUnusable = true
-		}
-		return nil
-	}
 	return s.applyLocked(s.runCfg.dns)
-}
-
-// unusable reports why dnsconfig would refuse every attempt on this host, or
-// nil. It has no backend outside macOS and Windows, and the darwin one needs
-// root for the dynamic store, /etc/resolver and its lock directory. Windows
-// wants LocalSystem or elevation, which dnsconfig checks and warns about
-// itself at construction. A forced no-op backend converges without touching
-// the host, so it is usable anywhere.
-func (s *hostDNS) unusable() error {
-	if s.force == dnsconfig.BackendNoop {
-		return nil
-	}
-	switch dnsconfig.Detect() {
-	case dnsconfig.BackendNoop:
-		return fmt.Errorf("host DNS configuration is not supported on %s", runtime.GOOS)
-	case dnsconfig.BackendDarwin:
-		if os.Geteuid() != 0 {
-			return errors.New("host DNS configuration requires root on macOS")
-		}
-	}
-	return nil
 }
 
 // applyLocked makes desired the host DNS goal.
 func (s *hostDNS) applyLocked(desired dnsconfig.Config) error {
 	if err := s.ensureManagerLocked(); err != nil {
+		if errors.Is(err, errHostDNSUnsupported) {
+			// Unrecoverable, and not a reason to keep the tunnel down: the
+			// same stanza may be doing its job on the mesh's other hosts.
+			if !s.warnedUnsupported {
+				s.l.Warn("host DNS configuration is not supported on this host; leaving host DNS unmanaged", "reason", err)
+				s.warnedUnsupported = true
+			}
+			return nil
+		}
 		return err
 	}
 	if st := s.mgr.Status(); st.Goal == dnsconfig.GoalSet && st.Desired.Equal(desired) {
@@ -442,11 +419,11 @@ func (s *hostDNS) applyLocked(desired dnsconfig.Config) error {
 // every attempt would be refused it is a quiet no-op: there is nothing to say
 // to an embedder that never asked for host DNS.
 func (s *hostDNS) deactivateLocked() error {
-	if err := s.unusable(); err != nil {
-		s.l.Debug("Skipping host DNS cleanup", "reason", err)
-		return nil
-	}
 	if err := s.ensureManagerLocked(); err != nil {
+		if errors.Is(err, errHostDNSUnsupported) {
+			s.l.Debug("Skipping host DNS cleanup", "reason", err)
+			return nil
+		}
 		return err
 	}
 	wasSet := s.mgr.Status().Goal == dnsconfig.GoalSet
@@ -460,18 +437,22 @@ func (s *hostDNS) deactivateLocked() error {
 }
 
 // ensureManagerLocked builds the Manager if there is none, which costs
-// nothing: it touches the host only when it has a goal to act on. Callers
-// check unusable first, so it never builds one every attempt would be refused
-// for.
+// nothing: it touches the host only when it has a goal to act on. On a host
+// dnsconfig would refuse every attempt for it returns errHostDNSUnsupported
+// and builds nothing.
 func (s *hostDNS) ensureManagerLocked() error {
 	if s.mgr != nil {
 		return nil
 	}
+
+	newManager := s.newManager
+	if newManager == nil {
+		newManager = newDNSConfigManager
+	}
 	opts := s.runCfg.hostDNSOptions
-	mgr, err := dnsconfig.New(s.ctx, dnsconfig.Options{
+	mgr, err := newManager(dnsconfig.Options{
 		Identity:      opts.Identity,
 		Logger:        s.l,
-		ForceBackend:  s.force,
 		InterfaceName: opts.Interface,
 	})
 	if err != nil {
@@ -479,6 +460,32 @@ func (s *hostDNS) ensureManagerLocked() error {
 	}
 	s.mgr, s.mgrOpts = mgr, opts
 	return nil
+}
+
+// errHostDNSUnsupported means dnsconfig would refuse every attempt on this
+// host, so no Manager is built for it.
+var errHostDNSUnsupported = errors.New("host DNS configuration is not supported on this host")
+
+// hostDNSNewTimeout bounds manager construction, which initializes the backend.
+const hostDNSNewTimeout = 5 * time.Second
+
+// newDNSConfigManager builds a dnsconfig.Manager, or reports why none can
+// work here. dnsconfig has no backend outside macOS and Windows, and the
+// darwin one needs root for the dynamic store, /etc/resolver and its lock
+// directory. Windows wants LocalSystem or elevation, which dnsconfig checks
+// and warns about itself at construction.
+func newDNSConfigManager(o dnsconfig.Options) (*dnsconfig.Manager, error) {
+	switch dnsconfig.Detect() {
+	case dnsconfig.BackendNoop:
+		return nil, fmt.Errorf("%w: no dnsconfig backend for %s", errHostDNSUnsupported, runtime.GOOS)
+	case dnsconfig.BackendDarwin:
+		if os.Geteuid() != 0 {
+			return nil, fmt.Errorf("%w: requires root on macOS", errHostDNSUnsupported)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), hostDNSNewTimeout)
+	defer cancel()
+	return dnsconfig.New(ctx, o)
 }
 
 // Restore puts the host's previous DNS configuration back and releases the
