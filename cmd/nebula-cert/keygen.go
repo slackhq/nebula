@@ -77,13 +77,13 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 	}
 
 	if !isP11 && !isStdio(*cf.outKeyPath) {
-		if _, err := os.Stat(*cf.outKeyPath); err == nil {
+		if existsNotDevice(*cf.outKeyPath) {
 			return fmt.Errorf("refusing to overwrite existing key: %s", *cf.outKeyPath)
 		}
 	}
 
 	if !isStdio(*cf.outPubPath) {
-		if _, err := os.Stat(*cf.outPubPath); err == nil {
+		if existsNotDevice(*cf.outPubPath) {
 			return fmt.Errorf("refusing to overwrite existing public key: %s", *cf.outPubPath)
 		}
 	}
@@ -120,6 +120,12 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 	}
 
 	return nil
+}
+
+// existsNotDevice reports whether path exists and is not a device or fifo, like /dev/stdout, which are written through
+func existsNotDevice(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.Mode()&(os.ModeDevice|os.ModeCharDevice|os.ModeNamedPipe) == 0
 }
 
 func keygenSummary() string {
