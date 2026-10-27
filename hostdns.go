@@ -117,7 +117,7 @@ func joinDNSErrors(errs ...error) error {
 }
 
 func parseDNSNameservers(c *config.C) ([]netip.Addr, error) {
-	raw, err := getStringSliceStrict(c, "dns.nameservers")
+	raw, err := c.GetStringSliceStrict("dns.nameservers")
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +155,7 @@ func parseDNSDomains(c *config.C, k string) ([]string, error) {
 	// GetStringSlice would read "match_domains: mesh.example.com", a one entry
 	// list missing its dash, as no match domains at all and silently point
 	// every query on the host at dns.nameservers.
-	raw, err := getStringSliceStrict(c, k)
+	raw, err := c.GetStringSliceStrict(k)
 	if err != nil {
 		return nil, err
 	}
@@ -223,21 +223,6 @@ func parseDNSIdentity(c *config.C) (string, error) {
 		return "", fmt.Errorf("dns.identity is not usable: %w", err)
 	}
 	return identity, nil
-}
-
-// getStringSliceStrict gets the slice of strings for k, or nil if k is not
-// set. Unlike GetStringSlice, a value that is set but is not a list is an
-// error rather than the default, so a one entry list written without its
-// leading dash is reported instead of read as empty.
-func getStringSliceStrict(c *config.C, k string) ([]string, error) {
-	r := c.Get(k)
-	if r == nil {
-		return nil, nil
-	}
-	if _, ok := r.([]any); !ok {
-		return nil, fmt.Errorf("%s must be a list, but wasn't: %v", k, r)
-	}
-	return c.GetStringSlice(k, nil), nil
 }
 
 // hostDNSState tracks the hostDNS lifecycle.

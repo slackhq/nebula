@@ -262,6 +262,29 @@ func (c *C) GetStringSlice(k string, d []string) []string {
 	return v
 }
 
+// GetStringSliceStrict gets the slice of strings for k, or nil if k is not
+// set. Unlike GetStringSlice, a value that is set but is not a list is an
+// error rather than the default, so a one entry list written without its
+// leading dash is reported instead of read as empty.
+func (c *C) GetStringSliceStrict(k string) ([]string, error) {
+	r := c.Get(k)
+	if r == nil {
+		return nil, nil
+	}
+
+	rv, ok := r.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s must be a list, but wasn't: %v", k, r)
+	}
+
+	v := make([]string, len(rv))
+	for i := range v {
+		v[i] = fmt.Sprintf("%v", rv[i])
+	}
+
+	return v, nil
+}
+
 // GetMap will get the map for k or return the default d if not found or invalid
 func (c *C) GetMap(k string, d map[string]any) map[string]any {
 	r := c.Get(k)
