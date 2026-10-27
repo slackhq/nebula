@@ -251,14 +251,12 @@ const (
 type hostDNS struct {
 	ctx context.Context
 	l   *slog.Logger
-	// unusable is why dnsconfig would refuse every attempt on this host, or
-	// nil. warnedUnusable is whether an enabled stanza has been told so; once
-	// is enough.
-	unusable       error
-	warnedUnusable bool
 	// force selects the dnsconfig backend, the zero value detects the native
 	// one. Tests force the no-op backend.
 	force dnsconfig.BackendKind
+	// warnedUnusable is whether an enabled stanza has been told this host
+	// can't be configured; once is enough.
+	warnedUnusable bool
 	// tunDisabled is whether this process runs without a tun device. It is
 	// read once at construction: tun.disabled only takes effect on restart,
 	// so we don't need to track it through reloads.
@@ -288,20 +286,6 @@ func newHostDNSFromConfig(ctx context.Context, l *slog.Logger, c *config.C) (*ho
 		ctx:         ctx,
 		l:           l.With("subsystem", "host_dns"),
 		tunDisabled: c.GetBool("tun.disabled", false),
-	}
-
-	// What we can tell up front about whether this host can be configured at
-	// all. dnsconfig has no backend outside macOS and Windows, and the darwin
-	// one needs root for the dynamic store, /etc/resolver and its lock
-	// directory. Windows wants LocalSystem or elevation, which dnsconfig
-	// checks and warns about itself at construction.
-	switch dnsconfig.Detect() {
-	case dnsconfig.BackendNoop:
-		s.unusable = fmt.Errorf("host DNS configuration is not supported on %s", runtime.GOOS)
-	case dnsconfig.BackendDarwin:
-		if os.Geteuid() != 0 {
-			s.unusable = errors.New("host DNS configuration requires root on macOS")
-		}
 	}
 
 	cfg, err := loadHostDNSConfig(c, s.tunDisabled)
@@ -395,16 +379,37 @@ func (s *hostDNS) convergeLocked() error {
 		// how a start with the stanza off recovers what a crash left behind.
 		return s.deactivateLocked()
 	}
-	if s.unusable != nil {
+	if err := s.unusable(); err != nil {
 		// Unrecoverable, and not a reason to keep the tunnel down: the same
 		// stanza may be doing its job on the mesh's other hosts.
 		if !s.warnedUnusable {
-			s.l.Warn("host DNS configuration is not supported on this host; leaving host DNS unmanaged", "reason", s.unusable)
+			s.l.Warn("host DNS configuration is not supported on this host; leaving host DNS unmanaged", "reason", err)
 			s.warnedUnusable = true
 		}
 		return nil
 	}
 	return s.applyLocked(s.runCfg.dns)
+}
+
+// unusable reports why dnsconfig would refuse every attempt on this host, or
+// nil. It has no backend outside macOS and Windows, and the darwin one needs
+// root for the dynamic store, /etc/resolver and its lock directory. Windows
+// wants LocalSystem or elevation, which dnsconfig checks and warns about
+// itself at construction. A forced no-op backend converges without touching
+// the host, so it is usable anywhere.
+func (s *hostDNS) unusable() error {
+	if s.force == dnsconfig.BackendNoop {
+		return nil
+	}
+	switch dnsconfig.Detect() {
+	case dnsconfig.BackendNoop:
+		return fmt.Errorf("host DNS configuration is not supported on %s", runtime.GOOS)
+	case dnsconfig.BackendDarwin:
+		if os.Geteuid() != 0 {
+			return errors.New("host DNS configuration requires root on macOS")
+		}
+	}
+	return nil
 }
 
 // applyLocked makes desired the host DNS goal.
@@ -437,8 +442,8 @@ func (s *hostDNS) applyLocked(desired dnsconfig.Config) error {
 // every attempt would be refused it is a quiet no-op: there is nothing to say
 // to an embedder that never asked for host DNS.
 func (s *hostDNS) deactivateLocked() error {
-	if s.unusable != nil {
-		s.l.Debug("Skipping host DNS cleanup", "reason", s.unusable)
+	if err := s.unusable(); err != nil {
+		s.l.Debug("Skipping host DNS cleanup", "reason", err)
 		return nil
 	}
 	if err := s.ensureManagerLocked(); err != nil {
@@ -455,13 +460,10 @@ func (s *hostDNS) deactivateLocked() error {
 }
 
 // ensureManagerLocked builds the Manager if there is none, which costs
-// nothing: it touches the host only when it has a goal to act on. It refuses,
-// rather than building one that every attempt would be refused for, where the
-// host is unusable; both callers check first, so this is a backstop.
+// nothing: it touches the host only when it has a goal to act on. Callers
+// check unusable first, so it never builds one every attempt would be refused
+// for.
 func (s *hostDNS) ensureManagerLocked() error {
-	if s.unusable != nil {
-		return s.unusable
-	}
 	if s.mgr != nil {
 		return nil
 	}

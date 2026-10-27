@@ -3,7 +3,6 @@ package nebula
 import (
 	"bytes"
 	"context"
-	"errors"
 	"net/netip"
 	"strings"
 	"testing"
@@ -15,9 +14,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// errHostDNSUnusable stands in for a host dnsconfig can't configure.
-var errHostDNSUnusable = errors.New("host DNS configuration is not possible here")
 
 func newHostDNSTestConfig(t *testing.T, raw string) *config.C {
 	t.Helper()
@@ -166,13 +162,12 @@ func TestLoadHostDNSConfig_listWrittenAsAScalar(t *testing.T) {
 	require.ErrorContains(t, err, "dns.match_domains must be a list")
 }
 
-// newTestHostDNS builds a hostDNS over the no-op dnsconfig backend, which records goals without touching the host,
-// on a host it takes to be usable whatever this one is.
+// newTestHostDNS builds a hostDNS over the no-op dnsconfig backend, which records goals without touching the host
+// and so counts as usable whatever this one is.
 func newTestHostDNS(t *testing.T, c *config.C) *hostDNS {
 	t.Helper()
 	s, err := newHostDNSFromConfig(context.Background(), test.NewLogger(), c)
 	require.NoError(t, err)
-	s.unusable = nil
 	s.force = dnsconfig.BackendNoop
 	t.Cleanup(s.Restore)
 	return s
@@ -328,13 +323,17 @@ func TestHostDNS_restoreBeforeStart(t *testing.T) {
 	assert.Nil(t, s.mgr)
 }
 
+// TestHostDNS_unusableHostCreatesNothing runs against the native backend on a host dnsconfig can't configure, which
+// is any OS but macOS and Windows, or macOS without root. Elsewhere it would touch the host, so it is skipped.
 func TestHostDNS_unusableHostCreatesNothing(t *testing.T) {
 	c := newHostDNSTestConfig(t, "dns:\n  enabled: false\n")
 	var logs bytes.Buffer
 	s, err := newHostDNSFromConfig(context.Background(), test.NewLoggerWithOutput(&logs), c)
 	require.NoError(t, err)
-	s.unusable = errHostDNSUnusable
-	s.force = dnsconfig.BackendNoop
+	reason := s.unusable()
+	if reason == nil {
+		t.Skip("this host can be configured, so the test would touch it")
+	}
 	t.Cleanup(s.Restore)
 
 	// Recovery and a disabled start are quiet: nothing was asked for, so there is nothing to complain about
@@ -350,7 +349,7 @@ func TestHostDNS_unusableHostCreatesNothing(t *testing.T) {
 	assert.False(t, res.Failed)
 	assert.Nil(t, s.mgr)
 	assert.Equal(t, 1, strings.Count(logs.String(), "leaving host DNS unmanaged"))
-	assert.Contains(t, logs.String(), errHostDNSUnusable.Error())
+	assert.Contains(t, logs.String(), reason.Error())
 	res = c.ReloadConfigString(hostDNSEnabledYAML + "  identity: nebula\n")
 	assert.False(t, res.Failed)
 	assert.Equal(t, 1, strings.Count(logs.String(), "leaving host DNS unmanaged"))
