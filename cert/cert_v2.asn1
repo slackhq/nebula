@@ -5,7 +5,13 @@ Time ::= INTEGER (0..18446744073709551615) -- Seconds since unix epoch, uint64 m
 Network ::= OCTET STRING (SIZE (5 | 17)) -- IP addresses are 4 or 16 bytes + 1 byte for the prefix length
 Curve ::= ENUMERATED {
     curve25519 (0),
-    p256 (1)
+    p256 (1),
+    -- Hosts: P-384 ECDH and ML-KEM-1024, publicKey is the uncompressed point (97) || encapsulation key (1568).
+    -- CAs: id-MLDSA87-ECDSA-P384-SHA512 of draft-ietf-lamps-pq-composite-sigs, with an empty ctx,
+    -- publicKey is the ML-DSA-87 key (2592) || uncompressed point (97), and signature is
+    -- the ML-DSA-87 signature (4627) || DER ECDSA signature, which must be low-s.
+    -- The fingerprint, and so the issuer, is SHA-512 rather than SHA-256.
+    p384-mlkem1024-mldsa87 (2)
 }
 
 -- The maximum size of a certificate must not exceed 65536 bytes

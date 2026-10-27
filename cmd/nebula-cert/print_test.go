@@ -226,13 +226,13 @@ func Test_printCertUnknownCurve(t *testing.T) {
 	tf, err := os.CreateTemp("", "print-cert")
 	require.NoError(t, err)
 	defer os.Remove(tf.Name())
-	_, err = tf.Write(cert_test.WithCurve(caPEM, cert.Curve(2)))
+	_, err = tf.Write(cert_test.WithCurve(caPEM, cert.Curve(9)))
 	require.NoError(t, err)
 
 	ob := &bytes.Buffer{}
 	eb := &bytes.Buffer{}
 	require.NoError(t, printCert([]string{"-json", "-path", tf.Name()}, ob, eb))
-	assert.Contains(t, ob.String(), `"curve":"2"`)
+	assert.Contains(t, ob.String(), `"curve":"9"`)
 	assert.Empty(t, eb.String())
 }
 

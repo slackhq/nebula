@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as unsupported subtypes.
 - Message metrics `messages.{tx,rx}.handshake_ixpsk0_fragmented` and `messages.{tx,rx}.handshake_xxpsk0_fragmented`
   count fragment packets and cookie replies apart from `handshake_ixpsk0`.
+- Post-quantum hybrid handshakes, `ix_hybrid`, on a new certificate curve, `P384_MLKEM1024_MLDSA87`, whose algorithms
+  are all in CNSA 1.0 or 2.0: P-384 and ML-KEM-1024 for host keys, the composite of ML-DSA-87 and ECDSA P-384
+  (`id-MLDSA87-ECDSA-P384-SHA512`) for CA signatures, and SHA-512 for the handshake hash and the certificates'
+  fingerprints. Version 2 certificates only. Like any curve it is the node's only one: a node on it makes hybrid
+  handshakes and nothing else, and can not reach classical nodes. `nebula-cert ca`, `keygen` and
+  `sign -curve P384-MLKEM1024-MLDSA87` make the CAs, keys and certificates. See `docs/pq-handshake.md`.
 
 - `service.Listen` supports `tcp6` and follows `net.Listen` address family semantics for `tcp`, `tcp4` and `tcp6`.
 - A control socket that provides access to all of the ssh debug server's commands along with support
@@ -31,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `nebula-cert keygen` refuses to overwrite an existing `-out-key` or `-out-pub` file, matching `ca` and `sign`.
   Overwriting kept the old file's mode, so a key written over a world-readable file stayed world-readable.
+- `pki.blocklist` accepts SHA-512 fingerprints, the length hybrid certificates have, as well as SHA-256 ones.
 
 ### Removed
 

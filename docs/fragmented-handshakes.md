@@ -29,7 +29,11 @@ how long repair fragments trail the data fragments; unset, it is a tenth of
 receiver keeps after completing a message. Both settings reload. With message metrics on
 (`stats.message_metrics`), fragment packets and cookie replies are counted in
 `messages.{tx,rx}.handshake_ixpsk0_fragmented` (and `handshake_xxpsk0_fragmented`), apart from
-the single-packet `handshake_ixpsk0`.
+the single-packet `handshake_ixpsk0`, and hybrid handshakes in `handshake_ixhybrid_fragmented`.
+
+`handshakes.fragment` governs classical handshakes. Hybrid handshakes, which have no unfragmented
+form, always travel as fragments and are always reassembled, `never` included; see
+[post-quantum handshakes](pq-handshake.md).
 
 A peer running an older nebula, or set to `never`, can not reassemble fragments. A message too
 big for one packet goes to it as fragments anyway: the oversized datagram it could have read
@@ -41,8 +45,9 @@ was working.
 
 Each handshake pattern has a fragmented subtype of its own, its value with 0x80 added:
 `header.HandshakeIXPSK0Fragmented` (0x80, shown as `ix_psk0_fragmented`) for classical IX, and
-`header.HandshakeXXPSK0Fragmented` (0x81) reserved alongside XX. Every packet of a fragmented
-message is:
+`header.HandshakeXXPSK0Fragmented` (0x81) reserved alongside XX, and
+`header.HandshakeIXHybridFragmented` (0x83, `ix_hybrid_fragmented`) for hybrid IX, which only ever
+travels so. Every packet of a fragmented message is:
 
 ```
 Nebula header (16)   Version | Type=Handshake | Subtype (fragmented) | Reserved=0 | RemoteIndex | Counter

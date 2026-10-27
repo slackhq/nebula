@@ -140,13 +140,13 @@ func Test_verify(t *testing.T) {
 	certFile.Truncate(0)
 	certFile.Seek(0, 0)
 	certFile.Write(pem.EncodeToMemory(&pem.Block{Type: "NEBULA CERTIFICATE V9", Bytes: []byte{0x30, 0x00}}))
-	certFile.Write(cert_test.WithCurve(newCurvePEM, cert.Curve(2)))
+	certFile.Write(cert_test.WithCurve(newCurvePEM, cert.Curve(9)))
 	certFile.Write(b)
 	err = verify([]string{"-ca", caFile.Name(), "-crt", certFile.Name()}, ob, eb)
 	assert.Empty(t, ob.String())
 	assert.Equal(t, "skipping ca: certificate 2: certificate version unrecognized: \"NEBULA CERTIFICATE V9\"\n"+
 		"skipping crt: certificate 1: certificate version unrecognized: \"NEBULA CERTIFICATE V9\"\n"+
-		fmt.Sprintf("skipping crt: certificate 2: %q: certificate curve unrecognized: 2\n", newCurve.Name()), eb.String())
+		fmt.Sprintf("skipping crt: certificate 2: %q: certificate curve unrecognized: 9\n", newCurve.Name()), eb.String())
 	require.NoError(t, err)
 
 	// a crt file with nothing we could check is not a pass

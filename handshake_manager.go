@@ -18,6 +18,7 @@ import (
 	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/handshake/fragment"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/ratelimit"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -87,6 +88,11 @@ type HandshakeManager struct {
 	// their address under load or before a big answer.
 	fragTable *fragment.Table[fragKey, fragSource]
 	cookies   *fragCookies
+
+	// hybrid holds hybrid handshakes waiting on their last step.
+	hybrid hybridState
+	// curveLimiter rate limits the log of msg1s for the curve this node does not have.
+	curveLimiter *ratelimit.Limiter
 }
 
 type HandshakeHostInfo struct {
@@ -106,6 +112,8 @@ type HandshakeHostInfo struct {
 	sender         *fragment.Sender        // msg1 as fragments, when it travels so
 	msg2           [fragMsg2Slots]msg2Slot // msg2 fragments being reassembled, per responder; an array, one slot is used nearly always
 	cookieResendAt time.Time               // last resend prompted by a cookie reply
+
+	responder *hybridResponder // Set for a responder's hybrid handshake waiting for msg3
 }
 
 func (hh *HandshakeHostInfo) cachePacket(l *slog.Logger, t header.MessageType, st header.MessageSubType, packet []byte, f packetCallback, m *cachedPacketMetrics) {
@@ -238,6 +246,8 @@ func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *Light
 	tableCfg.Quiet = config.tryInterval / 2
 	hm.fragTable = fragment.NewTable[fragKey, fragSource](tableCfg)
 	hm.cookies = newFragCookies(time.Now())
+	hm.curveLimiter, _ = ratelimit.New(1, time.Second)
+	hm.hybrid = newHybridState()
 	return hm
 }
 
@@ -255,6 +265,8 @@ func (hm *HandshakeManager) Run(ctx context.Context) {
 			hm.NextOutboundHandshakeTimerTick(now)
 			hm.fragTable.Expire(now)
 			hm.cookies.tick(now)
+			hm.expireHybridResponders(now)
+			hm.tickHybridConfirms(now)
 		}
 	}
 }
@@ -264,8 +276,11 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 	// don't yet support) are dropped here rather than silently routed through
 	// the IX path. Add a case when introducing a new pattern.
 	switch h.Subtype {
-	case header.HandshakeIXPSK0, header.HandshakeIXPSK0Fragmented:
+	case header.HandshakeIXPSK0, header.HandshakeIXPSK0Fragmented, header.HandshakeIXHybridFragmented:
 		// supported
+	case header.HandshakeIXHybrid:
+		hm.l.Debug("dropping hybrid handshake that is not fragmented", "from", via)
+		return
 	default:
 		hm.l.Debug("dropping handshake with unsupported subtype",
 			"from", via, "subtype", h.Subtype)
@@ -280,8 +295,8 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 		}
 	}
 
-	if _, fragmented := header.FragmentedPattern(h.Subtype); fragmented {
-		if hm.fragConfig().mode == fragmentNever {
+	if pattern, fragmented := header.FragmentedPattern(h.Subtype); fragmented {
+		if hm.fragConfig().mode == fragmentNever && !handshake.IsHybrid(pattern) {
 			hm.l.Debug("dropping fragmented handshake, handshakes.fragment is never", "from", via)
 			return
 		}
@@ -298,6 +313,9 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 		if h.RemoteIndex != 0 {
 			hm.l.Debug("dropping stage-1 handshake with non-zero RemoteIndex",
 				"from", via, "remoteIndex", h.RemoteIndex)
+			return
+		}
+		if !hm.answersPattern(via, h.Subtype) {
 			return
 		}
 		hm.beginHandshake(via, packet, h, msg1Info{validated: via.IsRelayed, received: len(packet)})
@@ -559,6 +577,12 @@ var (
 // ErrLocalIndexCollision if we already have an entry in the main or pending
 // hostmap for the hostinfo.localIndexId.
 func (hm *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket uint8, f *Interface) (*HostInfo, error) {
+	return hm.checkAndComplete(hostinfo, handshakePacket, f, false)
+}
+
+// checkAndComplete is CheckAndComplete. committed means the initiator has shown it uses this tunnel, as a hybrid msg3
+// does, so an existing tunnel is replaced even when its handshake is newer.
+func (hm *HandshakeManager) checkAndComplete(hostinfo *HostInfo, handshakePacket uint8, f *Interface, committed bool) (*HostInfo, error) {
 	hm.mainHostMap.Lock()
 	defer hm.mainHostMap.Unlock()
 	hm.Lock()
@@ -575,7 +599,7 @@ func (hm *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket
 		}
 
 		// Is this a newer handshake?
-		if existingHostInfo.lastHandshakeTime >= hostinfo.lastHandshakeTime && !existingHostInfo.ConnectionState.initiator {
+		if !committed && existingHostInfo.lastHandshakeTime >= hostinfo.lastHandshakeTime && !existingHostInfo.ConnectionState.initiator {
 			return existingHostInfo, ErrExistingHostInfo
 		}
 
@@ -804,7 +828,7 @@ func (hm *HandshakeManager) buildStage0Packet(hh *HandshakeHostInfo) bool {
 	machine, err := handshake.NewMachine(
 		v, cs.GetCredential,
 		hm.certVerifier(), func() (uint32, error) { return hm.allocateIndex(hh) },
-		true, header.HandshakeIXPSK0,
+		true, patternFor(cred.Cert.Curve()),
 	)
 	if err != nil {
 		hm.f.l.Error("Failed to create handshake machine",
@@ -848,10 +872,38 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		return
 	}
 
+	// h may be a fragment's header, packet is always the message reassembled.
+	subtype := patternOf(h.Subtype)
+	allocIndex := func() (uint32, error) { return generateIndex(f.l) }
+
+	// A hybrid responder has to wait for msg3, so its index is registered right away for msg3 to find.
+	var pending *HandshakeHostInfo
+	if handshake.IsHybrid(subtype) {
+		if hm.resendPendingHybrid(via, packet, in) {
+			return
+		}
+		pending = &HandshakeHostInfo{
+			hostinfo: &HostInfo{
+				HandshakePacket: make(map[uint8][]byte, 0),
+				relayState: RelayState{
+					relays:         nil,
+					relayForByAddr: map[netip.Addr]*Relay{},
+					relayForByIdx:  map[uint32]*Relay{},
+				},
+			},
+			startTime: time.Now(),
+			responder: &hybridResponder{},
+		}
+		// The index is visible to msg3 as soon as it is allocated, so hold the entry until it is filled in.
+		pending.Lock()
+		defer pending.Unlock()
+		allocIndex = func() (uint32, error) { return hm.allocateIndex(pending) }
+	}
+
 	machine, err := handshake.NewMachine(
 		v, cs.GetCredential,
-		hm.certVerifier(), func() (uint32, error) { return generateIndex(f.l) },
-		false, header.HandshakeIXPSK0,
+		hm.certVerifier(), allocIndex,
+		false, subtype,
 	)
 	if err != nil {
 		f.l.Error("Failed to create handshake machine", "from", via, "error", err)
@@ -860,12 +912,20 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 
 	response, result, err := machine.ProcessPacket(nil, packet)
 	if err != nil {
+		if pending != nil {
+			hm.DeleteHostInfo(pending.hostinfo)
+		}
 		level := slog.LevelError
 		if errors.Is(err, cert.ErrBlockListed) {
 			level = slog.LevelDebug
 			hm.metricRejectedBlocklisted.Inc(1)
 		}
 		f.l.Log(context.Background(), level, "Failed to process handshake packet", "from", via, "error", err)
+		return
+	}
+
+	if result == nil && pending != nil {
+		hm.awaitMsg3(via, pending, machine, packet, response, in)
 		return
 	}
 
@@ -946,7 +1006,7 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 
 	existing, err := hm.CheckAndComplete(hostinfo, handshakePacketStage0, f)
 	if err != nil {
-		hm.handleCheckAndCompleteError(err, existing, hostinfo, via, in)
+		hm.handleCheckAndCompleteError(err, existing, hostinfo, via, subtype, in)
 		return
 	}
 
@@ -957,6 +1017,16 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 	if f.lightHouse.IsAnyLighthouseAddr(vpnAddrs) {
 		f.lightHouse.TriggerUpdate()
 	}
+}
+
+// stillPending re-verifies hh is still tracked under index. Between queryIndex
+// returning and the caller taking hh.Lock, the handshake may have timed out and
+// been deleted. The caller must hold hh.Lock.
+func (hm *HandshakeManager) stillPending(hh *HandshakeHostInfo, index uint32) bool {
+	hm.RLock()
+	defer hm.RUnlock()
+	cur, ok := hm.indexes[index]
+	return ok && cur == hh
 }
 
 // continueHandshake feeds an incoming packet to an existing pending handshake Machine.
@@ -1012,11 +1082,10 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		return
 	}
 
-	if response != nil {
-		hm.sendHandshakeResponse(via, response, hostinfo, false, msg1Info{validated: true})
-	}
-
 	if result == nil {
+		if response != nil {
+			hm.sendHandshakeResponse(via, response, hostinfo, false, msg1Info{validated: true})
+		}
 		return
 	}
 
@@ -1128,6 +1197,12 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 
 	hm.Complete(hostinfo, f)
 
+	// A three message pattern finishes with our msg3, which goes out before any
+	// cached packets do and keeps going until the responder is heard from.
+	if response != nil {
+		hm.startHybridConfirm(via, hostinfo, response, result.MessageIndex)
+	}
+
 	if len(hh.packetStore) > 0 {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(f.l).Debug("Sending stored packets", "count", len(hh.packetStore))
@@ -1226,7 +1301,9 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 		"initiatorIndex", hostinfo.remoteIndexId,
 		"responderIndex", hostinfo.localIndexId,
 	}
-	if peerCert := hostinfo.ConnectionState.peerCert; peerCert != nil {
+	if hostinfo.ConnectionState == nil {
+		// A hybrid responder answers msg1 before it has keys.
+	} else if peerCert := hostinfo.ConnectionState.peerCert; peerCert != nil {
 		logFields = append(logFields,
 			"certName", peerCert.Certificate.Name(),
 			"certVersion", peerCert.Certificate.Version(),
@@ -1247,7 +1324,7 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 	}
 
 	now, later := [][]byte{msg}, [][]byte(nil)
-	if hm.shouldFragment(len(msg), in.fragmented) {
+	if hm.shouldFragment(subtype, len(msg), in.fragmented) {
 		now, later, err = fragmentResponse(msg, hostinfo, in.budget())
 		// Fragments, or a budget to fit them in, are only reached for a subtype with a fragmented form.
 		fragmented, _ := header.FragmentedSubtype(subtype)
@@ -1285,10 +1362,10 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 // This only fires from the responder-side beginHandshake path, after the
 // peer cert has been validated and ConnectionState populated, so peerCert
 // is always non-nil for the cases that log it.
-func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hostinfo *HostInfo, via ViaSender, in msg1Info) {
+func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hostinfo *HostInfo, via ViaSender, subtype header.MessageSubType, in msg1Info) {
 	f := hm.f
 	peerCert := hostinfo.ConnectionState.peerCert
-	hsFields := m{"stage": uint64(1), "style": header.SubTypeName(header.Handshake, header.HandshakeIXPSK0)}
+	hsFields := m{"stage": uint64(1), "style": header.SubTypeName(header.Handshake, subtype)}
 
 	switch err {
 	case ErrAlreadySeen:

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/fips140"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -19,7 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/flynn/noise"
+	"github.com/DefinedNet/noise"
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
@@ -298,17 +299,29 @@ func newCipherSuite(curve cert.Curve, pkcs11backed bool, cipher string, fips140E
 		} else {
 			dhFunc = noiseutil.DHP256
 		}
+	case cert.Curve_P384_MLKEM1024_MLDSA87:
+		if pkcs11backed {
+			return nil, errors.New("pki: the hybrid curve is not supported with PKCS#11 keys")
+		}
+		// P-384 here, ML-KEM-1024 comes in through the hybrid pattern.
+		dhFunc = noiseutil.DHP384
 	default:
-		return nil, fmt.Errorf("unsupported curve: %s", curve)
+		return nil, fmt.Errorf("unsupported curve: %s", cert.CurveName(curve))
+	}
+
+	// The curve chooses the hash: the hybrid curve is held to CNSA 2.0, which allows SHA-384 and SHA-512 only.
+	hash := noise.HashSHA256
+	if curve == cert.Curve_P384_MLKEM1024_MLDSA87 {
+		hash = noise.HashSHA512
 	}
 
 	if cipher == "chachapoly" {
 		if fips140Enforced {
 			return nil, errors.New("pki: use of ChaChaPoly is not allowed in FIPS 140-only mode")
 		}
-		return noise.NewCipherSuite(dhFunc, noise.CipherChaChaPoly, noise.HashSHA256), nil
+		return noise.NewCipherSuite(dhFunc, noise.CipherChaChaPoly, hash), nil
 	}
-	return noise.NewCipherSuite(dhFunc, noiseutil.CipherAESGCM, noise.HashSHA256), nil
+	return noise.NewCipherSuite(dhFunc, noiseutil.CipherAESGCM, hash), nil
 }
 
 func (cs *CertState) String() string {
@@ -386,8 +399,8 @@ func newCertStateFromConfig(l *slog.Logger, c *config.C, cipher string) (*CertSt
 			return nil, err
 		}
 
-		if fips140.Enforced() && crt.Curve() != cert.Curve_P256 {
-			return nil, fmt.Errorf("pki: use of %s is not allowed in FIPS 140-only mode", crt.Curve())
+		if fips140.Enforced() && crt.Curve() != cert.Curve_P256 && crt.Curve() != cert.Curve_P384_MLKEM1024_MLDSA87 {
+			return nil, fmt.Errorf("pki: use of %s is not allowed in FIPS 140-only mode", cert.CurveName(crt.Curve()))
 		}
 
 		switch crt.Version() {
@@ -620,6 +633,11 @@ func loadCAPoolFromConfig(l *slog.Logger, c *config.C) (*cert.CAPool, error) {
 
 	if err != nil {
 		for _, e := range cert.SkippedCertificates(err) {
+			if errors.Is(e, cert.ErrPQUnavailable) {
+				// A bundle shared with hybrid nodes stays usable here, without its hybrid CAs.
+				l.Warn("Leaving a hybrid CA certificate out of the CA pool, this build can not verify it", "error", e)
+				continue
+			}
 			l.Warn("Skipping a CA certificate that this version of nebula does not support", "error", e)
 		}
 
@@ -642,7 +660,7 @@ func loadCAPoolFromConfig(l *slog.Logger, c *config.C) (*cert.CAPool, error) {
 		for i, raw := range bl {
 			// Fingerprints are compared as lowercase hex strings, a malformed entry would silently block nothing
 			fp := strings.ToLower(strings.TrimSpace(raw))
-			if b, err := hex.DecodeString(fp); err != nil || len(b) != sha256.Size {
+			if b, err := hex.DecodeString(fp); err != nil || (len(b) != sha256.Size && len(b) != sha512.Size) {
 				bad = append(bad, fmt.Sprintf("entry %d %q", i+1, raw))
 				continue
 			}
