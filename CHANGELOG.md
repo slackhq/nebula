@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.12.0] - 2026-10-27
+## [1.12.0] - 2026-10-28
 
 See the [v1.12.0](https://github.com/slackhq/nebula/milestone/29?closed=1) milestone for a complete list of changes.
 
