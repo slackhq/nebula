@@ -305,6 +305,8 @@ type RemoteList struct {
 	// v4Only keeps IPv6 addresses out of addrs, because our socket cannot send to them. The cache still holds them,
 	// a lighthouse answers queries from it.
 	v4Only bool
+	// v6Only keeps IPv4 addresses out of addrs the same way, for an IPv6 only socket
+	v6Only bool
 
 	// This is a list of remotes that we have tried to handshake with and have returned from the wrong vpn ip.
 	// They should not be tried again during a handshake
@@ -688,7 +690,7 @@ func (r *RemoteList) unlockedCollect() {
 	relays := r.relays[:0]
 
 	for _, c := range r.cache {
-		if c.v4 != nil {
+		if c.v4 != nil && !r.v6Only {
 			if c.v4.learned != nil {
 				u := protoV4AddrPortToNetAddrPort(c.v4.learned)
 				if !r.unlockedIsBad(u) {
@@ -735,7 +737,7 @@ func (r *RemoteList) unlockedCollect() {
 
 	dnsAddrs := r.hr.GetAddrs()
 	for _, addr := range dnsAddrs {
-		if r.v4Only && !addr.Addr().Is4() {
+		if (r.v4Only && !addr.Addr().Is4()) || (r.v6Only && addr.Addr().Is4()) {
 			continue
 		}
 		if r.shouldAdd == nil || r.shouldAdd(r.vpnAddrs, addr.Addr()) {

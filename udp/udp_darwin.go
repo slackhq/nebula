@@ -20,6 +20,7 @@ import (
 type StdConn struct {
 	*net.UDPConn
 	isV4  bool
+	isV6  bool
 	sysFd uintptr
 	l     *slog.Logger
 }
@@ -53,6 +54,14 @@ func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 			return nil, err
 		}
 		c.isV4 = la.Addr().Is4()
+		if !c.isV4 {
+			v6only, err := getV6Only(rc)
+			if err != nil {
+				_ = uc.Close()
+				return nil, fmt.Errorf("failed to read IPV6_V6ONLY: %w", err)
+			}
+			c.isV6 = isIPv6Only(la.Addr(), v6only)
+		}
 
 		return c, nil
 	}
@@ -157,6 +166,10 @@ func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error)
 
 func (u *StdConn) IPv4Only() bool {
 	return u.isV4
+}
+
+func (u *StdConn) IPv6Only() bool {
+	return u.isV6
 }
 
 func (u *StdConn) LocalAddr() (netip.AddrPort, error) {

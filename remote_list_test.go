@@ -454,3 +454,22 @@ func TestRemoteList_V4OnlySkipsIPv6(t *testing.T) {
 	// The cache keeps the IPv6 address, a lighthouse still answers with it
 	assert.Contains(t, (*rl.CopyCache())[owner.String()].Reported, netip.MustParseAddrPort("[1::1]:4242"))
 }
+
+func TestRemoteList_V6OnlySkipsIPv4(t *testing.T) {
+	owner := netip.MustParseAddr("10.0.0.1")
+	rl := NewRemoteList([]netip.Addr{owner}, nil)
+	rl.v6Only = true
+	rl.unlockedSetV4(owner, owner, []*V4AddrPort{newIp4AndPortFromString("1.2.3.4:4242")},
+		func(netip.Addr, *V4AddrPort) bool { return true })
+	rl.unlockedSetV6(owner, owner, []*V6AddrPort{newIp6AndPortFromString("[1::1]:4242")},
+		func(netip.Addr, *V6AddrPort) bool { return true })
+	rl.unlockedSetHostnamesResults(trackedHostnameResults(func() {}, "5.6.7.8:4242", "[2::2]:4242"))
+
+	assert.ElementsMatch(t, []netip.AddrPort{
+		netip.MustParseAddrPort("[1::1]:4242"),
+		netip.MustParseAddrPort("[2::2]:4242"),
+	}, rl.CopyAddrs(nil))
+
+	// The cache keeps the IPv4 address, a lighthouse still answers with it
+	assert.Contains(t, (*rl.CopyCache())[owner.String()].Reported, netip.MustParseAddrPort("1.2.3.4:4242"))
+}

@@ -22,6 +22,7 @@ type StdConn struct {
 	sysFd  int
 	closed atomic.Bool
 	isV4   bool
+	isV6   bool
 	l      *slog.Logger
 	batch  int
 
@@ -72,6 +73,15 @@ func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 	}
 
 	out := &StdConn{sysFd: fd, isV4: s.Listen.Addr().Is4(), l: l, batch: s.Batch}
+	if !out.isV4 {
+		// IPV6_V6ONLY comes from the net.ipv6.bindv6only sysctl, read what the socket ended up with
+		v6only, err := unix.GetsockoptInt(fd, unix.IPPROTO_IPV6, unix.IPV6_V6ONLY)
+		if err != nil {
+			_ = unix.Close(fd)
+			return nil, fmt.Errorf("unable to read IPV6_V6ONLY: %w", err)
+		}
+		out.isV6 = isIPv6Only(s.Listen.Addr(), v6only != 0)
+	}
 
 	out.bw = newBatchWriter(fd, out.isV4, l, s.Offloads)
 
@@ -172,6 +182,10 @@ func (u *StdConn) GetSoMark() (int, error) {
 
 func (u *StdConn) IPv4Only() bool {
 	return u.isV4
+}
+
+func (u *StdConn) IPv6Only() bool {
+	return u.isV6
 }
 
 func (u *StdConn) LocalAddr() (netip.AddrPort, error) {

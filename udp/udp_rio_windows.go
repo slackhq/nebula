@@ -54,6 +54,7 @@ type ringBuffer struct {
 type RIOConn struct {
 	isOpen  atomic.Bool
 	isV4    bool
+	isV6    bool
 	l       *slog.Logger
 	sock    windows.Handle
 	rx, tx  ringBuffer
@@ -73,6 +74,15 @@ func NewRIOListener(l *slog.Logger, addr netip.Addr, port int) (*RIOConn, error)
 	if err != nil {
 		u.close()
 		return nil, fmt.Errorf("bind: %w", err)
+	}
+
+	if !u.isV4 {
+		v6only, err := windows.GetsockoptInt(u.sock, windows.IPPROTO_IPV6, windows.IPV6_V6ONLY)
+		if err != nil {
+			u.close()
+			return nil, fmt.Errorf("read IPV6_V6ONLY: %w", err)
+		}
+		u.isV6 = isIPv6Only(addr, v6only != 0)
 	}
 
 	for i := 0; i < packetsPerRing; i++ {
@@ -336,6 +346,10 @@ func (u *RIOConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error)
 
 func (u *RIOConn) IPv4Only() bool {
 	return u.isV4
+}
+
+func (u *RIOConn) IPv6Only() bool {
+	return u.isV6
 }
 
 func (u *RIOConn) LocalAddr() (netip.AddrPort, error) {

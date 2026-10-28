@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -253,15 +255,23 @@ func TestListenOutShutdown_BusyReader(t *testing.T) {
 	}
 }
 
-func TestStdConnIPv4Only(t *testing.T) {
+func TestStdConnIPv4OnlyIPv6Only(t *testing.T) {
+	// The IPv6 wildcard is IPv6 only when the net.ipv6.bindv6only sysctl sets IPV6_V6ONLY on new sockets
+	sysctl, err := os.ReadFile("/proc/sys/net/ipv6/bindv6only")
+	if err != nil {
+		t.Fatalf("read bindv6only: %v", err)
+	}
+	bindV6Only := strings.TrimSpace(string(sysctl)) == "1"
+
 	for _, tc := range []struct {
 		listen string
 		v4Only bool
+		v6Only bool
 	}{
-		{"127.0.0.1:0", true},
-		{"0.0.0.0:0", true},
-		{"[::1]:0", false},
-		{"[::]:0", false},
+		{"127.0.0.1:0", true, false},
+		{"0.0.0.0:0", true, false},
+		{"[::1]:0", false, true},
+		{"[::]:0", false, bindV6Only},
 	} {
 		c, err := NewListener(testLogger(), Settings{Listen: netip.MustParseAddrPort(tc.listen), Batch: 1})
 		if err != nil {
@@ -269,6 +279,9 @@ func TestStdConnIPv4Only(t *testing.T) {
 		}
 		if got := c.IPv4Only(); got != tc.v4Only {
 			t.Errorf("IPv4Only() on %s = %v, want %v", tc.listen, got, tc.v4Only)
+		}
+		if got := c.IPv6Only(); got != tc.v6Only {
+			t.Errorf("IPv6Only() on %s = %v, want %v", tc.listen, got, tc.v6Only)
 		}
 		_ = c.Close()
 	}

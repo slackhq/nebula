@@ -42,6 +42,8 @@ type LightHouse struct {
 
 	// v4Only is set when our udp socket is IPv4, which cannot send to IPv6 remotes
 	v4Only bool
+	// v6Only is set when our udp socket is IPv6 only, which cannot send to IPv4 remotes
+	v6Only bool
 
 	// localAddrsFn enumerates the underlay addresses we advertise. It is a field so tests can supply simulated
 	// addresses rather than whatever this machine's NICs happen to be. Set it before Start.
@@ -122,6 +124,7 @@ func NewLightHouseFromConfig(ctx context.Context, l *slog.Logger, c *config.C, c
 		nebulaPort:         nebulaPort,
 		punchy:             p,
 		v4Only:             pc != nil && pc.IPv4Only(),
+		v6Only:             pc != nil && pc.IPv6Only(),
 		updateTrigger:      make(chan struct{}, 1),
 		queryChan:          make(chan netip.Addr, c.GetUint32("handshakes.query_buffer", 1024)),
 		queryDropped:       metrics.GetOrRegisterCounter("lighthouse.query.dropped", nil),
@@ -726,6 +729,7 @@ func (lh *LightHouse) unlockedGetRemoteList(allAddrs []netip.Addr) *RemoteList {
 
 	am := NewRemoteList(allAddrs, lh.shouldAdd)
 	am.v4Only = lh.v4Only
+	am.v6Only = lh.v6Only
 	for _, addr := range allAddrs {
 		lh.addrMap[addr] = am
 	}
@@ -995,10 +999,12 @@ func (lh *LightHouse) SendUpdate() {
 		}
 
 		// Only add addrs that aren't my VPN/tun networks
+		// A socket of one family never receives on our addrs of the other, advertise_addrs are left to the operator
 		if e.Is4() {
-			v4 = append(v4, netAddrToProtoV4AddrPort(e, uint16(lh.nebulaPort)))
+			if !lh.v6Only {
+				v4 = append(v4, netAddrToProtoV4AddrPort(e, uint16(lh.nebulaPort)))
+			}
 		} else if !lh.v4Only {
-			// An IPv4 socket never receives on our IPv6 addrs, advertise_addrs are left to the operator
 			v6 = append(v6, netAddrToProtoV6AddrPort(e, uint16(lh.nebulaPort)))
 		}
 	}
@@ -1503,13 +1509,15 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpn
 	}
 
 	remoteAllowList := lhh.lh.GetRemoteAllowList()
-	for _, a := range n.Details.V4AddrPorts {
-		if a == nil {
-			continue
-		}
-		b := protoV4AddrPortToNetAddrPort(a)
-		if remoteAllowList.Allow(detailsVpnAddr, b.Addr()) {
-			lhh.lh.punchy.Schedule(b, detailsVpnAddr)
+	if !lhh.lh.v6Only {
+		for _, a := range n.Details.V4AddrPorts {
+			if a == nil {
+				continue
+			}
+			b := protoV4AddrPortToNetAddrPort(a)
+			if remoteAllowList.Allow(detailsVpnAddr, b.Addr()) {
+				lhh.lh.punchy.Schedule(b, detailsVpnAddr)
+			}
 		}
 	}
 

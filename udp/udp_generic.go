@@ -24,6 +24,7 @@ type GenericConn struct {
 	*net.UDPConn
 	l    *slog.Logger
 	isV4 bool
+	isV6 bool
 }
 
 var _ Conn = &GenericConn{}
@@ -43,6 +44,20 @@ func NewGenericListener(l *slog.Logger, s Settings) (Conn, error) {
 			return nil, err
 		}
 		c.isV4 = la.Addr().Is4()
+		if !c.isV4 {
+			// OpenBSD always sets IPV6_V6ONLY, the others follow Go clearing it on the wildcard
+			rc, err := uc.SyscallConn()
+			if err != nil {
+				_ = uc.Close()
+				return nil, err
+			}
+			v6only, err := getV6Only(rc)
+			if err != nil {
+				_ = uc.Close()
+				return nil, fmt.Errorf("failed to read IPV6_V6ONLY: %w", err)
+			}
+			c.isV6 = isIPv6Only(la.Addr(), v6only)
+		}
 		return c, nil
 	}
 	return nil, fmt.Errorf("Unexpected PacketConn: %T %#v", pc, pc)
@@ -68,6 +83,10 @@ func (u *GenericConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, er
 
 func (u *GenericConn) IPv4Only() bool {
 	return u.isV4
+}
+
+func (u *GenericConn) IPv6Only() bool {
+	return u.isV6
 }
 
 func (u *GenericConn) LocalAddr() (netip.AddrPort, error) {

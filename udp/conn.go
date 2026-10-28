@@ -31,6 +31,8 @@ type Conn interface {
 	LocalAddr() (netip.AddrPort, error)
 	// IPv4Only reports whether this conn's socket can only send to IPv4 remotes
 	IPv4Only() bool
+	// IPv6Only reports whether this conn's socket can only send to IPv6 remotes
+	IPv6Only() bool
 	// ListenOut invokes r for each received packet.
 	// On batch-capable backends (recvmmsg), flush is called after each batch is fully delivered.
 	// Callers use it to flush per-batch accumulators such as TUN write coalescers.
@@ -62,6 +64,9 @@ func (NoopConn) LocalAddr() (netip.AddrPort, error) {
 func (NoopConn) IPv4Only() bool {
 	return false
 }
+func (NoopConn) IPv6Only() bool {
+	return false
+}
 func (NoopConn) ListenOut(_ EncReader, _ func()) error {
 	return nil
 }
@@ -79,4 +84,14 @@ func (NoopConn) ReloadConfig(_ *config.C, _ *config.Reload) {
 }
 func (NoopConn) Close() error {
 	return nil
+}
+
+// isIPv6Only reports whether an IPv6 socket bound to local, with IPV6_V6ONLY set to v6only, can only reach IPv6
+// remotes. Only the IPv6 wildcard with IPV6_V6ONLY cleared reaches IPv4 too, a specific IPv6 address never does, and
+// an IPv4-mapped address only reaches IPv4.
+func isIPv6Only(local netip.Addr, v6only bool) bool {
+	if local.Is4In6() {
+		return false
+	}
+	return v6only || !local.IsUnspecified()
 }
