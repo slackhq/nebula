@@ -64,10 +64,10 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	// Host DNS recovery is the one thing that touches the system this early: a previous run that crashed
 	// may have left the resolver pointed at stale DNS configuration, and we want to clean that up in case
 	// we're stuck in some kind of crash loop.
-	hd, err := newHostDNSFromConfig(l, c)
-	if err != nil {
-		return nil, util.ContextualizeIfNeeded("Failed to configure host DNS", err)
-	}
+	//
+	// A stanza that does not load is fatal, but recovery runs first: the broken stanza may be the
+	// reason we are crash looping, and nothing else is going to put the host's resolver back.
+	hd, hdErr := newHostDNSFromConfig(l, c)
 	// Its Manager lives on in the Control, and without one, Restore finishes the recovery started below.
 	defer func() {
 		if retcon == nil {
@@ -78,6 +78,9 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		// Start recovery before everything is up, to give us the best chance of recovering
 		// in a persistent failure case.
 		hd.Recover()
+	}
+	if hdErr != nil {
+		return nil, util.ContextualizeIfNeeded("Failed to configure host DNS", hdErr)
 	}
 
 	pki, err := NewPKIFromConfig(l, c)

@@ -121,12 +121,14 @@ func TestLoadHostDNSConfig_joinsErrors(t *testing.T) {
 	_, err := loadHostDNSConfig(newHostDNSTestConfig(t, `
 dns:
   enabled: true
+  identity: "Not Usable"
   nameservers: [192.168.100.1, nope, 192.168.100.1:53]
   search_domains: ["", a.example]
   match_domains: ["."]
 `), true)
 	require.Error(t, err)
 	for _, want := range []string{
+		"dns.identity is not usable",
 		"dns.enabled requires a tun device, but tun.disabled is true",
 		"entry 2 in dns.nameservers is not an IP address",
 		"entry 3 in dns.nameservers is not an IP address",
@@ -226,6 +228,30 @@ func TestHostDNS_recoverWithoutAStanza(t *testing.T) {
 	// Start without a stanza keeps clearing
 	s.Start()
 	assert.Equal(t, dnsconfig.GoalClear, s.mgr.Status().Goal)
+}
+
+// TestHostDNS_recoverWithAStanzaThatDoesNotLoad: a stanza that does not load is an error, but when dns.identity
+// loaded, Recover still clears under it. Main relies on this to put the host's resolver back before it exits on
+// that error, since the broken stanza may be why it keeps exiting.
+func TestHostDNS_recoverWithAStanzaThatDoesNotLoad(t *testing.T) {
+	c := newHostDNSTestConfig(t, "dns:\n  enabled: true\n  identity: nebula-two\n  nameservers: [nope]\n  search_domains: [a.example]\n")
+	s, err := newHostDNSFromConfig(test.NewLogger(), c)
+	require.ErrorContains(t, err, "entry 1 in dns.nameservers is not an IP address")
+	require.NotNil(t, s)
+	s.newManager = newNoopDNSConfigManager
+	t.Cleanup(s.Restore)
+
+	s.Recover()
+	require.NotNil(t, s.mgr)
+	assert.Equal(t, "nebula-two", s.mgrOpts.Identity)
+	assert.Equal(t, dnsconfig.GoalClear, s.mgr.Status().Goal)
+	assert.False(t, s.runCfg.enabled)
+
+	// Without a usable identity there is nothing to clear under, and nothing comes back to clear with
+	c = newHostDNSTestConfig(t, "dns:\n  enabled: false\n  identity: nebula/two\n")
+	s, err = newHostDNSFromConfig(test.NewLogger(), c)
+	require.ErrorContains(t, err, "dns.identity is not usable")
+	assert.Nil(t, s)
 }
 
 func TestHostDNS_recoverOnlyBeforeStart(t *testing.T) {

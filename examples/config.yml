@@ -429,6 +429,8 @@ tun:
 # The dns section configures this host's OS resolver to send queries to a user specified DNS server.
 #
 # macOS and Windows only, it requires running with elevated privileges.
+#
+# A dns section that fails to load stops nebula from starting, the same as a bad firewall section.
 #dns:
   # enabled turns host DNS configuration on. Default false.
   #enabled: false

@@ -55,14 +55,18 @@ type hostDNSGoal struct {
 // whether this host can honour it. A disabled stanza ignores the resolver
 // keys.
 //
+// On error the goal is set like a disabled stanza, but the options are
+// still returned when they loaded. That lets a caller clear stale host
+// data even though the rest of the stanza is unusable.
+//
 // tunDisabled is whether this process runs without a tun device.
 func loadHostDNSConfig(c *config.C, tunDisabled bool) (hostDNSConfig, error) {
 	var cfg hostDNSConfig
-	var err error
-	if cfg.hostDNSOptions, err = loadIdentityConfig(c); err != nil {
-		return cfg, err
-	}
-	if cfg.hostDNSGoal, err = loadHostDNSGoal(c, tunDisabled); err != nil {
+	var optsErr, goalErr error
+	cfg.hostDNSOptions, optsErr = loadIdentityConfig(c)
+	cfg.hostDNSGoal, goalErr = loadHostDNSGoal(c, tunDisabled)
+	if err := joinDNSErrors(optsErr, goalErr); err != nil {
+		cfg.hostDNSGoal = hostDNSGoal{}
 		return cfg, err
 	}
 	return cfg, nil
@@ -269,6 +273,11 @@ type hostDNS struct {
 }
 
 // newHostDNSFromConfig builds a hostDNS and registers a reload callback.
+//
+// A stanza that does not load is returned as an error, and the caller is
+// expected to treat it as fatal. Recover and Restore can still clear stale
+// host dns configuration from a prior unclean shutdown, as long as we managed
+// to load our identity.
 func newHostDNSFromConfig(l *slog.Logger, c *config.C) (*hostDNS, error) {
 	s := &hostDNS{
 		l:           l.With("subsystem", "host_dns"),
@@ -276,10 +285,13 @@ func newHostDNSFromConfig(l *slog.Logger, c *config.C) (*hostDNS, error) {
 	}
 
 	cfg, err := loadHostDNSConfig(c, s.tunDisabled)
-	if err != nil {
-		return nil, err
-	}
 	s.runCfg = cfg
+	if err != nil {
+		if cfg.Identity == "" {
+			return nil, err
+		}
+		return s, err
+	}
 
 	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
 		r.RestartRequiredIfChanged("dns.identity")
