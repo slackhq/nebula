@@ -458,7 +458,7 @@ func (f *Interface) pinThisThread(i int) {
 		cpu = i % runtime.NumCPU()
 	}
 	if err := util.PinThreadToCPU(cpu); err != nil {
-		f.l.Warn("failed to pin tun reader to CPU", "queue", i, "cpu", cpu, "err", err)
+		f.l.Warn("failed to pin tun reader to CPU", "queue", i, "cpu", cpu, "error", err)
 	}
 }
 

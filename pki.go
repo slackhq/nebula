@@ -113,7 +113,7 @@ func (p *PKI) reload(c *config.C, initial bool, r *config.Reload) error {
 		after := p.cs.Load()
 		if !slices.Equal(before.myVpnNetworks, after.myVpnNetworks) {
 			p.l.Warn("The new cert changes our networks, a restart is required to use them",
-				"old_networks", before.myVpnNetworks, "new_networks", after.myVpnNetworks)
+				"oldNetworks", before.myVpnNetworks, "newNetworks", after.myVpnNetworks)
 			r.RestartRequired()
 		}
 	}
@@ -171,7 +171,7 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 				if !slices.Equal(currentState.v1Cert.Networks(), newState.v1Cert.Networks()) {
 					return util.NewContextualError(
 						"Networks in new cert was different from old",
-						m{"new_networks": newState.v1Cert.Networks(), "old_networks": currentState.v1Cert.Networks(), "cert_version": cert.Version1},
+						m{"newNetworks": newState.v1Cert.Networks(), "oldNetworks": currentState.v1Cert.Networks(), "certVersion": cert.Version1},
 						errCertNeedsRestart,
 					)
 				}
@@ -179,7 +179,7 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 				if currentState.v1Cert.Curve() != newState.v1Cert.Curve() {
 					return util.NewContextualError(
 						"Curve in new v1 cert was different from old",
-						m{"new_curve": newState.v1Cert.Curve(), "old_curve": currentState.v1Cert.Curve(), "cert_version": cert.Version1},
+						m{"newCurve": newState.v1Cert.Curve(), "oldCurve": currentState.v1Cert.Curve(), "certVersion": cert.Version1},
 						errCertNeedsRestart,
 					)
 				}
@@ -194,7 +194,7 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 				if !slices.Equal(currentState.v2Cert.Networks(), newState.v2Cert.Networks()) {
 					return util.NewContextualError(
 						"Networks in new cert was different from old",
-						m{"new_networks": newState.v2Cert.Networks(), "old_networks": currentState.v2Cert.Networks(), "cert_version": cert.Version2},
+						m{"newNetworks": newState.v2Cert.Networks(), "oldNetworks": currentState.v2Cert.Networks(), "certVersion": cert.Version2},
 						errCertNeedsRestart,
 					)
 				}
@@ -202,7 +202,7 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 				if currentState.v2Cert.Curve() != newState.v2Cert.Curve() {
 					return util.NewContextualError(
 						"Curve in new cert was different from old",
-						m{"new_curve": newState.v2Cert.Curve(), "old_curve": currentState.v2Cert.Curve(), "cert_version": cert.Version2},
+						m{"newCurve": newState.v2Cert.Curve(), "oldCurve": currentState.v2Cert.Curve(), "certVersion": cert.Version2},
 						errCertNeedsRestart,
 					)
 				}
@@ -217,7 +217,7 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 			if !slices.Equal(currentState.v2Cert.Networks(), newState.v1Cert.Networks()) {
 				return util.NewContextualError(
 					"Removing a V2 cert is not permitted unless it has identical networks to the new V1 cert",
-					m{"new_v1_networks": newState.v1Cert.Networks(), "old_v2_networks": currentState.v2Cert.Networks()},
+					m{"newV1Networks": newState.v1Cert.Networks(), "oldV2Networks": currentState.v2Cert.Networks()},
 					errCertNeedsRestart,
 				)
 			}

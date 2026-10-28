@@ -141,7 +141,7 @@ func (s *Server) accept(ln net.Listener, sem chan struct{}) {
 			} else {
 				delay = min(delay*2, acceptRetryMax)
 			}
-			s.l.Warn("Local control socket could not accept a connection, retrying", "error", err, "retry_in", delay)
+			s.l.Warn("Local control socket could not accept a connection, retrying", "error", err, "retryIn", delay)
 			time.Sleep(delay)
 			continue
 		}
