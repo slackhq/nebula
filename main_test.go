@@ -1,10 +1,13 @@
 package nebula
 
 import (
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -12,6 +15,7 @@ import (
 	cert_test "github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/test"
+	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -160,4 +164,86 @@ func writeTestPKI(t *testing.T, dir string) (caPath, certPath, keyPath string) {
 	require.NoError(t, os.WriteFile(certPath, certPEM, 0o600))
 	require.NoError(t, os.WriteFile(keyPath, keyPEM, 0o600))
 	return caPath, certPath, keyPath
+}
+
+func TestListenHostFromConfig(t *testing.T) {
+	l := test.NewLogger()
+
+	unset := netip.IPv6Unspecified()
+	if runtime.GOOS == "openbsd" {
+		unset = netip.IPv4Unspecified()
+	}
+
+	for _, tc := range []struct {
+		host any
+		want netip.Addr
+	}{
+		{nil, unset},
+		{"", unset},
+		{"::", netip.IPv6Unspecified()},
+		{"[::]", netip.IPv6Unspecified()},
+		{"0.0.0.0", netip.IPv4Unspecified()},
+		{"127.0.0.1", netip.MustParseAddr("127.0.0.1")},
+		{"::ffff:192.0.2.1", netip.MustParseAddr("192.0.2.1")},
+		{"2001:db8::1", netip.MustParseAddr("2001:db8::1")},
+	} {
+		t.Run(fmt.Sprint(tc.host), func(t *testing.T) {
+			c := config.NewC(l)
+			if tc.host != nil {
+				c.Settings["listen"] = map[string]any{"host": tc.host}
+			}
+			got, err := listenHostFromConfig(c)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestListenWithIPv4Fallback(t *testing.T) {
+	l := test.NewLogger()
+	errNoV6 := errors.New("address family not supported")
+	errNoV4 := errors.New("address in use")
+
+	for _, tc := range []struct {
+		name   string
+		listen string
+		fail   map[netip.Addr]error
+		tried  []string
+		want   string
+		err    error
+	}{
+		{name: "ipv6 wildcard works", listen: "[::]:4242", tried: []string{"[::]:4242"}, want: "[::]:4242"},
+		{
+			name: "ipv6 wildcard falls back", listen: "[::]:4242", fail: map[netip.Addr]error{netip.IPv6Unspecified(): errNoV6},
+			tried: []string{"[::]:4242", "0.0.0.0:4242"}, want: "0.0.0.0:4242",
+		},
+		{
+			name: "fallback fails too", listen: "[::]:0",
+			fail:  map[netip.Addr]error{netip.IPv6Unspecified(): errNoV6, netip.IPv4Unspecified(): errNoV4},
+			tried: []string{"[::]:0", "0.0.0.0:0"}, want: "0.0.0.0:0", err: errNoV4,
+		},
+		{
+			name: "ipv4 wildcard does not retry", listen: "0.0.0.0:4242", fail: map[netip.Addr]error{netip.IPv4Unspecified(): errNoV4},
+			tried: []string{"0.0.0.0:4242"}, want: "0.0.0.0:4242", err: errNoV4,
+		},
+		{
+			name: "specific ipv6 address does not retry", listen: "[2001:db8::1]:4242",
+			fail:  map[netip.Addr]error{netip.MustParseAddr("2001:db8::1"): errNoV6},
+			tried: []string{"[2001:db8::1]:4242"}, want: "[2001:db8::1]:4242", err: errNoV6,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var tried []string
+			newListener := func(_ *slog.Logger, s udp.Settings) (udp.Conn, error) {
+				tried = append(tried, s.Listen.String())
+				return nil, tc.fail[s.Listen.Addr()]
+			}
+
+			s := udp.Settings{Listen: netip.MustParseAddrPort(tc.listen)}
+			_, err := listenWithIPv4Fallback(l, &s, newListener)
+			require.ErrorIs(t, err, tc.err)
+			assert.Equal(t, tc.tried, tried)
+			assert.Equal(t, tc.want, s.Listen.String())
+		})
+	}
 }

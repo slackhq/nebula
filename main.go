@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"runtime"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -195,26 +196,13 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	}()
 
 	if !configTest {
-		rawListenHost := c.GetString("listen.host", "0.0.0.0")
-		var listenHost netip.Addr
-		if rawListenHost == "[::]" {
-			// Old guidance was to provide the literal `[::]` in `listen.host` but that won't resolve.
-			listenHost = netip.IPv6Unspecified()
-
-		} else {
-			ips, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip", rawListenHost)
-			if err != nil {
-				return nil, util.ContextualizeIfNeeded("Failed to resolve listen.host", err)
-			}
-			if len(ips) == 0 {
-				return nil, util.ContextualizeIfNeeded("Failed to resolve listen.host", err)
-			}
-			listenHost = ips[0].Unmap()
+		listenHost, err := listenHostFromConfig(c)
+		if err != nil {
+			return nil, util.ContextualizeIfNeeded("Failed to resolve listen.host", err)
 		}
 
 		for i := 0; i < routines; i++ {
 			listen := netip.AddrPortFrom(listenHost, uint16(port))
-			l.Info("listening", "addr", listen)
 			batchSize := c.GetInt("listen.batch", 64)
 			if batchSize < 1 {
 				oldBatch := batchSize
@@ -227,10 +215,18 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 				Batch:    batchSize,
 				Offloads: c.GetBool("listen.udp_offloads", false),
 			}
-			udpServer, err := udp.NewListener(l, udpSettings)
+			var udpServer udp.Conn
+			if i == 0 {
+				udpServer, err = listenWithIPv4Fallback(l, &udpSettings, udp.NewListener)
+				// Every other listener shares the first one's address family
+				listenHost = udpSettings.Listen.Addr()
+			} else {
+				udpServer, err = udp.NewListener(l, udpSettings)
+			}
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
+			l.Info("listening", "addr", udpSettings.Listen)
 			udpServer.ReloadConfig(c, nil)
 			udpConns[i] = udpServer
 
@@ -476,4 +472,42 @@ func moduleVersion() string {
 	}
 
 	return ""
+}
+
+// listenHostFromConfig returns the address listen.host resolves to. Unset, it is the IPv6 wildcard for a dual stack
+// bind, except on OpenBSD which has no dual stack sockets and gets the IPv4 wildcard.
+func listenHostFromConfig(c *config.C) (netip.Addr, error) {
+	raw := c.GetString("listen.host", "")
+	switch raw {
+	case "":
+		if runtime.GOOS == "openbsd" {
+			return netip.IPv4Unspecified(), nil
+		}
+		return netip.IPv6Unspecified(), nil
+	case "[::]":
+		// Old guidance was to provide the literal `[::]` in `listen.host` but that won't resolve.
+		return netip.IPv6Unspecified(), nil
+	}
+
+	ips, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip", raw)
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	if len(ips) == 0 {
+		return netip.Addr{}, fmt.Errorf("no addresses found for %s", raw)
+	}
+	return ips[0].Unmap(), nil
+}
+
+// listenWithIPv4Fallback opens a udp listener for s. When s is the IPv6 wildcard and that fails, for example because
+// IPv6 is disabled on this host, it listens on the IPv4 wildcard instead and updates s.Listen to match.
+func listenWithIPv4Fallback(l *slog.Logger, s *udp.Settings, newListener func(*slog.Logger, udp.Settings) (udp.Conn, error)) (udp.Conn, error) {
+	conn, err := newListener(l, *s)
+	if err == nil || s.Listen.Addr() != netip.IPv6Unspecified() {
+		return conn, err
+	}
+
+	l.Warn("Failed to listen on IPv6, falling back to IPv4 only", "addr", s.Listen, "error", err)
+	s.Listen = netip.AddrPortFrom(netip.IPv4Unspecified(), s.Listen.Port())
+	return newListener(l, *s)
 }

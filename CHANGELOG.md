@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `nebula-cert keygen` refuses to overwrite an existing `-out-key` or `-out-pub` file, matching `ca` and `sign`.
   Overwriting kept the old file's mode, so a key written over a world-readable file stayed world-readable.
+- `listen.host` defaults to `::`, listening on both IPv4 and IPv6, except on OpenBSD, which has no dual stack sockets
+  and keeps `0.0.0.0`. If `::` cannot be bound, for example because IPv6 is disabled, Nebula logs a warning and listens
+  on `0.0.0.0`.
 
 ### Removed
 
