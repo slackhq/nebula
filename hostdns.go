@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
-	"os"
-	"runtime"
 	"slices"
 	"sync"
 	"time"
@@ -241,11 +239,10 @@ const (
 
 // hostDNS turns the `dns` stanza into goals for a dnsconfig.Manager.
 //
-// We maintain a single Manager for the lifetime of nebula.
+// We maintain a single Manager for the lifetime of nebula. It is built with
+// the hostDNS and does nothing until it is given a goal.
 type hostDNS struct {
 	l *slog.Logger
-	// newManager is for testing; nil means newDNSConfigManager.
-	newManager func(dnsconfig.Options) (*dnsconfig.Manager, error)
 	// warnedUnsupported is whether an enabled stanza has been told this host
 	// can't be configured. It primarily exists for testing, but also serves
 	// to avoid logging multiple times in the case where it's never going to
@@ -265,12 +262,11 @@ type hostDNS struct {
 	// moves it to started, Restore moves it to stopped. A reload when in New
 	// or Stopped only loads config, but doesn't try to do anything.
 	state hostDNSState
-
-	// mgr is built lazily, when we first need it. mgrOpts is what it was built
-	// from, so we can log things appropriately.
-	mgr     *dnsconfig.Manager
-	mgrOpts hostDNSOptions
+	mgr   *dnsconfig.Manager
 }
+
+// hostDNSNewTimeout bounds manager construction, which initializes the backend.
+const hostDNSNewTimeout = 5 * time.Second
 
 // newHostDNSFromConfig builds a hostDNS and registers a reload callback.
 //
@@ -279,22 +275,47 @@ type hostDNS struct {
 // host dns configuration from a prior unclean shutdown, as long as we managed
 // to load our identity.
 func newHostDNSFromConfig(l *slog.Logger, c *config.C) (*hostDNS, error) {
+	return newHostDNS(l, c, dnsconfig.BackendAuto)
+}
+
+// newHostDNS is newHostDNSFromConfig with the dnsconfig backend chosen, which
+// is how tests stay off the host.
+func newHostDNS(l *slog.Logger, c *config.C, backend dnsconfig.BackendKind) (*hostDNS, error) {
+	tunDisabled := c.GetBool("tun.disabled", false)
+	cfg, cfgErr := loadHostDNSConfig(c, tunDisabled)
+	if cfg.Identity == "" {
+		return nil, cfgErr
+	}
 	s := &hostDNS{
-		l:           l.With("subsystem", "host_dns"),
-		tunDisabled: c.GetBool("tun.disabled", false),
+		l:           l.With("subsystem", "host_dns", "identity", cfg.Identity),
+		tunDisabled: tunDisabled,
+		runCfg:      cfg,
 	}
 
-	cfg, err := loadHostDNSConfig(c, s.tunDisabled)
-	s.runCfg = cfg
+	// On a host dnsconfig has no backend for, this is a Manager that applies
+	// nothing: Clear converges at once and Set is declined, which applyLocked
+	// reports.
+	ctx, cancel := context.WithTimeout(context.Background(), hostDNSNewTimeout)
+	defer cancel()
+	mgr, err := dnsconfig.New(ctx, dnsconfig.Options{
+		Identity:      cfg.Identity,
+		InterfaceName: cfg.Interface,
+		Logger:        s.l,
+		ForceBackend:  backend,
+	})
 	if err != nil {
-		if cfg.Identity == "" {
-			return nil, err
-		}
-		return s, err
+		return nil, joinDNSErrors(cfgErr, err)
+	}
+	s.mgr = mgr
+	if cfgErr != nil {
+		return s, cfgErr
 	}
 
 	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
 		r.RestartRequiredIfChanged("dns.identity")
+		if !c.HasChanged("dns") {
+			return
+		}
 		if err := s.reload(c); err != nil {
 			s.l.Error("Failed to reload host DNS from config", "error", err)
 			r.Failed()
@@ -328,10 +349,10 @@ func (s *hostDNS) Recover() {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.state != hostDNSNew || s.mgr != nil {
+	if s.state != hostDNSNew {
 		return
 	}
-	if err := s.deactivateLocked(); err != nil {
+	if err := s.mgr.Clear(); err != nil {
 		s.l.Error("Failed to start host DNS recovery", "error", err)
 	}
 }
@@ -373,113 +394,38 @@ func (s *hostDNS) convergeLocked() error {
 		return nil
 	}
 	if !s.runCfg.enabled {
-		// Deactivate rather than Restore: this is reversible, so the Manager
-		// stays live for the reload that turns host DNS back on. It is also
-		// how a start with the stanza off recovers what a crash left behind.
-		return s.deactivateLocked()
+		// Clear rather than Close: this is reversible, so the Manager stays
+		// live for the reload that turns host DNS back on. It is also how a
+		// start with the stanza off recovers what a crash left behind.
+		return s.mgr.Clear()
 	}
 	return s.applyLocked(s.runCfg.dns)
 }
 
-// applyLocked updates dnsconfig's goal if necessary.
+// applyLocked makes desired the Manager's goal. dnsconfig treats a goal equal
+// to the current one as a no-op.
 func (s *hostDNS) applyLocked(desired dnsconfig.Config) error {
-	if err := s.ensureManagerLocked(); err != nil {
-		if errors.Is(err, errHostDNSUnsupported) {
-			// Unrecoverable, and not a reason to keep the tunnel down: the
-			// same stanza may be doing its job on the mesh's other hosts.
-			if !s.warnedUnsupported {
-				s.l.Warn("host DNS configuration is not supported on this host; leaving host DNS unmanaged", "reason", err)
-				s.warnedUnsupported = true
-			}
-			return nil
+	err := s.mgr.Set(desired)
+	switch {
+	case errors.Is(err, dnsconfig.ErrConfigurationDeclined):
+		// Unrecoverable, and not a reason to keep the tunnel down: the
+		// same stanza may be doing its job on the mesh's other hosts.
+		if !s.warnedUnsupported {
+			s.l.Warn("host DNS configuration is not supported on this host; leaving host DNS unmanaged", "reason", err)
+			s.warnedUnsupported = true
 		}
-		return err
-	}
-	if st := s.mgr.Status(); st.Goal == dnsconfig.GoalSet && st.Desired.Equal(desired) {
 		return nil
-	}
-
-	if err := s.mgr.Set(desired); err != nil {
-		if errors.Is(err, dnsconfig.ErrInterfaceRequired) {
-			return fmt.Errorf("%w: set tun.dev so the adapter can be named", err)
-		}
+	case errors.Is(err, dnsconfig.ErrInterfaceRequired):
+		return fmt.Errorf("%w: set tun.dev so the adapter can be named", err)
+	case err != nil:
 		return err
 	}
 	if !desired.IsSplit() {
 		s.l.Info("host DNS config has no match_domains; overriding all host DNS resolution")
 	}
-	s.l.Info("host DNS config requested",
-		"identity", s.mgrOpts.Identity, "resolvers", desired.Nameservers,
+	s.l.Info("host DNS config requested", "resolvers", desired.Nameservers,
 		"matchDomains", desired.MatchDomains, "searchDomains", desired.SearchDomains)
 	return nil
-}
-
-// deactivateLocked tells dnsconfig to remove our state, including anything
-// left behind by a prior run.
-func (s *hostDNS) deactivateLocked() error {
-	if err := s.ensureManagerLocked(); err != nil {
-		if errors.Is(err, errHostDNSUnsupported) {
-			s.l.Debug("Skipping host DNS cleanup", "reason", err)
-			return nil
-		}
-		return err
-	}
-	wasSet := s.mgr.Status().Goal == dnsconfig.GoalSet
-	if err := s.mgr.Clear(); err != nil {
-		return err
-	}
-	if wasSet {
-		s.l.Info("host DNS config removal requested", "identity", s.mgrOpts.Identity)
-	}
-	return nil
-}
-
-// ensureManagerLocked builds the Manager if there is none. Note that the
-// Manager won't do anything until we give it a goal.
-func (s *hostDNS) ensureManagerLocked() error {
-	if s.mgr != nil {
-		return nil
-	}
-
-	newManager := s.newManager
-	if newManager == nil {
-		newManager = newDNSConfigManager
-	}
-	opts := s.runCfg.hostDNSOptions
-	mgr, err := newManager(dnsconfig.Options{
-		Identity:      opts.Identity,
-		Logger:        s.l,
-		InterfaceName: opts.Interface,
-	})
-	if err != nil {
-		return err
-	}
-	s.mgr, s.mgrOpts = mgr, opts
-	return nil
-}
-
-// errHostDNSUnsupported means dnsconfig would refuse every attempt on this
-// host, so no Manager is built for it.
-var errHostDNSUnsupported = errors.New("host DNS configuration is not supported on this host")
-
-// hostDNSNewTimeout bounds manager construction, which initializes the backend.
-const hostDNSNewTimeout = 5 * time.Second
-
-// newDNSConfigManager builds a dnsconfig.Manager, or reports an error if
-// we can't, except on Windows where we rely on dnsconfig itself reporting
-// the error.
-func newDNSConfigManager(o dnsconfig.Options) (*dnsconfig.Manager, error) {
-	switch dnsconfig.Detect() {
-	case dnsconfig.BackendNoop:
-		return nil, fmt.Errorf("%w: no dnsconfig backend for %s", errHostDNSUnsupported, runtime.GOOS)
-	case dnsconfig.BackendDarwin:
-		if os.Geteuid() != 0 {
-			return nil, fmt.Errorf("%w: requires root on macOS", errHostDNSUnsupported)
-		}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), hostDNSNewTimeout)
-	defer cancel()
-	return dnsconfig.New(ctx, o)
 }
 
 // Restore puts the host's previous DNS configuration back and releases the
@@ -493,32 +439,7 @@ func (s *hostDNS) Restore() {
 	defer s.mu.Unlock()
 
 	s.state = hostDNSStopped
-	s.closeManagerLocked()
-}
-
-// closeManagerLocked closes the Manager, reverting whatever it applied. It is
-// safe to call with no Manager.
-func (s *hostDNS) closeManagerLocked() {
-	if s.mgr == nil {
-		return
-	}
-	mgr := s.mgr
-	s.mgr = nil
-	owed := owesCleanup(mgr.Status())
-	err := mgr.Close()
-	switch {
-	case err != nil:
-		s.l.Warn("failed to revert host DNS config; rerun with the same identity to try again",
-			"identity", s.mgrOpts.Identity, "error", err)
-	case errors.Is(mgr.Status().LastError, dnsconfig.ErrManagerAlreadyRunning):
-		s.l.Warn("host DNS identity is held by another running process; not updating host DNS", "identity", s.mgrOpts.Identity)
-	case owed:
-		s.l.Info("restored the previous host DNS config", "identity", s.mgrOpts.Identity)
-	}
-}
-
-// owesCleanup reports whether a manager in st may have host DNS config of
-// ours to remove.
-func owesCleanup(st dnsconfig.Status) bool {
-	return st.Goal == dnsconfig.GoalSet || st.Goal == dnsconfig.GoalClear && !st.Converged
+	// Close removes whatever we applied and logs how that went. It is
+	// one-shot, which is what makes this idempotent.
+	_ = s.mgr.Close()
 }

@@ -2,9 +2,9 @@ package nebula
 
 import (
 	"bytes"
-	"context"
-	"fmt"
 	"net/netip"
+	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -165,32 +165,36 @@ func TestLoadHostDNSConfig_listWrittenAsAScalar(t *testing.T) {
 	require.ErrorContains(t, err, "dns.match_domains must be a list")
 }
 
-// newNoopDNSConfigManager builds a Manager over the no-op dnsconfig backend, which records goals without touching
-// the host, whatever this one is.
-func newNoopDNSConfigManager(o dnsconfig.Options) (*dnsconfig.Manager, error) {
-	o.ForceBackend = dnsconfig.BackendNoop
-	return dnsconfig.New(context.Background(), o)
-}
-
-// newTestHostDNS builds a hostDNS over the no-op dnsconfig backend.
+// newTestHostDNS builds a hostDNS over the no-op dnsconfig backend, which records goals without touching the
+// host, whatever this one is.
 func newTestHostDNS(t *testing.T, c *config.C) *hostDNS {
 	t.Helper()
-	s, err := newHostDNSFromConfig(test.NewLogger(), c)
+	s, err := newHostDNS(test.NewLogger(), c, dnsconfig.BackendNoop)
 	require.NoError(t, err)
-	s.newManager = newNoopDNSConfigManager
 	t.Cleanup(s.Restore)
 	return s
 }
 
+// hostDNSIdentityOf reports the identity s logs with, which is where it lives once the Manager is built. logs is
+// the output of the logger s was built with.
+func hostDNSIdentityOf(t *testing.T, logs *bytes.Buffer, s *hostDNS) string {
+	t.Helper()
+	s.l.Info("identity probe")
+	m := regexp.MustCompile(`msg="identity probe".*identity=(\S+)`).FindStringSubmatch(logs.String())
+	require.NotNil(t, m, "no identity on the logger: %s", logs.String())
+	return m[1]
+}
+
 func TestHostDNS_tunDisabledIsFixedAtStart(t *testing.T) {
 	c := newHostDNSTestConfig(t, hostDNSEnabledYAML+"tun:\n  disabled: true\n")
-	_, err := newHostDNSFromConfig(test.NewLogger(), c)
+	s, err := newHostDNS(test.NewLogger(), c, dnsconfig.BackendNoop)
 	require.ErrorContains(t, err, "requires a tun device")
+	s.Restore()
 
 	// A disabled stanza loads, and tun.disabled only takes effect on restart, so flipping it on a reload does not
 	// make a device appear
 	c = newHostDNSTestConfig(t, "dns:\n  enabled: false\ntun:\n  disabled: true\n")
-	s := newTestHostDNS(t, c)
+	s = newTestHostDNS(t, c)
 	s.Start()
 	res := c.ReloadConfigString(hostDNSEnabledYAML + "tun:\n  disabled: false\n")
 	assert.True(t, res.Failed)
@@ -203,13 +207,10 @@ func TestHostDNS_recoverThenStart(t *testing.T) {
 
 	// Recovery clears under the identity before anything else happens
 	s.Recover()
-	require.NotNil(t, s.mgr)
 	assert.Equal(t, dnsconfig.GoalClear, s.mgr.Status().Goal)
-	recovering := s.mgr
 
 	// Start states the real goal on the same Manager
 	s.Start()
-	assert.Same(t, recovering, s.mgr)
 	st := s.mgr.Status()
 	assert.Equal(t, dnsconfig.GoalSet, st.Goal)
 	assert.Equal(t, []string{"mesh.example.com."}, st.Desired.MatchDomains)
@@ -218,11 +219,13 @@ func TestHostDNS_recoverThenStart(t *testing.T) {
 
 func TestHostDNS_recoverWithoutAStanza(t *testing.T) {
 	c := newHostDNSTestConfig(t, "lighthouse: {}\n")
-	s := newTestHostDNS(t, c)
+	var logs bytes.Buffer
+	s, err := newHostDNS(test.NewLoggerWithOutput(&logs), c, dnsconfig.BackendNoop)
+	require.NoError(t, err)
+	t.Cleanup(s.Restore)
 
 	s.Recover()
-	require.NotNil(t, s.mgr)
-	assert.Equal(t, defaultHostDNSIdentity, s.mgrOpts.Identity)
+	assert.Equal(t, defaultHostDNSIdentity, hostDNSIdentityOf(t, &logs, s))
 	assert.Equal(t, dnsconfig.GoalClear, s.mgr.Status().Goal)
 
 	// Start without a stanza keeps clearing
@@ -235,21 +238,20 @@ func TestHostDNS_recoverWithoutAStanza(t *testing.T) {
 // that error, since the broken stanza may be why it keeps exiting.
 func TestHostDNS_recoverWithAStanzaThatDoesNotLoad(t *testing.T) {
 	c := newHostDNSTestConfig(t, "dns:\n  enabled: true\n  identity: nebula-two\n  nameservers: [nope]\n  search_domains: [a.example]\n")
-	s, err := newHostDNSFromConfig(test.NewLogger(), c)
+	var logs bytes.Buffer
+	s, err := newHostDNS(test.NewLoggerWithOutput(&logs), c, dnsconfig.BackendNoop)
 	require.ErrorContains(t, err, "entry 1 in dns.nameservers is not an IP address")
 	require.NotNil(t, s)
-	s.newManager = newNoopDNSConfigManager
 	t.Cleanup(s.Restore)
 
 	s.Recover()
-	require.NotNil(t, s.mgr)
-	assert.Equal(t, "nebula-two", s.mgrOpts.Identity)
+	assert.Equal(t, "nebula-two", hostDNSIdentityOf(t, &logs, s))
 	assert.Equal(t, dnsconfig.GoalClear, s.mgr.Status().Goal)
 	assert.False(t, s.runCfg.enabled)
 
 	// Without a usable identity there is nothing to clear under, and nothing comes back to clear with
 	c = newHostDNSTestConfig(t, "dns:\n  enabled: false\n  identity: nebula/two\n")
-	s, err = newHostDNSFromConfig(test.NewLogger(), c)
+	s, err = newHostDNS(test.NewLogger(), c, dnsconfig.BackendNoop)
 	require.ErrorContains(t, err, "dns.identity is not usable")
 	assert.Nil(t, s)
 }
@@ -259,7 +261,6 @@ func TestHostDNS_recoverOnlyBeforeStart(t *testing.T) {
 	s := newTestHostDNS(t, c)
 
 	s.Start()
-	require.NotNil(t, s.mgr)
 	assert.Equal(t, dnsconfig.GoalSet, s.mgr.Status().Goal)
 
 	s.Recover()
@@ -271,12 +272,11 @@ func TestHostDNS_startWaitsForTheTunDevice(t *testing.T) {
 	s := newTestHostDNS(t, c)
 
 	// A reload before start only loads its configuration
-	res := c.ReloadConfigString(hostDNSEnabledYAML)
+	res := c.ReloadConfigString(hostDNSEnabledYAML + "  identity: nebula\n")
 	assert.False(t, res.Failed)
-	assert.Nil(t, s.mgr)
+	assert.Equal(t, dnsconfig.GoalNone, s.mgr.Status().Goal)
 
 	s.Start()
-	require.NotNil(t, s.mgr)
 	assert.Equal(t, dnsconfig.GoalSet, s.mgr.Status().Goal)
 }
 
@@ -284,7 +284,6 @@ func TestHostDNS_reload(t *testing.T) {
 	c := newHostDNSTestConfig(t, hostDNSEnabledYAML)
 	s := newTestHostDNS(t, c)
 	s.Start()
-	require.NotNil(t, s.mgr)
 
 	// Disabling clears on the same Manager
 	res := c.ReloadConfigString("dns:\n  enabled: false\n")
@@ -304,6 +303,21 @@ func TestHostDNS_reload(t *testing.T) {
 	res = c.ReloadConfigString("lighthouse: {}\n")
 	assert.False(t, res.Failed)
 	assert.Equal(t, dnsconfig.GoalClear, s.mgr.Status().Goal)
+}
+
+// TestHostDNS_reload_unchangedStanzaIsIgnored: a reload for something else does not restate the goal, and a stanza
+// that is broken in the same way twice is not reported twice.
+func TestHostDNS_reload_unchangedStanzaIsIgnored(t *testing.T) {
+	c := newHostDNSTestConfig(t, hostDNSEnabledYAML)
+	var logs bytes.Buffer
+	s, err := newHostDNS(test.NewLoggerWithOutput(&logs), c, dnsconfig.BackendNoop)
+	require.NoError(t, err)
+	t.Cleanup(s.Restore)
+	s.Start()
+
+	res := c.ReloadConfigString(hostDNSEnabledYAML + "lighthouse: {}\n")
+	assert.False(t, res.Failed)
+	assert.Equal(t, 1, strings.Count(logs.String(), "host DNS config requested"), "an unchanged stanza must not be restated")
 }
 
 func TestHostDNS_reload_failureKeepsTheRunningConfig(t *testing.T) {
@@ -326,7 +340,6 @@ func TestHostDNS_reload_identityChangeNeedsARestart(t *testing.T) {
 	res := c.ReloadConfigString("dns:\n  identity: other\n")
 	assert.False(t, res.Failed)
 	assert.Equal(t, []string{"dns.identity"}, res.RestartKeys)
-	assert.Equal(t, defaultHostDNSIdentity, s.mgrOpts.Identity)
 	assert.Equal(t, dnsconfig.GoalClear, s.mgr.Status().Goal)
 }
 
@@ -334,51 +347,51 @@ func TestHostDNS_restoreIsFinal(t *testing.T) {
 	c := newHostDNSTestConfig(t, hostDNSEnabledYAML)
 	s := newTestHostDNS(t, c)
 	s.Start()
-	require.NotNil(t, s.mgr)
+	assert.Equal(t, dnsconfig.GoalSet, s.mgr.Status().Goal)
 
 	s.Restore()
-	assert.Nil(t, s.mgr)
+	assert.Equal(t, hostDNSStopped, s.state)
 
-	// Nothing is created after Restore, by a reload or a late Start
-	res := c.ReloadConfigString(hostDNSEnabledYAML)
+	// Nothing is stated after Restore, by a reload or a late Start, and a second Restore is harmless
+	res := c.ReloadConfigString("dns:\n  enabled: true\n  nameservers: [192.168.100.2]\n  match_domains: []\n")
 	assert.False(t, res.Failed)
-	assert.Nil(t, s.mgr)
 	s.Start()
-	assert.Nil(t, s.mgr)
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("192.168.100.1")}, s.mgr.Status().Desired.Nameservers)
+	s.Restore()
 }
 
 func TestHostDNS_restoreBeforeStart(t *testing.T) {
 	c := newHostDNSTestConfig(t, hostDNSEnabledYAML)
 	s := newTestHostDNS(t, c)
 	s.Restore()
-	assert.Nil(t, s.mgr)
 	s.Start()
-	assert.Nil(t, s.mgr)
+	assert.Equal(t, dnsconfig.GoalNone, s.mgr.Status().Goal)
 }
 
-func TestHostDNS_unsupportedHostCreatesNothing(t *testing.T) {
+// TestHostDNS_unsupportedHostLeavesTheHostAlone runs where dnsconfig has no backend, which is where the detected
+// backend is the no-op one with Set declined. Forcing the no-op backend permits Set, so this cannot be simulated.
+func TestHostDNS_unsupportedHostLeavesTheHostAlone(t *testing.T) {
+	if dnsconfig.Detect() != dnsconfig.BackendNoop {
+		t.Skipf("dnsconfig has a backend for %s", runtime.GOOS)
+	}
 	c := newHostDNSTestConfig(t, "dns:\n  enabled: false\n")
 	var logs bytes.Buffer
 	s, err := newHostDNSFromConfig(test.NewLoggerWithOutput(&logs), c)
 	require.NoError(t, err)
-	reason := fmt.Errorf("%w: not here", errHostDNSUnsupported)
-	s.newManager = func(dnsconfig.Options) (*dnsconfig.Manager, error) { return nil, reason }
 	t.Cleanup(s.Restore)
 
 	// Recovery and a disabled start are quiet: nothing was asked for, so there is nothing to complain about
 	s.Recover()
-	assert.Nil(t, s.mgr)
 	s.Start()
-	assert.Nil(t, s.mgr)
 	assert.NotContains(t, logs.String(), "level=ERROR")
 	assert.NotContains(t, logs.String(), "level=WARN")
 
 	// Asking for it is a warning, once, and not a failed reload: the stanza is shared with hosts it works on
 	res := c.ReloadConfigString(hostDNSEnabledYAML)
 	assert.False(t, res.Failed)
-	assert.Nil(t, s.mgr)
+	assert.Equal(t, dnsconfig.GoalClear, s.mgr.Status().Goal, "a declined Set records no goal")
 	assert.Equal(t, 1, strings.Count(logs.String(), "leaving host DNS unmanaged"))
-	assert.Contains(t, logs.String(), reason.Error())
+	assert.Contains(t, logs.String(), dnsconfig.ErrConfigurationDeclined.Error())
 	res = c.ReloadConfigString(hostDNSEnabledYAML + "  identity: nebula\n")
 	assert.False(t, res.Failed)
 	assert.Equal(t, 1, strings.Count(logs.String(), "leaving host DNS unmanaged"))

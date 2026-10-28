@@ -67,14 +67,19 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	//
 	// A stanza that does not load is fatal, but recovery runs first: the broken stanza may be the
 	// reason we are crash looping, and nothing else is going to put the host's resolver back.
-	hd, hdErr := newHostDNSFromConfig(l, c)
-	// Its Manager lives on in the Control, and without one, Restore finishes the recovery started below.
-	defer func() {
-		if retcon == nil {
-			hd.Restore()
-		}
-	}()
-	if !configTest {
+	var hd *hostDNS
+	var hdErr error
+	if configTest {
+		// Only validate: building the Manager initializes a backend a config test never uses.
+		_, hdErr = loadHostDNSConfig(c, c.GetBool("tun.disabled", false))
+	} else {
+		hd, hdErr = newHostDNSFromConfig(l, c)
+		// Its Manager lives on in the Control, and without one, Restore finishes the recovery started below.
+		defer func() {
+			if retcon == nil {
+				hd.Restore()
+			}
+		}()
 		// Start recovery before everything is up, to give us the best chance of recovering
 		// in a persistent failure case.
 		hd.Recover()
