@@ -286,9 +286,6 @@ func newHostDNS(l *slog.Logger, c *config.C, backend dnsconfig.BackendKind) (*ho
 		runCfg:      cfg,
 	}
 
-	// On a host dnsconfig has no backend for, this is a Manager that applies
-	// nothing: Clear converges at once and Set is declined, which applyLocked
-	// reports.
 	ctx, cancel := context.WithTimeout(context.Background(), hostDNSNewTimeout)
 	defer cancel()
 	mgr, err := dnsconfig.New(ctx, dnsconfig.Options{
@@ -396,20 +393,17 @@ func (s *hostDNS) convergeLocked() error {
 	return s.applyLocked(s.runCfg.dns)
 }
 
-// applyLocked makes desired the Manager's goal. dnsconfig treats a goal equal
-// to the current one as a no-op.
+// applyLocked updates dnsconfig's goal.
 func (s *hostDNS) applyLocked(desired dnsconfig.Config) error {
+	// dnsconfig treats a duplicate set as a no-op.
 	err := s.mgr.Set(desired)
 	switch {
 	case errors.Is(err, dnsconfig.ErrConfigurationDeclined):
-		// Unrecoverable, and not a reason to keep the tunnel down: the
-		// same stanza may be doing its job on the mesh's other hosts. This
-		// only repeats when the stanza changes, since the reload callback
-		// skips everything else.
+		// Unrecoverable, and not a reason to keep the tunnel down.
 		s.l.Warn("host DNS configuration is not supported on this host; leaving host DNS unmanaged", "reason", err)
 		return nil
 	case errors.Is(err, dnsconfig.ErrInterfaceRequired):
-		return fmt.Errorf("%w: set tun.dev so the adapter can be named", err)
+		return fmt.Errorf("%w: tun.dev must be specified", err)
 	case err != nil:
 		return err
 	}

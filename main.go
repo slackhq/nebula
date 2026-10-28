@@ -70,11 +70,13 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	var hd *hostDNS
 	var hdErr error
 	if configTest {
-		// Only validate: building the Manager initializes a backend a config test never uses.
+		// Avoid actually building a manager when we're just validating the config. Doing so might
+		// cause dnsconfig to log an error on unsupported hosts.
 		_, hdErr = loadHostDNSConfig(c, c.GetBool("tun.disabled", false))
 	} else {
+		// Set up a hostDNS whether it's configured or not, so we can remove stale
+		// host config in the event of a restart after an unclean shutdown.
 		hd, hdErr = newHostDNSFromConfig(l, c)
-		// Its Manager lives on in the Control, and without one, Restore finishes the recovery started below.
 		defer func() {
 			if retcon == nil {
 				hd.Restore()
