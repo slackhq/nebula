@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Fragmented handshakes: a handshake message too big for one packet, from a certificate with many groups, names or
+  networks, is sent as Reed-Solomon coded fragments that each fit the IPv6 minimum MTU, rather than relying on IP
+  fragmentation. `handshakes.fragment` (`auto`, `always`, `never`) chooses when, and `handshakes.repair_delay` how
+  long repair fragments trail: a tenth of `handshakes.try_interval` unless set, and under half of it. A node
+  reassembles fragments unless set to `never`; an older peer can not, but the oversized packet it could have read
+  needed IP fragmentation to arrive. See `docs/fragmented-handshakes.md`.
+- New handshake subtypes on the wire: `ix_psk0_fragmented` (0x80) marks the fragments of an IX handshake message and
+  the cookie replies a responder sends before it keeps state, and 0x81 is reserved for XX. An older node drops both
+  as unsupported subtypes.
+- Message metrics `messages.{tx,rx}.handshake_ixpsk0_fragmented` and `messages.{tx,rx}.handshake_xxpsk0_fragmented`
+  count fragment packets and cookie replies apart from `handshake_ixpsk0`.
+
 - `service.Listen` supports `tcp6` and follows `net.Listen` address family semantics for `tcp`, `tcp4` and `tcp6`.
 - A control socket that provides access to all of the ssh debug server's commands along with support
   for running `nebula ctl <command>` as a client from the CLI.
