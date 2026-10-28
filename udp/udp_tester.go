@@ -208,9 +208,14 @@ func (u *TesterConn) LocalAddr() (netip.AddrPort, error) {
 	return u.GetAddr(), nil
 }
 
-// IPv4Only is false, the test router delivers to any address whichever family this conn's own is
-func (u *TesterConn) IPv4Only() bool {
-	return false
+// CanSendIPv4 is true, the test router delivers to any address whichever family this conn's own is
+func (u *TesterConn) CanSendIPv4() bool {
+	return true
+}
+
+// CanSendIPv6 is true, the test router delivers to any address whichever family this conn's own is
+func (u *TesterConn) CanSendIPv6() bool {
+	return true
 }
 
 func (u *TesterConn) SupportsMultipleReaders() bool {

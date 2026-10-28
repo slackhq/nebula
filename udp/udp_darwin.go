@@ -19,6 +19,7 @@ import (
 
 type StdConn struct {
 	*net.UDPConn
+	families
 	isV4  bool
 	sysFd uintptr
 	l     *slog.Logger
@@ -53,6 +54,10 @@ func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 			return nil, err
 		}
 		c.isV4 = la.Addr().Is4()
+		if c.families, err = socketFamilies(la.Addr(), c.sysFd); err != nil {
+			_ = uc.Close()
+			return nil, err
+		}
 
 		return c, nil
 	}
@@ -153,10 +158,6 @@ func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error)
 		}
 	}
 	return written, nil
-}
-
-func (u *StdConn) IPv4Only() bool {
-	return u.isV4
 }
 
 func (u *StdConn) LocalAddr() (netip.AddrPort, error) {

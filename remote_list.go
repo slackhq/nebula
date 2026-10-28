@@ -302,9 +302,10 @@ type RemoteList struct {
 	// shouldAdd is a nillable function that decides if x should be added to addrs.
 	shouldAdd func(vpnAddrs []netip.Addr, x netip.Addr) bool
 
-	// v4Only keeps IPv6 addresses out of addrs, because our socket cannot send to them. The cache still holds them,
-	// a lighthouse answers queries from it.
-	v4Only bool
+	// canSendV4 and canSendV6 say which families our socket can send to, only those go in addrs. The cache still holds
+	// the others, a lighthouse answers queries from it.
+	canSendV4 bool
+	canSendV6 bool
 
 	// This is a list of remotes that we have tried to handshake with and have returned from the wrong vpn ip.
 	// They should not be tried again during a handshake
@@ -322,6 +323,8 @@ func NewRemoteList(vpnAddrs []netip.Addr, shouldAdd func([]netip.Addr, netip.Add
 		relays:    make([]netip.Addr, 0),
 		cache:     make(map[netip.Addr]*cache),
 		shouldAdd: shouldAdd,
+		canSendV4: true,
+		canSendV6: true,
 	}
 	copy(r.vpnAddrs, vpnAddrs)
 	return r
@@ -688,7 +691,7 @@ func (r *RemoteList) unlockedCollect() {
 	relays := r.relays[:0]
 
 	for _, c := range r.cache {
-		if c.v4 != nil {
+		if c.v4 != nil && r.canSendV4 {
 			if c.v4.learned != nil {
 				u := protoV4AddrPortToNetAddrPort(c.v4.learned)
 				if !r.unlockedIsBad(u) {
@@ -707,7 +710,7 @@ func (r *RemoteList) unlockedCollect() {
 			}
 		}
 
-		if c.v6 != nil && !r.v4Only {
+		if c.v6 != nil && r.canSendV6 {
 			if c.v6.learned != nil {
 				u := protoV6AddrPortToNetAddrPort(c.v6.learned)
 				if !r.unlockedIsBad(u) {
@@ -735,7 +738,7 @@ func (r *RemoteList) unlockedCollect() {
 
 	dnsAddrs := r.hr.GetAddrs()
 	for _, addr := range dnsAddrs {
-		if r.v4Only && !addr.Addr().Is4() {
+		if !r.canSend(addr.Addr()) {
 			continue
 		}
 		if r.shouldAdd == nil || r.shouldAdd(r.vpnAddrs, addr.Addr()) {
@@ -748,6 +751,14 @@ func (r *RemoteList) unlockedCollect() {
 	r.addrs = addrs
 	r.relays = relays
 
+}
+
+// canSend reports whether our socket can send to addr's family
+func (r *RemoteList) canSend(addr netip.Addr) bool {
+	if addr.Is4() {
+		return r.canSendV4
+	}
+	return r.canSendV6
 }
 
 // unlockedSort assumes you have the write lock and performs the deduping and sorting of the address list

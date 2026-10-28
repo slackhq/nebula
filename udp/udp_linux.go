@@ -19,6 +19,7 @@ import (
 )
 
 type StdConn struct {
+	families
 	sysFd  int
 	closed atomic.Bool
 	isV4   bool
@@ -72,6 +73,11 @@ func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 	}
 
 	out := &StdConn{sysFd: fd, isV4: s.Listen.Addr().Is4(), l: l, batch: s.Batch}
+	// IPV6_V6ONLY comes from the net.ipv6.bindv6only sysctl, socketFamilies reads what the socket ended up with
+	if out.families, err = socketFamilies(s.Listen.Addr(), uintptr(fd)); err != nil {
+		_ = unix.Close(fd)
+		return nil, err
+	}
 
 	out.bw = newBatchWriter(fd, out.isV4, l, s.Offloads)
 
@@ -168,10 +174,6 @@ func (u *StdConn) GetSendBuffer() (int, error) {
 
 func (u *StdConn) GetSoMark() (int, error) {
 	return unix.GetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_MARK)
-}
-
-func (u *StdConn) IPv4Only() bool {
-	return u.isV4
 }
 
 func (u *StdConn) LocalAddr() (netip.AddrPort, error) {

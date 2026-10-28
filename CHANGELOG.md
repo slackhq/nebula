@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A node whose UDP socket is IPv4, as with the default `listen.host` of `0.0.0.0`, no longer tries to handshake,
   roam or punch to a peer's IPv6 addresses, which it could never send to, or advertise its own IPv6 interface
   addresses, which it could never receive on.
+- Likewise, a node whose UDP socket is IPv6 only no longer tries to handshake, roam or punch to a peer's IPv4
+  addresses, or advertise its own IPv4 interface addresses. The socket is IPv6 only when it is bound to a specific
+  IPv6 address, or to `::` with `IPV6_V6ONLY` set, as on Linux with the `net.ipv6.bindv6only` sysctl set and always on
+  OpenBSD. Nebula reads this from the socket after binding.
 - The `service` package now works over an IPv6 overlay. It added only an IPv4 route, only the cert's first
   network (always labeled IPv4), and handed every inbound packet to gvisor as IPv4, so IPv6 dials failed and
   IPv6 replies were dropped.
