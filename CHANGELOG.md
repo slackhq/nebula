@@ -14,10 +14,11 @@ See the [v1.12.0](https://github.com/slackhq/nebula/milestone/29?closed=1) miles
 ### Breaking
 
 - Building Nebula, or embedding it as a library, now requires go v1.27.3. (#1940, #2028)
-- Firewall rule `group` and `groups` values that were silently turned into strings are now rejected on startup and
-  reload: unquoted floats (`group: 1.10` used to match the group `1.1`), dates, maps, nested arrays, and a null `group`
-  or `groups` when no `host`, other group, or `cidr` limits the rule. Quote group names. Unquoted ints and bools
-  still work but log a warning. (#1912, #2017)
+- A firewall rule `group` that YAML reads as a float, a date, a map, or a nested array is now rejected on startup and
+  reload instead of being quietly converted to a string, `group: 1.10` used to match the group `1.1`. A null `group` or
+  `groups` is rejected when no `host`, other group, or `cidr` limits the rule, a null `group` used to match nothing.
+  An unquoted int or bool, like `group: 7`, still works but logs a warning to quote it, since YAML has already turned
+  a value like `007` into `7`. (#1912, #2017)
 - A `pki.blocklist` entry that isn't a hex SHA-256 fingerprint now refuses to start and fails a reload.
   Entries are now compared case insensitively. (#1964)
 - On Linux, Nebula refuses a `tun.dev` that already exists, including a persistent device created ahead of time with
@@ -126,8 +127,8 @@ See the [v1.12.0](https://github.com/slackhq/nebula/milestone/29?closed=1) miles
   or punch to a peer's IPv6 addresses, or advertise its own IPv6 interface addresses. (#1991)
 - `remote_allow_list` is applied before capping a host's addresses at the max remotes limit, so denied addresses no
   longer crowd out allowed ones. (#1985)
-- A firewall rule with `group: []`, `groups:` with no value, or a non-string `groups` entry no longer crashes Nebula
-  on startup or reload. (#1912)
+- A firewall rule with `group: []`, `groups:` with no value, or a `groups` entry that isn't a string, such as
+  `groups: [1, 2]`, no longer crashes Nebula on startup or reload. (#1912)
 - A `firewall.conntrack` timeout of zero or less is now a config error, zero and small negative values crashed. (#1984)
 - `create-tunnel -address <ip:port>` no longer crashes Nebula. (#1909)
 - Signing a v2 certificate with an empty name, a name longer than 253 bytes, or an empty group now fails. These
