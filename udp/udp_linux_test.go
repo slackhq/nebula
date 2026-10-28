@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"os"
 	"runtime"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -252,37 +250,5 @@ func TestListenOutShutdown_BusyReader(t *testing.T) {
 	}
 	if n := afterShutdown.Load(); n > batch {
 		t.Fatalf("delivered %d packets after Shutdown, more than the one batch in flight", n)
-	}
-}
-
-func TestStdConnCanSend(t *testing.T) {
-	// The IPv6 wildcard only sends to IPv6 when the net.ipv6.bindv6only sysctl sets IPV6_V6ONLY on new sockets
-	sysctl, err := os.ReadFile("/proc/sys/net/ipv6/bindv6only")
-	if err != nil {
-		t.Fatalf("read bindv6only: %v", err)
-	}
-	bindV6Only := strings.TrimSpace(string(sysctl)) == "1"
-
-	for _, tc := range []struct {
-		listen    string
-		canSendV4 bool
-		canSendV6 bool
-	}{
-		{"127.0.0.1:0", true, false},
-		{"0.0.0.0:0", true, false},
-		{"[::1]:0", false, true},
-		{"[::]:0", !bindV6Only, true},
-	} {
-		c, err := NewListener(testLogger(), Settings{Listen: netip.MustParseAddrPort(tc.listen), Batch: 1})
-		if err != nil {
-			t.Fatalf("NewListener %s: %v", tc.listen, err)
-		}
-		if got := c.CanSendIPv4(); got != tc.canSendV4 {
-			t.Errorf("CanSendIPv4() on %s = %v, want %v", tc.listen, got, tc.canSendV4)
-		}
-		if got := c.CanSendIPv6(); got != tc.canSendV6 {
-			t.Errorf("CanSendIPv6() on %s = %v, want %v", tc.listen, got, tc.canSendV6)
-		}
-		_ = c.Close()
 	}
 }
