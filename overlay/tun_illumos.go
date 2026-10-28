@@ -5,24 +5,27 @@ package overlay
 // illumos tun support, on top of the STREAMS based tuntap driver (/dev/tun), which
 // OmniOS, OpenIndiana and SmartOS ship or package.
 //
-// Plumbing follows what OpenVPN and the Joyent wireguard-go port do:
+// Plumbing follows what ifconfig(8), OpenVPN and the Joyent wireguard-go port do:
 //
 //  1. open /dev/tun and ask it for a PPA (unit number) with I_STR/TUNNEWPPA;
 //     this fd is the one packets are read from and written to
-//  2. open /dev/tun again, push the "ip" module onto it and select the unit (IF_UNITSEL)
-//  3. I_PLINK that stream under an IP mux fd (/dev/udp) and record the mux id on the
-//     interface with SIOCSLIFMUXID; the link is persistent, so the second fd is closed
-//  4. on Close, I_PUNLINK the mux id, which unplumbs the interface
+//  2. for each address family in use, open /dev/tun again, push the "ip" module onto
+//     it and name it tunN for that family (IF_UNITSEL for IPv4, SIOCSLIFNAME with
+//     IFF_IPV6 for IPv6)
+//  3. I_PLINK that stream under an IP mux of the family (/dev/udp, /dev/udp6) and record
+//     the mux id on the interface with SIOCSLIFMUXID; the link is persistent, so the
+//     stream's own fd is closed
+//  4. on Close, I_PUNLINK the mux ids, which unplumbs the interface
 //
-// In tun mode the driver hands over bare IP packets, one per STREAMS message, without
-// the 4 byte address family header the BSDs use, so packets are moved with getmsg/putmsg.
+// In tun mode the driver hands over bare IP packets of both families, one per STREAMS
+// message, without the 4 byte address family header the BSDs use, so packets are moved
+// with getmsg/putmsg on the stream from step 1.
 //
-// Addresses, MTU and routes are set with ifconfig(8) and route(8), the same way OpenVPN
-// configures tun interfaces on illumos. The IPv6 side of the interface is plumbed by
-// ifconfig ("inet6 plumb"), which links a second stream for the same unit under IPv6;
-// the driver delivers packets of both families on the one packet stream from step 1,
-// and picks the upper stream for a written packet by its IP version. Close unplumbs it
-// again before unlinking the IPv4 side.
+// Addresses, netmasks, the MTU and the UP flag are set with the SIOC*LIF* ioctls, and
+// routes with routing socket messages, the same interfaces ifconfig(8) and route(8) use.
+// The first vpn network of each family goes on tunN itself; any further ones get a
+// logical interface each (tunN:1, tunN:2, ...), which is how illumos carries more than
+// one address of a family on an interface.
 
 import (
 	"errors"
@@ -31,10 +34,8 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -49,10 +50,9 @@ import (
 )
 
 const (
-	illumosTunDev  = "/dev/tun"
-	illumosIPMux   = "/dev/udp"
-	illumosIfconfg = "/usr/sbin/ifconfig"
-	illumosRoute   = "/usr/sbin/route"
+	illumosTunDev = "/dev/tun"
+	illumosIPMux  = "/dev/udp"
+	illumosIP6Mux = "/dev/udp6"
 )
 
 var illumosTunNameRE = regexp.MustCompile(`^tun([0-9]+)$`)
@@ -65,10 +65,10 @@ type tun struct {
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	l           *slog.Logger
 
-	f       *os.File // the packet stream from step 1
-	ipFd    int      // the IP mux the interface is linked under, -1 once unplumbed
-	ipMuxID int
-	inet6   atomic.Bool // the IPv6 side was plumbed by Activate
+	f   *os.File // the packet stream from step 1
+	ip4 ipLink   // the IPv4 side of the interface, if any vpn network is IPv4
+	ip6 ipLink   // the IPv6 side of the interface, if any vpn network is IPv6
+	seq atomic.Int32
 
 	closeOnce sync.Once
 	closeErr  error
@@ -93,7 +93,8 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 		vpnNetworks: vpnNetworks,
 		MTU:         getMTU(l, c),
 		l:           l,
-		ipFd:        -1,
+		ip4:         ipLink{muxFd: -1},
+		ip6:         ipLink{muxFd: -1},
 	}
 
 	if err := t.plumb(want); err != nil {
@@ -116,8 +117,14 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 	return t, nil
 }
 
-// plumb opens the tun device and links it into IP, see the top of the file.
-// want is the unit to ask for, or -1 for the first free one.
+// ipLink is one address family's stream of the interface, linked under that family's IP mux.
+type ipLink struct {
+	muxFd int // -1 when the family is not plumbed
+	muxID int
+}
+
+// plumb opens the tun device and links it into IP for every family in vpnNetworks, see
+// the top of the file. want is the unit to ask for, or -1 for the first free one.
 func (t *tun) plumb(want int) (err error) {
 	tunFd, err := unix.Open(illumosTunDev, unix.O_RDWR|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -125,6 +132,7 @@ func (t *tun) plumb(want int) (err error) {
 	}
 	defer func() {
 		if err != nil {
+			t.unplumb()
 			_ = unix.Close(tunFd)
 		}
 	}()
@@ -143,61 +151,123 @@ func (t *tun) plumb(want int) (err error) {
 	}
 	t.Device = fmt.Sprintf("tun%d", ppa)
 
-	ipFd, err := unix.Open(illumosIPMux, unix.O_RDWR|unix.O_CLOEXEC, 0)
+	var want4, want6 bool
+	for _, n := range t.vpnNetworks {
+		want4 = want4 || n.Addr().Is4()
+		want6 = want6 || n.Addr().Is6()
+	}
+	if want4 {
+		if t.ip4, err = plumbFamily(t.Device, ppa, false); err != nil {
+			return err
+		}
+	}
+	if want6 {
+		if t.ip6, err = plumbFamily(t.Device, ppa, true); err != nil {
+			return err
+		}
+	}
+
+	// Non blocking, so the fd goes through the runtime poller (event ports) and
+	// Close can wake a reader parked in Read.
+	if err = unix.SetNonblock(tunFd, true); err != nil {
+		return fmt.Errorf("could not set %s non blocking: %w", t.Device, err)
+	}
+
+	t.f = os.NewFile(uintptr(tunFd), illumosTunDev)
+	t.l.Info("Plumbed tun interface", "interface", t.Device, "ipv4", want4, "ipv6", want6)
+	return nil
+}
+
+// plumbFamily links a new stream for unit ppa of the tun driver under the IP mux of one
+// address family, which brings the interface name into existence for that family.
+func plumbFamily(name string, ppa int, v6 bool) (_ ipLink, err error) {
+	family, muxDev := "IPv4", illumosIPMux
+	if v6 {
+		family, muxDev = "IPv6", illumosIP6Mux
+	}
+
+	muxFd, err := unix.Open(muxDev, unix.O_RDWR|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return fmt.Errorf("could not open %s: %w", illumosIPMux, err)
+		return ipLink{muxFd: -1}, fmt.Errorf("could not open %s: %w", muxDev, err)
 	}
 	defer func() {
 		if err != nil {
-			_ = unix.Close(ipFd)
+			_ = unix.Close(muxFd)
 		}
 	}()
 
 	ifFd, err := unix.Open(illumosTunDev, unix.O_RDWR|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return fmt.Errorf("could not open %s a second time: %w", illumosTunDev, err)
+		return ipLink{muxFd: -1}, fmt.Errorf("could not open %s for %s: %w", illumosTunDev, family, err)
 	}
 	// The I_PLINK below is persistent, it survives closing this fd
 	defer unix.Close(ifFd)
 
 	ipMod := []byte("ip\x00")
 	if err = ioctlPtr(ifFd, unix.I_PUSH, unsafe.Pointer(&ipMod[0])); err != nil {
-		return fmt.Errorf("could not push the ip module onto %s: %w", t.Device, err)
+		return ipLink{muxFd: -1}, fmt.Errorf("could not push the ip module onto %s for %s: %w", name, family, err)
 	}
 
-	unit := int32(ppa)
-	if err = ioctlPtr(ifFd, unix.IF_UNITSEL, unsafe.Pointer(&unit)); err != nil {
-		return fmt.Errorf("could not select unit %d: %w", ppa, err)
+	if !v6 {
+		// IPv4 is what IF_UNITSEL selects; OpenVPN plumbs its tun interfaces this way.
+		unit := int32(ppa)
+		if err = ioctlPtr(ifFd, unix.IF_UNITSEL, unsafe.Pointer(&unit)); err != nil {
+			return ipLink{muxFd: -1}, fmt.Errorf("could not select unit %d: %w", ppa, err)
+		}
+	} else {
+		// IPv6 has to be named explicitly, the way ifconfig(8) plumbs any interface:
+		// keep the flags the driver reports, but a stream that has no name yet reports
+		// itself as IPv4, so swap that for IFF_IPV6 (and drop IFF_BROADCAST, which IPv6
+		// has no use for). The kernel refuses a name with both families set.
+		var lifr unix.Lifreq
+		_ = unix.IoctlLifreq(ifFd, unix.SIOCGLIFFLAGS, &lifr)
+		flags := (lifrFlags(&lifr) | unix.IFF_IPV6) &^ (unix.IFF_IPV4 | unix.IFF_BROADCAST)
+		lifr = unix.Lifreq{}
+		if err = lifr.SetName(name); err != nil {
+			return ipLink{muxFd: -1}, err
+		}
+		*(*uint32)(unsafe.Pointer(&lifr.Lifru1[0])) = uint32(ppa) // lifr_ppa
+		setLifrFlags(&lifr, flags)
+		if err = unix.IoctlLifreq(ifFd, unix.SIOCSLIFNAME, &lifr); err != nil {
+			return ipLink{muxFd: -1}, fmt.Errorf("could not name %s for IPv6: %w", name, err)
+		}
 	}
 
-	muxID, err := unix.IoctlSetIntRetInt(ipFd, unix.I_PLINK, ifFd)
+	muxID, err := unix.IoctlSetIntRetInt(muxFd, unix.I_PLINK, ifFd)
 	if err != nil {
-		return fmt.Errorf("could not link %s into ip: %w", t.Device, err)
+		return ipLink{muxFd: -1}, fmt.Errorf("could not link %s into %s: %w", name, family, err)
 	}
 
 	var lifr unix.Lifreq
-	if err = lifr.SetName(t.Device); err != nil {
-		return err
+	if err = lifr.SetName(name); err != nil {
+		_, _ = unix.IoctlSetIntRetInt(muxFd, unix.I_PUNLINK, muxID)
+		return ipLink{muxFd: -1}, err
 	}
 	// lifr_ip_muxid is lif_muxid[0], an int at the start of the lifr_lifru union
 	*(*int32)(unsafe.Pointer(&lifr.Lifru[0])) = int32(muxID)
-	if err = unix.IoctlLifreq(ipFd, unix.SIOCSLIFMUXID, &lifr); err != nil {
-		_, _ = unix.IoctlSetIntRetInt(ipFd, unix.I_PUNLINK, muxID)
-		return fmt.Errorf("could not set the ip mux id of %s: %w", t.Device, err)
+	if err = unix.IoctlLifreq(muxFd, unix.SIOCSLIFMUXID, &lifr); err != nil {
+		_, _ = unix.IoctlSetIntRetInt(muxFd, unix.I_PUNLINK, muxID)
+		return ipLink{muxFd: -1}, fmt.Errorf("could not set the %s mux id of %s: %w", family, name, err)
 	}
 
-	// Non blocking, so the fd goes through the runtime poller (event ports) and
-	// Close can wake a reader parked in Read.
-	if err = unix.SetNonblock(tunFd, true); err != nil {
-		_, _ = unix.IoctlSetIntRetInt(ipFd, unix.I_PUNLINK, muxID)
-		return fmt.Errorf("could not set %s non blocking: %w", t.Device, err)
-	}
+	return ipLink{muxFd: muxFd, muxID: muxID}, nil
+}
 
-	t.f = os.NewFile(uintptr(tunFd), illumosTunDev)
-	t.ipFd = ipFd
-	t.ipMuxID = muxID
-	t.l.Info("Plumbed tun interface", "interface", t.Device)
-	return nil
+// unplumb removes the interface from every family it was linked into. Logical
+// interfaces, addresses and the routes through the interface go with it.
+func (t *tun) unplumb() error {
+	var errs []error
+	for _, link := range []*ipLink{&t.ip6, &t.ip4} {
+		if link.muxFd < 0 {
+			continue
+		}
+		if _, err := unix.IoctlSetIntRetInt(link.muxFd, unix.I_PUNLINK, link.muxID); err != nil {
+			errs = append(errs, fmt.Errorf("could not unplumb %s: %w", t.Device, err))
+		}
+		_ = unix.Close(link.muxFd)
+		link.muxFd = -1
+	}
+	return errors.Join(errs...)
 }
 
 // newPPA asks the tun driver for unit want, or for the first free unit when want is -1.
@@ -247,17 +317,8 @@ func ioctlPtr(fd int, req int, arg unsafe.Pointer) (err error)
 func (t *tun) Close() error {
 	t.closeOnce.Do(func() {
 		var errs []error
-		if t.inet6.Swap(false) {
-			if err := runCmd(t.l, illumosIfconfg, t.Device, "inet6", "unplumb"); err != nil {
-				errs = append(errs, err)
-			}
-		}
-		if t.ipFd >= 0 {
-			if _, err := unix.IoctlSetIntRetInt(t.ipFd, unix.I_PUNLINK, t.ipMuxID); err != nil {
-				errs = append(errs, fmt.Errorf("could not unplumb %s: %w", t.Device, err))
-			}
-			_ = unix.Close(t.ipFd)
-			t.ipFd = -1
+		if err := t.unplumb(); err != nil {
+			errs = append(errs, err)
 		}
 		if t.f != nil {
 			if err := t.f.Close(); err != nil {
@@ -330,39 +391,133 @@ func (t *tun) Activate() error {
 		return err
 	}
 
-	var have4, have6 bool
+	s4, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
+	if err != nil {
+		return fmt.Errorf("could not open an IPv4 socket: %w", err)
+	}
+	defer unix.Close(s4)
+	s6, err := unix.Socket(unix.AF_INET6, unix.SOCK_DGRAM, 0)
+	if err != nil {
+		return fmt.Errorf("could not open an IPv6 socket: %w", err)
+	}
+	defer unix.Close(s6)
+
+	var first4, first6 = true, true
 	for _, cidr := range t.vpnNetworks {
-		var err error
-		switch {
-		case cidr.Addr().Is4() && !have4:
-			err = t.configure4(cidr)
-			have4 = true
-		case cidr.Addr().Is6() && !have6:
-			err = t.configure6(cidr)
-			have6 = true
-		default:
-			t.l.Warn("only one vpn network per address family is configured on illumos tun interfaces, skipping", "network", cidr)
-			continue
-		}
-		if err != nil {
-			return err
+		sock, first := s4, &first4
+		if cidr.Addr().Is6() {
+			sock, first = s6, &first6
 		}
 
-		if err := addRoute(t.l, t.Device, cidr.Masked(), t.vpnNetworks); err != nil {
+		name := t.Device
+		if !*first {
+			// Every further network of the family gets a logical interface of its own.
+			if name, err = addLogicalIf(sock, t.Device); err != nil {
+				return fmt.Errorf("failed to add a logical interface for %v: %w", cidr, err)
+			}
+		}
+
+		if err := t.configureIf(sock, name, cidr, *first); err != nil {
+			return fmt.Errorf("failed to configure %s for %v: %w", name, cidr, err)
+		}
+		*first = false
+
+		if err := t.addRoute(cidr.Masked(), cidr.Addr()); err != nil {
 			return fmt.Errorf("failed to set route for vpn network %v: %w", cidr, err)
 		}
-	}
-
-	if !have4 && !have6 {
-		return fmt.Errorf("no vpn network to configure on %s", t.Device)
+		t.l.Info("Configured vpn network", "interface", name, "network", cidr)
 	}
 
 	return t.addRoutes(false, nil)
 }
 
+// configureIf gives the (possibly logical) interface name the address of cidr, as a point
+// to point link whose far end is this host itself, and brings it up; addRoute then sends
+// the whole network through it. This is the "topology subnet" setup OpenVPN uses. The
+// MTU belongs to the interface, so it is set on the first one of each family only.
+func (t *tun) configureIf(sock int, name string, cidr netip.Prefix, setMTU bool) error {
+	steps := []struct {
+		what string
+		req  int
+		set  func(*unix.Lifreq)
+	}{
+		{"address", unix.SIOCSLIFADDR, func(l *unix.Lifreq) { setLifrAddr(l, cidr.Addr()) }},
+		{"destination", unix.SIOCSLIFDSTADDR, func(l *unix.Lifreq) { setLifrAddr(l, cidr.Addr()) }},
+		{"netmask", unix.SIOCSLIFNETMASK, func(l *unix.Lifreq) { setLifrAddr(l, prefixToMask(cidr)) }},
+	}
+	if setMTU {
+		steps = append(steps, struct {
+			what string
+			req  int
+			set  func(*unix.Lifreq)
+		}{"mtu", unix.SIOCSLIFMTU, func(l *unix.Lifreq) { *(*uint32)(unsafe.Pointer(&l.Lifru[0])) = uint32(t.MTU) }})
+	}
+
+	for _, step := range steps {
+		var lifr unix.Lifreq
+		if err := lifr.SetName(name); err != nil {
+			return err
+		}
+		step.set(&lifr)
+		if err := unix.IoctlLifreq(sock, step.req, &lifr); err != nil {
+			return fmt.Errorf("could not set the %s: %w", step.what, err)
+		}
+	}
+
+	var lifr unix.Lifreq
+	if err := lifr.SetName(name); err != nil {
+		return err
+	}
+	if err := unix.IoctlLifreq(sock, unix.SIOCGLIFFLAGS, &lifr); err != nil {
+		return fmt.Errorf("could not read the flags: %w", err)
+	}
+	setLifrFlags(&lifr, lifrFlags(&lifr)|unix.IFF_UP)
+	if err := unix.IoctlLifreq(sock, unix.SIOCSLIFFLAGS, &lifr); err != nil {
+		return fmt.Errorf("could not bring it up: %w", err)
+	}
+	return nil
+}
+
+// addLogicalIf adds the next free logical interface to dev and returns its name, tunN:k.
+func addLogicalIf(sock int, dev string) (string, error) {
+	var lifr unix.Lifreq
+	if err := lifr.SetName(dev); err != nil {
+		return "", err
+	}
+	if err := unix.IoctlLifreq(sock, unix.SIOCLIFADDIF, &lifr); err != nil {
+		return "", err
+	}
+	return lifrName(&lifr), nil
+}
+
+func lifrName(l *unix.Lifreq) string {
+	b := make([]byte, 0, len(l.Name))
+	for _, c := range l.Name {
+		if c == 0 {
+			break
+		}
+		b = append(b, byte(c))
+	}
+	return string(b)
+}
+
+// lifr_flags is a uint64 at the start of the lifr_lifru union.
+func lifrFlags(l *unix.Lifreq) uint64 { return *(*uint64)(unsafe.Pointer(&l.Lifru[0])) }
+
+func setLifrFlags(l *unix.Lifreq, f uint64) { *(*uint64)(unsafe.Pointer(&l.Lifru[0])) = f }
+
+// setLifrAddr writes a into lifr_addr, the sockaddr_storage at the start of lifr_lifru.
+func setLifrAddr(l *unix.Lifreq, a netip.Addr) {
+	if a.Is4() {
+		*(*unix.RawSockaddrInet4)(unsafe.Pointer(&l.Lifru[0])) = unix.RawSockaddrInet4{Family: unix.AF_INET, Addr: a.As4()}
+		return
+	}
+	*(*unix.RawSockaddrInet6)(unsafe.Pointer(&l.Lifru[0])) = unix.RawSockaddrInet6{Family: unix.AF_INET6, Addr: a.As16()}
+}
+
 // checkOverlap refuses vpn networks that contain an address already on another
 // interface. The kernel would then have two ways to reach that network, and the
-// errors that follow from route(8) do not point at the cause.
+// errors the routing socket returns then do not point at the cause.
 func (t *tun) checkOverlap() error {
 	ifs, err := net.Interfaces()
 	if err != nil {
@@ -395,40 +550,6 @@ func (t *tun) checkOverlap() error {
 			}
 		}
 	}
-	return nil
-}
-
-// configure4 makes the IPv4 side a point to point link whose far end is this host itself;
-// addRoute then sends the whole vpn network through it. This is OpenVPN's "topology
-// subnet" setup on illumos.
-func (t *tun) configure4(cidr netip.Prefix) error {
-	addr := cidr.Addr().String()
-	err := runCmd(t.l, illumosIfconfg, t.Device,
-		addr, addr,
-		"netmask", prefixToMask(cidr).String(),
-		"mtu", strconv.Itoa(t.MTU),
-		"up")
-	if err != nil {
-		return fmt.Errorf("failed to configure %s: %w", t.Device, err)
-	}
-	return nil
-}
-
-// configure6 plumbs the IPv6 side of the interface and sets it up the same way as IPv4.
-func (t *tun) configure6(cidr netip.Prefix) error {
-	// A leftover IPv6 instance, from a nebula that did not get to clean up, would make
-	// plumb fail; there is normally nothing to unplumb, so the error is ignored.
-	_ = runCmd(t.l, illumosIfconfg, t.Device, "inet6", "unplumb")
-
-	addr := cidr.Addr().String()
-	err := runCmd(t.l, illumosIfconfg, t.Device, "inet6", "plumb",
-		addr+"/"+strconv.Itoa(cidr.Bits()), addr,
-		"mtu", strconv.Itoa(t.MTU),
-		"up")
-	if err != nil {
-		return fmt.Errorf("failed to configure IPv6 on %s: %w", t.Device, err)
-	}
-	t.inet6.Store(true)
 	return nil
 }
 
@@ -496,7 +617,10 @@ func (t *tun) addRoutes(logErrors bool, rl *config.Reload) error {
 			continue
 		}
 
-		err := addRoute(t.l, t.Device, r.Cidr, t.vpnNetworks)
+		gw, err := selectGateway(r.Cidr, t.vpnNetworks)
+		if err == nil {
+			err = t.addRoute(r.Cidr, gw.Addr())
+		}
 		if err != nil {
 			retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
 			if logErrors {
@@ -520,8 +644,13 @@ func (t *tun) removeRoutes(routes []Route, rl *config.Reload) error {
 			continue
 		}
 
-		err := delRoute(t.l, t.Device, r.Cidr, t.vpnNetworks)
-		if err != nil {
+		gw, err := selectGateway(r.Cidr, t.vpnNetworks)
+		if err == nil {
+			err = t.delRoute(r.Cidr, gw.Addr())
+		}
+		if errors.Is(err, unix.ESRCH) {
+			t.l.Info("Route was already removed", "route", r)
+		} else if err != nil {
 			t.l.Error("Failed to remove route", "error", err, "route", r)
 			rl.Failed()
 		} else {
@@ -531,84 +660,65 @@ func (t *tun) removeRoutes(routes []Route, rl *config.Reload) error {
 	return nil
 }
 
-// addRoute sends everything in prefix straight into the tun interface dev.
-//
-// The only address the interface has is this host's own vpn address, and route(8)
-// rejects that as an unreachable next hop unless it is told the route is an interface
-// route. Which spelling of that route(8) takes has varied between illumos
-// distributions and releases, so the forms in routeForms are tried in order and the
-// first one route(8) accepts is kept. Every rejected attempt is logged at debug level
-// and, when none is accepted, returned in the error.
-func addRoute(l *slog.Logger, dev string, prefix netip.Prefix, gateways []netip.Prefix) error {
-	gw, err := selectGateway(prefix, gateways)
-	if err != nil {
-		return err
+// addRoute sends everything in prefix straight into the tun interface. local is one of
+// this host's own vpn addresses of the same family; it names the interface, so the route
+// is an interface route (RTF_GATEWAY clear), what route(8) calls -interface.
+func (t *tun) addRoute(prefix netip.Prefix, local netip.Addr) error {
+	err := t.routeMsg(unix.RTM_ADD, prefix, local)
+	if errors.Is(err, unix.EEXIST) {
+		err = t.routeMsg(unix.RTM_CHANGE, prefix, local)
 	}
-
-	var errs []error
-	for i, form := range routeForms(dev, prefix, gw) {
-		err := runCmd(l, illumosRoute, append([]string{"-n", "add"}, form...)...)
-		if err != nil && strings.Contains(err.Error(), "entry exists") {
-			err = runCmd(l, illumosRoute, append([]string{"-n", "change"}, form...)...)
-		}
-		if err == nil {
-			if i > 0 {
-				l.Info("route(8) accepted a fallback form", "route", prefix, "args", form)
-			}
-			return nil
-		}
-		l.Debug("route(8) rejected a form, trying the next", "route", prefix, "error", err)
-		errs = append(errs, err)
-	}
-	return errors.Join(errs...)
+	return err
 }
 
-// delRoute removes a route addRoute installed, trying the same forms.
-func delRoute(l *slog.Logger, dev string, prefix netip.Prefix, gateways []netip.Prefix) error {
-	gw, err := selectGateway(prefix, gateways)
-	if err != nil {
-		return err
+// delRoute removes a route addRoute installed. It returns unix.ESRCH if there was none.
+func (t *tun) delRoute(prefix netip.Prefix, local netip.Addr) error {
+	return t.routeMsg(unix.RTM_DELETE, prefix, local)
+}
+
+// routeMsg writes one message to a routing socket. illumos sockaddrs carry no length, so
+// each one is the size of its family's sockaddr, appended right after the header in
+// RTA_* bit order, as route(8) lays them out.
+func (t *tun) routeMsg(typ uint8, prefix netip.Prefix, local netip.Addr) error {
+	prefix = prefix.Masked()
+	hdr := unix.RtMsghdr{
+		Version: unix.RTM_VERSION,
+		Type:    typ,
+		Flags:   unix.RTF_UP | unix.RTF_STATIC,
+		Addrs:   unix.RTA_DST | unix.RTA_GATEWAY,
+		Pid:     int32(os.Getpid()),
+		Seq:     t.seq.Add(1),
 	}
 
-	var errs []error
-	for _, form := range routeForms(dev, prefix, gw) {
-		err := runCmd(l, illumosRoute, append([]string{"-n", "delete"}, form...)...)
-		if err == nil {
-			return nil
-		}
-		errs = append(errs, err)
+	msg := make([]byte, unix.SizeofRtMsghdr, unix.SizeofRtMsghdr+3*unix.SizeofSockaddrInet6)
+	msg = appendSockaddr(msg, prefix.Addr())
+	msg = appendSockaddr(msg, local)
+	if prefix.IsSingleIP() {
+		hdr.Flags |= unix.RTF_HOST
+	} else {
+		hdr.Addrs |= unix.RTA_NETMASK
+		msg = appendSockaddr(msg, prefixToMask(prefix))
 	}
-	for _, err := range errs {
-		if !strings.Contains(err.Error(), "not in table") {
-			return errors.Join(errs...)
-		}
+	hdr.Msglen = uint16(len(msg))
+	copy(msg, unsafe.Slice((*byte)(unsafe.Pointer(&hdr)), unix.SizeofRtMsghdr))
+
+	sock, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW, unix.AF_UNSPEC)
+	if err != nil {
+		return fmt.Errorf("unable to create AF_ROUTE socket: %w", err)
 	}
-	l.Info("Route was already removed", "route", prefix)
+	defer unix.Close(sock)
+
+	if _, err := unix.Write(sock, msg); err != nil {
+		return fmt.Errorf("routing socket refused the route for %v: %w", prefix, err)
+	}
 	return nil
 }
 
-// routeForms lists the ways of telling route(8) to send prefix into dev, most specific
-// first: an interface route pinned to dev, an interface route found through dev's
-// address, and a route through dev's address pinned to dev.
-func routeForms(dev string, prefix netip.Prefix, gw netip.Prefix) [][]string {
-	family := "-inet"
-	if prefix.Addr().Is6() {
-		family = "-inet6"
+func appendSockaddr(b []byte, a netip.Addr) []byte {
+	if a.Is4() {
+		sa := unix.RawSockaddrInet4{Family: unix.AF_INET, Addr: a.As4()}
+		return append(b, unsafe.Slice((*byte)(unsafe.Pointer(&sa)), unix.SizeofSockaddrInet4)...)
 	}
-	dst := prefix.Masked().String()
-	via := gw.Addr().String()
-	return [][]string{
-		{family, "-net", dst, via, "-interface", "-ifp", dev},
-		{family, "-net", dst, via, "-interface"},
-		{family, "-net", dst, via, "-ifp", dev},
-	}
-}
-
-func runCmd(l *slog.Logger, name string, args ...string) error {
-	l.Debug("command", "cmd", name, "args", args)
-	out, err := exec.Command(name, args...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
-	}
-	return nil
+	sa := unix.RawSockaddrInet6{Family: unix.AF_INET6, Addr: a.As16()}
+	return append(b, unsafe.Slice((*byte)(unsafe.Pointer(&sa)), unix.SizeofSockaddrInet6)...)
 }
