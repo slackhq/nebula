@@ -243,11 +243,6 @@ const (
 // the hostDNS and does nothing until it is given a goal.
 type hostDNS struct {
 	l *slog.Logger
-	// warnedUnsupported is whether an enabled stanza has been told this host
-	// can't be configured. It primarily exists for testing, but also serves
-	// to avoid logging multiple times in the case where it's never going to
-	// work.
-	warnedUnsupported bool
 	// tunDisabled is whether this process runs without a tun device. It is
 	// read once at construction: tun.disabled only takes effect on restart,
 	// so we don't need to track it through reloads.
@@ -278,8 +273,7 @@ func newHostDNSFromConfig(l *slog.Logger, c *config.C) (*hostDNS, error) {
 	return newHostDNS(l, c, dnsconfig.BackendAuto)
 }
 
-// newHostDNS is newHostDNSFromConfig with the dnsconfig backend chosen, which
-// is how tests stay off the host.
+// newHostDNS allows tests to force a particular backend.
 func newHostDNS(l *slog.Logger, c *config.C, backend dnsconfig.BackendKind) (*hostDNS, error) {
 	tunDisabled := c.GetBool("tun.disabled", false)
 	cfg, cfgErr := loadHostDNSConfig(c, tunDisabled)
@@ -409,11 +403,10 @@ func (s *hostDNS) applyLocked(desired dnsconfig.Config) error {
 	switch {
 	case errors.Is(err, dnsconfig.ErrConfigurationDeclined):
 		// Unrecoverable, and not a reason to keep the tunnel down: the
-		// same stanza may be doing its job on the mesh's other hosts.
-		if !s.warnedUnsupported {
-			s.l.Warn("host DNS configuration is not supported on this host; leaving host DNS unmanaged", "reason", err)
-			s.warnedUnsupported = true
-		}
+		// same stanza may be doing its job on the mesh's other hosts. This
+		// only repeats when the stanza changes, since the reload callback
+		// skips everything else.
+		s.l.Warn("host DNS configuration is not supported on this host; leaving host DNS unmanaged", "reason", err)
 		return nil
 	case errors.Is(err, dnsconfig.ErrInterfaceRequired):
 		return fmt.Errorf("%w: set tun.dev so the adapter can be named", err)

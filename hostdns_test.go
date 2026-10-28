@@ -386,15 +386,20 @@ func TestHostDNS_unsupportedHostLeavesTheHostAlone(t *testing.T) {
 	assert.NotContains(t, logs.String(), "level=ERROR")
 	assert.NotContains(t, logs.String(), "level=WARN")
 
-	// Asking for it is a warning, once, and not a failed reload: the stanza is shared with hosts it works on
+	// Asking for it is a warning, not a failed reload: the stanza is shared with hosts it works on
 	res := c.ReloadConfigString(hostDNSEnabledYAML)
 	assert.False(t, res.Failed)
 	assert.Equal(t, dnsconfig.GoalClear, s.mgr.Status().Goal, "a declined Set records no goal")
 	assert.Equal(t, 1, strings.Count(logs.String(), "leaving host DNS unmanaged"))
 	assert.Contains(t, logs.String(), dnsconfig.ErrConfigurationDeclined.Error())
-	res = c.ReloadConfigString(hostDNSEnabledYAML + "  identity: nebula\n")
+
+	// A reload that leaves the stanza alone is quiet, and one that changes it warns again
+	res = c.ReloadConfigString(hostDNSEnabledYAML + "lighthouse: {}\n")
 	assert.False(t, res.Failed)
 	assert.Equal(t, 1, strings.Count(logs.String(), "leaving host DNS unmanaged"))
+	res = c.ReloadConfigString(hostDNSEnabledYAML + "  identity: nebula\n")
+	assert.False(t, res.Failed)
+	assert.Equal(t, 2, strings.Count(logs.String(), "leaving host DNS unmanaged"))
 }
 
 func TestHostDNS_nilIsSafe(t *testing.T) {
