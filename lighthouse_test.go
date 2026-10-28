@@ -422,6 +422,52 @@ func TestLighthouse_reloadStaticHostMap(t *testing.T) {
 	assert.Equal(t, []netip.AddrPort{netip.MustParseAddrPort("3.3.3.3:4242")}, rl.CopyAddrs([]netip.Prefix{}))
 }
 
+// TestLighthouse_reloadRemoteAllowListRefiltersStatic verifies that a reload which only changes
+// the remote allow list is applied to the addresses already cached for static_host_map entries.
+func TestLighthouse_reloadRemoteAllowListRefiltersStatic(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	c.Settings["lighthouse"] = map[string]any{"am_lighthouse": true}
+	c.Settings["listen"] = map[string]any{"port": 4242}
+	c.Settings["static_host_map"] = map[string]any{
+		"10.128.0.2": []any{"1.1.1.1:4242"},
+	}
+
+	cs := testCertState(netip.MustParsePrefix("10.128.0.1/24"))
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, cs, nil, nil)
+	require.NoError(t, err)
+
+	staticHost := netip.MustParseAddr("10.128.0.2")
+	staticAddr := netip.MustParseAddrPort("1.1.1.1:4242")
+
+	rl := lh.Query(staticHost)
+	require.NotNil(t, rl)
+	assert.Equal(t, []netip.AddrPort{staticAddr}, rl.CopyAddrs([]netip.Prefix{}))
+
+	reload := func(lighthouse map[string]any) {
+		t.Helper()
+		nc := map[string]any{
+			"lighthouse":      lighthouse,
+			"listen":          map[string]any{"port": 4242},
+			"static_host_map": map[string]any{"10.128.0.2": []any{"1.1.1.1:4242"}},
+		}
+		rc, err := yaml.Marshal(nc)
+		require.NoError(t, err)
+		require.NoError(t, c.ReloadConfigString(string(rc)).Err)
+	}
+
+	// Adding a deny over the static address must drop it
+	reload(map[string]any{
+		"am_lighthouse":     true,
+		"remote_allow_list": map[string]any{"1.1.1.1/32": false},
+	})
+	assert.Empty(t, rl.CopyAddrs([]netip.Prefix{}))
+
+	// Removing the deny must bring it back
+	reload(map[string]any{"am_lighthouse": true})
+	assert.Equal(t, []netip.AddrPort{staticAddr}, rl.CopyAddrs([]netip.Prefix{}))
+}
+
 // sendLHHostRequest delivers a HostQuery to lhh and hands back the writer that
 // captured what it emitted. Pass a nil filter to see every message.
 func sendLHHostRequest(fromAddr netip.AddrPort, myVpnIp, queryVpnIp netip.Addr, lhh *LightHouseHandler, filter *NebulaMeta_MessageType) *testEncWriter {

@@ -301,7 +301,9 @@ func (lh *LightHouse) reload(c *config.C, initial bool, r *config.Reload) error 
 	}
 
 	//NOTE: many things will get much simpler when we combine static_host_map and lighthouse.hosts in config
-	if initial || c.HasChanged("static_host_map") || c.HasChanged("static_map.cadence") || c.HasChanged("static_map.network") || c.HasChanged("static_map.lookup_timeout") {
+	// The remote allow list is checked as static addresses are added to the cache, so a change to it has to re-add them
+	if initial || c.HasChanged("static_host_map") || c.HasChanged("static_map.cadence") || c.HasChanged("static_map.network") || c.HasChanged("static_map.lookup_timeout") ||
+		c.HasChanged("lighthouse.remote_allow_list") || c.HasChanged("lighthouse.remote_allow_ranges") {
 		// Clean up. Entries still in the static_host_map will be re-built.
 		ourselves := lh.myVpnNetworks[0].Addr()
 		oldStaticList := lh.staticList.Load()
