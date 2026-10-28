@@ -439,7 +439,7 @@ func TestRemoteList_SetFiltersBeforeCap(t *testing.T) {
 func TestRemoteList_V4OnlySkipsIPv6(t *testing.T) {
 	owner := netip.MustParseAddr("10.0.0.1")
 	rl := NewRemoteList([]netip.Addr{owner}, nil)
-	rl.v4Only = true
+	rl.canSendV6 = false
 	rl.unlockedSetV4(owner, owner, []*V4AddrPort{newIp4AndPortFromString("1.2.3.4:4242")},
 		func(netip.Addr, *V4AddrPort) bool { return true })
 	rl.unlockedSetV6(owner, owner, []*V6AddrPort{newIp6AndPortFromString("[1::1]:4242")},
@@ -458,7 +458,7 @@ func TestRemoteList_V4OnlySkipsIPv6(t *testing.T) {
 func TestRemoteList_V6OnlySkipsIPv4(t *testing.T) {
 	owner := netip.MustParseAddr("10.0.0.1")
 	rl := NewRemoteList([]netip.Addr{owner}, nil)
-	rl.v6Only = true
+	rl.canSendV4 = false
 	rl.unlockedSetV4(owner, owner, []*V4AddrPort{newIp4AndPortFromString("1.2.3.4:4242")},
 		func(netip.Addr, *V4AddrPort) bool { return true })
 	rl.unlockedSetV6(owner, owner, []*V6AddrPort{newIp6AndPortFromString("[1::1]:4242")},

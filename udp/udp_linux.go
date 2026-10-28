@@ -19,12 +19,12 @@ import (
 )
 
 type StdConn struct {
-	sysFd  int
-	closed atomic.Bool
-	isV4   bool
-	isV6   bool
-	l      *slog.Logger
-	batch  int
+	sysFd     int
+	closed    atomic.Bool
+	isV4      bool
+	dualStack bool
+	l         *slog.Logger
+	batch     int
 
 	// bw owns the sendmmsg/UDP-GSO transmit path: the per-queue write
 	// scratch and the GSO capability state probed at socket creation. See
@@ -80,7 +80,7 @@ func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 			_ = unix.Close(fd)
 			return nil, fmt.Errorf("unable to read IPV6_V6ONLY: %w", err)
 		}
-		out.isV6 = isIPv6Only(s.Listen.Addr(), v6only != 0)
+		out.dualStack = isDualStack(s.Listen.Addr(), v6only != 0)
 	}
 
 	out.bw = newBatchWriter(fd, out.isV4, l, s.Offloads)
@@ -180,12 +180,12 @@ func (u *StdConn) GetSoMark() (int, error) {
 	return unix.GetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_MARK)
 }
 
-func (u *StdConn) IPv4Only() bool {
-	return u.isV4
+func (u *StdConn) CanSendIPv4() bool {
+	return u.isV4 || u.dualStack
 }
 
-func (u *StdConn) IPv6Only() bool {
-	return u.isV6
+func (u *StdConn) CanSendIPv6() bool {
+	return !u.isV4
 }
 
 func (u *StdConn) LocalAddr() (netip.AddrPort, error) {

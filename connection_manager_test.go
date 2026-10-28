@@ -24,6 +24,8 @@ func newTestLighthouse() *LightHouse {
 		queryChan: make(chan netip.Addr, 10),
 		// Nothing drains queryChan here, so an 11th query is dropped.
 		queryDropped: metrics.NilCounter{},
+		canSendV4:    true,
+		canSendV6:    true,
 	}
 	lighthouses := []netip.Addr{}
 	staticList := map[netip.Addr]struct{}{}

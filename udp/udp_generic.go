@@ -22,9 +22,9 @@ import (
 
 type GenericConn struct {
 	*net.UDPConn
-	l    *slog.Logger
-	isV4 bool
-	isV6 bool
+	l         *slog.Logger
+	isV4      bool
+	dualStack bool
 }
 
 var _ Conn = &GenericConn{}
@@ -56,7 +56,7 @@ func NewGenericListener(l *slog.Logger, s Settings) (Conn, error) {
 				_ = uc.Close()
 				return nil, fmt.Errorf("failed to read IPV6_V6ONLY: %w", err)
 			}
-			c.isV6 = isIPv6Only(la.Addr(), v6only)
+			c.dualStack = isDualStack(la.Addr(), v6only)
 		}
 		return c, nil
 	}
@@ -81,12 +81,12 @@ func (u *GenericConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, er
 	return written, nil
 }
 
-func (u *GenericConn) IPv4Only() bool {
-	return u.isV4
+func (u *GenericConn) CanSendIPv4() bool {
+	return u.isV4 || u.dualStack
 }
 
-func (u *GenericConn) IPv6Only() bool {
-	return u.isV6
+func (u *GenericConn) CanSendIPv6() bool {
+	return !u.isV4
 }
 
 func (u *GenericConn) LocalAddr() (netip.AddrPort, error) {

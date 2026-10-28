@@ -40,10 +40,9 @@ type LightHouse struct {
 	myVpnAddrsTable *bart.Lite
 	punchy          *Punchy
 
-	// v4Only is set when our udp socket is IPv4, which cannot send to IPv6 remotes
-	v4Only bool
-	// v6Only is set when our udp socket is IPv6 only, which cannot send to IPv4 remotes
-	v6Only bool
+	// canSendV4 and canSendV6 say which families our udp socket can send to, a dual stack socket can send to both
+	canSendV4 bool
+	canSendV6 bool
 
 	// localAddrsFn enumerates the underlay addresses we advertise. It is a field so tests can supply simulated
 	// addresses rather than whatever this machine's NICs happen to be. Set it before Start.
@@ -123,8 +122,8 @@ func NewLightHouseFromConfig(ctx context.Context, l *slog.Logger, c *config.C, c
 		addrMap:            make(map[netip.Addr]*RemoteList),
 		nebulaPort:         nebulaPort,
 		punchy:             p,
-		v4Only:             pc != nil && pc.IPv4Only(),
-		v6Only:             pc != nil && pc.IPv6Only(),
+		canSendV4:          pc == nil || pc.CanSendIPv4(),
+		canSendV6:          pc == nil || pc.CanSendIPv6(),
 		updateTrigger:      make(chan struct{}, 1),
 		queryChan:          make(chan netip.Addr, c.GetUint32("handshakes.query_buffer", 1024)),
 		queryDropped:       metrics.GetOrRegisterCounter("lighthouse.query.dropped", nil),
@@ -728,8 +727,8 @@ func (lh *LightHouse) unlockedGetRemoteList(allAddrs []netip.Addr) *RemoteList {
 	}
 
 	am := NewRemoteList(allAddrs, lh.shouldAdd)
-	am.v4Only = lh.v4Only
-	am.v6Only = lh.v6Only
+	am.canSendV4 = lh.canSendV4
+	am.canSendV6 = lh.canSendV6
 	for _, addr := range allAddrs {
 		lh.addrMap[addr] = am
 	}
@@ -1001,10 +1000,10 @@ func (lh *LightHouse) SendUpdate() {
 		// Only add addrs that aren't my VPN/tun networks
 		// A socket of one family never receives on our addrs of the other, advertise_addrs are left to the operator
 		if e.Is4() {
-			if !lh.v6Only {
+			if lh.canSendV4 {
 				v4 = append(v4, netAddrToProtoV4AddrPort(e, uint16(lh.nebulaPort)))
 			}
-		} else if !lh.v4Only {
+		} else if lh.canSendV6 {
 			v6 = append(v6, netAddrToProtoV6AddrPort(e, uint16(lh.nebulaPort)))
 		}
 	}
@@ -1509,7 +1508,7 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpn
 	}
 
 	remoteAllowList := lhh.lh.GetRemoteAllowList()
-	if !lhh.lh.v6Only {
+	if lhh.lh.canSendV4 {
 		for _, a := range n.Details.V4AddrPorts {
 			if a == nil {
 				continue
@@ -1521,7 +1520,7 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpn
 		}
 	}
 
-	if !lhh.lh.v4Only {
+	if lhh.lh.canSendV6 {
 		for _, a := range n.Details.V6AddrPorts {
 			if a == nil {
 				continue

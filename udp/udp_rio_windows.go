@@ -52,14 +52,14 @@ type ringBuffer struct {
 }
 
 type RIOConn struct {
-	isOpen  atomic.Bool
-	isV4    bool
-	isV6    bool
-	l       *slog.Logger
-	sock    windows.Handle
-	rx, tx  ringBuffer
-	rq      winrio.Rq
-	results [packetsPerRing]winrio.Result
+	isOpen    atomic.Bool
+	isV4      bool
+	dualStack bool
+	l         *slog.Logger
+	sock      windows.Handle
+	rx, tx    ringBuffer
+	rq        winrio.Rq
+	results   [packetsPerRing]winrio.Result
 }
 
 func NewRIOListener(l *slog.Logger, addr netip.Addr, port int) (*RIOConn, error) {
@@ -82,7 +82,7 @@ func NewRIOListener(l *slog.Logger, addr netip.Addr, port int) (*RIOConn, error)
 			u.close()
 			return nil, fmt.Errorf("read IPV6_V6ONLY: %w", err)
 		}
-		u.isV6 = isIPv6Only(addr, v6only != 0)
+		u.dualStack = isDualStack(addr, v6only != 0)
 	}
 
 	for i := 0; i < packetsPerRing; i++ {
@@ -344,12 +344,12 @@ func (u *RIOConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error)
 	return written, nil
 }
 
-func (u *RIOConn) IPv4Only() bool {
-	return u.isV4
+func (u *RIOConn) CanSendIPv4() bool {
+	return u.isV4 || u.dualStack
 }
 
-func (u *RIOConn) IPv6Only() bool {
-	return u.isV6
+func (u *RIOConn) CanSendIPv6() bool {
+	return !u.isV4
 }
 
 func (u *RIOConn) LocalAddr() (netip.AddrPort, error) {
