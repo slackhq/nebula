@@ -128,6 +128,8 @@ lighthouse:
 # Port Nebula will be listening on. The default here is 4242. For a lighthouse node, the port should be defined,
 # however using port 0 will dynamically assign a port and is recommended for roaming nodes.
 listen:
+  # The default "::" listens on both ipv4 and ipv6, except on OpenBSD where the default is "0.0.0.0".
+  # If "::" can't be bound, for example with ipv6 disabled, nebula falls back to "0.0.0.0".
   # To listen on only ipv4, use "0.0.0.0". Not reloadable.
   host: "::"
   # Not reloadable.
