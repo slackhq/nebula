@@ -66,12 +66,18 @@ See the [v1.12.0](https://github.com/slackhq/nebula/milestone/29?closed=1) miles
   for the host owning an address, and `/pem` under either for the certificate. When running more than one instance on
   a host give each its own `local_api.control.socket`, otherwise `nebula ctl` reaches whichever instance bound the
   default path first. (#1975, #1988)
+- Experimental: a `dns` stanza that points the host's resolver at `dns.nameservers`, either for `dns.match_domains`
+  (split DNS) or for every lookup (`match_domains: []`). Off by default, macOS and Windows only, and needs root on macOS
+  or admin on Windows. On macOS and Windows Nebula now removes leftover DNS settings for `dns.identity` (default
+  `nebula`) at every start, even without the stanza, so a host running more than one instance with `dns` enabled needs
+  a distinct identity for each. Settings left by a crash stay until Nebula starts again with the same identity. (#2009)
 
 #### Embedders
 
 - On macOS, hand Nebula a utun fd the host already configured with `overlay.NewFdDeviceFromConfig`, Nebula leaves its
   addressing, MTU and routes to the host. (#1890)
 - `localapi.Client.InvokeLine` runs a control socket command line the way `nebula ctl` does. (#2025)
+- `config.C.GetStringSliceStrict` reads a list and refuses a scalar where a list belongs. (#2009)
 
 ### Changed
 
@@ -108,6 +114,8 @@ See the [v1.12.0](https://github.com/slackhq/nebula/milestone/29?closed=1) miles
 - Lighthouses ignore host queries for their own overlay addresses. (#1866)
 - IPv6 packets with more than 8 extension headers are now dropped. (#1704, #1883)
 - Use about 10MB less memory by no longer linking gopacket outside of tests. (#1864)
+- The fields logged when a reload refuses a certificate change are camelCase, `old_networks` is now `oldNetworks`,
+  `cert_version` is now `certVersion`, and so on. (#2035)
 - Various dependency updates. (#1827, #1828, #1829, #1846, #1847, #1859, #1860, #1875, #1876, #1894, #1904, #1937, #1938,
   #2015, #2016)
 
