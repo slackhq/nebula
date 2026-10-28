@@ -411,12 +411,13 @@ func (d *dnsServer) parseQuery(m *dns.Msg, w dns.ResponseWriter) {
 			if debugEnabled {
 				d.l.Debug("DNS query", "type", "TXT", "name", q.Name)
 			}
-			ip := d.QueryCert(q.Name)
-			if ip != "" {
-				rr, err := dns.NewRR(fmt.Sprintf("%s TXT %s", q.Name, ip))
-				if err == nil {
-					m.Answer = append(m.Answer, rr)
-				}
+			crt := d.QueryCert(q.Name)
+			if crt != "" {
+				m.Answer = append(m.Answer, &dns.TXT{
+					// The ttl dns.NewRR gives the A and AAAA answers
+					Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 3600},
+					Txt: txtStrings(crt),
+				})
 			}
 		}
 	}
@@ -424,6 +425,18 @@ func (d *dnsServer) parseQuery(m *dns.Msg, w dns.ResponseWriter) {
 	if len(m.Answer) == 0 && !anyNameExists {
 		m.Rcode = dns.RcodeNameError
 	}
+}
+
+// txtStrings splits s into the 255 byte character-strings a TXT record is made of. miekg/dns reads a backslash in
+// Txt as an escape, so each one is doubled to arrive as itself.
+func txtStrings(s string) []string {
+	var out []string
+	for len(s) > 0 {
+		n := min(len(s), 255)
+		out = append(out, strings.ReplaceAll(s[:n], `\`, `\\`))
+		s = s[n:]
+	}
+	return out
 }
 
 func (d *dnsServer) handleDnsRequest(w dns.ResponseWriter, r *dns.Msg) {

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -441,6 +442,34 @@ func TestDnsServer_QueryCert_answersOutsideOurNetworks(t *testing.T) {
 	far := netip.MustParseAddr("9.9.9.9")
 	assert.NotEmpty(t, ds.QueryCert(far.String()+"."), "the TXT lookup is not limited to our networks")
 	assert.False(t, identity(t, f, far.String()).OK, "identity is")
+}
+
+// TestDnsServer_parseQuery_txtIsTheCertJSON: a client joining the TXT record's strings
+// gets the certificate JSON back byte for byte. The name carries a quote and a backslash,
+// which come out of JSON as \" and \\ and must survive the wire as-is.
+func TestDnsServer_parseQuery_txtIsTheCertJSON(t *testing.T) {
+	ds, _ := newTestDnsServer(t)
+	me := netip.MustParseAddr("10.0.0.1")
+	ds.pki = newTestPKI(t, `light"house\`, []netip.Addr{me})
+	want := ds.QueryCert(me.String() + ".")
+	require.Greater(t, len(want), 255, "the cert JSON should need more than one character-string")
+
+	m := &dns.Msg{}
+	m.SetQuestion(me.String()+".", dns.TypeTXT)
+	ds.parseQuery(m, stubDNSWriter{})
+	wire, err := m.Pack()
+	require.NoError(t, err)
+
+	got := &dns.Msg{}
+	require.NoError(t, got.Unpack(wire))
+	require.Len(t, got.Answer, 1)
+	var raw strings.Builder
+	for _, s := range got.Answer[0].(*dns.TXT).Txt {
+		// Unpacking escapes " and \ for presentation; undo it to compare the bytes sent
+		raw.WriteString(strings.NewReplacer(`\"`, `"`, `\\`, `\`).Replace(s))
+	}
+	assert.JSONEq(t, want, raw.String())
+	assert.Equal(t, want, raw.String())
 }
 
 func TestDnsServer_reload_disable_stopsRunningServer(t *testing.T) {
