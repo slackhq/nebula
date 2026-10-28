@@ -52,14 +52,13 @@ type ringBuffer struct {
 }
 
 type RIOConn struct {
-	isOpen    atomic.Bool
-	isV4      bool
-	dualStack bool
-	l         *slog.Logger
-	sock      windows.Handle
-	rx, tx    ringBuffer
-	rq        winrio.Rq
-	results   [packetsPerRing]winrio.Result
+	families
+	isOpen  atomic.Bool
+	l       *slog.Logger
+	sock    windows.Handle
+	rx, tx  ringBuffer
+	rq      winrio.Rq
+	results [packetsPerRing]winrio.Result
 }
 
 func NewRIOListener(l *slog.Logger, addr netip.Addr, port int) (*RIOConn, error) {
@@ -67,8 +66,7 @@ func NewRIOListener(l *slog.Logger, addr netip.Addr, port int) (*RIOConn, error)
 		return nil, errors.New("could not initialize winrio")
 	}
 
-	// An IPv4 addr is bound as IPv4-mapped, which leaves the dual stack socket only able to reach IPv4
-	u := &RIOConn{l: l, isV4: addr.Unmap().Is4()}
+	u := &RIOConn{l: l}
 
 	err := u.bind(l, &windows.SockaddrInet6{Addr: addr.As16(), Port: port})
 	if err != nil {
@@ -76,13 +74,10 @@ func NewRIOListener(l *slog.Logger, addr netip.Addr, port int) (*RIOConn, error)
 		return nil, fmt.Errorf("bind: %w", err)
 	}
 
-	if !u.isV4 {
-		v6only, err := windows.GetsockoptInt(u.sock, windows.IPPROTO_IPV6, windows.IPV6_V6ONLY)
-		if err != nil {
-			u.close()
-			return nil, fmt.Errorf("read IPV6_V6ONLY: %w", err)
-		}
-		u.dualStack = isDualStack(addr, v6only != 0)
+	// An IPv4 addr is bound as IPv4-mapped, which leaves the dual stack socket only able to reach IPv4
+	if u.families, err = socketFamilies(addr.Unmap(), uintptr(u.sock)); err != nil {
+		u.close()
+		return nil, err
 	}
 
 	for i := 0; i < packetsPerRing; i++ {
@@ -342,14 +337,6 @@ func (u *RIOConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error)
 		}
 	}
 	return written, nil
-}
-
-func (u *RIOConn) CanSendIPv4() bool {
-	return u.isV4 || u.dualStack
-}
-
-func (u *RIOConn) CanSendIPv6() bool {
-	return !u.isV4
 }
 
 func (u *RIOConn) LocalAddr() (netip.AddrPort, error) {

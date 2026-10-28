@@ -86,8 +86,33 @@ func (NoopConn) Close() error {
 	return nil
 }
 
-// isDualStack reports whether an IPv6 socket bound to local, with IPV6_V6ONLY set to v6only, can send to IPv4 remotes
-// too. Only the IPv6 wildcard with IPV6_V6ONLY cleared can, a socket bound to a specific IPv6 address never does.
-func isDualStack(local netip.Addr, v6only bool) bool {
-	return !v6only && local.IsUnspecified()
+// families records which address families a socket can send to, conns embed it for CanSendIPv4 and CanSendIPv6
+type families struct {
+	v4, v6 bool
+}
+
+func (f families) CanSendIPv4() bool {
+	return f.v4
+}
+
+func (f families) CanSendIPv6() bool {
+	return f.v6
+}
+
+// socketFamilies returns the families the socket fd, bound to local, can send to. An IPv6 socket reaches IPv4 too only
+// when it is bound to the wildcard with IPV6_V6ONLY cleared, which is read from the socket rather than assumed, a socket
+// bound to a specific IPv6 address never does.
+func socketFamilies(local netip.Addr, fd uintptr) (families, error) {
+	if local.Is4() {
+		return families{v4: true}, nil
+	}
+	if !local.IsUnspecified() {
+		return families{v6: true}, nil
+	}
+
+	v6only, err := getV6Only(fd)
+	if err != nil {
+		return families{}, err
+	}
+	return families{v4: !v6only, v6: true}, nil
 }

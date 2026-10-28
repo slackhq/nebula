@@ -79,7 +79,7 @@ func newRelayBatchPath(t *testing.T, cipher noise.CipherFunc) *relayBatchPath {
 	conn := &relayBatchConn{}
 	f := &Interface{
 		ctx: t.Context(), l: l, hostMap: newHostMap(l), outside: conn,
-		writers: []udp.Conn{conn}, lightHouse: &LightHouse{l: l},
+		writers: []udp.Conn{conn}, lightHouse: newTestLighthouse(),
 		myVpnNetworksTable: &bart.Lite{}, metricTxDropped: metrics.NewCounter(),
 		batchers: []*batch.MultiCoalescer{batch.NewMultiCoalescer(&capturingTun{}, l)},
 	}

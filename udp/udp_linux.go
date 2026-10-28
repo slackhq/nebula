@@ -19,12 +19,12 @@ import (
 )
 
 type StdConn struct {
-	sysFd     int
-	closed    atomic.Bool
-	isV4      bool
-	dualStack bool
-	l         *slog.Logger
-	batch     int
+	families
+	sysFd  int
+	closed atomic.Bool
+	isV4   bool
+	l      *slog.Logger
+	batch  int
 
 	// bw owns the sendmmsg/UDP-GSO transmit path: the per-queue write
 	// scratch and the GSO capability state probed at socket creation. See
@@ -73,14 +73,10 @@ func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 	}
 
 	out := &StdConn{sysFd: fd, isV4: s.Listen.Addr().Is4(), l: l, batch: s.Batch}
-	if !out.isV4 {
-		// IPV6_V6ONLY comes from the net.ipv6.bindv6only sysctl, read what the socket ended up with
-		v6only, err := unix.GetsockoptInt(fd, unix.IPPROTO_IPV6, unix.IPV6_V6ONLY)
-		if err != nil {
-			_ = unix.Close(fd)
-			return nil, fmt.Errorf("unable to read IPV6_V6ONLY: %w", err)
-		}
-		out.dualStack = isDualStack(s.Listen.Addr(), v6only != 0)
+	// IPV6_V6ONLY comes from the net.ipv6.bindv6only sysctl, socketFamilies reads what the socket ended up with
+	if out.families, err = socketFamilies(s.Listen.Addr(), uintptr(fd)); err != nil {
+		_ = unix.Close(fd)
+		return nil, err
 	}
 
 	out.bw = newBatchWriter(fd, out.isV4, l, s.Offloads)
@@ -178,14 +174,6 @@ func (u *StdConn) GetSendBuffer() (int, error) {
 
 func (u *StdConn) GetSoMark() (int, error) {
 	return unix.GetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_MARK)
-}
-
-func (u *StdConn) CanSendIPv4() bool {
-	return u.isV4 || u.dualStack
-}
-
-func (u *StdConn) CanSendIPv6() bool {
-	return !u.isV4
 }
 
 func (u *StdConn) LocalAddr() (netip.AddrPort, error) {

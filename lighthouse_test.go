@@ -773,7 +773,8 @@ func TestLighthouse_DeletesWork(t *testing.T) {
 
 func TestLightHouse_logLocalAddrsErr(t *testing.T) {
 	out := &bytes.Buffer{}
-	lh := &LightHouse{l: test.NewLoggerWithOutput(out)}
+	lh := newTestLighthouse()
+	lh.l = test.NewLoggerWithOutput(out)
 
 	// The first sighting of a failure warns.
 	lh.logLocalAddrsErr(errors.New("permission denied"))

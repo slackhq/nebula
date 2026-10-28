@@ -22,9 +22,8 @@ import (
 
 type GenericConn struct {
 	*net.UDPConn
-	l         *slog.Logger
-	isV4      bool
-	dualStack bool
+	families
+	l *slog.Logger
 }
 
 var _ Conn = &GenericConn{}
@@ -38,25 +37,21 @@ func NewGenericListener(l *slog.Logger, s Settings) (Conn, error) {
 	if uc, ok := pc.(*net.UDPConn); ok {
 		c := &GenericConn{UDPConn: uc, l: l}
 		// Go picks the socket's family from the listen address and the platform, an IPv4 local address means it
-		// opened an IPv4 socket
+		// opened an IPv4 socket. On the IPv6 wildcard OpenBSD always sets IPV6_V6ONLY, the others follow Go clearing it.
 		la, err := c.LocalAddr()
 		if err != nil {
 			return nil, err
 		}
-		c.isV4 = la.Addr().Is4()
-		if !c.isV4 {
-			// OpenBSD always sets IPV6_V6ONLY, the others follow Go clearing it on the wildcard
-			rc, err := uc.SyscallConn()
-			if err != nil {
-				_ = uc.Close()
-				return nil, err
-			}
-			v6only, err := getV6Only(rc)
-			if err != nil {
-				_ = uc.Close()
-				return nil, fmt.Errorf("failed to read IPV6_V6ONLY: %w", err)
-			}
-			c.dualStack = isDualStack(la.Addr(), v6only)
+		rc, err := uc.SyscallConn()
+		if err != nil {
+			_ = uc.Close()
+			return nil, err
+		}
+		var famErr error
+		err = rc.Control(func(fd uintptr) { c.families, famErr = socketFamilies(la.Addr(), fd) })
+		if err = errors.Join(err, famErr); err != nil {
+			_ = uc.Close()
+			return nil, err
 		}
 		return c, nil
 	}
@@ -79,14 +74,6 @@ func (u *GenericConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, er
 		}
 	}
 	return written, nil
-}
-
-func (u *GenericConn) CanSendIPv4() bool {
-	return u.isV4 || u.dualStack
-}
-
-func (u *GenericConn) CanSendIPv6() bool {
-	return !u.isV4
 }
 
 func (u *GenericConn) LocalAddr() (netip.AddrPort, error) {
