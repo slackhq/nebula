@@ -216,7 +216,7 @@ func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hh *Handshak
 			fallthrough
 		default:
 			hl.Error("Relay unexpected state",
-				"vpnIp", vpnIp,
+				"vpnAddr", vpnIp,
 				"state", existingRelay.State,
 				"relay", relay,
 			)

@@ -298,7 +298,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 				l.Info("tun.pin_threads_key is port number")
 				key = uint64(ap.Port())
 			} else {
-				l.Warn("Failed to get a port number for tun.pin_threads_key, falling back to PID", "err", err)
+				l.Warn("Failed to get a port number for tun.pin_threads_key, falling back to PID", "error", err)
 			}
 		default:
 			l.Warn("tun.pin_threads_key is invalid, using PID")
@@ -458,7 +458,7 @@ func parseCpuAffinity(c *config.C, l *slog.Logger, routines int) []int {
 	}
 	if len(cpus) != routines {
 		l.Warn("tun.cpu_affinity length doesn't match routines; queues will modulo-cycle through the list",
-			"affinity_len", len(cpus), "routines", routines)
+			"affinityLen", len(cpus), "routines", routines)
 	}
 	return cpus
 }
