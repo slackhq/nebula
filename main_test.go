@@ -241,7 +241,7 @@ func TestListenWithIPv4Fallback(t *testing.T) {
 
 			s := udp.Settings{Listen: netip.MustParseAddrPort(tc.listen)}
 			_, err := listenWithIPv4Fallback(l, &s, newListener)
-			assert.ErrorIs(t, err, tc.err)
+			require.ErrorIs(t, err, tc.err)
 			assert.Equal(t, tc.tried, tried)
 			assert.Equal(t, tc.want, s.Listen.String())
 		})
