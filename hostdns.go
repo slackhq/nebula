@@ -410,7 +410,7 @@ func (s *hostDNS) applyLocked(desired dnsconfig.Config) error {
 	}
 	s.l.Info("host DNS config requested",
 		"identity", s.mgrOpts.Identity, "resolvers", desired.Nameservers,
-		"match_domains", desired.MatchDomains, "search_domains", desired.SearchDomains)
+		"matchDomains", desired.MatchDomains, "searchDomains", desired.SearchDomains)
 	return nil
 }
 
