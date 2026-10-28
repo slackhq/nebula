@@ -5,7 +5,7 @@ go 1.27.2
 require (
 	dario.cat/mergo v1.0.2
 	filippo.io/bigmod v0.1.0
-	github.com/DefinedNet/dnsconfig v0.0.0-20261021162245-50d3bf44c4f2
+	github.com/DefinedNet/dnsconfig v0.0.0-20261028144832-7c71c543670c
 	github.com/DefinedNet/netlink v1.3.2-dn.1
 	github.com/Microsoft/go-winio v0.6.4
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
