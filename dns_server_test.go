@@ -403,6 +403,32 @@ func TestDnsServer_QueryCert_returnsOwnCert(t *testing.T) {
 	assert.Empty(t, ds.QueryCert(other.String()+"."), "unknown peer IP should return nothing")
 }
 
+// TestDnsServer_isSelfNebulaOrLocalhost: TXT queries are answered for any host inside our vpn networks, not only us
+func TestDnsServer_isSelfNebulaOrLocalhost(t *testing.T) {
+	ds, _ := newTestDnsServer(t)
+	networks := new(bart.Lite)
+	networks.Insert(netip.MustParsePrefix("10.0.0.0/24"))
+	networks.Insert(netip.MustParsePrefix("fd00::/64"))
+	addrs := new(bart.Lite)
+	addrs.Insert(netip.MustParsePrefix("10.0.0.1/32"))
+	ds.pki = &PKI{}
+	ds.pki.cs.Store(&CertState{myVpnNetworksTable: networks, myVpnAddrsTable: addrs})
+
+	for addr, want := range map[string]bool{
+		"10.0.0.1:53":  true,
+		"10.0.0.99:53": true,
+		"[fd00::5]:53": true,
+		"127.0.0.1:53": true,
+		"[::1]:53":     true,
+		"10.0.1.1:53":  false,
+		"192.0.2.1:53": false,
+		"[fd01::1]:53": false,
+		"not-an-addr":  false,
+	} {
+		assert.Equal(t, want, ds.isSelfNebulaOrLocalhost(addr), addr)
+	}
+}
+
 // TestDnsServer_QueryCert_answersWithTheInitiatingCertificate: with both versions loaded
 // the TXT record carries the certificate handshakes start with, as it always has, where
 // identity and print-cert report the v2.

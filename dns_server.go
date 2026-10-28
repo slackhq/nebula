@@ -372,11 +372,10 @@ func (d *dnsServer) isSelfNebulaOrLocalhost(addr string) bool {
 	}
 
 	cs := d.certState()
-	if cs == nil || cs.myVpnAddrsTable == nil {
+	if cs == nil || cs.myVpnNetworksTable == nil {
 		return false
 	}
-	//if we found it in this table, it's good
-	return cs.myVpnAddrsTable.Contains(b)
+	return cs.myVpnNetworksTable.Contains(b)
 }
 
 func (d *dnsServer) parseQuery(m *dns.Msg, w dns.ResponseWriter) {
