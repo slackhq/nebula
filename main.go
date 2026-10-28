@@ -61,6 +61,35 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		l.Info(string(b))
 	}
 
+	// Host DNS recovery is the one thing that touches the system this early: a previous run that crashed
+	// may have left the resolver pointed at stale DNS configuration, and we want to clean that up in case
+	// we're stuck in some kind of crash loop.
+	//
+	// A stanza that does not load is fatal, but recovery runs first: the broken stanza may be the
+	// reason we are crash looping, and nothing else is going to put the host's resolver back.
+	var hd *hostDNS
+	var hdErr error
+	if configTest {
+		// Avoid actually building a manager when we're just validating the config. Doing so might
+		// cause dnsconfig to log an error on unsupported hosts.
+		_, hdErr = loadHostDNSConfig(c, c.GetBool("tun.disabled", false))
+	} else {
+		// Set up a hostDNS whether it's configured or not, so we can remove stale
+		// host config in the event of a restart after an unclean shutdown.
+		hd, hdErr = newHostDNSFromConfig(l, c)
+		defer func() {
+			if retcon == nil {
+				hd.Restore()
+			}
+		}()
+		// Start recovery before everything is up, to give us the best chance of recovering
+		// in a persistent failure case.
+		hd.Recover()
+	}
+	if hdErr != nil {
+		return nil, util.ContextualizeIfNeeded("Failed to configure host DNS", hdErr)
+	}
+
 	pki, err := NewPKIFromConfig(l, c)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to load PKI from config", err)
@@ -365,6 +394,8 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		lighthouseStart:        lightHouse.StartUpdateWorker,
 		networkChangeStart:     networkChanges.Start,
 		connectionManagerStart: connManager.Start,
+		hostDNSStart:           hd.Start,
+		hostDNSRestore:         hd.Restore,
 	}, nil
 }
 

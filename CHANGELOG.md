@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for running `nebula ctl <command>` as a client from the CLI.
 - An info socket that serves the `identity` command over HTTP: `GET /v1/identity` for this node,
   `GET /v1/identity/<vpn addr>` for the host owning an address, and `/pem` under either for the certificate.
+- A top-level `dns` stanza allowing nebula to update the host's DNS resolver. See `examples/config.yml`
+  for more information.
 
 ### Changed
 

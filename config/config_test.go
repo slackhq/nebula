@@ -64,6 +64,24 @@ func TestConfig_GetStringSlice(t *testing.T) {
 	assert.Equal(t, []string{"one", "two"}, c.GetStringSlice("slice", []string{}))
 }
 
+func TestConfig_GetStringSliceStrict(t *testing.T) {
+	l := test.NewLogger()
+	c := NewC(l)
+	c.Settings["slice"] = []any{"one", 2}
+	c.Settings["scalar"] = "one"
+
+	v, err := c.GetStringSliceStrict("slice")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"one", "2"}, v)
+
+	v, err = c.GetStringSliceStrict("nope")
+	require.NoError(t, err)
+	assert.Nil(t, v)
+
+	_, err = c.GetStringSliceStrict("scalar")
+	require.EqualError(t, err, "scalar must be a list, but wasn't: one")
+}
+
 func TestConfig_GetBool(t *testing.T) {
 	l := test.NewLogger()
 	c := NewC(l)
