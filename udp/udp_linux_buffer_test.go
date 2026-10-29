@@ -189,3 +189,27 @@ func TestSendOnlyReloadLogLevel(t *testing.T) {
 		})
 	}
 }
+
+// TestSendOnlyGSOLogLevel checks a send only socket logs its GSO probe at debug, the main listener reports it
+func TestSendOnlyGSOLogLevel(t *testing.T) {
+	for _, sendOnly := range []bool{false, true} {
+		t.Run(strconv.FormatBool(sendOnly), func(t *testing.T) {
+			var buf bytes.Buffer
+			l := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			c, err := NewListener(l, Settings{Listen: netip.MustParseAddrPort("127.0.0.1:0"), Batch: 1, Offloads: true, SendOnly: sendOnly})
+			if err != nil {
+				t.Skipf("NewListener: %v", err)
+			}
+			defer c.Close()
+
+			out := buf.String()
+			if !strings.Contains(out, "msg=\"udp: GSO") {
+				t.Fatalf("no GSO probe log in:\n%s", out)
+			}
+			quiet := !strings.Contains(out, "level=INFO") && !strings.Contains(out, "level=WARN")
+			if quiet != sendOnly {
+				t.Errorf("sendOnly=%v but probe logs were:\n%s", sendOnly, out)
+			}
+		})
+	}
+}

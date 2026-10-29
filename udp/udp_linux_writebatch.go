@@ -79,10 +79,17 @@ type batchWriter struct {
 	// plainUntil is the bufs index below which planRun packs one packet per entry,
 	// set to replay a GSO run the route refused as plain datagrams.
 	plainUntil int
+
+	// probeLogLevel is the level prepareGSO logs its outcome at, debug for a send only socket, one of many opened
+	// alongside a main listener that already logs the same outcome
+	probeLogLevel slog.Level
 }
 
-func newBatchWriter(fd int, isV4 bool, l *slog.Logger, offloadsEnabled bool) *batchWriter {
-	w := &batchWriter{fd: fd, isV4: isV4, l: l}
+func newBatchWriter(fd int, isV4 bool, l *slog.Logger, offloadsEnabled, sendOnly bool) *batchWriter {
+	w := &batchWriter{fd: fd, isV4: isV4, l: l, probeLogLevel: slog.LevelInfo}
+	if sendOnly {
+		w.probeLogLevel = slog.LevelDebug
+	}
 	w.sendFn = w.sendmmsg
 	if offloadsEnabled {
 		w.prepareGSO()
@@ -138,20 +145,24 @@ func (w *batchWriter) prepareGSO() {
 	w.maxGSOSegments = 63 // pre-6.9 cap; see gsoMaxSegments
 
 	if err := unix.SetsockoptInt(w.fd, unix.IPPROTO_UDP, unix.UDP_SEGMENT, 0); err != nil {
-		w.l.Info("udp: GSO disabled", "reason", "rawconn control failed", "error", err)
+		w.l.Log(context.Background(), w.probeLogLevel, "udp: GSO disabled", "reason", "rawconn control failed", "error", err)
 		recordCapability("udp.gso.enabled", false)
 		return
 	}
 
 	var un unix.Utsname
 	if err := unix.Uname(&un); err != nil {
-		w.l.Warn("udp: kernel version probe failed, capping GSO at 63 segments", "error", err)
+		level := slog.LevelWarn
+		if w.probeLogLevel == slog.LevelDebug {
+			level = slog.LevelDebug
+		}
+		w.l.Log(context.Background(), level, "udp: kernel version probe failed, capping GSO at 63 segments", "error", err)
 	} else {
 		w.maxGSOSegments = gsoMaxSegments(string(un.Release[:]))
 	}
 
 	w.gsoSupported = true
-	w.l.Info("udp: GSO enabled", "maxGSOSegments", w.maxGSOSegments)
+	w.l.Log(context.Background(), w.probeLogLevel, "udp: GSO enabled", "maxGSOSegments", w.maxGSOSegments)
 	recordCapability("udp.gso.enabled", true)
 }
 

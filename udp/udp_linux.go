@@ -84,7 +84,7 @@ func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 
 	out := &StdConn{sysFd: fd, isV4: s.Listen.Addr().Is4(), l: l, batch: s.Batch, sendOnly: s.SendOnly}
 
-	out.bw = newBatchWriter(fd, out.isV4, l, s.Offloads)
+	out.bw = newBatchWriter(fd, out.isV4, l, s.Offloads, s.SendOnly)
 
 	// GRO coalesces same-flow datagrams into superpackets that must be split back apart via the delivered gso_size cmsg
 	// batch == 1 means the caller wants plain single-datagram reads with MTU-sized buffers, so leave it off.
