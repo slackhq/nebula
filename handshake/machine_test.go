@@ -681,3 +681,28 @@ func TestMachineVersionNegotiation(t *testing.T) {
 			"responder should keep V1 when V2 not available")
 	})
 }
+
+func TestResultSetMultiport(t *testing.T) {
+	tests := []struct {
+		name     string
+		d        *PayloadMultiPortDetails
+		wantRx   bool
+		wantTx   bool
+		wantPort uint16
+	}{
+		{"nil", nil, false, false, 0},
+		{"rx only", &PayloadMultiPortDetails{RxSupported: true, BasePort: 4242}, true, false, 0},
+		{"tx", &PayloadMultiPortDetails{TxSupported: true, BasePort: 4242}, false, true, 4242},
+		{"tx port 0", &PayloadMultiPortDetails{RxSupported: true, TxSupported: true}, true, false, 0},
+		{"tx port too big", &PayloadMultiPortDetails{TxSupported: true, BasePort: 70000}, false, false, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var r Result
+			r.setMultiport(tt.d)
+			assert.Equal(t, tt.wantRx, r.MultiportRx)
+			assert.Equal(t, tt.wantTx, r.MultiportTx)
+			assert.Equal(t, tt.wantPort, r.MultiportBasePort)
+		})
+	}
+}

@@ -326,22 +326,10 @@ func (m *Machine) processPayload(msg []byte, flags msgFlags) error {
 		var remoteIndex uint32
 		if m.result.Initiator {
 			remoteIndex = payload.ResponderIndex
-			if payload.ResponderMultiPort != nil {
-				m.result.MultiportRx = payload.ResponderMultiPort.RxSupported
-				m.result.MultiportTx = payload.ResponderMultiPort.TxSupported
-				if payload.ResponderMultiPort.BasePort <= math.MaxUint16 {
-					m.result.MultiportBasePort = uint16(payload.ResponderMultiPort.BasePort)
-				}
-			}
+			m.result.setMultiport(payload.ResponderMultiPort)
 		} else {
 			remoteIndex = payload.InitiatorIndex
-			if payload.InitiatorMultiPort != nil {
-				m.result.MultiportRx = payload.InitiatorMultiPort.RxSupported
-				m.result.MultiportTx = payload.InitiatorMultiPort.TxSupported
-				if payload.InitiatorMultiPort.BasePort <= math.MaxUint16 {
-					m.result.MultiportBasePort = uint16(payload.InitiatorMultiPort.BasePort)
-				}
-			}
+			m.result.setMultiport(payload.InitiatorMultiPort)
 		}
 		// The payload presence check above can be satisfied by Time alone, so a payload
 		// could still carry a zero index here. We need to reject it.
@@ -493,4 +481,17 @@ func (m *Machine) buildResponse(out []byte) ([]byte, *noise.CipherState, *noise.
 	}
 
 	return out, dKey, eKey, nil
+}
+
+// setMultiport records the peer's multiport details. A peer claiming tx with a base port we can't send to is treated
+// as not supporting tx, otherwise we would send to port 0 or a truncated port.
+func (r *Result) setMultiport(d *PayloadMultiPortDetails) {
+	if d == nil {
+		return
+	}
+	r.MultiportRx = d.RxSupported
+	if d.TxSupported && d.BasePort > 0 && d.BasePort <= math.MaxUint16 {
+		r.MultiportTx = true
+		r.MultiportBasePort = uint16(d.BasePort)
+	}
 }
