@@ -3,6 +3,7 @@
 package udp
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -445,13 +446,13 @@ func (u *StdConn) ReloadConfig(c *config.C, r *config.Reload) {
 	if b > 0 {
 		if err := u.SetSendBuffer(b); err == nil {
 			if s, err := u.GetSendBuffer(); err == nil && s >= 2*b {
-				u.l.Info("listen.write_buffer was set", "size", s)
+				u.l.Log(context.Background(), u.reloadLogLevel(slog.LevelInfo), "listen.write_buffer was set", "size", s)
 			} else if err == nil {
-				u.l.Warn("listen.write_buffer was limited by the system",
+				u.l.Log(context.Background(), u.reloadLogLevel(slog.LevelWarn), "listen.write_buffer was limited by the system",
 					"requested", b, "size", s,
 					"hint", "raise net.core.wmem_max or grant CAP_NET_ADMIN")
 			} else {
-				u.l.Warn("Failed to get listen.write_buffer", "error", err)
+				u.l.Log(context.Background(), u.reloadLogLevel(slog.LevelWarn), "Failed to get listen.write_buffer", "error", err)
 			}
 		} else {
 			u.l.Error("Failed to set listen.write_buffer", "error", err)
@@ -464,15 +465,24 @@ func (u *StdConn) ReloadConfig(c *config.C, r *config.Reload) {
 	if b > 0 || (err == nil && s != 0) {
 		if err := u.SetSoMark(b); err == nil {
 			if s, err := u.GetSoMark(); err == nil {
-				u.l.Info("listen.so_mark was set", "mark", s)
+				u.l.Log(context.Background(), u.reloadLogLevel(slog.LevelInfo), "listen.so_mark was set", "mark", s)
 			} else {
-				u.l.Warn("Failed to get listen.so_mark", "error", err)
+				u.l.Log(context.Background(), u.reloadLogLevel(slog.LevelWarn), "Failed to get listen.so_mark", "error", err)
 			}
 		} else {
 			u.l.Error("Failed to set listen.so_mark", "error", err)
 			r.Failed()
 		}
 	}
+}
+
+// reloadLogLevel is the level for ReloadConfig's non-error logs. A send only socket is one of many opened alongside a
+// main listener that already logs the same outcome, so it only logs at debug.
+func (u *StdConn) reloadLogLevel(level slog.Level) slog.Level {
+	if u.sendOnly {
+		return slog.LevelDebug
+	}
+	return level
 }
 
 func (u *StdConn) getMemInfo(meminfo *[unix.SK_MEMINFO_VARS]uint32) error {

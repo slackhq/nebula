@@ -154,3 +154,38 @@ func TestSendOnlyRecvBuffer(t *testing.T) {
 		t.Errorf("send buffer after reload = %d, %v, want at least %d", got, err, 1<<20)
 	}
 }
+
+// TestSendOnlyReloadLogLevel checks a send only socket logs its reload outcomes at debug, there can be thousands
+func TestSendOnlyReloadLogLevel(t *testing.T) {
+	sysMax := readSysctlInt(t, "/proc/sys/net/core/wmem_max")
+	for _, size := range []int{64 * 1024, sysMax + 1<<20} {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			var buf bytes.Buffer
+			l := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			c, err := NewListener(l, Settings{Listen: netip.MustParseAddrPort("127.0.0.1:0"), Batch: 1, SendOnly: true})
+			if err != nil {
+				t.Skipf("NewListener: %v", err)
+			}
+			defer c.Close()
+
+			cfg := config.NewC(l)
+			if err := cfg.LoadString(fmt.Sprintf("listen:\n  read_buffer: %d\n  write_buffer: %d\n", size, size)); err != nil {
+				t.Fatal(err)
+			}
+			buf.Reset()
+			c.ReloadConfig(cfg, nil)
+			out := buf.String()
+			if !strings.Contains(out, "level=DEBUG msg=\"listen.write_buffer was") {
+				t.Errorf("missing debug write_buffer log in:\n%s", out)
+			}
+			if strings.Contains(out, "read_buffer") {
+				t.Errorf("send only socket logged read_buffer:\n%s", out)
+			}
+			for _, level := range []string{"level=INFO", "level=WARN", "level=ERROR"} {
+				if strings.Contains(out, level) {
+					t.Errorf("unexpected %s log:\n%s", level, out)
+				}
+			}
+		})
+	}
+}
