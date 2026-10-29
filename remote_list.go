@@ -508,6 +508,13 @@ func (r *RemoteList) CopyBlockedRemotes() []netip.AddrPort {
 	return c
 }
 
+// CopyRelays locks and makes a copy of the deduplicated relay list
+func (r *RemoteList) CopyRelays() []netip.Addr {
+	r.RLock()
+	defer r.RUnlock()
+	return slices.Clone(r.relays)
+}
+
 // RefreshFromHandshake locks and updates the RemoteList to account for data learned upon a completed handshake
 func (r *RemoteList) RefreshFromHandshake(vpnAddrs []netip.Addr) {
 	r.Lock()
