@@ -344,22 +344,29 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		ifce.writers = udpConns
 		lightHouse.ifce = ifce
 
+		multiPort := &multiPortSettings{}
+		ifce.multiPort = multiPort
+		handshakeManager.multiPort = multiPort
+
 		loadMultiPortConfig := func(c *config.C, r *config.Reload) {
-			ifce.multiPort.Rx = c.GetBool("tun.multiport.rx_enabled", false)
+			// Build the whole config before storing it, readers load it without locking
+			mpc := config.MultiPortConfig{
+				Rx: c.GetBool("tun.multiport.rx_enabled", false),
+			}
 
 			tx := c.GetBool("tun.multiport.tx_enabled", false)
-
 			txPorts := c.GetInt("tun.multiport.tx_ports", 100)
 
 			// The send sockets are opened once and never replaced, since the send path uses them without locking
 			mp := ifce.udpMulti.Load()
 			if tx && mp == nil {
-				mp, err = udp.NewMultiPortConn(l, udp.Settings{
+				var mpErr error
+				mp, mpErr = udp.NewMultiPortConn(l, udp.Settings{
 					Listen:   netip.AddrPortFrom(listenHost, uint16(port)),
 					Offloads: c.GetBool("listen.udp_offloads", false),
 				}, txPorts)
-				if err != nil {
-					l.Error("Failed to open udp sockets for tun.multiport.tx_enabled", "error", err)
+				if mpErr != nil {
+					l.Error("Failed to open udp sockets for tun.multiport.tx_enabled", "error", mpErr)
 					mp = nil
 					tx = false
 				} else {
@@ -370,18 +377,16 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 			}
 
 			if tx {
-				ifce.multiPort.TxBasePort = uint16(port)
-				ifce.multiPort.TxPorts = mp.Ports()
-				ifce.multiPort.TxHandshake = c.GetBool("tun.multiport.tx_handshake", false)
-				ifce.multiPort.TxHandshakeDelay = int64(c.GetInt("tun.multiport.tx_handshake_delay", 2))
+				mpc.Tx = true
+				mpc.TxBasePort = uint16(port)
+				mpc.TxPorts = mp.Ports()
+				mpc.TxHandshake = c.GetBool("tun.multiport.tx_handshake", false)
+				mpc.TxHandshakeDelay = int64(c.GetInt("tun.multiport.tx_handshake_delay", 2))
 				mp.ReloadConfig(c, r)
 			}
-			ifce.multiPort.Tx = tx
+			multiPort.Store(mpc)
 
-			// TODO: if we upstream this, make this cleaner
-			handshakeManager.multiPort = ifce.multiPort
-
-			l.Info("Multiport configured", "multiPort", ifce.multiPort)
+			l.Info("Multiport configured", "multiPort", mpc)
 		}
 
 		loadMultiPortConfig(c, nil)

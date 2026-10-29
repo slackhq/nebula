@@ -139,7 +139,7 @@ type Interface struct {
 
 	// udpMulti holds the extra send sockets for multiport tx, nil until tun.multiport.tx_enabled is set
 	udpMulti  atomic.Pointer[udp.MultiPortConn]
-	multiPort config.MultiPortConfig
+	multiPort *multiPortSettings
 
 	metricHandshakes    metrics.Histogram
 	messageMetrics      *MessageMetrics
@@ -340,7 +340,7 @@ func (f *Interface) activate() error {
 
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
 
-	metrics.GetOrRegisterGauge("multiport.tx_ports", nil).Update(int64(f.multiPort.TxPorts))
+	metrics.GetOrRegisterGauge("multiport.tx_ports", nil).Update(int64(f.multiPort.Load().TxPorts))
 
 	for i := range f.queues {
 		f.batchers[i] = batch.NewMultiCoalescer(f.queues[i], f.l)

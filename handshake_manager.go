@@ -14,7 +14,6 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
-	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/udp"
@@ -75,7 +74,7 @@ type HandshakeManager struct {
 	f                         *Interface
 	l                         *slog.Logger
 
-	multiPort config.MultiPortConfig
+	multiPort *multiPortSettings
 
 	// can be used to trigger outbound handshake for the given vpnIp
 	trigger chan netip.Addr
@@ -373,6 +372,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 	// Send the handshake to all known ips, stage 2 takes care of assigning the hostinfo.remote based on the first to reply
 	var sentTo []netip.AddrPort
 	var sentMultiport bool
+	multiPort := hm.multiPort.Load()
 	hostinfo.remotes.ForEach(hm.mainHostMap.GetPreferredRanges(), func(addr netip.AddrPort, _ bool) {
 		hm.messageMetrics.Tx(header.Handshake, hh.machine.Subtype(), 1)
 		err := hm.outside.WriteTo(stage0, addr)
@@ -395,7 +395,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		}
 
 		// Attempt a multiport handshake once TxHandshakeDelay attempts went unanswered, counter counts this attempt
-		if !hm.multiPort.Tx || !hm.multiPort.TxHandshake || hh.counter <= hm.multiPort.TxHandshakeDelay {
+		if !multiPort.Tx || !multiPort.TxHandshake || hh.counter <= multiPort.TxHandshakeDelay {
 			return
 		}
 		if multiport := hm.f.udpMulti.Load(); multiport != nil {
@@ -781,7 +781,7 @@ func (hm *HandshakeManager) buildStage0Packet(hh *HandshakeHostInfo) bool {
 		v, cs.GetCredential,
 		hm.certVerifier(), func() (uint32, error) { return hm.allocateIndex(hh) },
 		true, header.HandshakeIXPSK0,
-		hm.multiPort,
+		hm.multiPort.Load(),
 	)
 	if err != nil {
 		hm.f.l.Error("Failed to create handshake machine",
@@ -819,11 +819,13 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		return
 	}
 
+	// One snapshot covers what we advertise in the response and how we treat the peer's answer
+	multiPort := hm.multiPort.Load()
 	machine, err := handshake.NewMachine(
 		v, cs.GetCredential,
 		hm.certVerifier(), func() (uint32, error) { return generateIndex(f.l) },
 		false, header.HandshakeIXPSK0,
-		hm.multiPort,
+		multiPort,
 	)
 	if err != nil {
 		f.l.Error("Failed to create handshake machine", "from", via, "error", err)
@@ -853,7 +855,7 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		return
 	}
 
-	if !via.IsRelayed && hm.multiPort.Rx && result.MultiportTx && result.MultiportBasePort != via.UdpAddr.Port() {
+	if !via.IsRelayed && multiPort.Rx && result.MultiportTx && result.MultiportBasePort != via.UdpAddr.Port() {
 		// The other side sent us a handshake from a different port, make sure
 		// we send responses back to the BasePort. Only when we agreed to multiport rx, otherwise the
 		// source port is the real one, it may have been rewritten by a NAT on the way to us.
@@ -890,8 +892,8 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 			relayForByAddr: map[netip.Addr]*Relay{},
 			relayForByIdx:  map[uint32]*Relay{},
 		},
-		multiportTx: hm.multiPort.Tx && result.MultiportRx,
-		multiportRx: hm.multiPort.Rx && result.MultiportTx,
+		multiportTx: multiPort.Tx && result.MultiportRx,
+		multiportRx: multiPort.Rx && result.MultiportTx,
 	}
 
 	msg := "Handshake message received"
@@ -1003,14 +1005,15 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		return
 	}
 
-	if !via.IsRelayed && hm.multiPort.Rx && result.MultiportTx && result.MultiportBasePort != via.UdpAddr.Port() {
+	multiPort := hm.multiPort.Load()
+	if !via.IsRelayed && multiPort.Rx && result.MultiportTx && result.MultiportBasePort != via.UdpAddr.Port() {
 		// The other side sent us a handshake from a different port, make sure
 		// we send responses back to the BasePort. Only when we agreed to multiport rx, otherwise the
 		// source port is the real one, it may have been rewritten by a NAT on the way to us.
 		via.UdpAddr = netip.AddrPortFrom(via.UdpAddr.Addr(), result.MultiportBasePort)
 	}
-	hostinfo.multiportTx = hm.multiPort.Tx && result.MultiportRx
-	hostinfo.multiportRx = hm.multiPort.Rx && result.MultiportTx
+	hostinfo.multiportTx = multiPort.Tx && result.MultiportRx
+	hostinfo.multiportRx = multiPort.Rx && result.MultiportTx
 
 	// Handshake complete; build the ConnectionState now that we have keys and a verified peer cert.
 	cs, err := newConnectionStateFromResult(result)

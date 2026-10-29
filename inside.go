@@ -226,7 +226,7 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, fwPack
 
 	// Every segment of a superpacket shares one 5-tuple, so they all leave from the same multiport send port
 	var sendPort uint16
-	if f.multiPort.Tx && hostinfo.multiportTx {
+	if hostinfo.multiportTx && f.multiPort.Load().Tx {
 		if mp := f.udpMulti.Load(); mp != nil {
 			sendPort = fwPacket.UDPSendPort(mp.Ports())
 		}
@@ -539,7 +539,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	}
 
 	var multiport *udp.MultiPortConn
-	if f.multiPort.Tx && hostinfo.multiportTx {
+	if hostinfo.multiportTx && f.multiPort.Load().Tx {
 		multiport = f.udpMulti.Load()
 		if udpPortGetter == nil {
 			udpPortGetter = udp.RandomSendPort
