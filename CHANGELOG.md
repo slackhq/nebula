@@ -68,9 +68,10 @@ See the [v1.12.0](https://github.com/slackhq/nebula/milestone/29?closed=1) miles
   default path first. (#1975, #1988)
 - Experimental: a `dns` stanza that points the host's resolver at `dns.nameservers`, either for `dns.match_domains`
   (split DNS) or for every lookup (`match_domains: []`). Off by default, macOS and Windows only, and needs root on macOS
-  or admin on Windows. On macOS and Windows Nebula now removes leftover DNS settings for `dns.identity` (default
-  `nebula`) at every start, even without the stanza, so a host running more than one instance with `dns` enabled needs
-  a distinct identity for each. Settings left by a crash stay until Nebula starts again with the same identity. (#2009)
+  or admin on Windows. With those privileges, Nebula clears any DNS settings left under its `dns.identity` (default
+  `nebula`) when it starts, even without the stanza, so a host running more than one instance with `dns` enabled needs
+  a distinct identity for each. Settings left by a crash stay until Nebula starts again with the same identity.
+  (#2009, #2038)
 
 #### Embedders
 
