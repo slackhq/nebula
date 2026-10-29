@@ -394,8 +394,8 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 			sentTo = append(sentTo, addr)
 		}
 
-		// Attempt a multiport handshake if we are past the TxHandshakeDelay attempts
-		if !hm.multiPort.Tx || !hm.multiPort.TxHandshake || hh.counter < hm.multiPort.TxHandshakeDelay {
+		// Attempt a multiport handshake once TxHandshakeDelay attempts went unanswered, counter counts this attempt
+		if !hm.multiPort.Tx || !hm.multiPort.TxHandshake || hh.counter <= hm.multiPort.TxHandshakeDelay {
 			return
 		}
 		if multiport := hm.f.udpMulti.Load(); multiport != nil {
