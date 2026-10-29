@@ -853,9 +853,10 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		return
 	}
 
-	if !via.IsRelayed && result.MultiportTx && result.MultiportBasePort != via.UdpAddr.Port() {
+	if !via.IsRelayed && hm.multiPort.Rx && result.MultiportTx && result.MultiportBasePort != via.UdpAddr.Port() {
 		// The other side sent us a handshake from a different port, make sure
-		// we send responses back to the BasePort
+		// we send responses back to the BasePort. Only when we agreed to multiport rx, otherwise the
+		// source port is the real one, it may have been rewritten by a NAT on the way to us.
 		via.UdpAddr = netip.AddrPortFrom(via.UdpAddr.Addr(), result.MultiportBasePort)
 	}
 
@@ -1002,9 +1003,10 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		return
 	}
 
-	if !via.IsRelayed && result.MultiportTx && result.MultiportBasePort != via.UdpAddr.Port() {
+	if !via.IsRelayed && hm.multiPort.Rx && result.MultiportTx && result.MultiportBasePort != via.UdpAddr.Port() {
 		// The other side sent us a handshake from a different port, make sure
-		// we send responses back to the BasePort
+		// we send responses back to the BasePort. Only when we agreed to multiport rx, otherwise the
+		// source port is the real one, it may have been rewritten by a NAT on the way to us.
 		via.UdpAddr = netip.AddrPortFrom(via.UdpAddr.Addr(), result.MultiportBasePort)
 	}
 	hostinfo.multiportTx = hm.multiPort.Tx && result.MultiportRx
