@@ -673,3 +673,28 @@ func TestStatsServer_Start_duringStopWaitsForThePass(t *testing.T) {
 	waitFor(t, func() bool { return len(entered) == 1 })
 	assert.Equal(t, int64(1), most.Load(), "a Start captured alongside the pass Stop was waiting out")
 }
+
+// A reload that can't bind says so rather than finding out in the background, and the same config tries again once
+// the port is free
+func TestStatsServer_reload_bindFailureFails(t *testing.T) {
+	blocker, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := strconv.Itoa(blocker.Addr().(*net.TCPAddr).Port)
+
+	s, c := newTestStatsServer(t)
+	stopAtCleanup(t, &s)
+	require.NoError(t, s.reload(c, true))
+
+	setStatsConfig(c, map[string]any{
+		"type":     "prometheus",
+		"interval": "1s",
+		"listen":   "127.0.0.1:" + port,
+		"path":     "/metrics",
+	})
+	require.Error(t, s.reload(c, false))
+	assert.Nil(t, currentRuntime(s))
+
+	require.NoError(t, blocker.Close())
+	require.NoError(t, s.reload(c, false))
+	waitForListening(t, "127.0.0.1:"+port)
+}
