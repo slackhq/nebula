@@ -169,3 +169,27 @@ func TestSendBatchCommitPort(t *testing.T) {
 	}
 	check("base second flush", base, []byte{9, 10})
 }
+
+func TestSendBatchCommitPortAllocs(t *testing.T) {
+	base := noopBatchWriter{}
+	b := NewSendBatch(base, 128, 0)
+	b.SetPortWriter(func(uint16) BatchWriter { return base })
+	ap := netip.MustParseAddrPort("10.0.0.1:4242")
+	pkt := []byte{1}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		for i := range 128 {
+			b.CommitPort(pkt, ap, uint16(i%100))
+		}
+		_, _ = b.Flush()
+	})
+	if allocs != 0 {
+		t.Fatalf("multiport flush allocated %v times per run", allocs)
+	}
+}
+
+type noopBatchWriter struct{}
+
+func (noopBatchWriter) WriteBatch(bufs [][]byte, _ []netip.AddrPort) (int, error) {
+	return len(bufs), nil
+}

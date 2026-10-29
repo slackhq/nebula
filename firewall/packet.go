@@ -88,7 +88,7 @@ func (fp Packet) UDPSendPort(numBuckets int) uint16 {
 	x *= 0xd35a2d97
 	x ^= x >> 15
 
-	return uint16(x) % uint16(numBuckets)
+	return uint16(x % uint32(numBuckets))
 }
 
 // ParsedPacket is a Packet plus the parse byproducts the RX path reuses

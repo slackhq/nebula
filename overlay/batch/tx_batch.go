@@ -1,8 +1,10 @@
 package batch
 
 import (
+	"cmp"
 	"errors"
 	"net/netip"
+	"slices"
 )
 
 const SendBatchCap = 128
@@ -26,7 +28,8 @@ type SendBatch struct {
 	mixed bool
 	// portOut picks the writer for a nonzero send port, see SetPortWriter
 	portOut func(port uint16) BatchWriter
-	// scratch for the per-port runs in flushPorts
+	// scratch for flushPorts: slot indices sorted by port, and the slots laid out in that order
+	order   []int
 	runBufs [][]byte
 	runDsts []netip.AddrPort
 }
@@ -96,32 +99,40 @@ func (b *SendBatch) Flush() (int, error) {
 
 // flushPorts writes one WriteBatch per distinct send port, keeping each port's packets in commit order.
 func (b *SendBatch) flushPorts() (int, error) {
+	// Stable sort the slots by port, then lay them out in that order so each port's run is one contiguous WriteBatch
+	b.order = b.order[:0]
+	for i := range b.bufs {
+		b.order = append(b.order, i)
+	}
+	ports := b.ports
+	slices.SortStableFunc(b.order, func(x, y int) int { return cmp.Compare(ports[x], ports[y]) })
+
+	b.runBufs = b.runBufs[:0]
+	b.runDsts = b.runDsts[:0]
+	for _, i := range b.order {
+		b.runBufs = append(b.runBufs, b.bufs[i])
+		b.runDsts = append(b.runDsts, b.dsts[i])
+	}
+
 	var errs []error
 	written := 0
-	for i := range b.bufs {
-		if b.bufs[i] == nil {
-			continue // already sent with an earlier run
-		}
-		port := b.ports[i]
-		b.runBufs = b.runBufs[:0]
-		b.runDsts = b.runDsts[:0]
-		for j := i; j < len(b.bufs); j++ {
-			if b.bufs[j] != nil && b.ports[j] == port {
-				b.runBufs = append(b.runBufs, b.bufs[j])
-				b.runDsts = append(b.runDsts, b.dsts[j])
-				b.bufs[j] = nil
-			}
+	for start := 0; start < len(b.order); {
+		port := ports[b.order[start]]
+		end := start + 1
+		for end < len(b.order) && ports[b.order[end]] == port {
+			end++
 		}
 
 		out := b.out
 		if port != 0 {
 			out = b.portOut(port)
 		}
-		n, err := out.WriteBatch(b.runBufs, b.runDsts)
+		n, err := out.WriteBatch(b.runBufs[start:end], b.runDsts[start:end])
 		written += n
 		if err != nil {
 			errs = append(errs, err)
 		}
+		start = end
 	}
 	clear(b.runBufs)
 	return written, errors.Join(errs...)
