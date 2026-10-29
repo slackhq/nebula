@@ -149,15 +149,6 @@ type Interface struct {
 	l *slog.Logger
 }
 
-type MultiPortConfig struct {
-	Tx               bool
-	Rx               bool
-	TxBasePort       uint16
-	TxPorts          int
-	TxHandshake      bool
-	TxHandshakeDelay int64
-}
-
 type EncWriter interface {
 	SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, nocopy bool, q int)
 	SendMessageToVpnAddr(t header.MessageType, st header.MessageSubType, vpnAddr netip.Addr, p, nb, out []byte)
