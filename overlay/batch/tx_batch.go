@@ -23,7 +23,8 @@ type SendBatch struct {
 	dsts  []netip.AddrPort
 	arena *Arena
 
-	// ports holds the multiport send port of each slot, mixed is set once any of them is nonzero
+	// ports holds the multiport send port of each slot, only kept once mixed is set by a nonzero port so a batch
+	// without multiport packets pays nothing for it
 	ports []uint16
 	mixed bool
 	// portOut picks the writer for a nonzero send port, see SetPortWriter
@@ -57,7 +58,9 @@ func (b *SendBatch) Len() int { return len(b.bufs) }
 func (b *SendBatch) Commit(pkt []byte, dst netip.AddrPort) {
 	b.bufs = append(b.bufs, pkt)
 	b.dsts = append(b.dsts, dst)
-	b.ports = append(b.ports, 0)
+	if b.mixed {
+		b.ports = append(b.ports, 0)
+	}
 }
 
 // SetPortWriter sets how CommitPort's nonzero send ports map to writers. Port 0 always uses the batch's own writer.
@@ -72,7 +75,13 @@ func (b *SendBatch) CommitPort(pkt []byte, dst netip.AddrPort, port uint16) {
 		b.Commit(pkt, dst)
 		return
 	}
-	b.mixed = true
+	if !b.mixed {
+		// Backfill port 0 for the slots committed before this one
+		// bufs can outgrow the batch cap, Grow only allocates then
+		b.ports = slices.Grow(b.ports[:0], len(b.bufs))[:len(b.bufs)]
+		clear(b.ports)
+		b.mixed = true
+	}
 	b.bufs = append(b.bufs, pkt)
 	b.dsts = append(b.dsts, dst)
 	b.ports = append(b.ports, port)

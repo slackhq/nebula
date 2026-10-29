@@ -193,3 +193,27 @@ type noopBatchWriter struct{}
 func (noopBatchWriter) WriteBatch(bufs [][]byte, _ []netip.AddrPort) (int, error) {
 	return len(bufs), nil
 }
+
+func TestSendBatchCommitPortBackfillPastCap(t *testing.T) {
+	base := &recordingBatchWriter{}
+	other := &recordingBatchWriter{}
+	b := NewSendBatch(base, 2, 0)
+	b.SetPortWriter(func(uint16) BatchWriter { return other })
+
+	ap := netip.MustParseAddrPort("10.0.0.1:4242")
+	// Commit past the batch cap on port 0 before the first nonzero port
+	for i := range 3 {
+		b.Commit([]byte{byte(i)}, ap)
+	}
+	b.CommitPort([]byte{3}, ap, 1)
+	b.Commit([]byte{4}, ap)
+	if n, err := b.Flush(); err != nil || n != 5 {
+		t.Fatalf("Flush: n=%d err=%v", n, err)
+	}
+	if len(base.calls) != 1 || string(base.calls[0]) != string([]byte{0, 1, 2, 4}) {
+		t.Errorf("base got %v", base.calls)
+	}
+	if len(other.calls) != 1 || string(other.calls[0]) != string([]byte{3}) {
+		t.Errorf("port 1 got %v", other.calls)
+	}
+}
