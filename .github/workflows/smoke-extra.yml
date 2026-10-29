@@ -104,6 +104,7 @@ jobs:
         cd .github/workflows/smoke && ./build.sh illumos-amd64
 
     - name: start OmniOS
+      id: vm
       uses: vmactions/omnios-vm@v1
       with:
         release: r151058
@@ -114,6 +115,7 @@ jobs:
       run: .github/workflows/smoke/test-illumos.sh
 
     - name: illumos-amd64
+      if: ${{ !cancelled() && steps.vm.outcome == 'success' }}
       run: cd .github/workflows/smoke && ./smoke-illumos.sh illumos-amd64
 
     timeout-minutes: 45

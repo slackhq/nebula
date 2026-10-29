@@ -31,7 +31,12 @@ done
 ssh omnios "rm -rf $VMSRC"
 rsync -a --exclude .git ./ "omnios:$VMSRC/"
 
-ssh omnios "cd $VMSRC && fail=0; while read -r name dir; do
+# The VM logs in as root, but the tests expect an unprivileged user like every other CI run: root passes the control
+# socket's peer check and may create directories a normal user cannot
+TESTUSER=nebulatest
+ssh omnios "id $TESTUSER >/dev/null 2>&1 || useradd -m -d /export/home/$TESTUSER $TESTUSER; chown -R $TESTUSER $VMSRC"
+
+ssh omnios "su $TESTUSER -c 'cd $VMSRC && fail=0; while read -r name dir; do
     echo \"=== \$dir\"
-    (cd \"\$dir\" && $VMSRC/$OUT/\$name.test -test.skip '$SKIP') || fail=1
-done <$OUT/manifest; exit \$fail"
+    (cd \"\$dir\" && $VMSRC/$OUT/\$name.test -test.skip \"$SKIP\") || fail=1
+done <$OUT/manifest; exit \$fail'"
