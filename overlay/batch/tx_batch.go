@@ -1,7 +1,6 @@
 package batch
 
 import (
-	"cmp"
 	"errors"
 	"net/netip"
 	"slices"
@@ -27,12 +26,24 @@ type SendBatch struct {
 	// without multiport packets pays nothing for it
 	ports []uint16
 	mixed bool
+	// runs marks each change of port in commit order, also only kept once mixed is set
+	runs []portRun
+	// seen is a bitset over ports, flushPorts uses it to find a port with more than one run
+	seen *[65536 / 64]uint64
 	// portOut picks the writer for a nonzero send port, see SetPortWriter
 	portOut func(port uint16) BatchWriter
-	// scratch for flushPorts: slot indices sorted by port, and the slots laid out in that order
-	order   []int
-	runBufs [][]byte
-	runDsts []netip.AddrPort
+	// scratch for flushPorts when a port has more than one run: run indices sorted by port, and the slots laid
+	// out in that order
+	order    []int
+	orderTmp []int
+	runBufs  [][]byte
+	runDsts  []netip.AddrPort
+}
+
+// portRun is a run of consecutive slots committed for one port, starting at slot start
+type portRun struct {
+	start int
+	port  uint16
 }
 
 // NewSendBatch makes a SendBatch with batchCap slots and an arenaSize byte buffer for slices to back those slots
@@ -60,6 +71,14 @@ func (b *SendBatch) Commit(pkt []byte, dst netip.AddrPort) {
 	b.dsts = append(b.dsts, dst)
 	if b.mixed {
 		b.ports = append(b.ports, 0)
+		b.addRun(0)
+	}
+}
+
+// addRun records the slot just committed for port, call it after appending the slot
+func (b *SendBatch) addRun(port uint16) {
+	if n := len(b.runs); n == 0 || b.runs[n-1].port != port {
+		b.runs = append(b.runs, portRun{start: len(b.bufs) - 1, port: port})
 	}
 }
 
@@ -80,11 +99,16 @@ func (b *SendBatch) CommitPort(pkt []byte, dst netip.AddrPort, port uint16) {
 		// bufs can outgrow the batch cap, Grow only allocates then
 		b.ports = slices.Grow(b.ports[:0], len(b.bufs))[:len(b.bufs)]
 		clear(b.ports)
+		b.runs = b.runs[:0]
+		if len(b.bufs) > 0 {
+			b.runs = append(b.runs, portRun{start: 0, port: 0})
+		}
 		b.mixed = true
 	}
 	b.bufs = append(b.bufs, pkt)
 	b.dsts = append(b.dsts, dst)
 	b.ports = append(b.ports, port)
+	b.addRun(port)
 }
 
 // Flush writes every queued packet and reports how many actually went out. A short count means some destinations
@@ -101,6 +125,7 @@ func (b *SendBatch) Flush() (int, error) {
 	b.bufs = b.bufs[:0]
 	b.dsts = b.dsts[:0]
 	b.ports = b.ports[:0]
+	b.runs = b.runs[:0]
 	b.mixed = false
 	b.arena.Reset()
 	return written, err
@@ -108,41 +133,109 @@ func (b *SendBatch) Flush() (int, error) {
 
 // flushPorts writes one WriteBatch per distinct send port, keeping each port's packets in commit order.
 func (b *SendBatch) flushPorts() (int, error) {
-	// Stable sort the slots by port, then lay them out in that order so each port's run is one contiguous WriteBatch
-	b.order = b.order[:0]
-	for i := range b.bufs {
-		b.order = append(b.order, i)
+	if b.seen == nil {
+		b.seen = new([65536 / 64]uint64)
 	}
-	ports := b.ports
-	slices.SortStableFunc(b.order, func(x, y int) int { return cmp.Compare(ports[x], ports[y]) })
 
-	b.runBufs = b.runBufs[:0]
-	b.runDsts = b.runDsts[:0]
-	for _, i := range b.order {
-		b.runBufs = append(b.runBufs, b.bufs[i])
-		b.runDsts = append(b.runDsts, b.dsts[i])
+	// The common case is every port in one run, the segments of a flow are committed back to back, and each run
+	// can go out straight from bufs
+	grouped := true
+	var maxPort uint16
+	for _, r := range b.runs {
+		maxPort = max(maxPort, r.port)
+		w, bit := r.port/64, uint64(1)<<(r.port%64)
+		if b.seen[w]&bit != 0 {
+			grouped = false
+		}
+		b.seen[w] |= bit
+	}
+	for _, r := range b.runs {
+		b.seen[r.port/64] = 0
 	}
 
 	var errs []error
 	written := 0
-	for start := 0; start < len(b.order); {
-		port := ports[b.order[start]]
-		end := start + 1
-		for end < len(b.order) && ports[b.order[end]] == port {
-			end++
-		}
-
+	write := func(port uint16, bufs [][]byte, dsts []netip.AddrPort) {
 		out := b.out
 		if port != 0 {
 			out = b.portOut(port)
 		}
-		n, err := out.WriteBatch(b.runBufs[start:end], b.runDsts[start:end])
+		n, err := out.WriteBatch(bufs, dsts)
 		written += n
 		if err != nil {
 			errs = append(errs, err)
 		}
-		start = end
+	}
+
+	if grouped {
+		for i, r := range b.runs {
+			start, end := b.runBounds(i)
+			write(r.port, b.bufs[start:end], b.dsts[start:end])
+		}
+		return written, errors.Join(errs...)
+	}
+
+	// A port has several runs. Stable sort the runs by port and lay the slots out in that order, so each port is
+	// one contiguous WriteBatch
+	b.sortRuns(maxPort)
+	runs := b.runs
+
+	b.runBufs = b.runBufs[:0]
+	b.runDsts = b.runDsts[:0]
+	for _, i := range b.order {
+		// Runs are often a single slot, a plain loop beats a slice append's bulk copy for those
+		start, end := b.runBounds(i)
+		for j := start; j < end; j++ {
+			b.runBufs = append(b.runBufs, b.bufs[j])
+			b.runDsts = append(b.runDsts, b.dsts[j])
+		}
+	}
+
+	pos := 0
+	for k := 0; k < len(b.order); {
+		port, begin := runs[b.order[k]].port, pos
+		for ; k < len(b.order) && runs[b.order[k]].port == port; k++ {
+			start, end := b.runBounds(b.order[k])
+			pos += end - start
+		}
+		write(port, b.runBufs[begin:pos], b.runDsts[begin:pos])
 	}
 	clear(b.runBufs)
 	return written, errors.Join(errs...)
+}
+
+// sortRuns fills order with the run indices stably sorted by port, an LSD radix sort on the port bytes that skips
+// the high byte when every port is below 256
+func (b *SendBatch) sortRuns(maxPort uint16) {
+	n := len(b.runs)
+	b.order = slices.Grow(b.order[:0], n)[:n]
+	b.orderTmp = slices.Grow(b.orderTmp[:0], n)[:n]
+	for i := range b.order {
+		b.order[i] = i
+	}
+
+	for shift := uint(0); shift < 16 && maxPort>>shift > 0; shift += 8 {
+		var counts [257]int32
+		for _, i := range b.order {
+			counts[uint8(b.runs[i].port>>shift)+1]++
+		}
+		for d := 1; d < len(counts); d++ {
+			counts[d] += counts[d-1]
+		}
+		for _, i := range b.order {
+			d := uint8(b.runs[i].port >> shift)
+			b.orderTmp[counts[d]] = i
+			counts[d]++
+		}
+		b.order, b.orderTmp = b.orderTmp, b.order
+	}
+}
+
+// runBounds returns the slots [start, end) of run i
+func (b *SendBatch) runBounds(i int) (int, int) {
+	end := len(b.bufs)
+	if i+1 < len(b.runs) {
+		end = b.runs[i+1].start
+	}
+	return b.runs[i].start, end
 }

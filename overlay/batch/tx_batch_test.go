@@ -217,3 +217,45 @@ func TestSendBatchCommitPortBackfillPastCap(t *testing.T) {
 		t.Errorf("port 1 got %v", other.calls)
 	}
 }
+
+func TestSendBatchCommitPortOrders(t *testing.T) {
+	ap := netip.MustParseAddrPort("10.0.0.1:4242")
+	tests := []struct {
+		name  string
+		ports []uint16
+	}{
+		// Every port in one run, sent straight from the batch
+		{"grouped", []uint16{3, 3, 0, 0, 7, 9, 9}},
+		// Ports split across runs and past 255, both radix passes
+		{"scattered wide", []uint16{300, 5, 300, 256, 5, 0, 256, 300, 1, 0}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			writers := map[uint16]*recordingBatchWriter{0: {}}
+			b := NewSendBatch(writers[0], 4, 0)
+			b.SetPortWriter(func(port uint16) BatchWriter {
+				if writers[port] == nil {
+					writers[port] = &recordingBatchWriter{}
+				}
+				return writers[port]
+			})
+
+			want := map[uint16][]byte{}
+			for i, port := range tt.ports {
+				b.CommitPort([]byte{byte(i)}, ap, port)
+				want[port] = append(want[port], byte(i))
+			}
+			if n, err := b.Flush(); err != nil || n != len(tt.ports) {
+				t.Fatalf("Flush: n=%d err=%v", n, err)
+			}
+			for port, w := range writers {
+				if len(w.calls) != 1 || string(w.calls[0]) != string(want[port]) {
+					t.Errorf("port %d: got %v want one call of %v", port, w.calls, want[port])
+				}
+			}
+			if len(writers) != len(want) {
+				t.Errorf("wrote to %d ports, want %d", len(writers), len(want))
+			}
+		})
+	}
+}
