@@ -1259,10 +1259,7 @@ func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hos
 
 	switch err {
 	case ErrAlreadySeen:
-		if hostinfo.multiportRx {
-			// The other host is sending to us with multiport, so only grab the IP
-			via.UdpAddr = netip.AddrPortFrom(via.UdpAddr.Addr(), hostinfo.GetRemote().Port())
-		}
+		// via already points at the peer's multiport base port, beginHandshake rewrote it
 		if existing.SetRemoteIfPreferred(f.hostMap, via) {
 			f.SendMessageToVpnAddr(header.Test, header.TestRequest, hostinfo.vpnAddrs[0], []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 		}
