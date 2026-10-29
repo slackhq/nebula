@@ -621,7 +621,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	if remote.IsValid() {
 		if multiport != nil {
 			port := multiportSendPort(flow, multiport)
-			err = multiport.WriteTo(out, port, remote, f.writers[q])
+			err = multiport.WriteTo(out, port, q, remote, f.writers[q])
 		} else {
 			err = f.writers[q].WriteTo(out, remote)
 		}
@@ -636,7 +636,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	} else if hr := hostinfo.GetRemote(); hr.IsValid() {
 		if multiport != nil {
 			port := multiportSendPort(flow, multiport)
-			err = multiport.WriteTo(out, port, hr, f.writers[q])
+			err = multiport.WriteTo(out, port, q, hr, f.writers[q])
 		} else {
 			err = f.writers[q].WriteTo(out, hr)
 		}

@@ -18,14 +18,19 @@ func RandomSendPort(ports int) uint16 {
 // MultiPortConn holds the extra UDP sockets used to send from multiple source
 // ports. Port index 0 is the base port, which is served by the caller's main
 // listener. Port index i (i > 0) is served by a socket bound to basePort+i.
+//
+// Like the main listeners, every queue gets its own socket per port, so queues never contend on one socket's
+// lock or send buffer.
 type MultiPortConn struct {
-	conns []Conn
+	// conns[q][i-1] is queue q's socket for port index i
+	conns [][]Conn
+	ports int
 }
 
-// NewMultiPortConn opens ports-1 additional UDP sockets bound to base.Listen's address on base.Listen's port + 1
-// through port + ports-1, with base's offload setting. These sockets are only used to send, nebula never reads
-// from them.
-func NewMultiPortConn(l *slog.Logger, base Settings, ports int) (*MultiPortConn, error) {
+// NewMultiPortConn opens ports-1 additional UDP sockets per queue, bound to base.Listen's address on base.Listen's
+// port + 1 through port + ports-1, with base's offload setting. With more than one queue each port is bound with
+// SO_REUSEPORT, once per queue. These sockets are only used to send, nebula never reads from them.
+func NewMultiPortConn(l *slog.Logger, base Settings, ports, queues int) (*MultiPortConn, error) {
 	basePort := int(base.Listen.Port())
 	if ports < 1 {
 		return nil, fmt.Errorf("multiport tx_ports must be at least 1, got %d", ports)
@@ -33,20 +38,27 @@ func NewMultiPortConn(l *slog.Logger, base Settings, ports int) (*MultiPortConn,
 	if basePort+ports-1 > 65535 {
 		return nil, fmt.Errorf("multiport tx_ports %d from base port %d exceeds 65535", ports, basePort)
 	}
+	if queues < 1 {
+		return nil, fmt.Errorf("multiport needs at least 1 queue, got %d", queues)
+	}
 
-	m := &MultiPortConn{conns: make([]Conn, 0, ports-1)}
-	for i := 1; i < ports; i++ {
-		port := basePort + i
-		c, err := NewListener(l, Settings{
-			Listen:   netip.AddrPortFrom(base.Listen.Addr(), uint16(port)),
-			Batch:    1,
-			Offloads: base.Offloads,
-		})
-		if err != nil {
-			_ = m.Close()
-			return nil, fmt.Errorf("failed to open multiport socket on port %d: %w", port, err)
+	m := &MultiPortConn{conns: make([][]Conn, queues), ports: ports}
+	for q := range m.conns {
+		m.conns[q] = make([]Conn, 0, ports-1)
+		for i := 1; i < ports; i++ {
+			port := basePort + i
+			c, err := NewListener(l, Settings{
+				Listen:   netip.AddrPortFrom(base.Listen.Addr(), uint16(port)),
+				Multi:    queues > 1,
+				Batch:    1,
+				Offloads: base.Offloads,
+			})
+			if err != nil {
+				_ = m.Close()
+				return nil, fmt.Errorf("failed to open multiport socket on port %d for queue %d: %w", port, q, err)
+			}
+			m.conns[q] = append(m.conns[q], c)
 		}
-		m.conns = append(m.conns, c)
 	}
 
 	return m, nil
@@ -54,33 +66,38 @@ func NewMultiPortConn(l *slog.Logger, base Settings, ports int) (*MultiPortConn,
 
 // Ports returns the total number of send ports, including the base port.
 func (m *MultiPortConn) Ports() int {
-	return len(m.conns) + 1
+	return m.ports
 }
 
-// Conn returns the socket for the source port at index port. Index 0 (and any index out of range) is base.
-func (m *MultiPortConn) Conn(port uint16, base Conn) Conn {
-	if port == 0 || int(port) > len(m.conns) {
+// Conn returns queue q's socket for the source port at index port. Index 0 (and any index or queue out of range) is
+// base, the caller's main listener for q.
+func (m *MultiPortConn) Conn(port uint16, q int, base Conn) Conn {
+	if port == 0 || int(port) >= m.ports || q < 0 || q >= len(m.conns) {
 		return base
 	}
-	return m.conns[port-1]
+	return m.conns[q][port-1]
 }
 
-// WriteTo sends b to addr from the source port at index port, see Conn.
-func (m *MultiPortConn) WriteTo(b []byte, port uint16, addr netip.AddrPort, base Conn) error {
-	return m.Conn(port, base).WriteTo(b, addr)
+// WriteTo sends b to addr from queue q's source port at index port, see Conn.
+func (m *MultiPortConn) WriteTo(b []byte, port uint16, q int, addr netip.AddrPort, base Conn) error {
+	return m.Conn(port, q, base).WriteTo(b, addr)
 }
 
 func (m *MultiPortConn) ReloadConfig(c *config.C, r *config.Reload) {
-	for _, conn := range m.conns {
-		conn.ReloadConfig(c, r)
+	for _, conns := range m.conns {
+		for _, conn := range conns {
+			conn.ReloadConfig(c, r)
+		}
 	}
 }
 
 func (m *MultiPortConn) Close() error {
 	var errs []error
-	for _, conn := range m.conns {
-		if err := conn.Close(); err != nil {
-			errs = append(errs, err)
+	for _, conns := range m.conns {
+		for _, conn := range conns {
+			if err := conn.Close(); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 	return errors.Join(errs...)

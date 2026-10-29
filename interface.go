@@ -480,7 +480,7 @@ func (f *Interface) listenIn(queue tio.Queue, i int) {
 	sb := batch.NewSendBatch(f.writers[i], batch.SendBatchCap, arenaSize)
 	// Only reached for nonzero ports, which are only committed once udpMulti is set, and it is never unset
 	sb.SetPortWriter(func(port uint16) batch.BatchWriter {
-		return f.udpMulti.Load().Conn(port, f.writers[i])
+		return f.udpMulti.Load().Conn(port, i, f.writers[i])
 	})
 	fwPacket := &firewall.ParsedPacket{}
 	nb := make([]byte, 12, 12)

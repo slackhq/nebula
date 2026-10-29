@@ -402,7 +402,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 			sentMultiport = true
 			hm.messageMetrics.Tx(header.Handshake, hh.machine.Subtype(), 1)
 			port := udp.RandomSendPort(multiport.Ports())
-			err = multiport.WriteTo(stage0, port, addr, hm.outside)
+			err = multiport.WriteTo(stage0, port, 0, addr, hm.outside)
 			if err != nil {
 				hostinfo.logger(hm.l).Error("Failed to send handshake message",
 					"error", err,

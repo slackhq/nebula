@@ -364,7 +364,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 				mp, mpErr = udp.NewMultiPortConn(l, udp.Settings{
 					Listen:   netip.AddrPortFrom(listenHost, uint16(port)),
 					Offloads: c.GetBool("listen.udp_offloads", false),
-				}, txPorts)
+				}, txPorts, len(udpConns))
 				if mpErr != nil {
 					l.Error("Failed to open udp sockets for tun.multiport.tx_enabled", "error", mpErr)
 					mp = nil

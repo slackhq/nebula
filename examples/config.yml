@@ -438,8 +438,9 @@ tun:
   # NOTE: you cannot use multiport on a host if you are relying on UDP hole
   # punching to get through a NAT or firewall.
   #
-  # NOTE: With tx_enabled, nebula binds tx_ports - 1 additional UDP sockets on
-  # listen.host, using ports listen.port + 1 through listen.port + tx_ports - 1.
+  # NOTE: With tx_enabled, nebula binds tx_ports - 1 additional UDP sockets per
+  # routine on listen.host, using ports listen.port + 1 through
+  # listen.port + tx_ports - 1 (with SO_REUSEPORT when routines > 1).
   # These ports must be free and allowed through any local firewall. They are
   # only used for sending.
   #
