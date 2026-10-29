@@ -120,7 +120,7 @@ func TestSendNoMetricsDropsExhausted(t *testing.T) {
 	f := &Interface{l: test.NewLogger(), messageMetrics: &MessageMetrics{txExhausted: metrics.NewCounter()}}
 	hostinfo := &HostInfo{vpnAddrs: []netip.Addr{netip.MustParseAddr("10.0.0.1")}, ConnectionState: ci}
 
-	f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, []byte{}, make([]byte, 12), make([]byte, mtu), 0)
+	f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, []byte{}, make([]byte, 12), make([]byte, mtu), 0, nil)
 
 	// The crossing send is refused: it records an exhaustion drop and never reaches connectionManager.Out.
 	assert.Equal(t, int64(1), f.messageMetrics.txExhausted.Count())
@@ -147,7 +147,7 @@ func TestSendNoMetricsCloseTunnelKeepsRebindEpoch(t *testing.T) {
 	f.rebindEpoch.Add(1)
 
 	remote := netip.MustParseAddrPort("10.0.0.2:4242")
-	f.sendNoMetrics(header.CloseTunnel, 0, ci, hostinfo, remote, []byte{}, make([]byte, 12), make([]byte, mtu), 0)
+	f.sendNoMetrics(header.CloseTunnel, 0, ci, hostinfo, remote, []byte{}, make([]byte, 12), make([]byte, mtu), 0, nil)
 
 	// markOut at the new epoch still reports the move, so the edge was preserved.
 	assert.True(t, hostinfo.markOut(1), "a CloseTunnel send must not consume the rebind epoch")
@@ -234,7 +234,7 @@ func TestSendNoMetricsViaRelay(t *testing.T) {
 				payload[i] = byte(i)
 			}
 			counter := ci.messageCounter.Load()
-			f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, payload, make([]byte, 12), make([]byte, mtu), 0)
+			f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, payload, make([]byte, 12), make([]byte, mtu), 0, nil)
 
 			if !tt.sent {
 				assert.Empty(t, conn.writes)
