@@ -340,7 +340,7 @@ smoke-relay-docker: bin-docker
 
 smoke-multiport-docker: bin-docker
 	cd .github/workflows/smoke/ && NAME="smoke-multiport" MULTIPORT_TX=true MULTIPORT_RX=true MULTIPORT_HANDSHAKE=true ./build.sh
-	cd .github/workflows/smoke/ && NAME="smoke-multiport" ./smoke.sh
+	cd .github/workflows/smoke/ && NAME="smoke-multiport" MULTIPORT=true ./smoke.sh
 
 smoke-docker-ipv6: export SMOKE_OVERLAY_IPV6 = 1
 smoke-docker-ipv6: smoke-docker

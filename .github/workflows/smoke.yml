@@ -67,6 +67,6 @@ jobs:
 
     - name: run smoke
       working-directory: ./.github/workflows/smoke
-      run: NAME="smoke-multiport" ./smoke.sh
+      run: NAME="smoke-multiport" MULTIPORT=true ./smoke.sh
 
     timeout-minutes: 10

@@ -191,3 +191,30 @@ then
     echo "nebula still running after SIGTERM sent" >&2
     exit 1
 fi
+
+if [ "$MULTIPORT" ]
+then
+    set +x
+    echo
+    echo " *** Testing multiport"
+    echo
+    set -x
+
+    # The extra multiport send ports are listen.port + 1 through listen.port + tx_ports - 1 (4242, default 100)
+    MULTIPORT_PORTS="4243-4341"
+
+    for h in lighthouse1:$LIGHTHOUSE_IP host2:$HOST2_IP host3:$HOST3_IP host4:$HOST4_IP
+    do
+        name="${h%%:*}"
+        ip="${h#*:}"
+
+        # A failed bind falls back to the base port silently as far as connectivity goes, so check for it
+        ! grep -q "Failed to open udp sockets for tun.multiport.tx_enabled" "logs/$name" || exit 1
+        grep -q "multiportTx=true" "logs/$name"
+
+        # Something must have left from a multiport send port, read the pcap with the smoke image's tcpdump
+        sent="$(docker run --rm -v "$PWD/logs:/logs:ro" --entrypoint tcpdump "$CONTAINER" \
+            -nn -r "/logs/$name.outside.pcap" "udp and src host $ip and src portrange $MULTIPORT_PORTS" 2>/dev/null | wc -l)"
+        [ "$sent" -gt 0 ] || { echo "$name sent nothing from a multiport send port" >&2; exit 1; }
+    done
+fi
