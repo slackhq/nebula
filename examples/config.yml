@@ -8,6 +8,7 @@ pki:
   cert: /etc/nebula/host.crt
   key: /etc/nebula/host.key
   # blocklist is a list of certificate fingerprints that we will refuse to talk to
+  # Entries are the hex fingerprints shown by `nebula-cert print`, an invalid entry fails startup and reload.
   #blocklist:
   #  - c99d4e650533b92061b09918e838a5a0a6aaee21eed1d12fd937682865936c72
   # disconnect_invalid is a toggle to force a client to be disconnected if the certificate is expired or invalid.
@@ -38,12 +39,13 @@ static_host_map:
   # public address. Other valid options are "ip6" and "ip" (returns both.)
   #network: ip4
 
-  # lookup_timeout is the DNS query timeout.
-  #lookup_timeout: 250ms
+  # lookup_timeout is the DNS query timeout. A failed lookup keeps the last known good addresses, only a not found
+  # answer removes them.
+  #lookup_timeout: 5s
 
 lighthouse:
   # am_lighthouse is used to enable lighthouse functionality for a node. This should ONLY be true on nodes
-  # you have configured to be lighthouses in your network
+  # you have configured to be lighthouses in your network. Not reloadable.
   am_lighthouse: false
   # serve_dns optionally starts a dns listener that responds to various queries and can even be
   # delegated to for resolution
@@ -126,18 +128,23 @@ lighthouse:
 # Port Nebula will be listening on. The default here is 4242. For a lighthouse node, the port should be defined,
 # however using port 0 will dynamically assign a port and is recommended for roaming nodes.
 listen:
-  # To listen on only ipv4, use "0.0.0.0"
+  # To listen on only ipv4, use "0.0.0.0". Not reloadable.
   host: "::"
+  # Not reloadable.
   port: 4242
   # Sets the max number of packets to pull from the kernel for each syscall (under systems that support recvmmsg)
   # default is 64, does not support reload
+  # Note: on Linux with UDP GRO (kernel 5.10+), each receive slot is sized for a full 64KiB coalesced
+  # superpacket, so the receive scratch is batch * 64KiB per listening socket (~4MiB per routine at the
+  # default of 64). Lower this to trade peak per-syscall throughput for memory on constrained hosts.
   #batch: 64
+  # Linux only. Reloadable, but removing a value leaves the socket at the old size until Nebula restarts.
   # Configure socket buffers for the udp side (outside), leave unset to use the system defaults. Values will be doubled by the kernel
   # Default is net.core.rmem_default and net.core.wmem_default (/proc/sys/net/core/rmem_default and /proc/sys/net/core/rmem_default)
   # Maximum is limited by memory in the system, SO_RCVBUFFORCE and SO_SNDBUFFORCE is used to avoid having to raise the system wide
   # max, net.core.rmem_max and net.core.wmem_max
-  #read_buffer: 10485760
-  #write_buffer: 10485760
+  read_buffer: 3412512
+  write_buffer: 3412512
 
   # On Windows only
   # When true, Nebula installs a WFP (Windows Filtering Platform) PERMIT filter scoped to UDP at the listener port.
@@ -169,12 +176,14 @@ listen:
   # allowing for more precise routing decisions based on the packet tags. Default is 0 meaning no mark is set.
   # This setting is reloadable.
   #so_mark: 0
+  # the udp_offloads setting controls if Nebula will attempt to enable GSO and GRO for its UDP socket(s). Linux only, not reloadable.
+  # udp_offloads: false
 
 # Routines is the number of thread pairs to run that consume from the tun and UDP queues.
 # Currently, this defaults to 1 which means we have 1 tun queue reader and 1
 # UDP queue reader. Setting this above one will set IFF_MULTI_QUEUE on the tun
 # device and SO_REUSEPORT on the UDP socket to allow multiple queues.
-# This option is only supported on Linux.
+# This option is only supported on Linux. Not reloadable.
 #routines: 1
 
 punchy:
@@ -198,6 +207,7 @@ punchy:
 
 # Cipher allows you to choose between the available ciphers for your network. Options are chachapoly or aes
 # IMPORTANT: this value must be identical on ALL NODES/LIGHTHOUSES. We do not/will not support use of different ciphers simultaneously!
+# Not reloadable.
 #cipher: aes
 
 # Preferred ranges is used to define a hint about the local network ranges, which speeds up discovering the fastest
@@ -224,12 +234,62 @@ punchy:
   # Trusted SSH CA public keys. These are the public keys of the CAs that are allowed to sign SSH keys for access.
   #trusted_cas:
     #- "ssh public key string"
-  # sandbox_dir restricts file paths for profiling commands (start-cpu-profile, save-heap-profile,
-  # save-mutex-profile) to the specified directory. Relative paths will be resolved within this directory,
-  # and absolute paths outside of it will be rejected. Default is $TMP/nebula-debug.
-  # The directory is NOT automatically created.
-  # Overriding this to "" is the same as "/" and will allow overwriting any path on the host.
-  #sandbox_dir: /var/tmp/nebula-debug
+
+# Local APIs allow accessing running nebula state.
+#local_api:
+  # There are two types of sockets available: a control socket intended for use on the
+  # local machine, primarily for debugging, and an info socket intended to make
+  # nebula's internal state available to other consumers.
+  #
+  # The control socket is made available by default, and can be accessed via
+  # `nebula ctl <command>`. It defaults to /var/run/nebula/ctl.sock on Linux, macOS and
+  # the BSDs; on Windows it is a named pipe under \\.\pipe\ProtectedPrefix\Administrators.
+  #control:
+    # Set to false to turn the control socket off. Reloadable.
+    #enabled: true
+    # The absolute path where the control socket should live, or a full pipe name on
+    # Windows. The last directory is created if missing, and must be owned by root or by
+    # the user running nebula. It must not be writable by anyone else.
+    #socket: /var/run/nebula/ctl.sock
+    # A group (or account/group/SID on Windows) that should be allowed to access the
+    # socket. On Windows a group cannot be changed while the socket is served: a group
+    # added takes effect after a restart, and one removed or changed stops the socket
+    # until nebula is restarted.
+    #group: nebula
+
+  # The info socket is not made available by default. If you enable it, it makes some
+  # internal state available over HTTP.
+  #
+  # The currently supported HTTP requests are:
+  #   GET /v1/identity                            this node's identity
+  #   GET /v1/identity/<vpn addr>[:port]          the host owning the address; the port
+  #                                               is ignored. 404 when no tunnel is
+  #                                               up or the address is outside this
+  #                                               node's networks.
+  #   GET /v1/identity/<vpn addr>[:port]/pem      that host's certificate, PEM encoded,
+  #                                               as {"pem": ...}; GET /v1/identity/pem
+  #                                               is this node's.
+  #   Add ?pretty to any of them to indent the JSON.
+  #
+  # NB: unless a connection arrived on the nebula interface, there's no guarantee
+  # that the identity returned belongs to the sender. An address in an overlay network
+  # this node does not hold is never answered, since nebula cannot make that guarantee
+  # for it, even with a tunnel to its holder up.
+  #
+  #info:
+    #enabled: false
+    # The absolute path to listen on, or a full pipe name on Windows. Name a pipe under
+    # \\.\pipe\ProtectedPrefix\Administrators\.
+    #socket: /var/run/nebula/info.sock
+    # A group (or account/group/SID on Windows) that should be allowed to access the
+    # socket. On Windows a group cannot be changed while the socket is served: a group
+    # added takes effect after a restart, and one removed or changed stops the socket
+    # until nebula is restarted.
+    #group: nebula-info
+    # Octal mode for the socket, as a quoted string. Defaults to "0600" unless a
+    # group is set, in which case it defaults to "0660". On Windows a pipe has no
+    # mode and this is ignored.
+    #socket_mode: "0660"
 
 # EXPERIMENTAL: relay support for networks that can't establish direct connections.
 relay:
@@ -248,19 +308,53 @@ relay:
 # Configure the private interface. Note: addr is baked into the nebula certificate
 tun:
   # When tun is disabled, a lighthouse can be started without a local tun interface (and therefore without root)
+  # Not reloadable.
   disabled: false
   # Name of the device. If not set, a default will be chosen by the OS.
   # For macOS: if set, must be in the form `utun[0-9]+`.
-  # For NetBSD: Required to be set, must be in the form `tun[0-9]+`
+  # For OpenBSD and NetBSD: if set, must be in the form `tun[0-9]+`, otherwise the first free one is used.
+  # Not reloadable.
   dev: nebula1
   # Toggles forwarding of local broadcast packets, the address of which depends on the ip/mask encoded in pki.cert
+  # Not reloadable.
   drop_local_broadcast: false
-  # Toggles forwarding of multicast packets
+  # Toggles forwarding of multicast packets. Not reloadable.
   drop_multicast: false
-  # Sets the transmit queue length, if you notice lots of transmit drops on the tun it may help to raise this number. Default is 500
-  tx_queue: 500
+  # Sets the transmit queue length, if you notice lots of transmit drops on the tun it may help to raise this number. Default is 5000
+  # Not reloadable.
+  tx_queue: 5000
   # Default MTU for every packet, safe setting is (and the default) 1300 for internet based traffic
+  # Anything above 8937, here or on a route below, is capped to 8937 with a warning
+  # Reloadable on Linux only. Where the tun is handed to nebula by a host app (iOS, Android, macOS network extensions)
+  # the host app owns the MTU.
   mtu: 1300
+
+  # the use_offloads setting controls if Nebula will attempt to enable GSO and GRO for the tun device. Linux only, not reloadable.
+  #use_offloads: false
+
+  # Linux only. pin_threads pins each tun reader/encrypt OS thread to a single CPU. This keeps every goroutine's
+  # batched sends flowing through one XPS-selected NIC TX ring, so packets within a flow stay ordered on the wire
+  # instead of being sprayed across multiple TX rings and reordered. Not reloadable. Coerced to false if routines <= 1.
+  #pin_threads: true
+
+  # pin_threads_key helps the CPU-auto-selector shuffle which CPUs are chosen for pinning.
+  # Valid options are "pid" or "port". Use "port" if you want Nebula to choose the same cores every time, which is nice for benchmarking.
+  # Linux only, not reloadable.
+  #pin_threads_key: "pid"
+
+  # Linux only. cpu_affinity overrides which CPUs the tun reader threads pin to: a list of CPU IDs, one per routine
+  # (see the top-level `routines` setting). Lists shorter than `routines` are modulo-cycled across the queues; extra
+  # entries are ignored. IDs must be within the process's allowed CPU set, so this respects taskset / cgroup cpusets;
+  # a non-integer or not-allowed entry disables the override, leaving the default pin selection described below.
+  # Only meaningful while pin_threads is true. Not reloadable.
+  # When unset (or rejected), the default spread prefers performance cores on heterogeneous CPUs (ARM big.LITTLE,
+  # Intel P/E hybrids, AMD compact cores), keeps all readers on one NUMA node and on distinct physical cores when the
+  # topology allows (SMT siblings last), leaves CPU 0's physical core as a last resort, and rotates its starting
+  # point per instance (keyed by the bound UDP port) so co-located nebulas don't stack their readers onto the
+  # same cores.
+  #cpu_affinity:
+  #  - 2
+  #  - 4
 
   # Route based MTU overrides, you have known vpn ip paths that can support larger MTUs you can increase/decrease them here
   routes:
@@ -294,6 +388,9 @@ tun:
   # `mtu`: will default to tun mtu if this option is not specified
   # `metric`: will default to 0 if this option is not specified
   # `install`: will default to true, controls whether this route is installed in the systems routing table.
+  # On macOS, a route whose destination another interface already routes, like the local network, is installed once
+  # that route is removed. One deleted by hand stays deleted until nebula reloads or restarts, or until another
+  # interface routes its destination and lets it go.
   # This setting is reloadable.
   unsafe_routes:
     #- route: 172.16.1.0/24
@@ -325,7 +422,7 @@ tun:
   #use_system_route_table: false
   # Buffer size for reading routes updates. 0 means default system buffer size. (/proc/sys/net/core/rmem_default).
   # If using massive routes updates, for example BGP, you may need to increase this value to avoid packet loss.
-  # SO_RCVBUFFORCE is used to avoid having to raise the system wide max
+  # SO_RCVBUFFORCE is used to avoid having to raise the system wide max. Not reloadable.
   #use_system_route_table_buffer_size: 0
 
   # EXPERIMENTAL: This option may change or disappear in the future.
@@ -371,6 +468,42 @@ tun:
     # How many unresponded handshakes we should send before we attempt to
     # send multiport handshakes.
     #tx_handshake_delay: 2
+
+# EXPERIMENTAL: this option may change or disappear in the future.
+# The dns section configures this host's OS resolver to send queries to a user specified DNS server.
+#
+# macOS and Windows only, it requires running with elevated privileges.
+#
+# A dns section that fails to load stops nebula from starting, the same as a bad firewall section.
+#dns:
+  # enabled turns host DNS configuration on. Default false.
+  #enabled: false
+
+  # A list of DNS server IPs to send matching queries to. Required.
+  #nameservers:
+  #  - 192.168.100.1
+
+  # match_domains restricts `nameservers` to just the specified suffixes.
+  #
+  # Setting it to an explicitly empty list attempts to redirect all resolution
+  # to the specified nameservers. If unset, it defaults to search_domains.
+  #match_domains:
+  #  - mesh.example.com
+
+  # search_domains is a list of domains that will be tried when handling requests for a bare label.
+  # These must fall under a configured match_domains entry. If no match_domains is specified, it
+  # defaults to search_domains.
+  #search_domains:
+  #  - mesh.example.com
+
+  # identity is used to prevent multiple consumers of the dnsconfig library from stepping on
+  # each other's toes (this includes multiple instances of nebula.) At startup nebula removes
+  # any host DNS configuration a previous run under this identity left behind, such as after
+  # a crash, whether or not `enabled` is set.
+  #
+  # It must start with a lowercase letter or digit and hold only lowercase letters, digits, '.',
+  # '_' and '-', up to 63 characters.
+  #identity: nebula
 
 # Configure logging level
 logging:
@@ -419,14 +552,16 @@ logging:
   # Handshakes are sent to all known addresses at each interval with a linear backoff,
   # Wait try_interval after the 1st attempt, 2 * try_interval after the 2nd, etc, until the handshake is older than timeout
   # A 100ms interval with the default 10 retries will give a handshake 5.5 seconds to resolve before timing out
+  # Not reloadable.
   #try_interval: 100ms
   #retries: 20
 
-  # query_buffer is the size of the buffer channel for querying lighthouses
-  #query_buffer: 64
+  # query_buffer is the size of the buffer channel for querying lighthouses, drops are recorded in the lighthouse.query.dropped metric.
+  # Not reloadable.
+  #query_buffer: 1024
 
   # trigger_buffer is the size of the buffer channel for quickly sending handshakes
-  # after receiving the response for lighthouse queries
+  # after receiving the response for lighthouse queries. Not reloadable.
   #trigger_buffer: 64
 
 # Tunnel manager settings

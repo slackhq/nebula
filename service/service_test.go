@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"net"
 	"net/netip"
 	"os"
 	"testing"
@@ -18,12 +21,20 @@ import (
 	"github.com/slackhq/nebula/overlay"
 	"go.yaml.in/yaml/v3"
 	"golang.org/x/sync/errgroup"
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
 )
 
 type m = map[string]any
 
 func newSimpleService(caCrt cert.Certificate, caKey []byte, name string, udpIp netip.Addr, overrides m) *Service {
-	_, _, myPrivKey, myPEM := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, caCrt, caKey, "a", time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{netip.PrefixFrom(udpIp, 24)}, nil, []string{})
+	return newService(caCrt, caKey, name, []netip.Prefix{netip.PrefixFrom(udpIp, 24)}, overrides)
+}
+
+// newService is newSimpleService with an arbitrary set of cert networks, for
+// IPv6 and dual-stack hosts.
+func newService(caCrt cert.Certificate, caKey []byte, name string, networks []netip.Prefix, overrides m) *Service {
+	_, _, myPrivKey, myPEM := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, caCrt, caKey, name, time.Now(), time.Now().Add(5*time.Minute), networks, nil, []string{})
 	caB, err := caCrt.MarshalPEM()
 	if err != nil {
 		panic(err)
@@ -89,7 +100,23 @@ func newSimpleService(caCrt cert.Certificate, caKey []byte, name string, udpIp n
 	return s
 }
 
+// ephemeralUDPPort reserves a free UDP port by binding port 0, then releases
+// it for the caller to use. A fixed port would collide with concurrent test
+// runs or an unrelated process (say, a real nebula) already listening on it.
+func ephemeralUDPPort(t *testing.T) int {
+	t.Helper()
+	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := pc.LocalAddr().(*net.UDPAddr).Port
+	_ = pc.Close()
+	return port
+}
+
 func TestService(t *testing.T) {
+	lighthousePort := ephemeralUDPPort(t)
+
 	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
 	a := newSimpleService(ca, caKey, "a", netip.MustParseAddr("10.0.0.1"), m{
 		"static_host_map": m{},
@@ -98,12 +125,12 @@ func TestService(t *testing.T) {
 		},
 		"listen": m{
 			"host": "0.0.0.0",
-			"port": 4243,
+			"port": lighthousePort,
 		},
 	})
 	b := newSimpleService(ca, caKey, "b", netip.MustParseAddr("10.0.0.2"), m{
 		"static_host_map": m{
-			"10.0.0.1": []string{"localhost:4243"},
+			"10.0.0.1": []string{fmt.Sprintf("localhost:%d", lighthousePort)},
 		},
 		"lighthouse": m{
 			"hosts":    []string{"10.0.0.1"},
@@ -169,4 +196,631 @@ func TestService(t *testing.T) {
 	if err := eg.Wait(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// A cert may list one address under two prefix lengths, which the netstack
+// holds as a single host address.
+func TestServiceSameAddressTwoPrefixes(t *testing.T) {
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+	a := newService(ca, caKey, "a", []netip.Prefix{
+		netip.MustParsePrefix("10.0.0.1/24"),
+		netip.MustParsePrefix("10.0.0.1/16"),
+	}, m{
+		"static_host_map": m{},
+		"listen": m{
+			"host": "127.0.0.1",
+			"port": 0,
+		},
+	})
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TCP between two services must work over an IPv6 overlay, with IPv6-only and
+// dual-stack certs, and IPv4 must keep working on a dual-stack cert.
+func TestServiceIPv6(t *testing.T) {
+	v6a := netip.MustParsePrefix("fd00::1/64")
+	v6b := netip.MustParsePrefix("fd00::2/64")
+	v4a := netip.MustParsePrefix("10.0.0.1/24")
+	v4b := netip.MustParsePrefix("10.0.0.2/24")
+
+	tests := []struct {
+		name   string
+		aNets  []netip.Prefix
+		bNets  []netip.Prefix
+		dialTo string
+	}{
+		{"ipv6 only", []netip.Prefix{v6a}, []netip.Prefix{v6b}, "[fd00::1]:1234"},
+		{"dual stack over ipv6", []netip.Prefix{v6a, v4a}, []netip.Prefix{v6b, v4b}, "[fd00::1]:1234"},
+		{"dual stack over ipv4", []netip.Prefix{v6a, v4a}, []netip.Prefix{v6b, v4b}, "10.0.0.1:1234"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lighthousePort := ephemeralUDPPort(t)
+			// The lighthouse is addressed by the family being dialed, so b already
+			// knows the underlay address and needs no lighthouse query
+			lighthouseIP := netip.MustParseAddrPort(tt.dialTo).Addr().String()
+
+			ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+			a := newService(ca, caKey, "a", tt.aNets, m{
+				"static_host_map": m{},
+				"lighthouse": m{
+					"am_lighthouse": true,
+				},
+				"listen": m{
+					"host": "127.0.0.1",
+					"port": lighthousePort,
+				},
+			})
+			t.Cleanup(func() { _ = a.Close() })
+			b := newService(ca, caKey, "b", tt.bNets, m{
+				"static_host_map": m{
+					lighthouseIP: []string{fmt.Sprintf("127.0.0.1:%d", lighthousePort)},
+				},
+				"lighthouse": m{
+					"hosts":    []string{lighthouseIP},
+					"interval": 1,
+				},
+			})
+			t.Cleanup(func() { _ = b.Close() })
+
+			ln, err := a.Listen("tcp", ":1234")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var eg errgroup.Group
+			eg.Go(func() error {
+				conn, err := ln.Accept()
+				if err != nil {
+					return err
+				}
+				defer conn.Close()
+
+				if _, err := conn.Write([]byte("server msg")); err != nil {
+					return err
+				}
+				data := make([]byte, 100)
+				n, err := conn.Read(data)
+				if err != nil {
+					return err
+				}
+				if !bytes.Equal(data[:n], []byte("client msg")) {
+					return errors.New("got invalid message from client")
+				}
+				return conn.Close()
+			})
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			c, err := b.DialContext(ctx, "tcp", tt.dialTo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.Write([]byte("client msg")); err != nil {
+				t.Fatal(err)
+			}
+
+			data := make([]byte, 100)
+			n, err := c.Read(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(data[:n], []byte("server msg")) {
+				t.Fatal("got invalid message from server")
+			}
+
+			if err := c.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := eg.Wait(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// A listener that is never accepted from must not stall connections to other
+// ports, and closing it must not block.
+func TestServiceUnacceptedListener(t *testing.T) {
+	lighthousePort := ephemeralUDPPort(t)
+
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+	a := newSimpleService(ca, caKey, "a", netip.MustParseAddr("10.0.0.1"), m{
+		"static_host_map": m{},
+		"lighthouse": m{
+			"am_lighthouse": true,
+		},
+		"listen": m{
+			"host": "0.0.0.0",
+			"port": lighthousePort,
+		},
+	})
+	t.Cleanup(func() { _ = a.Close() })
+	b := newSimpleService(ca, caKey, "b", netip.MustParseAddr("10.0.0.2"), m{
+		"static_host_map": m{
+			"10.0.0.1": []string{fmt.Sprintf("127.0.0.1:%d", lighthousePort)},
+		},
+		"lighthouse": m{
+			"hosts":    []string{"10.0.0.1"},
+			"interval": 1,
+		},
+	})
+	t.Cleanup(func() { _ = b.Close() })
+
+	idle, err := a.Listen("tcp", ":1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := a.Listen("tcp", ":1235")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	idleConn, err := b.DialContext(ctx, "tcp", "10.0.0.1:1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idleConn.Close()
+
+	accepted := make(chan error, 1)
+	go func() {
+		conn, err := active.Accept()
+		if err == nil {
+			err = conn.Close()
+		}
+		accepted <- err
+	}()
+
+	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	activeConn, err := b.DialContext(ctx, "tcp", "10.0.0.1:1235")
+	if err != nil {
+		t.Fatalf("dial to accepted port stalled behind idle listener: %v", err)
+	}
+	defer activeConn.Close()
+
+	select {
+	case err := <-accepted:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("accept stalled behind idle listener")
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- idle.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("closing idle listener blocked")
+	}
+
+	if _, err := idle.Accept(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("expected net.ErrClosed from closed listener, got %v", err)
+	}
+	if err := idle.Close(); err != nil {
+		t.Fatalf("second close: %v", err)
+	}
+}
+
+// Accept must report net.ErrClosed after Close even while a handler is still
+// trying to hand off a connection.
+func TestListenerAcceptAfterClose(t *testing.T) {
+	s := &Service{}
+	s.mu.listeners = map[listenerKey]*tcpListener{}
+	key := listenerKey{proto: ipv4.ProtocolNumber, port: 1234}
+	l := &tcpListener{
+		s:      s,
+		keys:   []listenerKey{key},
+		accept: make(chan net.Conn),
+		closed: make(chan struct{}),
+	}
+	s.mu.listeners[key] = l
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Keep a send pending so every Accept has a connection ready alongside closed.
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			server, client := net.Pipe()
+			_ = client.Close()
+			select {
+			case l.accept <- server:
+			case <-stop:
+				_ = server.Close()
+				return
+			}
+		}
+	}()
+	defer func() {
+		close(stop)
+		<-done
+	}()
+
+	for range 100 {
+		time.Sleep(time.Millisecond)
+		conn, err := l.Accept()
+		if conn != nil {
+			_ = conn.Close()
+		}
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Accept after Close: got err %v, want net.ErrClosed", err)
+		}
+	}
+}
+
+// Close must release blocked Accept calls and let Wait report a clean shutdown.
+func TestServiceClose(t *testing.T) {
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+	a := newSimpleService(ca, caKey, "a", netip.MustParseAddr("10.0.0.1"), m{
+		"static_host_map": m{},
+		"listen": m{
+			"host": "127.0.0.1",
+			"port": 0,
+		},
+	})
+
+	ln, err := a.Listen("tcp", ":1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := make(chan error, 1)
+	go func() {
+		_, err := ln.Accept()
+		accepted <- err
+	}()
+
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-accepted:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("expected net.ErrClosed from Accept, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Accept still blocked after Close")
+	}
+
+	waited := make(chan error, 1)
+	go func() { waited <- a.Wait() }()
+	select {
+	case err := <-waited:
+		if err != nil {
+			t.Fatalf("expected clean shutdown from Wait, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Wait still blocked after Close")
+	}
+
+	if a.ipstack.HasNIC(nicID) {
+		t.Fatal("netstack not torn down after Wait")
+	}
+	if err := a.Close(); err != nil {
+		t.Fatalf("second close: %v", err)
+	}
+	if _, err := a.Listen("tcp", ":1235"); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("expected net.ErrClosed from Listen after Close, got %v", err)
+	}
+}
+
+// If nebula stops without Close being called, the service must still release
+// Accept and tear down the netstack.
+func TestServiceNebulaStopped(t *testing.T) {
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+	a := newSimpleService(ca, caKey, "a", netip.MustParseAddr("10.0.0.1"), m{
+		"static_host_map": m{},
+		"listen": m{
+			"host": "127.0.0.1",
+			"port": 0,
+		},
+	})
+
+	ln, err := a.Listen("tcp", ":1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := make(chan error, 1)
+	go func() {
+		_, err := ln.Accept()
+		accepted <- err
+	}()
+
+	a.control.Stop()
+
+	waited := make(chan error, 1)
+	go func() { waited <- a.Wait() }()
+	select {
+	case err := <-waited:
+		if err != nil {
+			t.Fatalf("expected clean shutdown from Wait, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Wait still blocked after nebula stopped")
+	}
+
+	select {
+	case err := <-accepted:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("expected net.ErrClosed from Accept, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Accept still blocked after nebula stopped")
+	}
+
+	if a.ipstack.HasNIC(nicID) {
+		t.Fatal("netstack not torn down after Wait")
+	}
+}
+
+// Dials racing Close must not hold Wait until their connect times out.
+func TestServiceDialDuringClose(t *testing.T) {
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+	a := newSimpleService(ca, caKey, "a", netip.MustParseAddr("10.0.0.1"), m{
+		"static_host_map": m{},
+		"listen": m{
+			"host": "127.0.0.1",
+			"port": 0,
+		},
+	})
+
+	stop := make(chan struct{})
+	var eg errgroup.Group
+	for range 8 {
+		eg.Go(func() error {
+			for {
+				select {
+				case <-stop:
+					return nil
+				default:
+				}
+				// 10.0.0.2 has no tunnel, so each dial sits in SYN-SENT until aborted
+				if c, err := a.Dial("tcp", "10.0.0.2:80"); err == nil {
+					_ = c.Close()
+				}
+			}
+		})
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- a.Wait() }()
+	select {
+	case err := <-waited:
+		if err != nil {
+			t.Fatalf("expected clean shutdown from Wait, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Wait blocked behind a dial that raced Close")
+	}
+
+	close(stop)
+	dialersDone := make(chan error, 1)
+	go func() { dialersDone <- eg.Wait() }()
+	select {
+	case <-dialersDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Dial still blocked after Wait")
+	}
+}
+
+func TestListenFamilyConflicts(t *testing.T) {
+	bareService := func() *Service {
+		s := &Service{}
+		s.mu.listeners = map[listenerKey]*tcpListener{}
+		return s
+	}
+	listen := func(t *testing.T, s *Service, network, address string) net.Listener {
+		t.Helper()
+		ln, err := s.Listen(network, address)
+		if err != nil {
+			t.Fatalf("Listen(%q, %q): %v", network, address, err)
+		}
+		return ln
+	}
+
+	for _, tc := range []struct {
+		first, second string
+		ok            bool
+	}{
+		{"tcp4", "tcp6", true},
+		{"tcp6", "tcp4", true},
+		{"tcp", "tcp4", false},
+		{"tcp", "tcp6", false},
+		{"tcp", "tcp", false},
+		{"tcp4", "tcp", false},
+		{"tcp6", "tcp", false},
+		{"tcp4", "tcp4", false},
+		{"tcp6", "tcp6", false},
+	} {
+		t.Run(tc.first+" then "+tc.second, func(t *testing.T) {
+			s := bareService()
+			listen(t, s, tc.first, ":80")
+			_, err := s.Listen(tc.second, ":80")
+			if tc.ok && err != nil {
+				t.Fatalf("expected success, got %v", err)
+			}
+			if !tc.ok && err == nil {
+				t.Fatal("expected a conflict")
+			}
+			// A failed Listen must not have claimed anything.
+			if _, err := s.Listen(tc.second, ":81"); err != nil {
+				t.Fatalf("unrelated port: %v", err)
+			}
+		})
+	}
+
+	t.Run("close frees only its family", func(t *testing.T) {
+		s := bareService()
+		ln4 := listen(t, s, "tcp4", ":80")
+		ln6 := listen(t, s, "tcp6", ":80")
+		if err := ln4.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if s.mu.listeners[listenerKey{proto: ipv6.ProtocolNumber, port: 80}] != ln6 {
+			t.Fatal("closing tcp4 removed the tcp6 listener")
+		}
+		if _, err := s.Listen("tcp", ":80"); err == nil {
+			t.Fatal("tcp must conflict with the remaining tcp6 listener")
+		}
+		listen(t, s, "tcp4", ":80")
+	})
+
+	t.Run("close of tcp frees both families", func(t *testing.T) {
+		s := bareService()
+		ln := listen(t, s, "tcp", ":80")
+		if err := ln.Close(); err != nil {
+			t.Fatal(err)
+		}
+		listen(t, s, "tcp4", ":80")
+		listen(t, s, "tcp6", ":80")
+	})
+
+	t.Run("double close", func(t *testing.T) {
+		s := bareService()
+		ln := listen(t, s, "tcp", ":80")
+		if err := ln.Close(); err != nil {
+			t.Fatal(err)
+		}
+		ln2 := listen(t, s, "tcp4", ":80")
+		if err := ln.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if s.mu.listeners[listenerKey{proto: ipv4.ProtocolNumber, port: 80}] != ln2 {
+			t.Fatal("second Close removed a newer listener")
+		}
+	})
+
+	t.Run("address must match family", func(t *testing.T) {
+		s := bareService()
+		if _, err := s.Listen("tcp6", "0.0.0.0:80"); err == nil {
+			t.Fatal("expected tcp6 with an IPv4 address to fail")
+		}
+	})
+}
+
+func TestServiceListenPerFamily(t *testing.T) {
+	lighthousePort := ephemeralUDPPort(t)
+
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+	a := newService(ca, caKey, "a", []netip.Prefix{
+		netip.MustParsePrefix("10.0.0.1/24"),
+		netip.MustParsePrefix("fd00::1/64"),
+	}, m{
+		"static_host_map": m{},
+		"lighthouse": m{
+			"am_lighthouse": true,
+		},
+		"listen": m{
+			"host": "0.0.0.0",
+			"port": lighthousePort,
+		},
+	})
+	b := newService(ca, caKey, "b", []netip.Prefix{
+		netip.MustParsePrefix("10.0.0.2/24"),
+		netip.MustParsePrefix("fd00::2/64"),
+	}, m{
+		"static_host_map": m{
+			"10.0.0.1": []string{fmt.Sprintf("127.0.0.1:%d", lighthousePort)},
+		},
+		"lighthouse": m{
+			"hosts":    []string{"10.0.0.1"},
+			"interval": 1,
+		},
+	})
+	t.Cleanup(func() {
+		_ = a.Close()
+		_ = b.Close()
+	})
+
+	// serve answers every connection with name, so the client can tell which
+	// listener accepted it.
+	serve := func(network, address string) net.Listener {
+		ln, err := a.Listen(network, address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			for {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				_, _ = conn.Write([]byte(network))
+				_ = conn.Close()
+			}
+		}()
+		return ln
+	}
+	expect := func(t *testing.T, addr, want string) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		c, err := b.DialContext(ctx, "tcp", addr)
+		if err != nil {
+			t.Fatalf("dial %s: %v", addr, err)
+		}
+		defer c.Close()
+		_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+		got, err := io.ReadAll(c)
+		if err != nil {
+			t.Fatalf("read %s: %v", addr, err)
+		}
+		if string(got) != want {
+			t.Fatalf("%s accepted by %q, want %q", addr, got, want)
+		}
+	}
+	// The tunnel is already up when this is called, so a refusal arrives in
+	// one round trip; only a dropped SYN would run into the context deadline.
+	expectRefused := func(t *testing.T, addr string) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		c, err := b.DialContext(ctx, "tcp", addr)
+		if err == nil {
+			_ = c.Close()
+			t.Fatalf("dial %s: expected refusal", addr)
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("dial %s: timed out instead of being refused: %v", addr, err)
+		}
+	}
+
+	ln4 := serve("tcp4", ":1234")
+	serve("tcp6", ":1234")
+	expect(t, "10.0.0.1:1234", "tcp4")
+	expect(t, "[fd00::1]:1234", "tcp6")
+
+	if err := ln4.Close(); err != nil {
+		t.Fatal(err)
+	}
+	expectRefused(t, "10.0.0.1:1234")
+	expect(t, "[fd00::1]:1234", "tcp6")
+
+	ln := serve("tcp", ":1235")
+	expect(t, "10.0.0.1:1235", "tcp")
+	expect(t, "[fd00::1]:1235", "tcp")
+
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	serve("tcp4", ":1235")
+	expect(t, "10.0.0.1:1235", "tcp4")
+	expectRefused(t, "[fd00::1]:1235")
 }

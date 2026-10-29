@@ -1,5 +1,4 @@
 //go:build !e2e_testing
-// +build !e2e_testing
 
 package udp
 
@@ -7,14 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"net/netip"
 	"syscall"
 
 	"golang.org/x/sys/unix"
 )
 
-func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
-	return NewGenericListener(l, ip, port, multi, batch)
+func NewListener(l *slog.Logger, s Settings) (Conn, error) {
+	return NewGenericListener(l, s)
 }
 
 func NewListenConfig(multi bool) net.ListenConfig {

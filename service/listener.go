@@ -1,32 +1,53 @@
 package service
 
 import (
-	"io"
 	"net"
+	"sync"
 )
 
 type tcpListener struct {
-	port   uint16
 	s      *Service
 	addr   *net.TCPAddr
+	keys   []listenerKey
 	accept chan net.Conn
+
+	// closed is closed instead of accept so a handler blocked handing off a
+	// connection can't send on a closed channel.
+	closed    chan struct{}
+	closeOnce sync.Once
 }
 
 func (l *tcpListener) Accept() (net.Conn, error) {
-	conn, ok := <-l.accept
-	if !ok {
-		return nil, io.EOF
+	// select picks randomly among ready cases, so without this a handler still
+	// waiting to hand off could win over closed after Close has returned.
+	select {
+	case <-l.closed:
+		return nil, net.ErrClosed
+	default:
 	}
-	return conn, nil
+
+	select {
+	case conn := <-l.accept:
+		return conn, nil
+	case <-l.closed:
+		return nil, net.ErrClosed
+	}
 }
 
 func (l *tcpListener) Close() error {
-	l.s.mu.Lock()
-	defer l.s.mu.Unlock()
-	delete(l.s.mu.listeners, uint16(l.addr.Port))
+	l.closeOnce.Do(func() {
+		// Close before leaving the map so a concurrent closeListeners that
+		// no longer sees this listener knows Accept is already released.
+		close(l.closed)
 
-	close(l.accept)
-
+		// Keys are only reusable once removed here, so this listener still owns
+		// every one of them.
+		l.s.mu.Lock()
+		for _, key := range l.keys {
+			delete(l.s.mu.listeners, key)
+		}
+		l.s.mu.Unlock()
+	})
 	return nil
 }
 

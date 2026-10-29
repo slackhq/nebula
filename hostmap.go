@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/netip"
 	"slices"
 	"sync"
@@ -18,7 +17,6 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
-	"github.com/slackhq/nebula/logging"
 )
 
 const defaultPromoteEvery = 1000       // Count of packets sent before we try moving a tunnel to a preferred underlay ip address
@@ -235,15 +233,22 @@ const (
 	NetworkTypeVPNPeer
 	// NetworkTypeUnsafe is a network from Certificate.UnsafeNetworks()
 	NetworkTypeUnsafe
+	// NetworkTypeUnsafeVPNOverlap is the overlap between a network from Certificate.UnsafeNetworks()
+	// and one of the vpnNetworks in our certificate
+	NetworkTypeUnsafeVPNOverlap
 )
 
 type HostInfo struct {
 	remote          atomic.Pointer[netip.AddrPort]
-	remotes         *RemoteList
-	promoteCounter  atomic.Uint32
 	ConnectionState *ConnectionState
-	remoteIndexId   uint32
-	localIndexId    uint32
+
+	// Traffic bits, pendingDeletion, and the rebind epoch we last sent under
+	state atomic.Uint32
+
+	promoteCounter atomic.Uint32
+	remoteIndexId  uint32
+	localIndexId   uint32
+	remotes        *RemoteList
 
 	// vpnAddrs is a list of vpn addresses assigned to this host that are within our own vpn networks
 	// The host may have other vpn addresses that are outside our
@@ -268,11 +273,6 @@ type HostInfo struct {
 	// This is used to limit lighthouse re-queries in chatty clients
 	nextLHQuery atomic.Int64
 
-	// lastRebindCount is the other side of Interface.rebindCount, if these values don't match then we need to ask LH
-	// for a punch from the remote end of this tunnel. The goal being to prime their conntrack for our traffic just like
-	// with a handshake
-	lastRebindCount int8
-
 	// lastHandshakeTime records the time the remote side told us about at the stage when the handshake was completed locally
 	// Stage 1 packet will contain it if I am a responder, stage 2 packet if I am an initiator
 	// This is used to avoid an attack where a handshake packet is replayed after some time
@@ -280,9 +280,6 @@ type HostInfo struct {
 
 	lastRoam       time.Time
 	lastRoamRemote netip.AddrPort
-
-	//TODO: in, out, and others might benefit from being an atomic.Int32. We could collapse connectionManager pendingDeletion, relayUsed, and in/out into this 1 thing
-	in, out, pendingDeletion atomic.Bool
 
 	// lastUsed tracks the last time ConnectionManager checked the tunnel and it was in use.
 	// This value will be behind against actual tunnel utilization in the hot path.
@@ -328,9 +325,9 @@ type cachedPacketMetrics struct {
 func NewHostMapFromConfig(l *slog.Logger, c *config.C) *HostMap {
 	hm := newHostMap(l)
 
-	hm.reload(c, true)
-	c.RegisterReloadCallback(func(c *config.C) {
-		hm.reload(c, false)
+	hm.reload(c, true, nil)
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		hm.reload(c, false, r)
 	})
 
 	l.Info("Main HostMap created", "preferredRanges", hm.GetPreferredRanges())
@@ -349,7 +346,8 @@ func newHostMap(l *slog.Logger) *HostMap {
 	}
 }
 
-func (hm *HostMap) reload(c *config.C, initial bool) {
+// r is nil on the initial load
+func (hm *HostMap) reload(c *config.C, initial bool, r *config.Reload) {
 	if initial || c.HasChanged("preferred_ranges") {
 		var preferredRanges []netip.Prefix
 		rawPreferredRanges := c.GetStringSlice("preferred_ranges", []string{})
@@ -360,8 +358,9 @@ func (hm *HostMap) reload(c *config.C, initial bool) {
 			if err != nil {
 				hm.l.Warn("Failed to parse preferred ranges, ignoring",
 					"error", err,
-					"range", rawPreferredRanges,
+					"range", rawPreferredRange,
 				)
+				r.Failed()
 				continue
 			}
 
@@ -549,6 +548,17 @@ func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) bool {
 	return final
 }
 
+func (hm *HostMap) QueryIndexCached(index uint32, cache map[uint32]*HostInfo) *HostInfo {
+	if out, ok := cache[index]; ok {
+		return out
+	}
+	out := hm.QueryIndex(index)
+	if out != nil {
+		cache[index] = out
+	}
+	return out
+}
+
 func (hm *HostMap) QueryIndex(index uint32) *HostInfo {
 	hm.RLock()
 	if h, ok := hm.Indexes[index]; ok {
@@ -664,7 +674,7 @@ func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 	hm.Indexes[hostinfo.localIndexId] = hostinfo
 	hm.RemoteIndexes[hostinfo.remoteIndexId] = hostinfo
 
-	hostinfo.out.Store(true)
+	hostinfo.markOut(f.rebindEpoch.Load())
 	if f.connectionManager != nil { // f.connectionManager is only nil in some unit tests
 		f.connectionManager.trafficTimer.Add(hostinfo.localIndexId, f.connectionManager.checkInterval)
 	}
@@ -765,6 +775,64 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []netip.Prefix, ifce *Interfac
 	}
 }
 
+// Bits within HostInfo.state, everything above stateEpochShift is the epoch
+const (
+	stateIn uint32 = 1 << iota
+	stateOut
+	statePendingDeletion
+
+	stateFlags = stateIn | stateOut | statePendingDeletion
+	// The epoch is the top 29 bits, it would take 2^29 rebinds to wrap and we will never get there
+	stateEpochShift = 3
+)
+
+// markIn records inbound traffic
+func (i *HostInfo) markIn() {
+	if i.state.Load()&stateIn == 0 {
+		i.state.Or(stateIn)
+	}
+}
+
+// markOut records a send and reports whether the epoch moved, meaning we want a punch from the far side
+func (i *HostInfo) markOut(epoch uint32) bool {
+	e := epoch << stateEpochShift
+	for {
+		old := i.state.Load()
+		if old&stateOut != 0 && old&^stateFlags == e {
+			return false
+		}
+
+		if i.state.CompareAndSwap(old, old&stateFlags|stateOut|e) {
+			return old&^stateFlags != e
+		}
+	}
+}
+
+// markOutOnly records a send without consuming the rebind epoch, for paths that cannot act on a requery
+func (i *HostInfo) markOutOnly() {
+	if i.state.Load()&stateOut == 0 {
+		i.state.Or(stateOut)
+	}
+}
+
+// takeTraffic clears both traffic bits, leaving the epoch alone, and reports what they were
+func (i *HostInfo) takeTraffic() (in bool, out bool) {
+	old := i.state.And(^(stateIn | stateOut))
+	return old&stateIn != 0, old&stateOut != 0
+}
+
+func (i *HostInfo) setPendingDeletion(v bool) {
+	if v {
+		i.state.Or(statePendingDeletion)
+	} else {
+		i.state.And(^statePendingDeletion)
+	}
+}
+
+func (i *HostInfo) isPendingDeletion() bool {
+	return i.state.Load()&statePendingDeletion != 0
+}
+
 func (i *HostInfo) GetCert() *cert.CachedCertificate {
 	if i.ConnectionState != nil {
 		return i.ConnectionState.peerCert
@@ -837,6 +905,25 @@ func (i *HostInfo) buildNetworks(myVpnNetworksTable *bart.Lite, c cert.Certifica
 	}
 
 	i.networks = new(bart.Table[NetworkType])
+	for _, network := range c.UnsafeNetworks() {
+		// Mark where an unsafe network overlaps our vpn networks, the firewall must not let the
+		// peer send from vpn addresses that belong to other nodes
+		if myVpnNetworksTable.LookupPrefix(network) {
+			// The unsafe network is inside one of our vpn networks, all of it is overlap.
+			// Ex: vpn network 10.1.0.0/16, unsafe network 10.1.2.0/24, all of 10.1.2.0/24 is overlap
+			i.networks.Insert(network, NetworkTypeUnsafeVPNOverlap)
+		} else {
+			// Any of our vpn networks inside the unsafe network are the overlap, the rest is unsafe.
+			// Ex: vpn network 10.1.0.0/16, unsafe network 10.0.0.0/8, 10.1.0.0/16 is overlap and the rest of 10.0.0.0/8 is unsafe.
+			// On the other hand, an unsafe network assignment of 192.168.0.0/16 would have no overlap.
+			i.networks.Insert(network, NetworkTypeUnsafe)
+			for overlap := range myVpnNetworksTable.Subnets(network) {
+				i.networks.Insert(overlap, NetworkTypeUnsafeVPNOverlap)
+			}
+		}
+	}
+
+	// Insert the peer's own addresses last so an overlap of the same prefix can't replace them
 	for _, network := range c.Networks() {
 		nprefix := netip.PrefixFrom(network.Addr(), network.Addr().BitLen())
 		if myVpnNetworksTable.Contains(network.Addr()) {
@@ -844,10 +931,6 @@ func (i *HostInfo) buildNetworks(myVpnNetworksTable *bart.Lite, c cert.Certifica
 		} else {
 			i.networks.Insert(nprefix, NetworkTypeVPNPeer)
 		}
-	}
-
-	for _, network := range c.UnsafeNetworks() {
-		i.networks.Insert(network, NetworkTypeUnsafe)
 	}
 }
 
@@ -870,60 +953,4 @@ func (i *HostInfo) logger(l *slog.Logger) *slog.Logger {
 	}
 
 	return li
-}
-
-// Utility functions
-
-func localAddrs(l *slog.Logger, allowList *LocalAllowList) []netip.Addr {
-	//FIXME: This function is pretty garbage
-	var finalAddrs []netip.Addr
-	ifaces, _ := net.Interfaces()
-	for _, i := range ifaces {
-		allow := allowList.AllowName(i.Name)
-		if l.Enabled(context.Background(), logging.LevelTrace) {
-			l.Log(context.Background(), logging.LevelTrace, "localAllowList.AllowName",
-				"interfaceName", i.Name,
-				"allow", allow,
-			)
-		}
-
-		if !allow {
-			continue
-		}
-		addrs, _ := i.Addrs()
-		for _, rawAddr := range addrs {
-			var addr netip.Addr
-			switch v := rawAddr.(type) {
-			case *net.IPNet:
-				//continue
-				addr, _ = netip.AddrFromSlice(v.IP)
-			case *net.IPAddr:
-				addr, _ = netip.AddrFromSlice(v.IP)
-			}
-
-			if !addr.IsValid() {
-				if l.Enabled(context.Background(), slog.LevelDebug) {
-					l.Debug("addr was invalid", "localAddr", rawAddr)
-				}
-				continue
-			}
-			addr = addr.Unmap()
-
-			if addr.IsLoopback() == false && addr.IsLinkLocalUnicast() == false {
-				isAllowed := allowList.Allow(addr)
-				if l.Enabled(context.Background(), logging.LevelTrace) {
-					l.Log(context.Background(), logging.LevelTrace, "localAllowList.Allow",
-						"localAddr", addr,
-						"allowed", isAllowed,
-					)
-				}
-				if !isAllowed {
-					continue
-				}
-
-				finalAddrs = append(finalAddrs, addr)
-			}
-		}
-	}
-	return finalAddrs
 }

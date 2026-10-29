@@ -6,11 +6,16 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"os"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/slackhq/nebula/commands"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/cpupick"
+	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/sshd"
 	"github.com/slackhq/nebula/udp"
@@ -20,11 +25,20 @@ import (
 
 type m = map[string]any
 
+// maxRoutines caps routines below the RejectHeadroom nonce gap so concurrent senders can't race the counter past wrap.
+const maxRoutines = 1 << 16
+
+// The reject headroom must exceed every sender that can be mid-reservation at once, about two per routine.
+const _ = noiseutil.RejectHeadroom - 4*maxRoutines
+
 func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, deviceFactory overlay.DeviceFactory) (retcon *Control, reterr error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	// Automatically cancel the context if Main returns an error, to signal all created goroutines to quit.
+	// The goroutines started below stop only when this context does, and only a caller holding the
+	// Control can arrange that. Cancel whenever we are not handing one back, which covers an error
+	// and a config test alike: a config test used to leave the lighthouse query worker, and a
+	// hostname resolver per dns named static host, running for the life of the process.
 	defer func() {
-		if reterr != nil {
+		if retcon == nil {
 			cancel()
 		}
 	}()
@@ -32,6 +46,9 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	if buildVersion == "" {
 		buildVersion = moduleVersion()
 	}
+
+	// Debug builds (-tags debug) serve pprof on :6060; a no-op otherwise.
+	startPprofServer(ctx, l)
 
 	// Print the config if in test, the exit comes later
 	if configTest {
@@ -42,6 +59,35 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 
 		// Print the final config
 		l.Info(string(b))
+	}
+
+	// Host DNS recovery is the one thing that touches the system this early: a previous run that crashed
+	// may have left the resolver pointed at stale DNS configuration, and we want to clean that up in case
+	// we're stuck in some kind of crash loop.
+	//
+	// A stanza that does not load is fatal, but recovery runs first: the broken stanza may be the
+	// reason we are crash looping, and nothing else is going to put the host's resolver back.
+	var hd *hostDNS
+	var hdErr error
+	if configTest {
+		// Avoid actually building a manager when we're just validating the config. Doing so might
+		// cause dnsconfig to log an error on unsupported hosts.
+		_, hdErr = loadHostDNSConfig(c, c.GetBool("tun.disabled", false))
+	} else {
+		// Set up a hostDNS whether it's configured or not, so we can remove stale
+		// host config in the event of a restart after an unclean shutdown.
+		hd, hdErr = newHostDNSFromConfig(l, c)
+		defer func() {
+			if retcon == nil {
+				hd.Restore()
+			}
+		}()
+		// Start recovery before everything is up, to give us the best chance of recovering
+		// in a persistent failure case.
+		hd.Recover()
+	}
+	if hdErr != nil {
+		return nil, util.ContextualizeIfNeeded("Failed to configure host DNS", hdErr)
 	}
 
 	pki, err := NewPKIFromConfig(l, c)
@@ -55,14 +101,18 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	}
 	l.Info("Firewall started", "firewallHashes", fw.GetRuleHashes())
 
-	ssh, err := sshd.NewSSHServer(ctx, l.With("subsystem", "sshd"))
+	// The command registry is shared by every surface that exposes these commands, so a
+	// command cannot reach one of them without reaching the others.
+	cmdRegistry := commands.New()
+
+	ssh, err := sshd.NewSSHServer(ctx, l.With("subsystem", "sshd"), cmdRegistry)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Error while creating SSH server", err)
 	}
 	wireSSHReload(l, ssh, c)
 	var sshStart func()
 	if c.GetBool("sshd.enabled", false) {
-		sshStart, err = configSSH(l, ssh, c)
+		sshStart, err = configSSH(l, ssh, c, nil)
 		if err != nil {
 			l.Warn("Failed to configure sshd, ssh debugging will not be available", "error", err)
 			sshStart = nil
@@ -81,9 +131,6 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		if routines < 1 {
 			routines = 1
 		}
-		if routines > 1 {
-			l.Info("Using multiple routines", "routines", routines)
-		}
 	} else {
 		// deprecated and undocumented
 		tunQueues := c.GetInt("tun.routines", 1)
@@ -92,6 +139,12 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		if routines != 1 {
 			l.Warn("Setting tun.routines and listen.routines is deprecated. Use `routines` instead", "routines", routines)
 		}
+	}
+	if routines > maxRoutines {
+		l.Warn("Using multiple routines", "routines", maxRoutines, "clamped", true, "requestedRoutines", routines)
+		routines = maxRoutines
+	} else if routines > 1 {
+		l.Info("Using multiple routines", "routines", routines)
 	}
 
 	// EXPERIMENTAL
@@ -160,12 +213,25 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		}
 
 		for i := 0; i < routines; i++ {
-			l.Info("listening", "addr", netip.AddrPortFrom(listenHost, uint16(port)))
-			udpServer, err := udp.NewListener(l, listenHost, port, routines > 1, c.GetInt("listen.batch", 64))
+			listen := netip.AddrPortFrom(listenHost, uint16(port))
+			l.Info("listening", "addr", listen)
+			batchSize := c.GetInt("listen.batch", 64)
+			if batchSize < 1 {
+				oldBatch := batchSize
+				batchSize = 1
+				l.Warn("listen.batch size is invalid", "provided", oldBatch, "overridden to", batchSize)
+			}
+			udpSettings := udp.Settings{
+				Listen:   listen,
+				Multi:    routines > 1,
+				Batch:    batchSize,
+				Offloads: c.GetBool("listen.udp_offloads", false),
+			}
+			udpServer, err := udp.NewListener(l, udpSettings)
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
-			udpServer.ReloadConfig(c)
+			udpServer.ReloadConfig(c, nil)
 			udpConns[i] = udpServer
 
 			// If port is dynamic, discover it before the next pass through the for loop
@@ -210,6 +276,37 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		l.Warn("Failed to start DNS responder", "error", err)
 	}
 
+	pinThreads := c.GetBool("tun.pin_threads", true)
+	cpuAffinity := parseCpuAffinity(c, l, routines)
+	if pinThreads && routines > 1 && len(cpuAffinity) == 0 && !configTest {
+		// The operator didn't choose pin CPUs, so pick a default set that
+		// prefers performance cores and doesn't stack co-located instances
+		// onto allowed[0].
+
+		// key is used to seed the spreading of routines->cores.
+		// use PID if you want to ensure many different Nebulas in VMs or containers land on different cores
+		// use port if you want to always end up on the same cores, ideal for benchmarking.
+		key := uint64(os.Getpid()) //default to PID
+		pinKeyStr := strings.ToLower(c.GetString("tun.pin_threads_key", ""))
+		switch pinKeyStr {
+		case "":
+			l.Debug("tun.pin_threads_key is empty, using PID")
+		case "pid":
+			l.Debug("tun.pin_threads_key is PID")
+		case "port":
+			if ap, err := udpConns[0].LocalAddr(); err == nil && ap.Port() != 0 {
+				l.Info("tun.pin_threads_key is port number")
+				key = uint64(ap.Port())
+			} else {
+				l.Warn("Failed to get a port number for tun.pin_threads_key, falling back to PID", "error", err)
+			}
+		default:
+			l.Warn("tun.pin_threads_key is invalid, using PID")
+		}
+
+		cpuAffinity = cpupick.Default(routines, key, l)
+	}
+
 	ifConfig := &InterfaceConfig{
 		HostMap:               hostMap,
 		Inside:                tun,
@@ -231,10 +328,13 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		relayManager:          NewRelayManager(ctx, l, hostMap, c),
 		punchy:                punchy,
 		ConntrackCacheTimeout: conntrackCacheTimeout,
+		CpuAffinity:           cpuAffinity,
+		PinThreads:            pinThreads,
 		l:                     l,
 	}
 
 	var ifce *Interface
+	var emitStats func()
 	if !configTest {
 		ifce, err = NewInterface(ctx, ifConfig)
 		if err != nil {
@@ -244,7 +344,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		ifce.writers = udpConns
 		lightHouse.ifce = ifce
 
-		loadMultiPortConfig := func(c *config.C) {
+		loadMultiPortConfig := func(c *config.C, r *config.Reload) {
 			ifce.multiPort.Rx = c.GetBool("tun.multiport.rx_enabled", false)
 
 			tx := c.GetBool("tun.multiport.tx_enabled", false)
@@ -254,7 +354,10 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 			// The send sockets are opened once and never replaced, since the send path uses them without locking
 			mp := ifce.udpMulti.Load()
 			if tx && mp == nil {
-				mp, err = udp.NewMultiPortConn(l, listenHost, uint16(port), txPorts)
+				mp, err = udp.NewMultiPortConn(l, udp.Settings{
+					Listen:   netip.AddrPortFrom(listenHost, uint16(port)),
+					Offloads: c.GetBool("listen.udp_offloads", false),
+				}, txPorts)
 				if err != nil {
 					l.Error("Failed to open udp sockets for tun.multiport.tx_enabled", "error", err)
 					mp = nil
@@ -263,8 +366,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 					ifce.udpMulti.Store(mp)
 				}
 			} else if tx && mp.Ports() != txPorts {
-				l.Warn("tun.multiport.tx_ports is not reloadable, a restart is required to change it",
-					"current", mp.Ports(), "configured", txPorts)
+				r.RestartRequiredIfChanged("tun.multiport.tx_ports")
 			}
 
 			if tx {
@@ -272,7 +374,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 				ifce.multiPort.TxPorts = mp.Ports()
 				ifce.multiPort.TxHandshake = c.GetBool("tun.multiport.tx_handshake", false)
 				ifce.multiPort.TxHandshakeDelay = int64(c.GetInt("tun.multiport.tx_handshake_delay", 2))
-				mp.ReloadConfig(c)
+				mp.ReloadConfig(c, r)
 			}
 			ifce.multiPort.Tx = tx
 
@@ -282,10 +384,20 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 			l.Info("Multiport configured", "multiPort", ifce.multiPort)
 		}
 
-		loadMultiPortConfig(c)
+		loadMultiPortConfig(c, nil)
 		c.RegisterReloadCallback(loadMultiPortConfig)
 
 		ifce.RegisterConfigChangeCallbacks(c)
+		// These are only read at startup
+		c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+			r.RestartRequiredIfChanged(
+				"routines", "tun.routines", "listen.routines", "firewall.conntrack.routine_cache_timeout",
+				"listen.port", "listen.host", "stats.message_metrics",
+				"handshakes.try_interval", "handshakes.retries", "handshakes.trigger_buffer",
+				"tun.drop_local_broadcast", "tun.drop_multicast",
+			)
+			r.RestartRequiredIfChanged(osStartupOnlyKeys...)
+		})
 		ifce.reloadDisconnectInvalid(c)
 		ifce.reloadSendRecvError(c)
 		ifce.reloadAcceptRecvError(c)
@@ -294,9 +406,12 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		go handshakeManager.Run(ctx)
 
 		punchy.Start(ctx, ifce, hostMap, lightHouse)
+
+		// On the stats server's loop, so the gauges follow the interval it accepted
+		emitStats = ifce.statsEmitter()
 	}
 
-	stats, err := newStatsServerFromConfig(ctx, l, c, buildVersion, configTest)
+	stats, err := newStatsServerFromConfig(ctx, l, c, buildVersion, configTest, emitStats)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to start stats emitter", err)
 	}
@@ -305,15 +420,14 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		return nil, nil
 	}
 
-	go ifce.emitStats(ctx, c.GetDuration("stats.interval", time.Second*10))
-
-	attachCommands(l, c, ssh, ifce)
+	attachCommands(l, c, cmdRegistry, ifce)
 
 	networkChanges := udp.NewNetworkChangeMonitor(ctx, l, c)
 
 	return &Control{
 		state:                  StateReady,
 		f:                      ifce,
+		commands:               cmdRegistry,
 		l:                      l,
 		ctx:                    ctx,
 		cancel:                 cancel,
@@ -323,7 +437,73 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		lighthouseStart:        lightHouse.StartUpdateWorker,
 		networkChangeStart:     networkChanges.Start,
 		connectionManagerStart: connManager.Start,
+		hostDNSStart:           hd.Start,
+		hostDNSRestore:         hd.Restore,
 	}, nil
+}
+
+// parseCpuAffinity reads `tun.cpu_affinity` from the config — a list of
+// integer CPU IDs, one per TUN reader goroutine. Empty / unset returns nil
+// (listenIn falls back to spreading queues across the allowed CPU set).
+// Length mismatch with `routines` is a warning, not an error: shorter lists
+// are modulo-cycled across queues, longer lists' tail is ignored. Invalid
+// entries (non-integer, or a CPU ID we're not allowed to run on) are also a
+// warning and disable the override entirely so we don't silently pin to the
+// wrong CPU. Entries are validated against the process's current affinity
+// mask (util.AllowedCPUs) rather than 0..NumCPU-1: under a cgroup cpuset or
+// taskset the runnable IDs are frequently not that contiguous range, and
+// pinning to an unrunnable ID always fails. If the allowed set can't be
+// determined we fall back to a plain non-negative check.
+func parseCpuAffinity(c *config.C, l *slog.Logger, routines int) []int {
+	raw := c.Get("tun.cpu_affinity")
+	if raw == nil {
+		return nil
+	}
+	rv, ok := raw.([]any)
+	if !ok {
+		l.Warn("tun.cpu_affinity must be a list of integers; ignoring", "value", raw)
+		return nil
+	}
+	// allowed is the set of CPU IDs we're actually permitted to run on. A nil
+	// slice (unsupported platform or lookup error) means "can't tell", so we
+	// only apply the weaker non-negative check in that case.
+	allowed, err := util.AllowedCPUs()
+	if err != nil {
+		l.Warn("could not determine allowed CPUs; validating tun.cpu_affinity against non-negative only", "error", err)
+		allowed = nil
+	}
+	cpus := make([]int, 0, len(rv))
+	for i, e := range rv {
+		var cpu int
+		switch v := e.(type) {
+		case int:
+			cpu = v
+		case int64:
+			cpu = int(v)
+		case float64:
+			cpu = int(v)
+		default:
+			l.Warn("tun.cpu_affinity entry not an integer; ignoring affinity",
+				"index", i, "value", e)
+			return nil
+		}
+		if cpu < 0 {
+			l.Warn("tun.cpu_affinity entry out of range; ignoring affinity",
+				"index", i, "cpu", cpu)
+			return nil
+		}
+		if len(allowed) > 0 && !slices.Contains(allowed, cpu) {
+			l.Warn("tun.cpu_affinity entry not in allowed CPU set; ignoring affinity",
+				"index", i, "cpu", cpu, "allowed", allowed)
+			return nil
+		}
+		cpus = append(cpus, cpu)
+	}
+	if len(cpus) != routines {
+		l.Warn("tun.cpu_affinity length doesn't match routines; queues will modulo-cycle through the list",
+			"affinityLen", len(cpus), "routines", routines)
+	}
+	return cpus
 }
 
 func moduleVersion() string {

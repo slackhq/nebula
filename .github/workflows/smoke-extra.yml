@@ -34,7 +34,7 @@ jobs:
 
     - uses: actions/setup-go@v7
       with:
-        go-version: '1.26'
+        go-version: '1.27'
         check-latest: true
 
     - name: add hashicorp source
@@ -66,7 +66,7 @@ jobs:
 
     - uses: actions/setup-go@v7
       with:
-        go-version: '1.26'
+        go-version: '1.27'
         check-latest: true
 
     - name: add hashicorp source
@@ -74,7 +74,9 @@ jobs:
 
     - name: install vagrant and virtualbox
       run: |
-        sudo apt-get update && sudo apt-get install -y vagrant virtualbox
+        wget -O- https://www.virtualbox.org/download/oracle_vbox_2016.asc | sudo gpg --dearmor -o /usr/share/keyrings/oracle-virtualbox-2016.gpg
+        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/oracle-virtualbox-2016.gpg] https://download.virtualbox.org/virtualbox/debian $(lsb_release -cs) contrib" | sudo tee /etc/apt/sources.list.d/virtualbox.list
+        sudo apt-get update && sudo apt-get install -y vagrant virtualbox-7.2 linux-headers-$(uname -r)
         sudo rmmod kvm_amd kvm_intel kvm 2>/dev/null || true
 
     - name: linux-386
@@ -92,13 +94,13 @@ jobs:
 
     - uses: actions/setup-go@v7
       with:
-        go-version: '1.26'
+        go-version: '1.27'
         check-latest: true
 
     # WSL2 + Ubuntu so the smoke can run a real linux peer with its own
     # netns. iputils-ping is needed for the in-WSL ping check. WSL1 has no
     # real kernel and would lack /dev/net/tun, so we have to force WSL2.
-    - uses: Vampire/setup-wsl@v3
+    - uses: Vampire/setup-wsl@v7
       with:
         distribution: Ubuntu-24.04
         additional-packages: iputils-ping iproute2

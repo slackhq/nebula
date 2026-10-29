@@ -1,21 +1,22 @@
 //go:build !ios && !e2e_testing
-// +build !ios,!e2e_testing
 
 package overlay
 
 import (
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
+	"math/bits"
 	"net/netip"
 	"os"
+	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	netroute "golang.org/x/net/route"
@@ -29,8 +30,31 @@ type tun struct {
 	DefaultMTU  int
 	Routes      atomic.Pointer[[]Route]
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
-	linkAddr    *netroute.LinkAddr
-	l           *slog.Logger
+	linkAddr    atomic.Pointer[netroute.LinkAddr]
+	// hostOwned means the fd arrived from the OS, which has already configured addressing, mtu
+	// and routes for it. NEPacketTunnelProvider on darwin does this.
+	hostOwned bool
+	l         *slog.Logger
+
+	// routesMu serializes changes to the system routing table between reload and the route watcher, and guards the
+	// fields below it
+	routesMu sync.Mutex
+	// routeStates is who held each installable unsafe_route prefix when we last looked
+	routeStates map[netip.Prefix]routeState
+	// routeWatch is the routing socket watchRoutes reads, Close closes it
+	routeWatch *os.File
+	// routeSweep reconciles the unsafe_routes every routeSweepEvery
+	routeSweep      *time.Timer
+	routeSweepEvery time.Duration
+	closed          bool
+
+	// routeMovers is who last changed each unsafe_route prefix since the last reconcile, for its logs. It has its own
+	// lock so the route watcher never waits on a reconcile
+	routeMoversMu sync.Mutex
+	routeMovers   map[netip.Prefix]routeMover
+
+	// lastRouteEvent is when the routing socket last reported something that may have moved a prefix, in unix nanos
+	lastRouteEvent atomic.Int64
 }
 
 type ifReq struct {
@@ -76,17 +100,31 @@ type ifreqAlias6 struct {
 	Lifetime   addrLifetime
 }
 
+// utunIndex is the utun tun.dev asks for, or -1 for whichever is free. ok is false for a name that isn't utunN, which
+// also gets whichever is free
+func utunIndex(name string) (index int, ok bool) {
+	if name == "" || name == "utun" {
+		return -1, true
+	}
+	if _, err := fmt.Sscanf(name, "utun%d", &index); err != nil || index < 0 {
+		return -1, false
+	}
+	return index, true
+}
+
+// tunDevNeedsRestart is true when tun.dev asks for a particular utun that isn't the running one. Anything else takes
+// whichever is free, and the one we have will do
+func tunDevNeedsRestart(name, running string) bool {
+	index, _ := utunIndex(name)
+	return index >= 0 && fmt.Sprintf("utun%d", index) != running
+}
+
 func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*tun, error) {
-	name := c.GetString("tun.dev", "")
-	ifIndex := -1
-	if name != "" && name != "utun" {
-		_, err := fmt.Sscanf(name, "utun%d", &ifIndex)
-		if err != nil || ifIndex < 0 {
-			// NOTE: we don't make this error so we don't break existing
-			// configs that set a name before it was used.
-			l.Warn("interface name must be utun[0-9]+ on Darwin, ignoring")
-			ifIndex = -1
-		}
+	ifIndex, ok := utunIndex(c.GetString("tun.dev", ""))
+	if !ok {
+		// NOTE: we don't make this error so we don't break existing
+		// configs that set a name before it was used.
+		l.Warn("interface name must be utun[0-9]+ on Darwin, ignoring")
 	}
 
 	fd, err := unix.Socket(unix.AF_SYSTEM, unix.SOCK_DGRAM, unix.AF_SYS_CONTROL)
@@ -110,7 +148,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 		return nil, fmt.Errorf("SYS_CONNECT: %v", err)
 	}
 
-	name, err = unix.GetsockoptString(fd, unix.AF_SYS_CONTROL, _UTUN_OPT_IFNAME)
+	name, err := unix.GetsockoptString(fd, unix.AF_SYS_CONTROL, _UTUN_OPT_IFNAME)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve tun name: %w", err)
 	}
@@ -121,22 +159,28 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 	}
 
 	t := &tun{
-		f:           os.NewFile(uintptr(fd), ""),
-		Device:      name,
-		vpnNetworks: vpnNetworks,
-		DefaultMTU:  c.GetInt("tun.mtu", DefaultMTU),
-		l:           l,
+		f:               os.NewFile(uintptr(fd), ""),
+		Device:          name,
+		vpnNetworks:     vpnNetworks,
+		DefaultMTU:      getMTU(l, c),
+		routeSweepEvery: routeSweepInterval,
+		l:               l,
 	}
 
-	err = t.reload(c, true)
+	err = t.reload(c, true, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	c.RegisterReloadCallback(func(c *config.C) {
-		err := t.reload(c, false)
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		r.RestartRequiredIfChanged("tun.mtu")
+		if tunDevNeedsRestart(c.GetString("tun.dev", ""), t.Device) {
+			r.RestartRequiredIfChanged("tun.dev")
+		}
+		err := t.reload(c, false, r)
 		if err != nil {
 			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
+			r.Failed()
 		}
 	})
 
@@ -150,11 +194,62 @@ func (t *tun) deviceBytes() (o [16]byte) {
 	return
 }
 
-func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (*tun, error) {
-	return nil, fmt.Errorf("newTunFromFd not supported in Darwin")
+// newTunFromFd adopts a utun the host already created and configured, which is how a darwin
+// network extension is handed its device. Everything about moving packets is shared with newTun,
+// only the setup differs: the host owns addressing and routing here.
+func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
+	if err := unix.SetNonblock(deviceFd, true); err != nil {
+		// We own the fd from the moment it is handed to us
+		_ = unix.Close(deviceFd)
+		return nil, fmt.Errorf("failed to set the tun fd to non-blocking mode: %w", err)
+	}
+
+	file := os.NewFile(uintptr(deviceFd), "/dev/tun")
+	t := &tun{
+		f:           file,
+		Device:      utunNameFromFd(deviceFd),
+		vpnNetworks: vpnNetworks,
+		DefaultMTU:  getMTU(l, c),
+		hostOwned:   true,
+		l:           l,
+	}
+
+	if err := t.reload(c, true, nil); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		if err := t.reload(c, false, r); err != nil {
+			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
+			r.Failed()
+		}
+	})
+
+	return t, nil
+}
+
+// utunNameFromFd asks the socket what interface it is, for logs. A blank name is not worth
+// failing a tunnel over, so an error just leaves it empty.
+func utunNameFromFd(fd int) string {
+	name, err := unix.GetsockoptString(fd, unix.AF_SYS_CONTROL, _UTUN_OPT_IFNAME)
+	if err != nil {
+		return ""
+	}
+	return name
 }
 
 func (t *tun) Close() error {
+	t.routesMu.Lock()
+	t.closed = true
+	if t.routeWatch != nil {
+		_ = t.routeWatch.Close()
+	}
+	if t.routeSweep != nil {
+		t.routeSweep.Stop()
+	}
+	t.routesMu.Unlock()
+
 	if t.f != nil {
 		return t.f.Close()
 	}
@@ -162,6 +257,12 @@ func (t *tun) Close() error {
 }
 
 func (t *tun) Activate() error {
+	// The host handed us a configured device. Its addresses, mtu and routes come from the network
+	// settings it applied, and a sandboxed extension cannot change them anyway.
+	if t.hostOwned {
+		return nil
+	}
+
 	devName := t.deviceBytes()
 
 	s, err := unix.Socket(
@@ -195,7 +296,7 @@ func (t *tun) Activate() error {
 	if linkAddr == nil {
 		return fmt.Errorf("unable to discover link_addr for tun interface")
 	}
-	t.linkAddr = linkAddr
+	t.linkAddr.Store(linkAddr)
 
 	for _, network := range t.vpnNetworks {
 		if network.Addr().Is4() {
@@ -217,10 +318,25 @@ func (t *tun) Activate() error {
 		return fmt.Errorf("failed to run tun device: %s", err)
 	}
 
+	// Watch before adding so a route removed in between is still noticed
+	watch, err := openRouteSocket()
+	if err != nil {
+		t.l.Error("Failed to watch the system routing table, unsafe_routes held by another interface are only retried every minute", "error", err)
+	}
+
 	// Unsafe path routes
-	return t.addRoutes(false)
+	if err = t.addRoutes(false, nil); err != nil {
+		if watch != nil {
+			_ = watch.Close()
+		}
+		return err
+	}
+
+	t.startRouteWatch(watch)
+	return nil
 }
 
+// activate4 assigns our vpn address as a /32 and routes the vpn network to the tun explicitly.
 func (t *tun) activate4(network netip.Prefix) error {
 	s, err := unix.Socket(
 		unix.AF_INET,
@@ -247,22 +363,32 @@ func (t *tun) activate4(network netip.Prefix) error {
 		MaskAddr: unix.RawSockaddrInet4{
 			Len:    unix.SizeofSockaddrInet4,
 			Family: unix.AF_INET,
-			Addr:   prefixToMask(network).As4(),
+			Addr:   [4]byte{255, 255, 255, 255}, //always make the address a /32
 		},
 	}
+
+	// On Darwin, VPNs don't edit the routing table directly.
+	// A network extension hands its routes to the system, and configd installs them.
+	// configd replaces any route already holding the same prefix, including ours.
+	// As an example, Tailscale with an exit node treats any interface prefix wider than one address as a LAN.
+	// With LAN access off, it routes each LAN into Tailscale's utun.
+	// With LAN access on, it excludes each LAN from its tunnel.
+	// configd routes an excluded prefix like its own routes would, ignoring ours, so it goes out the default route.
+	// Either way our route is replaced, and traffic for the vpn network no longer reaches nebula.
+	// A single address isn't a LAN to Tailscale, so our route is left alone.
+	// We route the vpn network to the tun explicitly instead.
 
 	if err := ioctl(uintptr(s), unix.SIOCAIFADDR, uintptr(unsafe.Pointer(&ifr))); err != nil {
 		return fmt.Errorf("failed to set tun v4 address: %s", err)
 	}
 
-	err = addRoute(network, t.linkAddr)
-	if err != nil {
-		return err
+	if err := addRoute(network, t.linkAddr.Load()); err != nil {
+		return fmt.Errorf("failed to add route for %v: %w", network.Masked(), err)
 	}
-
 	return nil
 }
 
+// activate6 is activate4 for IPv6
 func (t *tun) activate6(network netip.Prefix) error {
 	s, err := unix.Socket(
 		unix.AF_INET6,
@@ -284,31 +410,36 @@ func (t *tun) activate6(network netip.Prefix) error {
 		PrefixMask: unix.RawSockaddrInet6{
 			Len:    unix.SizeofSockaddrInet6,
 			Family: unix.AF_INET6,
-			Addr:   prefixToMask(network).As16(),
+			// Always set the netmask to be a /128. See activate4 for why we do this.
+			Addr: [16]byte{255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255},
 		},
 		Lifetime: addrLifetime{
 			// never expires
 			Vltime: 0xffffffff,
 			Pltime: 0xffffffff,
 		},
-		Flags: _IN6_IFF_NODAD,
+		Flags: _IN6_IFF_NODAD, // No DAD, a utun has no neighbors.
 	}
 
 	if err := ioctl(uintptr(s), _SIOCAIFADDR_IN6, uintptr(unsafe.Pointer(&ifr))); err != nil {
 		return fmt.Errorf("failed to set tun address: %s", err)
 	}
 
+	if err := addRoute(network, t.linkAddr.Load()); err != nil {
+		return fmt.Errorf("failed to add route for %v: %w", network.Masked(), err)
+	}
 	return nil
 }
 
-func (t *tun) reload(c *config.C, initial bool) error {
-	change, routes, err := getAllRoutesFromConfig(c, t.vpnNetworks, initial)
+func (t *tun) reload(c *config.C, initial bool, r *config.Reload) error {
+	change, routes, err := getAllRoutesFromConfig(t.l, c, t.vpnNetworks, initial)
 	if err != nil {
 		return err
 	}
 
 	if !initial && !change {
-		return nil
+		// Any reload puts back the unsafe_routes someone deleted
+		return t.addRoutes(true, r)
 	}
 
 	routeTree, err := makeRouteTree(t.l, routes, false)
@@ -322,16 +453,18 @@ func (t *tun) reload(c *config.C, initial bool) error {
 
 	if !initial {
 		// Remove first, if the system removes a wanted route hopefully it will be re-added next
-		err := t.removeRoutes(findRemovedRoutes(routes, *oldRoutes))
+		err := t.removeRoutes(findRemovedRoutes(routes, *oldRoutes), r)
 		if err != nil {
 			util.LogWithContextIfNeeded("Failed to remove routes", err, t.l)
+			r.Failed()
 		}
 
 		// Ensure any routes we actually want are installed
-		err = t.addRoutes(true)
+		err = t.addRoutes(true, r)
 		if err != nil {
 			// Catch any stray logs
 			util.LogWithContextIfNeeded("Failed to add routes", err, t.l)
+			r.Failed()
 		}
 	}
 
@@ -344,6 +477,56 @@ func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 		return r
 	}
 	return routing.Gateways{}
+}
+
+func fetchRoutes() ([]netroute.Message, error) {
+	rib, err := netroute.FetchRIB(unix.AF_UNSPEC, unix.NET_RT_DUMP, 0)
+	if err != nil {
+		return nil, err
+	}
+	return netroute.ParseRIB(unix.NET_RT_DUMP, rib)
+}
+
+// routeInterfaceIn returns the index of the interface prefix is routed through, or 0 if msgs has no route for exactly
+// that prefix. Routes scoped to an interface are skipped, they don't stop us adding ours.
+func routeInterfaceIn(msgs []netroute.Message, prefix netip.Prefix) int {
+	for _, msg := range msgs {
+		m, ok := msg.(*netroute.RouteMessage)
+		if !ok || len(m.Addrs) <= unix.RTAX_NETMASK || m.Flags&unix.RTF_IFSCOPE != 0 {
+			continue
+		}
+		if p, ok := routePrefix(m.Addrs[unix.RTAX_DST], m.Addrs[unix.RTAX_NETMASK]); ok && p == prefix.Masked() {
+			return m.Index
+		}
+	}
+	return 0
+}
+
+// routePrefix returns the prefix a route covers. Host routes have no netmask.
+func routePrefix(dst, mask netroute.Addr) (netip.Prefix, bool) {
+	switch d := dst.(type) {
+	case *netroute.Inet4Addr:
+		bits := 32
+		if m, ok := mask.(*netroute.Inet4Addr); ok {
+			bits = maskBits(m.IP[:])
+		}
+		return netip.PrefixFrom(netip.AddrFrom4(d.IP), bits), true
+	case *netroute.Inet6Addr:
+		bits := 128
+		if m, ok := mask.(*netroute.Inet6Addr); ok {
+			bits = maskBits(m.IP[:])
+		}
+		return netip.PrefixFrom(netip.AddrFrom16(d.IP), bits), true
+	}
+	return netip.Prefix{}, false
+}
+
+func maskBits(mask []byte) int {
+	n := 0
+	for _, b := range mask {
+		n += bits.OnesCount8(b)
+	}
+	return n
 }
 
 // Get the LinkAddr for the interface of the given name
@@ -372,51 +555,6 @@ func getLinkAddr(name string) (*netroute.LinkAddr, error) {
 	}
 
 	return nil, nil
-}
-
-func (t *tun) addRoutes(logErrors bool) error {
-	routes := *t.Routes.Load()
-
-	for _, r := range routes {
-		if len(r.Via) == 0 || !r.Install {
-			// We don't allow route MTUs so only install routes with a via
-			continue
-		}
-
-		err := addRoute(r.Cidr, t.linkAddr)
-		if err != nil {
-			if errors.Is(err, unix.EEXIST) {
-				t.l.Warn("unable to add unsafe_route, identical route already exists", "route", r.Cidr)
-			} else {
-				retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
-				if logErrors {
-					retErr.Log(t.l)
-				} else {
-					return retErr
-				}
-			}
-		} else {
-			t.l.Info("Added route", "route", r)
-		}
-	}
-
-	return nil
-}
-
-func (t *tun) removeRoutes(routes []Route) error {
-	for _, r := range routes {
-		if !r.Install {
-			continue
-		}
-
-		err := delRoute(r.Cidr, t.linkAddr)
-		if err != nil {
-			t.l.Error("Failed to remove route", "error", err, "route", r)
-		} else {
-			t.l.Info("Removed route", "route", r)
-		}
-	}
-	return nil
 }
 
 func addRoute(prefix netip.Prefix, gateway netroute.Addr) error {
@@ -550,7 +688,9 @@ func (t *tun) Read(to []byte) (int, error) {
 	return n - 4, nil
 }
 
-// Write pushes one IP packet onto the utun device.
+// Write pushes one IP packet onto the utun device. Safe for concurrent use:
+// the AF prefix and iovecs are per-call stack state, and the fd write itself
+// serializes on the runtime's fd mutex (see the Queue contract in tio.go).
 func (t *tun) Write(from []byte) (int, error) {
 	if len(from) == 0 {
 		return 0, syscall.EIO
@@ -606,10 +746,6 @@ func (t *tun) Name() string {
 	return t.Device
 }
 
-func (t *tun) SupportsMultiqueue() bool {
-	return false
-}
-
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented for darwin")
+func (t *tun) Queues(int) ([]tio.Queue, error) {
+	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}, nil
 }

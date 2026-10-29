@@ -25,7 +25,7 @@ func AssertDeepCopyEqual(t *testing.T, a any, b any) {
 }
 
 func traverseDeepCopy(t *testing.T, v1 reflect.Value, v2 reflect.Value, name string) bool {
-	if v1.Type() == v2.Type() && v1.Type() == reflect.TypeOf(netip.Addr{}) {
+	if v1.Type() == v2.Type() && v1.Type() == reflect.TypeFor[netip.Addr]() {
 		// Ignore netip.Addr types since they reuse an interned global value
 		return false
 	}
@@ -72,7 +72,7 @@ func traverseDeepCopy(t *testing.T, v1 reflect.Value, v2 reflect.Value, name str
 		}
 		return traverseDeepCopy(t, v1.Elem(), v2.Elem(), name)
 
-	case reflect.Ptr:
+	case reflect.Pointer:
 		local := reflect.ValueOf(time.Local).Pointer()
 		if local == v1.Pointer() && local == v2.Pointer() {
 			return true

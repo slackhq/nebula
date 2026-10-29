@@ -24,6 +24,11 @@ type m = map[string]any
 const (
 	Version uint8 = 1
 	Len           = 16
+
+	// MaxOverhead is the most a payload grows on its way to the underlay.
+	// A relayed packet has two headers and two AEAD tags, one for the inner tunnel and another for the relay tunnel.
+	// Every supported cipher (today) has a 16 byte tag.
+	MaxOverhead = 2 * (Len + 16)
 )
 
 type MessageType uint8
@@ -190,13 +195,18 @@ func SubTypeName(t MessageType, s MessageSubType) string {
 }
 
 func IsValidSubType(t MessageType, s MessageSubType) bool {
-	if n, ok := subTypeMap[t]; ok {
-		if _, ok := (*n)[s]; ok {
-			return true
-		}
+	switch t {
+	case Message:
+		return s == MessageNone || s == MessageRelay
+	case Handshake:
+		return s == HandshakeIXPSK0
+	case Test:
+		return s == TestReply || s == TestRequest
+	case Control, CloseTunnel, RecvError, LightHouse:
+		return s == 0
+	default:
+		return false
 	}
-
-	return false
 }
 
 // NewHeader turns bytes into a header

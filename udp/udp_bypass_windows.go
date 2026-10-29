@@ -26,7 +26,9 @@ type bypassConn struct {
 	session     *wfp.Session
 }
 
-func (b *bypassConn) ReloadConfig(c *config.C) {
+func (b *bypassConn) ReloadConfig(c *config.C, r *config.Reload) {
+	// Only read on the first call, at startup
+	r.RestartRequiredIfChanged("listen.windows_bypass_wdf")
 	b.installOnce.Do(func() {
 		if !c.GetBool("listen.windows_bypass_wdf", true) {
 			return
@@ -45,7 +47,7 @@ func (b *bypassConn) ReloadConfig(c *config.C) {
 			"port", addr.Port())
 		b.session = s
 	})
-	b.Conn.ReloadConfig(c)
+	b.Conn.ReloadConfig(c, r)
 }
 
 func (b *bypassConn) Close() error {

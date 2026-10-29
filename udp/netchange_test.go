@@ -37,3 +37,19 @@ func TestNetworkChangeMonitorNilRebindIsANoOp(t *testing.T) {
 	m := newMonitor(t, context.Background(), "listen:\n  rebind_on_network_change: true\n")
 	m.Start(nil)
 }
+
+// The monitor only reads listen.rebind_on_network_change when it is made
+func TestNetworkChangeMonitorRestartKey(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	require.NoError(t, c.LoadString("listen:\n  rebind_on_network_change: true\n"))
+	NewNetworkChangeMonitor(context.Background(), l, c)
+
+	res := c.ReloadConfigString("listen:\n  rebind_on_network_change: false\n")
+	require.NoError(t, res.Err)
+	if watchesNetworkChanges {
+		assert.Equal(t, []string{"listen.rebind_on_network_change"}, res.RestartKeys)
+	} else {
+		assert.Empty(t, res.RestartKeys, "the setting does nothing here")
+	}
+}

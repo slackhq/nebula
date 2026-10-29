@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/fips140"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -24,7 +26,7 @@ func newKeygenFlags() *keygenFlags {
 	cf.set.Usage = func() {}
 	cf.outPubPath = cf.set.String("out-pub", "", "Required: path to write the public key to")
 	cf.outKeyPath = cf.set.String("out-key", "", "Required: path to write the private key to")
-	cf.curve = cf.set.String("curve", "25519", "ECDH Curve (25519, P256)")
+	cf.curve = cf.set.String("curve", defaultCurve(), "ECDH Curve (25519, P256)")
 	cf.p11url = p11Flag(cf.set)
 	return &cf
 }
@@ -61,6 +63,9 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 	} else {
 		switch *cf.curve {
 		case "25519", "X25519", "Curve25519", "CURVE25519":
+			if fips140.Enforced() {
+				return errors.New("use of Curve25519 is not allowed in FIPS 140-only mode")
+			}
 			pub, rawPriv = x25519Keypair()
 			curve = cert.Curve_CURVE25519
 		case "P256":
@@ -68,6 +73,18 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 			curve = cert.Curve_P256
 		default:
 			return fmt.Errorf("invalid curve: %s", *cf.curve)
+		}
+	}
+
+	if !isP11 && !isStdio(*cf.outKeyPath) {
+		if existsNotDevice(*cf.outKeyPath) {
+			return fmt.Errorf("refusing to overwrite existing key: %s", *cf.outKeyPath)
+		}
+	}
+
+	if !isStdio(*cf.outPubPath) {
+		if existsNotDevice(*cf.outPubPath) {
+			return fmt.Errorf("refusing to overwrite existing public key: %s", *cf.outPubPath)
 		}
 	}
 
@@ -103,6 +120,12 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 	}
 
 	return nil
+}
+
+// existsNotDevice reports whether path exists and is not a device or fifo, like /dev/stdout, which are written through
+func existsNotDevice(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.Mode()&(os.ModeDevice|os.ModeCharDevice|os.ModeNamedPipe) == 0
 }
 
 func keygenSummary() string {

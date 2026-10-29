@@ -1,0 +1,432 @@
+package nebula
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/netip"
+	"slices"
+	"sync"
+	"time"
+
+	"github.com/DefinedNet/dnsconfig"
+	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/util"
+)
+
+// This file turns the `dns` stanza into a host DNS configuration and applies it
+// to the host OS through a dnsconfig.Manager. It is in two parts: the stanza
+// and its parsers, and the hostDNS that owns the Manager and ties it to
+// nebula's config reloads and Control lifecycle.
+
+const defaultHostDNSIdentity = "nebula"
+
+// hostDNSConfig is the `dns` stanza, loaded.
+type hostDNSConfig struct {
+	// hostDNSOptions is what we need to build the Manager, while hostDNSGoal
+	// is what we want the host's DNS resolution to look like.
+	hostDNSOptions
+	hostDNSGoal
+}
+
+// hostDNSOptions configures the Manager. They are fixed for its life.
+type hostDNSOptions struct {
+	// Identity scopes this instance's DNS artifacts, cleanup, and the
+	// cross-process lock inside dnsconfig. It must be stable across restarts
+	// and distinct for dnsconfig Manager on the host.
+	Identity string
+
+	// Interface is the tun device's name, which Windows needs to write DNS
+	// settings. It is tun.dev, which is fixed for the life of the process,
+	// that means a Manager can be built with it before the device exists.
+	Interface string
+}
+
+// What we want to do to the host's resolver.
+type hostDNSGoal struct {
+	enabled bool
+	dns     dnsconfig.Config
+}
+
+// loadHostDNSConfig reads and validates the `dns` stanza. It does not ask
+// whether this host can honour it. A disabled stanza ignores the resolver
+// keys.
+//
+// On error the goal is set like a disabled stanza, but the options are
+// still returned when they loaded. That lets a caller clear stale host
+// data even though the rest of the stanza is unusable.
+//
+// tunDisabled is whether this process runs without a tun device.
+func loadHostDNSConfig(c *config.C, tunDisabled bool) (hostDNSConfig, error) {
+	var cfg hostDNSConfig
+	var optsErr, goalErr error
+	cfg.hostDNSOptions, optsErr = loadIdentityConfig(c)
+	cfg.hostDNSGoal, goalErr = loadHostDNSGoal(c, tunDisabled)
+	if err := joinDNSErrors(optsErr, goalErr); err != nil {
+		cfg.hostDNSGoal = hostDNSGoal{}
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+// loadIdentityConfig reads dns.identity and tun.dev.
+func loadIdentityConfig(c *config.C) (hostDNSOptions, error) {
+	identity, err := parseDNSIdentity(c)
+	if err != nil {
+		return hostDNSOptions{}, err
+	}
+	return hostDNSOptions{Identity: identity, Interface: c.GetString("tun.dev", "")}, nil
+}
+
+// loadHostDNSGoal reads dns.enabled and, when it is on, the desired resolver
+// configuration. It keeps checking after a key fails, so one bad stanza can
+// report several problems at once.
+func loadHostDNSGoal(c *config.C, tunDisabled bool) (hostDNSGoal, error) {
+	g := hostDNSGoal{enabled: c.GetBool("dns.enabled", false)}
+	if !g.enabled {
+		return g, nil
+	}
+
+	var tunErr, nameserversErr, domainsErr error
+	if tunDisabled {
+		tunErr = errors.New("dns.enabled requires a tun device, but tun.disabled is true")
+	}
+	g.dns.Nameservers, nameserversErr = parseDNSNameservers(c)
+	g.dns.SearchDomains, g.dns.MatchDomains, domainsErr = parseDNSDomainLists(c)
+	if err := joinDNSErrors(tunErr, nameserversErr, domainsErr); err != nil {
+		return hostDNSGoal{}, err
+	}
+
+	if err := g.dns.Validate(); err != nil {
+		return hostDNSGoal{}, util.NewContextualError("dns is not a valid DNS configuration", nil, err)
+	}
+	return g, nil
+}
+
+// joinDNSErrors reports a batch of validation failures as one error.
+//
+// A lone error is handed back unwrapped rather than joined, and no errors at
+// all is nil.
+func joinDNSErrors(errs ...error) error {
+	errs = slices.DeleteFunc(slices.Clone(errs), func(err error) bool { return err == nil })
+	switch len(errs) {
+	case 0:
+		return nil
+	case 1:
+		return errs[0]
+	}
+	return errors.Join(errs...)
+}
+
+func parseDNSNameservers(c *config.C) ([]netip.Addr, error) {
+	raw, err := c.GetStringSliceStrict("dns.nameservers")
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return nil, errors.New("dns.nameservers must have at least one entry")
+	}
+
+	var errs []error
+	out := make([]netip.Addr, 0, len(raw))
+	for i, rawAddr := range raw {
+		addr, err := netip.ParseAddr(rawAddr)
+		if err != nil {
+			errs = append(errs, util.NewContextualError(
+				fmt.Sprintf("entry %v in dns.nameservers is not an IP address", i+1),
+				m{"addr": rawAddr},
+				err,
+			))
+			continue
+		}
+		out = append(out, addr)
+	}
+
+	if len(errs) > 0 {
+		return nil, joinDNSErrors(errs...)
+	}
+
+	return out, nil
+}
+
+// parseDNSDomains reads a list of domain suffixes at key k. Entries are handed
+// to dnsconfig as written: it compares and publishes them case-insensitively
+// and with or without the trailing dot.
+func parseDNSDomains(c *config.C, k string) ([]string, error) {
+	// Strict because no match domains is the explicit opt in to catch-all DNS:
+	// GetStringSlice would read "match_domains: mesh.example.com", a one entry
+	// list missing its dash, as no match domains at all and silently point
+	// every query on the host at dns.nameservers.
+	raw, err := c.GetStringSliceStrict(k)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	var errs []error
+	for i, domain := range raw {
+		switch domain {
+		case "":
+			errs = append(errs, fmt.Errorf("entry %v in %s is empty", i+1, k))
+		case ".":
+			// Don't allow '.'. If the user wants to take over everything, they should
+			// explicitly configure no match_domains.
+			errs = append(errs, fmt.Errorf(`entry %v in %s is the root domain; set "match_domains: []" to send every query to dns.nameservers`, i+1, k))
+		}
+	}
+
+	if len(errs) > 0 {
+		return nil, joinDNSErrors(errs...)
+	}
+
+	return raw, nil
+}
+
+// parseDNSDomainLists reads dns.search_domains and dns.match_domains. We read
+// them together so we can properly handle the fallback behavior when search_domains
+// is specified but match_domains is not.
+func parseDNSDomainLists(c *config.C) (search, match []string, err error) {
+	var errs []error
+
+	search, err = parseDNSDomains(c, "dns.search_domains")
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	switch {
+	case c.IsSet("dns.match_domains"):
+		match, err = parseDNSDomains(c, "dns.match_domains")
+		if err != nil {
+			errs = append(errs, err)
+		}
+
+	case len(errs) > 0:
+		// search_domains is what needs fixing; say nothing else about it.
+
+	case len(search) == 0:
+		errs = append(errs, errors.New(`dns requires search_domains or match_domains; set "match_domains: []" to send every query to dns.nameservers`))
+
+	default:
+		match = slices.Clone(search)
+	}
+
+	return search, match, joinDNSErrors(errs...)
+}
+
+// parseDNSIdentity loads the identity we use for tracking our changes to the local
+// resolver configuration. This value is used to disambiguate changes from other
+// users of the dnsconfig library, and to recover original OS state in the event
+// of an unclean shutdown.
+func parseDNSIdentity(c *config.C) (string, error) {
+	identity := c.GetString("dns.identity", defaultHostDNSIdentity)
+	if err := dnsconfig.ValidateIdentity(identity); err != nil {
+		return "", fmt.Errorf("dns.identity is not usable: %w", err)
+	}
+	return identity, nil
+}
+
+// hostDNSState tracks the hostDNS lifecycle.
+type hostDNSState int
+
+const (
+	hostDNSNew hostDNSState = iota
+	hostDNSStarted
+	hostDNSStopped
+)
+
+// hostDNS turns the `dns` stanza into goals for a dnsconfig.Manager.
+//
+// We maintain a single Manager for the lifetime of nebula. It is built with
+// the hostDNS and does nothing until it is given a goal.
+type hostDNS struct {
+	l *slog.Logger
+	// tunDisabled is whether this process runs without a tun device. It is
+	// read once at construction: tun.disabled only takes effect on restart,
+	// so we don't need to track it through reloads.
+	tunDisabled bool
+
+	// mu serializes Recover, Start, Restore, and the reload callback. It is
+	// held across restore to prevent a reload from landing, and meddling with
+	// Restore's work.
+	mu     sync.Mutex
+	runCfg hostDNSConfig
+	// state is used to track where we sit relative to the Manager. Start
+	// moves it to started, Restore moves it to stopped. A reload when in New
+	// or Stopped only loads config, but doesn't try to do anything.
+	state hostDNSState
+	mgr   *dnsconfig.Manager
+}
+
+// hostDNSNewTimeout bounds manager construction, which initializes the backend.
+const hostDNSNewTimeout = 5 * time.Second
+
+// newHostDNSFromConfig builds a hostDNS and registers a reload callback.
+//
+// A stanza that does not load is returned as an error, and the caller is
+// expected to treat it as fatal. Recover and Restore can still clear stale
+// host dns configuration from a prior unclean shutdown, as long as we managed
+// to load our identity.
+func newHostDNSFromConfig(l *slog.Logger, c *config.C) (*hostDNS, error) {
+	return newHostDNS(l, c, dnsconfig.BackendAuto)
+}
+
+// newHostDNS allows tests to force a particular backend.
+func newHostDNS(l *slog.Logger, c *config.C, backend dnsconfig.BackendKind) (*hostDNS, error) {
+	tunDisabled := c.GetBool("tun.disabled", false)
+	cfg, cfgErr := loadHostDNSConfig(c, tunDisabled)
+	if cfg.Identity == "" {
+		return nil, cfgErr
+	}
+	s := &hostDNS{
+		l:           l.With("subsystem", "host_dns", "identity", cfg.Identity),
+		tunDisabled: tunDisabled,
+		runCfg:      cfg,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), hostDNSNewTimeout)
+	defer cancel()
+	mgr, err := dnsconfig.New(ctx, dnsconfig.Options{
+		Identity:      cfg.Identity,
+		InterfaceName: cfg.Interface,
+		Logger:        s.l,
+		ForceBackend:  backend,
+	})
+	if err != nil {
+		return nil, joinDNSErrors(cfgErr, err)
+	}
+	s.mgr = mgr
+	if cfgErr != nil {
+		return s, cfgErr
+	}
+
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		r.RestartRequiredIfChanged("dns.identity")
+		if !c.HasChanged("dns") {
+			return
+		}
+		if err := s.reload(c); err != nil {
+			s.l.Error("Failed to reload host DNS from config", "error", err)
+			r.Failed()
+		}
+	})
+	return s, nil
+}
+
+// reload loads the configuration a HUP delivered and states its goal.
+func (s *hostDNS) reload(c *config.C) error {
+	cfg, err := loadHostDNSConfig(c, s.tunDisabled)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runCfg = cfg
+	return s.convergeLocked()
+}
+
+// Recover makes removing whatever a previous run left behind the goal, so a
+// crash never leaves the host pointed at a nameserver that is no longer
+// reachable. Main calls it once, before anything that could fail and leave
+// such a crash unrepaired, and whether or not the stanza is enabled. It does
+// not wait for the removal: Start's goal supersedes it, and Restore completes
+// it if Start never comes.
+func (s *hostDNS) Recover() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state != hostDNSNew {
+		return
+	}
+	if err := s.mgr.Clear(); err != nil {
+		s.l.Error("Failed to start host DNS recovery", "error", err)
+	}
+}
+
+// Start latches that the tun device is active and registers the goal. Control
+// calls it once, after activating the device; this is what Control.hostDNSStart
+// points at.
+//
+// The latch is the whole reason this is separate from converge: nebula arms
+// SIGHUP before Control activates the device, so a reload landing in that
+// window would otherwise apply against a link that is not up yet. A reload
+// that early only loads its configuration, which is applied here.
+func (s *hostDNS) Start() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.state == hostDNSNew {
+		// Only move to started from new: a Restore that beat us here has
+		// already declared the host off limits.
+		s.state = hostDNSStarted
+	}
+
+	if err := s.convergeLocked(); err != nil {
+		s.l.Error("Failed to apply host DNS config", "error", err)
+	}
+}
+
+// convergeLocked registers the goal the configuration asks for and returns.
+// Set and Clear only record the goal; dnsconfig applies it and repairs drift in
+// the background, logging failures through our logger.
+//
+// Safe to call when host DNS is disabled, and when nothing was ever applied.
+// It no-ops until Start has latched the tun device as active.
+func (s *hostDNS) convergeLocked() error {
+	if s.state != hostDNSStarted {
+		return nil
+	}
+	if !s.runCfg.enabled {
+		// Clear rather than Close: this is reversible, so the Manager stays
+		// live for the reload that turns host DNS back on. It is also how a
+		// start with the stanza off recovers what a crash left behind.
+		return s.mgr.Clear()
+	}
+	return s.applyLocked(s.runCfg.dns)
+}
+
+// applyLocked updates dnsconfig's goal.
+func (s *hostDNS) applyLocked(desired dnsconfig.Config) error {
+	// dnsconfig treats a duplicate set as a no-op.
+	err := s.mgr.Set(desired)
+	switch {
+	case errors.Is(err, dnsconfig.ErrConfigurationDeclined):
+		// Unrecoverable, and not a reason to keep the tunnel down.
+		s.l.Warn("host DNS configuration is not supported on this host; leaving host DNS unmanaged", "reason", err)
+		return nil
+	case errors.Is(err, dnsconfig.ErrInterfaceRequired):
+		return fmt.Errorf("%w: tun.dev must be specified", err)
+	case err != nil:
+		return err
+	}
+	if !desired.IsSplit() {
+		s.l.Info("host DNS config has no match_domains; overriding all host DNS resolution")
+	}
+	s.l.Info("host DNS config requested", "resolvers", desired.Nameservers,
+		"matchDomains", desired.MatchDomains, "searchDomains", desired.SearchDomains)
+	return nil
+}
+
+// Restore puts the host's previous DNS configuration back and releases the
+// Manager. Call it before the tunnels and tun go away. It is idempotent and
+// safe to call when nothing was ever applied, and on a nil hostDNS.
+func (s *hostDNS) Restore() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.state = hostDNSStopped
+	// Close removes whatever we applied and logs how that went. It is
+	// one-shot, which is what makes this idempotent.
+	_ = s.mgr.Close()
+}

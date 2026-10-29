@@ -28,10 +28,11 @@ func NewRelayManager(ctx context.Context, l *slog.Logger, hostmap *HostMap, c *c
 		hostmap: hostmap,
 	}
 	rm.reload(c, true)
-	c.RegisterReloadCallback(func(c *config.C) {
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
 		err := rm.reload(c, false)
 		if err != nil {
 			rm.l.Error("Failed to reload relay_manager", "error", err)
+			r.Failed()
 		}
 	})
 	return rm
@@ -161,7 +162,7 @@ func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hh *Handshak
 		switch existingRelay.State {
 		case Established:
 			hl.Log(context.Background(), level, "Send handshake via relay", "relay", relay.String())
-			f.SendVia(relayHostInfo, existingRelay, stage0, make([]byte, 12), make([]byte, mtu), false)
+			f.SendVia(relayHostInfo, existingRelay, stage0, make([]byte, 12), make([]byte, mtu), false, 0)
 		case Disestablished:
 			// Mark this relay as 'requested'
 			relayHostInfo.relayState.UpdateRelayForByIpState(vpnIp, Requested)
@@ -215,7 +216,7 @@ func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hh *Handshak
 			fallthrough
 		default:
 			hl.Error("Relay unexpected state",
-				"vpnIp", vpnIp,
+				"vpnAddr", vpnIp,
 				"state", existingRelay.State,
 				"relay", relay,
 			)
@@ -525,6 +526,10 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 	} else {
 		// the target is not me. Create a relay to the target, from me.
 		if !rm.GetAmRelay() {
+			return
+		}
+		if !slices.Contains(h.vpnAddrs, from) {
+			logMsg.Info("Discarding relay request where relayFrom is not the sending peer")
 			return
 		}
 		peer := rm.hostmap.QueryVpnAddr(target)

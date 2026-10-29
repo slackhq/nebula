@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,7 +20,7 @@ func TestConfig_Load(t *testing.T) {
 	// invalid yaml
 	c := NewC(l)
 	os.WriteFile(filepath.Join(dir, "01.yaml"), []byte(" invalid yaml"), 0644)
-	require.EqualError(t, c.Load(dir), "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `invalid...` into map[string]interface {}")
+	require.EqualError(t, c.Load(dir), filepath.Join(dir, "01.yaml")+": yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `invalid...` into map[string]interface {}")
 
 	// simple multi config merge
 	c = NewC(l)
@@ -61,6 +62,24 @@ func TestConfig_GetStringSlice(t *testing.T) {
 	c := NewC(l)
 	c.Settings["slice"] = []any{"one", "two"}
 	assert.Equal(t, []string{"one", "two"}, c.GetStringSlice("slice", []string{}))
+}
+
+func TestConfig_GetStringSliceStrict(t *testing.T) {
+	l := test.NewLogger()
+	c := NewC(l)
+	c.Settings["slice"] = []any{"one", 2}
+	c.Settings["scalar"] = "one"
+
+	v, err := c.GetStringSliceStrict("slice")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"one", "2"}, v)
+
+	v, err = c.GetStringSliceStrict("nope")
+	require.NoError(t, err)
+	assert.Nil(t, v)
+
+	_, err = c.GetStringSliceStrict("scalar")
+	require.EqualError(t, err, "scalar must be a list, but wasn't: one")
 }
 
 func TestConfig_GetBool(t *testing.T) {
@@ -129,7 +148,7 @@ func TestConfig_ReloadConfig(t *testing.T) {
 
 	os.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: ho"), 0644)
 
-	c.RegisterReloadCallback(func(c *C) {
+	c.RegisterReloadCallback(func(c *C, _ *Reload) {
 		done <- true
 	})
 
@@ -219,4 +238,42 @@ firewall:
 		},
 	}
 	assert.Equal(t, expected, m)
+}
+
+// TestRegisterReloadCallbackDuringReload: registration is not confined to startup. The
+// HUP handler runs from inside nebula.Main, and anything wired after Main returns
+// registers while a reload may already be iterating the callbacks. Under -race this is
+// the data race on the slice; without it, it checks a callback registered mid-reload is
+// picked up by the next one.
+func TestRegisterReloadCallbackDuringReload(t *testing.T) {
+	l := test.NewLogger()
+	c := NewC(l)
+	require.NoError(t, c.LoadString("a: 1"))
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			c.RegisterReloadCallback(func(*C, *Reload) {})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			assert.NoError(t, c.ReloadConfigString("a: 1").Err)
+		}
+	}()
+	wg.Wait()
+
+	// A callback that registers another callback must not deadlock, and the new one
+	// runs from the following reload on.
+	var ran int
+	c.RegisterReloadCallback(func(c *C, _ *Reload) {
+		c.RegisterReloadCallback(func(*C, *Reload) { ran++ })
+	})
+	require.NoError(t, c.ReloadConfigString("a: 1").Err)
+	assert.Equal(t, 0, ran, "registered during this reload, so not run by it")
+	require.NoError(t, c.ReloadConfigString("a: 1").Err)
+	assert.Equal(t, 1, ran, "and run by the next")
 }

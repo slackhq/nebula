@@ -21,6 +21,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
+	"github.com/slackhq/nebula/iputil"
 )
 
 type FirewallInterface interface {
@@ -64,6 +65,9 @@ type Firewall struct {
 
 	rules        string
 	rulesVersion uint16
+
+	// source is the rendered firewall config this firewall was built from, the cert networks are kept above
+	source string
 
 	defaultLocalCIDRAny bool
 	incomingMetrics     firewallMetrics
@@ -202,11 +206,25 @@ func NewFirewallFromConfig(l *slog.Logger, cs *CertState, c *config.C) (*Firewal
 		panic("No certificate available to reconfigure the firewall")
 	}
 
+	tcpTimeout := c.GetDuration("firewall.conntrack.tcp_timeout", time.Minute*12)
+	udpTimeout := c.GetDuration("firewall.conntrack.udp_timeout", time.Minute*3)
+	defaultTimeout := c.GetDuration("firewall.conntrack.default_timeout", time.Minute*10)
+
+	if tcpTimeout <= 0 {
+		return nil, fmt.Errorf("firewall.conntrack.tcp_timeout must be greater than 0, got: %s", tcpTimeout)
+	}
+	if udpTimeout <= 0 {
+		return nil, fmt.Errorf("firewall.conntrack.udp_timeout must be greater than 0, got: %s", udpTimeout)
+	}
+	if defaultTimeout <= 0 {
+		return nil, fmt.Errorf("firewall.conntrack.default_timeout must be greater than 0, got: %s", defaultTimeout)
+	}
+
 	fw := NewFirewall(
 		l,
-		c.GetDuration("firewall.conntrack.tcp_timeout", time.Minute*12),
-		c.GetDuration("firewall.conntrack.udp_timeout", time.Minute*3),
-		c.GetDuration("firewall.conntrack.default_timeout", time.Minute*10),
+		tcpTimeout,
+		udpTimeout,
+		defaultTimeout,
 		certificate,
 		//TODO: max_connections
 	)
@@ -245,6 +263,7 @@ func NewFirewallFromConfig(l *slog.Logger, cs *CertState, c *config.C) (*Firewal
 		return nil, err
 	}
 
+	fw.source = c.Render("firewall")
 	return fw, nil
 }
 
@@ -262,11 +281,11 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 	}
 
 	switch proto {
-	case firewall.ProtoTCP:
+	case iputil.IPProtocolTCP:
 		fp = ft.TCP
-	case firewall.ProtoUDP:
+	case iputil.IPProtocolUDP:
 		fp = ft.UDP
-	case firewall.ProtoICMP, firewall.ProtoICMPv6:
+	case iputil.IPProtocolICMP, iputil.IPProtocolICMPv6:
 		//ICMP traffic doesn't have ports, so we always coerce to "any", even if a value is provided
 		if startPort != firewall.PortAny {
 			f.l.Warn("ignoring port specification for ICMP firewall rule", "startPort", startPort)
@@ -364,13 +383,13 @@ func AddFirewallRulesFromConfig(l *slog.Logger, inbound bool, c *config.C, fw Fi
 			proto = firewall.ProtoAny
 			startPort, endPort, err = parsePort(sPort)
 		case "tcp":
-			proto = firewall.ProtoTCP
+			proto = iputil.IPProtocolTCP
 			startPort, endPort, err = parsePort(sPort)
 		case "udp":
-			proto = firewall.ProtoUDP
+			proto = iputil.IPProtocolUDP
 			startPort, endPort, err = parsePort(sPort)
 		case "icmp":
-			proto = firewall.ProtoICMP
+			proto = iputil.IPProtocolICMP
 			startPort = firewall.PortAny
 			endPort = firewall.PortAny
 			if sPort != "" {
@@ -417,6 +436,7 @@ func AddFirewallRulesFromConfig(l *slog.Logger, inbound bool, c *config.C, fw Fi
 var ErrUnknownNetworkType = errors.New("unknown network type")
 var ErrPeerRejected = errors.New("remote address is not within a network that we handle")
 var ErrInvalidRemoteIP = errors.New("remote address is not in remote certificate networks")
+var ErrUnsafeVPNOverlap = errors.New("remote address is in our vpn networks but arrived via the peer's unsafe network")
 var ErrInvalidLocalIP = errors.New("local address is not in list of handled local addresses")
 var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 
@@ -444,6 +464,13 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 			return ErrPeerRejected // reject for now, one day this may have different FW rules
 		case NetworkTypeUnsafe:
 			break // nothing special, one day this may have different FW rules
+		case NetworkTypeUnsafeVPNOverlap:
+			// The peer's unsafe network overlaps our vpn networks, it is claiming another node's
+			// vpn address as a source. Outbound the address is only a destination.
+			if incoming {
+				f.metrics(incoming).droppedRemoteAddr.Inc(1)
+				return ErrUnsafeVPNOverlap
+			}
 		default:
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
 			return ErrUnknownNetworkType //should never happen
@@ -560,9 +587,9 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 	}
 
 	switch fp.Protocol {
-	case firewall.ProtoTCP:
+	case iputil.IPProtocolTCP:
 		c.Expires = time.Now().Add(f.TCPTimeout)
-	case firewall.ProtoUDP:
+	case iputil.IPProtocolUDP:
 		c.Expires = time.Now().Add(f.UDPTimeout)
 	default:
 		c.Expires = time.Now().Add(f.DefaultTimeout)
@@ -582,9 +609,9 @@ func (f *Firewall) addConn(fp firewall.Packet, incoming bool) {
 	c := &conn{}
 
 	switch fp.Protocol {
-	case firewall.ProtoTCP:
+	case iputil.IPProtocolTCP:
 		timeout = f.TCPTimeout
-	case firewall.ProtoUDP:
+	case iputil.IPProtocolUDP:
 		timeout = f.UDPTimeout
 	default:
 		timeout = f.DefaultTimeout
@@ -635,15 +662,15 @@ func (ft *FirewallTable) match(p firewall.Packet, incoming bool, c *cert.CachedC
 	}
 
 	switch p.Protocol {
-	case firewall.ProtoTCP:
+	case iputil.IPProtocolTCP:
 		if ft.TCP.match(p, incoming, c, caPool) {
 			return true
 		}
-	case firewall.ProtoUDP:
+	case iputil.IPProtocolUDP:
 		if ft.UDP.match(p, incoming, c, caPool) {
 			return true
 		}
-	case firewall.ProtoICMP, firewall.ProtoICMPv6:
+	case iputil.IPProtocolICMP, iputil.IPProtocolICMPv6:
 		if ft.ICMP.match(p, incoming, c, caPool) {
 			return true
 		}
@@ -680,7 +707,7 @@ func (fp firewallPort) match(p firewall.Packet, incoming bool, c *cert.CachedCer
 	}
 
 	// this branch is here to catch traffic from FirewallTable.Any.match and FirewallTable.ICMP.match
-	if p.Protocol == firewall.ProtoICMP || p.Protocol == firewall.ProtoICMPv6 {
+	if p.Protocol == iputil.IPProtocolICMP || p.Protocol == iputil.IPProtocolICMPv6 {
 		// port numbers are re-used for connection tracking of ICMP,
 		// but we don't want to actually filter on them.
 		return fp[firewall.PortAny].match(p, c, caPool)
@@ -966,33 +993,54 @@ func convertRule(l *slog.Logger, p any, table string, i int) (rule, error) {
 	r.CAName = toString("ca_name", m)
 	r.CASha = toString("ca_sha", m)
 
-	// Make sure group isn't an array
-	if v, ok := m["group"].([]any); ok {
-		if len(v) > 1 {
-			return r, errors.New("group should contain a single value, an array with more than one entry was provided")
+	// A null value, `group:` with nothing after it, is the same as no group
+	var singleGroup string
+	if g, ok := m["group"]; ok && g != nil {
+		// Make sure group isn't an array
+		v, isArray := g.([]any)
+		if isArray {
+			if len(v) > 1 {
+				return r, errors.New("group should contain a single value, an array with more than one entry was provided")
+			}
+			if len(v) == 0 {
+				return r, errors.New("group should contain a single value, an empty array was provided")
+			}
+			g = v[0]
 		}
 
-		l.Warn("group was an array with a single value, converting to simple value",
-			"table", table,
-			"rule", i,
-		)
-		m["group"] = v[0]
+		var err error
+		singleGroup, err = groupName(l, g, table, i)
+		if err != nil {
+			return r, fmt.Errorf("group should contain a single value, %w", err)
+		}
+
+		if isArray {
+			l.Warn("group was an array with a single value, converting to simple value",
+				"table", table,
+				"rule", i,
+			)
+		}
 	}
 
-	singleGroup := toString("group", m)
-
-	if rg, ok := m["groups"]; ok {
+	// A null value, `groups:` with nothing after it, is the same as no groups
+	if rg, ok := m["groups"]; ok && rg != nil {
 		switch reflect.TypeOf(rg).Kind() {
 		case reflect.Slice:
 			v := reflect.ValueOf(rg)
 			r.Groups = make([]string, v.Len())
-			for i := 0; i < v.Len(); i++ {
-				r.Groups[i] = v.Index(i).Interface().(string)
+			for gi := 0; gi < v.Len(); gi++ {
+				name, err := groupName(l, v.Index(gi).Interface(), table, i)
+				if err != nil {
+					return r, fmt.Errorf("groups entry #%d should contain a single value, %w", gi, err)
+				}
+				r.Groups[gi] = name
 			}
-		case reflect.String:
-			r.Groups = []string{rg.(string)}
 		default:
-			r.Groups = []string{fmt.Sprintf("%v", rg)}
+			name, err := groupName(l, rg, table, i)
+			if err != nil {
+				return r, fmt.Errorf("groups should contain an array or a single value, %w", err)
+			}
+			r.Groups = []string{name}
 		}
 	}
 
@@ -1005,7 +1053,41 @@ func convertRule(l *slog.Logger, p any, table string, i int) (rule, error) {
 		r.Groups = []string{singleGroup}
 	}
 
+	// A null group would otherwise leave the rule matching any host, likely from a template that rendered nothing
+	for _, k := range []string{"group", "groups"} {
+		if g, ok := m[k]; ok && g == nil && len(r.Groups) == 0 && r.Host == "" && r.Cidr == "" {
+			return r, fmt.Errorf("%s is null and no host, group, or cidr was provided, use `host: any` to match any host", k)
+		}
+	}
+
 	return r, nil
+}
+
+// groupName reads a group name from config. YAML has already parsed an unquoted value by the time we see it, so `007`
+// arrives as 7, `1.10` as 1.1, and a date as a time.Time, and the text that was written is gone. Strings are used as
+// is. Ints and bools are converted so `group: 7` keeps working, with a warning to quote them. Anything else would
+// become a name that may not match what was written, or matches nothing like "<nil>" or "map[a:b]", so it is rejected.
+func groupName(l *slog.Logger, v any, table string, i int) (string, error) {
+	if v == nil {
+		return "", errors.New("a null was provided")
+	}
+	switch reflect.TypeOf(v).Kind() {
+	case reflect.String:
+		return reflect.ValueOf(v).String(), nil
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Bool:
+		l.Warn("group was not a string and should be quoted to match as written",
+			"table", table,
+			"rule", i,
+			"group", v,
+		)
+		return fmt.Sprintf("%v", v), nil
+	case reflect.Slice, reflect.Array:
+		return "", errors.New("an array was provided")
+	case reflect.Map:
+		return "", errors.New("a map was provided")
+	}
+	return "", fmt.Errorf("%v was read as a %T, quote it to use it as a group name", v, v)
 }
 
 // sanity returns an error if the rule would be evaluated in a way that would short-circuit a configured check on a wildcard value

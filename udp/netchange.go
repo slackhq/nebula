@@ -24,6 +24,12 @@ type NetworkChangeMonitor struct {
 // NewNetworkChangeMonitor builds a monitor for local network changes. The returned monitor is always usable: Start
 // is safe to call unconditionally, it no-ops when disabled or on a platform that does not need it.
 func NewNetworkChangeMonitor(ctx context.Context, l *slog.Logger, c *config.C) *NetworkChangeMonitor {
+	if watchesNetworkChanges {
+		c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+			r.RestartRequiredIfChanged("listen.rebind_on_network_change")
+		})
+	}
+
 	return &NetworkChangeMonitor{
 		l:       l,
 		ctx:     ctx,

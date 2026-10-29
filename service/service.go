@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"net"
 	"net/netip"
 	"strings"
@@ -32,15 +31,27 @@ import (
 const nicID = 1
 
 type Service struct {
-	eg      *errgroup.Group
 	control *nebula.Control
 	ipstack *stack.Stack
+
+	// done is closed once the forwarding goroutines have exited and the
+	// netstack is torn down, at which point err holds the first fatal error.
+	done chan struct{}
+	err  error
 
 	mu struct {
 		sync.Mutex
 
-		listeners map[uint16]*tcpListener
+		closed    bool
+		listeners map[listenerKey]*tcpListener
 	}
+}
+
+// listenerKey identifies the address family and port an incoming connection is
+// delivered by. A dual-stack listener is registered under both families.
+type listenerKey struct {
+	proto tcpip.NetworkProtocolNumber
+	port  uint16
 }
 
 func New(control *nebula.Control) (_ *Service, reterr error) {
@@ -65,15 +76,20 @@ func New(control *nebula.Control) (_ *Service, reterr error) {
 	ctx := control.Context()
 	eg, ctx := errgroup.WithContext(ctx)
 	s := Service{
-		eg:      eg,
 		control: control,
 	}
-	s.mu.listeners = map[uint16]*tcpListener{}
+	s.mu.listeners = map[listenerKey]*tcpListener{}
 
 	s.ipstack = stack.New(stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol, icmp.NewProtocol4, icmp.NewProtocol6},
 	})
+	// The teardown goroutine only owns the stack once New succeeds
+	defer func() {
+		if reterr != nil {
+			s.ipstack.Destroy()
+		}
+	}()
 	sackEnabledOpt := tcpip.TCPSACKEnabled(true) // TCP SACK is disabled by default
 	tcpipErr := s.ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &sackEnabledOpt)
 	if tcpipErr != nil {
@@ -84,23 +100,36 @@ func New(control *nebula.Control) (_ *Service, reterr error) {
 		return nil, fmt.Errorf("could not create netstack NIC: %v", tcpipProblem)
 	}
 	ipv4Subnet, _ := tcpip.NewSubnet(tcpip.AddrFrom4([4]byte{0x00, 0x00, 0x00, 0x00}), tcpip.MaskFrom(strings.Repeat("\x00", 4)))
+	ipv6Subnet, _ := tcpip.NewSubnet(tcpip.AddrFrom16([16]byte{}), tcpip.MaskFrom(strings.Repeat("\x00", 16)))
 	s.ipstack.SetRouteTable([]tcpip.Route{
 		{
 			Destination: ipv4Subnet,
 			NIC:         nicID,
 		},
+		{
+			Destination: ipv6Subnet,
+			NIC:         nicID,
+		},
 	})
 
-	ipNet := device.Networks()
-	pa := tcpip.ProtocolAddress{
-		AddressWithPrefix: tcpip.AddrFromSlice(ipNet[0].Addr().AsSlice()).WithPrefix(),
-		Protocol:          ipv4.ProtocolNumber,
-	}
-	if err := s.ipstack.AddProtocolAddress(nicID, pa, stack.AddressProperties{
-		PEB:        stack.CanBePrimaryEndpoint, // zero value default
-		ConfigType: stack.AddressConfigStatic,  // zero value default
-	}); err != nil {
-		return nil, fmt.Errorf("error creating IP: %s", err)
+	// A v2 cert can carry several networks, possibly of both families, and each
+	// needs its own address on the NIC for that family to work
+	for _, ipNet := range device.Networks() {
+		pa := tcpip.ProtocolAddress{
+			AddressWithPrefix: tcpip.AddrFromSlice(ipNet.Addr().AsSlice()).WithPrefix(),
+			Protocol:          getProtocolNumber(ipNet.Addr()),
+		}
+		if err := s.ipstack.AddProtocolAddress(nicID, pa, stack.AddressProperties{
+			PEB:        stack.CanBePrimaryEndpoint, // zero value default
+			ConfigType: stack.AddressConfigStatic,  // zero value default
+		}); err != nil {
+			// A certificate may list one address under several prefix lengths,
+			// and the netstack only holds the host address.
+			if _, ok := err.(*tcpip.ErrDuplicateAddress); ok {
+				continue
+			}
+			return nil, fmt.Errorf("error creating IP %s: %s", ipNet.Addr(), err)
+		}
 	}
 
 	const tcpReceiveBufferSize = 0
@@ -123,15 +152,31 @@ func New(control *nebula.Control) (_ *Service, reterr error) {
 			// this will read exactly one packet
 			n, err := reader.Read(buf)
 			if err != nil {
+				// An error after shutdown began is noise from the device pipes
+				// closing, anything else is fatal and must stop nebula too
+				if ctx.Err() != nil {
+					return nil
+				}
+				s.control.Stop()
 				return err
+			}
+			var proto tcpip.NetworkProtocolNumber
+			switch header.IPVersion(buf[:n]) {
+			case header.IPv4Version:
+				proto = header.IPv4ProtocolNumber
+			case header.IPv6Version:
+				proto = header.IPv6ProtocolNumber
+			default:
+				// Not an IP packet, nothing in the stack can use it
+				continue
 			}
 			packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
 				Payload: buffer.MakeWithData(bytes.Clone(buf[:n])),
 			})
-			linkEP.InjectInbound(header.IPv4ProtocolNumber, packetBuf)
+			linkEP.InjectInbound(proto, packetBuf)
 
-			if err := ctx.Err(); err != nil {
-				return err
+			if ctx.Err() != nil {
+				return nil
 			}
 		}
 	})
@@ -139,13 +184,18 @@ func New(control *nebula.Control) (_ *Service, reterr error) {
 		for {
 			packet := linkEP.ReadContext(ctx)
 			if packet == nil {
-				if err := ctx.Err(); err != nil {
-					return err
+				if ctx.Err() != nil {
+					return nil
 				}
 				continue
 			}
 			bufView := packet.ToView()
 			if _, err := bufView.WriteTo(writer); err != nil {
+				// Same shutdown noise handling as the inbound reader
+				if ctx.Err() != nil {
+					return nil
+				}
+				s.control.Stop()
 				return err
 			}
 			bufView.Release()
@@ -157,6 +207,22 @@ func New(control *nebula.Control) (_ *Service, reterr error) {
 	eg.Go(func() error {
 		return control.Wait()
 	})
+
+	// Tear down here rather than in Close so it also happens when nebula stops
+	// on its own. The forwarding goroutines must exit before the stack they feed
+	// is destroyed.
+	s.done = make(chan struct{})
+	go func() {
+		s.err = eg.Wait()
+		s.closeListeners()
+		// Destroy aborts the endpoints that exist when it starts, then waits on
+		// every endpoint, so a Dial registering in between would hold Wait until
+		// its connect timed out. Without the NIC new dials fail route lookup.
+		// RemoveNIC also closes linkEP.
+		_ = s.ipstack.RemoveNIC(nicID)
+		s.ipstack.Destroy()
+		close(s.done)
+	}()
 
 	return &s, nil
 }
@@ -206,60 +272,105 @@ func (s *Service) Dial(network, address string) (net.Conn, error) {
 }
 
 // Listen listens on the provided address. Currently only TCP with wildcard
-// addresses are supported.
+// addresses are supported. As with net.Listen, "tcp4" accepts only IPv4
+// connections, "tcp6" only IPv6, and "tcp" both. A "tcp4" and a "tcp6"
+// listener may share a port, but a "tcp" listener claims the port for both
+// families. Connections of a family with no listener on the port are reset.
 func (s *Service) Listen(network, address string) (net.Listener, error) {
-	if network != "tcp" && network != "tcp4" {
+	var protos []tcpip.NetworkProtocolNumber
+	switch network {
+	case "tcp":
+		protos = []tcpip.NetworkProtocolNumber{ipv4.ProtocolNumber, ipv6.ProtocolNumber}
+	case "tcp4":
+		protos = []tcpip.NetworkProtocolNumber{ipv4.ProtocolNumber}
+	case "tcp6":
+		protos = []tcpip.NetworkProtocolNumber{ipv6.ProtocolNumber}
+	default:
 		return nil, errors.New("only tcp is supported")
 	}
 	addr, err := net.ResolveTCPAddr(network, address)
 	if err != nil {
 		return nil, err
 	}
-	if addr.IP != nil && !bytes.Equal(addr.IP, []byte{0, 0, 0, 0}) {
+	if addr.IP != nil && !addr.IP.IsUnspecified() {
 		return nil, fmt.Errorf("only wildcard address supported, got %q %v", address, addr.IP)
 	}
 	if addr.Port == 0 {
 		return nil, errors.New("specific port required, got 0")
 	}
-	if addr.Port < 0 || addr.Port >= math.MaxUint16 {
-		return nil, fmt.Errorf("invalid port %d", addr.Port)
-	}
 	port := uint16(addr.Port)
 
 	l := &tcpListener{
-		port:   port,
 		s:      s,
 		addr:   addr,
 		accept: make(chan net.Conn),
+		closed: make(chan struct{}),
+	}
+	for _, proto := range protos {
+		l.keys = append(l.keys, listenerKey{proto: proto, port: port})
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, ok := s.mu.listeners[port]; ok {
-		return nil, fmt.Errorf("already listening on port %d", port)
+	if s.mu.closed {
+		return nil, net.ErrClosed
 	}
-	s.mu.listeners[port] = l
+	for _, key := range l.keys {
+		if _, ok := s.mu.listeners[key]; ok {
+			return nil, fmt.Errorf("%s port %d already in use", network, port)
+		}
+	}
+	for _, key := range l.keys {
+		s.mu.listeners[key] = l
+	}
 
 	return l, nil
 }
 
+// Wait blocks until the service has fully stopped, either via Close or a fatal
+// error, and returns the first fatal error if there was one.
 func (s *Service) Wait() error {
-	return s.eg.Wait()
+	<-s.done
+	return s.err
 }
 
+// Close closes all listeners and stops nebula. Use Wait to block until
+// shutdown has completed.
 func (s *Service) Close() error {
+	s.closeListeners()
 	s.control.Stop()
 	return nil
+}
+
+// closeListeners unblocks pending Accept calls and rejects new listeners.
+func (s *Service) closeListeners() {
+	// Every caller closes every listener rather than returning early once
+	// closed is set, so none returns while another is still closing them.
+	s.mu.Lock()
+	s.mu.closed = true
+	listeners := make([]*tcpListener, 0, len(s.mu.listeners))
+	for _, l := range s.mu.listeners {
+		listeners = append(listeners, l)
+	}
+	s.mu.Unlock()
+
+	for _, l := range listeners {
+		_ = l.Close()
+	}
 }
 
 func (s *Service) tcpHandler(r *tcp.ForwarderRequest) {
 	endpointID := r.ID()
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	key := listenerKey{proto: ipv4.ProtocolNumber, port: endpointID.LocalPort}
+	if endpointID.LocalAddress.Len() == net.IPv6len {
+		key.proto = ipv6.ProtocolNumber
+	}
 
-	l, ok := s.mu.listeners[endpointID.LocalPort]
+	s.mu.Lock()
+	l, ok := s.mu.listeners[key]
+	s.mu.Unlock()
 	if !ok {
 		r.Complete(true)
 		return
@@ -275,6 +386,12 @@ func (s *Service) tcpHandler(r *tcp.ForwarderRequest) {
 	r.Complete(false)
 	ep.SocketOptions().SetKeepAlive(true)
 
+	// The handoff blocks until Accept is called, so it must not hold s.mu or a
+	// listener nobody accepts from stalls every other port.
 	conn := gonet.NewTCPConn(&wq, ep)
-	l.accept <- conn
+	select {
+	case l.accept <- conn:
+	case <-l.closed:
+		_ = conn.Close()
+	}
 }

@@ -1,22 +1,20 @@
 //go:build !e2e_testing
-// +build !e2e_testing
 
 package overlay
 
 import (
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/netip"
 	"os"
-	"regexp"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	netroute "golang.org/x/net/route"
@@ -59,24 +57,12 @@ type tun struct {
 	fd          int
 }
 
-var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
-
 func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (*tun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in openbsd")
 }
 
 func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*tun, error) {
-	// Try to open tun device
-	var err error
-	deviceName := c.GetString("tun.dev", "")
-	if deviceName == "" {
-		return nil, fmt.Errorf("a device name in the format of /dev/tunN must be specified")
-	}
-	if !deviceNameRE.MatchString(deviceName) {
-		return nil, fmt.Errorf("a device name in the format of /dev/tunN must be specified")
-	}
-
-	fd, err := unix.Open("/dev/"+deviceName, os.O_RDWR, 0)
+	fd, deviceName, err := openTun(l, c.GetString("tun.dev", ""))
 	if err != nil {
 		return nil, err
 	}
@@ -91,19 +77,24 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 		fd:          fd,
 		Device:      deviceName,
 		vpnNetworks: vpnNetworks,
-		MTU:         c.GetInt("tun.mtu", DefaultMTU),
+		MTU:         getMTU(l, c),
 		l:           l,
 	}
 
-	err = t.reload(c, true)
+	err = t.reload(c, true, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	c.RegisterReloadCallback(func(c *config.C) {
-		err := t.reload(c, false)
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		r.RestartRequiredIfChanged("tun.mtu")
+		if tunDevNeedsRestart(c.GetString("tun.dev", ""), t.Device) {
+			r.RestartRequiredIfChanged("tun.dev")
+		}
+		err := t.reload(c, false, r)
 		if err != nil {
 			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
+			r.Failed()
 		}
 	})
 
@@ -138,8 +129,8 @@ func tunWritev(fd int, iovecs []unix.Iovec) (n int, err error)
 //go:noescape
 func tunReadv(fd int, iovecs []unix.Iovec) (n int, err error)
 
-// Read pulls one IP packet off the tun device, scattering the 4 byte protocol header away from the
-// packet so the payload lands directly in to.
+// Read pulls one IP packet off the tun device, scattering the 4 byte protocol header away from
+// the packet so the payload lands directly in to.
 func (t *tun) Read(to []byte) (int, error) {
 	var head [4]byte
 
@@ -304,7 +295,7 @@ func (t *tun) Activate() error {
 		}
 	}
 
-	return t.addRoutes(false)
+	return t.addRoutes(false, nil)
 }
 
 func (t *tun) doIoctlByName(ctl uintptr, value uint32) error {
@@ -319,8 +310,8 @@ func (t *tun) doIoctlByName(ctl uintptr, value uint32) error {
 	return err
 }
 
-func (t *tun) reload(c *config.C, initial bool) error {
-	change, routes, err := getAllRoutesFromConfig(c, t.vpnNetworks, initial)
+func (t *tun) reload(c *config.C, initial bool, r *config.Reload) error {
+	change, routes, err := getAllRoutesFromConfig(t.l, c, t.vpnNetworks, initial)
 	if err != nil {
 		return err
 	}
@@ -340,16 +331,18 @@ func (t *tun) reload(c *config.C, initial bool) error {
 
 	if !initial {
 		// Remove first, if the system removes a wanted route hopefully it will be re-added next
-		err := t.removeRoutes(findRemovedRoutes(routes, *oldRoutes))
+		err := t.removeRoutes(findRemovedRoutes(routes, *oldRoutes), r)
 		if err != nil {
 			util.LogWithContextIfNeeded("Failed to remove routes", err, t.l)
+			r.Failed()
 		}
 
 		// Ensure any routes we actually want are installed
-		err = t.addRoutes(true)
+		err = t.addRoutes(true, r)
 		if err != nil {
 			// Catch any stray logs
 			util.LogWithContextIfNeeded("Failed to add routes", err, t.l)
+			r.Failed()
 		}
 	}
 
@@ -369,15 +362,11 @@ func (t *tun) Name() string {
 	return t.Device
 }
 
-func (t *tun) SupportsMultiqueue() bool {
-	return false
+func (t *tun) Queues(int) ([]tio.Queue, error) {
+	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}, nil
 }
 
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented for openbsd")
-}
-
-func (t *tun) addRoutes(logErrors bool) error {
+func (t *tun) addRoutes(logErrors bool, rl *config.Reload) error {
 	routes := *t.Routes.Load()
 
 	for _, r := range routes {
@@ -391,6 +380,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 			retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
 			if logErrors {
 				retErr.Log(t.l)
+				rl.Failed()
 			} else {
 				return retErr
 			}
@@ -402,15 +392,20 @@ func (t *tun) addRoutes(logErrors bool) error {
 	return nil
 }
 
-func (t *tun) removeRoutes(routes []Route) error {
+func (t *tun) removeRoutes(routes []Route, rl *config.Reload) error {
 	for _, r := range routes {
-		if !r.Install {
+		if len(r.Via) == 0 || !r.Install {
+			// addRoutes never installs these
 			continue
 		}
 
 		err := delRoute(r.Cidr, t.vpnNetworks)
-		if err != nil {
+		if errors.Is(err, unix.ESRCH) {
+			// Already gone, which is what we wanted
+			t.l.Info("Route was already removed", "route", r)
+		} else if err != nil {
 			t.l.Error("Failed to remove route", "error", err, "route", r)
+			rl.Failed()
 		} else {
 			t.l.Info("Removed route", "route", r)
 		}

@@ -1,5 +1,4 @@
 //go:build e2e_testing
-// +build e2e_testing
 
 package e2e
 
@@ -1514,7 +1513,7 @@ func TestLighthouseUpdateOnReload(t *testing.T) {
 	// Reload the config. The lighthouse.hosts change triggers TriggerUpdate,
 	// which wakes the update worker. It calls SendUpdate, initiating a
 	// handshake to the new lighthouse and caching the HostUpdateNotification.
-	require.NoError(t, myConfig.ReloadConfigString(string(newCfg)))
+	require.NoError(t, myConfig.ReloadConfigString(string(newCfg)).Err)
 
 	// Route until the lighthouse receives the HostUpdateNotification.
 	// This covers: handshake stage 1, stage 2, then the cached update.

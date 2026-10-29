@@ -1,17 +1,14 @@
 //go:build e2e_testing
-// +build e2e_testing
 
 package e2e
 
 import (
-	"io"
+	"log/slog"
 	"net/netip"
 	"os"
 	"strings"
 	"testing"
 	"time"
-
-	"log/slog"
 
 	"dario.cat/mergo"
 	"github.com/google/gopacket"
@@ -274,24 +271,6 @@ func newServer(caCrt []cert.Certificate, certs []cert.Certificate, key []byte, o
 	return control, vpnNetworks, udpAddr, c
 }
 
-type doneCb func()
-
-func deadline(t *testing.T, seconds time.Duration) doneCb {
-	timeout := time.After(seconds * time.Second)
-	done := make(chan bool)
-	go func() {
-		select {
-		case <-timeout:
-			t.Fatal("Test did not finish in time")
-		case <-done:
-		}
-	}()
-
-	return func() {
-		done <- true
-	}
-}
-
 func assertTunnel(t testing.TB, vpnIpA, vpnIpB netip.Addr, controlA, controlB *nebula.Control, r *router.R) {
 	// Send a packet from them to me
 	controlB.InjectTunPacket(BuildTunUDPPacket(vpnIpA, 80, vpnIpB, 90, []byte("Hi from B")))
@@ -382,7 +361,7 @@ func getAddrs(ns []netip.Prefix) []netip.Addr {
 func NewTestLogger() *slog.Logger {
 	v := os.Getenv("TEST_LOGS")
 	if v == "" {
-		return slog.New(slog.NewTextHandler(io.Discard, nil))
+		return slog.New(slog.DiscardHandler)
 	}
 
 	level := slog.LevelInfo

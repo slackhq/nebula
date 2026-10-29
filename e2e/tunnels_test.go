@@ -1,5 +1,4 @@
 //go:build e2e_testing
-// +build e2e_testing
 
 package e2e
 
@@ -130,7 +129,7 @@ func TestCertUpgrade(t *testing.T) {
 	}
 
 	r.Logf("reload new v2-only config")
-	err = myC.ReloadConfigString(string(cb))
+	err = myC.ReloadConfigString(string(cb)).Err
 	assert.NoError(t, err)
 	r.Log("yay, spin until their sees it")
 	waitStart := time.Now()
@@ -223,7 +222,7 @@ func TestCertDowngrade(t *testing.T) {
 	}
 
 	r.Logf("reload new v1-only config")
-	err = myC.ReloadConfigString(string(cb))
+	err = myC.ReloadConfigString(string(cb)).Err
 	assert.NoError(t, err)
 	r.Log("yay, spin until their sees it")
 	waitStart := time.Now()

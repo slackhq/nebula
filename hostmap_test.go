@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
@@ -400,4 +401,105 @@ func TestHostMap_RelayState(t *testing.T) {
 	h1.relayState.DeleteRelay(a1)
 	assert.Equal(t, []netip.Addr{}, h1.relayState.relays)
 
+}
+
+// sentSinceCheck reports whether anything has been sent since the connection manager last looked. Test only:
+// production reads the out bit through takeTraffic on the connection manager tick.
+func (i *HostInfo) sentSinceCheck() bool {
+	return i.state.Load()&stateOut != 0
+}
+
+func TestHostInfo_markOut(t *testing.T) {
+	h := &HostInfo{}
+	h.markOut(5) // stamped when the tunnel was added
+
+	// A tunnel already on the current epoch has nothing to report, which is what keeps a fresh tunnel from
+	// requerying on its first packet
+	assert.False(t, h.markOut(5), "an unchanged epoch should not report a move")
+	assert.True(t, h.sentSinceCheck(), "the send is still recorded as traffic")
+
+	// A rebind is observed exactly once, so we requery once per rebind
+	assert.True(t, h.markOut(6), "a bumped epoch should report a move")
+	assert.False(t, h.markOut(6), "the epoch move should only be reported once")
+
+	// Traffic and pendingDeletion live in the same word and must survive an epoch change
+	h.setPendingDeletion(true)
+	h.markIn()
+	assert.True(t, h.markOut(7))
+	assert.True(t, h.isPendingDeletion(), "pendingDeletion must survive an epoch change")
+	in, out := h.takeTraffic()
+	assert.True(t, in, "inbound traffic must survive an epoch change")
+	assert.True(t, out)
+
+	// Clearing the traffic bits leaves the epoch alone, otherwise an idle tunnel would requery forever
+	assert.False(t, h.markOut(7), "takeTraffic must not disturb the epoch")
+}
+
+// A relayed send records traffic but must leave the rebind epoch for the direct path to consume, otherwise
+// relaying to a host swallows the requery that gets the far side punching at our new address.
+func TestHostInfo_markOutOnly(t *testing.T) {
+	h := &HostInfo{}
+	h.markOut(5)
+
+	h.markOutOnly()
+	assert.True(t, h.sentSinceCheck(), "a relayed send is still outbound traffic")
+	assert.False(t, h.markOut(5), "a relayed send must not disturb the epoch")
+
+	assert.True(t, h.markOut(6), "a relayed send must not consume the epoch edge")
+	assert.False(t, h.markOut(6))
+}
+
+// A preferred range that doesn't parse is skipped and the rest are used, the reload says one was skipped
+func TestHostMap_reloadBadPreferredRangeFails(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	require.NoError(t, c.LoadString("preferred_ranges: [10.0.0.0/8]\n"))
+	hm := NewHostMapFromConfig(l, c)
+
+	res := c.ReloadConfigString("preferred_ranges: [10.0.0.0/8, nope]\n")
+	require.NoError(t, res.Err)
+	assert.True(t, res.Failed)
+	assert.Equal(t, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, hm.GetPreferredRanges())
+}
+
+func TestHostInfo_buildNetworks_UnsafeVPNOverlap(t *testing.T) {
+	myVpnNetworksTable := new(bart.Lite)
+	myVpnNetworksTable.Insert(netip.MustParsePrefix("1.2.3.0/24"))
+	myVpnNetworksTable.Insert(netip.MustParsePrefix("fd00:1::/64"))
+
+	lookup := func(unsafe ...string) func(string) NetworkType {
+		c := dummyCert{networks: []netip.Prefix{netip.MustParsePrefix("1.2.3.9/24"), netip.MustParsePrefix("fd00:1::9/64")}}
+		for _, u := range unsafe {
+			c.unsafeNetworks = append(c.unsafeNetworks, netip.MustParsePrefix(u))
+		}
+		var h HostInfo
+		h.buildNetworks(myVpnNetworksTable, &c)
+		return func(addr string) NetworkType {
+			nwType, _ := h.networks.Lookup(netip.MustParseAddr(addr))
+			return nwType
+		}
+	}
+
+	// Unsafe networks containing our vpn networks: only the overlap is marked, the peer's own
+	// addresses stay vpn
+	l := lookup("1.2.0.0/16", "fd00::/16")
+	assert.Equal(t, NetworkTypeVPN, l("1.2.3.9"))
+	assert.Equal(t, NetworkTypeVPN, l("fd00:1::9"))
+	assert.Equal(t, NetworkTypeUnsafeVPNOverlap, l("1.2.3.10"))
+	assert.Equal(t, NetworkTypeUnsafeVPNOverlap, l("fd00:1::10"))
+	assert.Equal(t, NetworkTypeUnsafe, l("1.2.5.5"))
+	assert.Equal(t, NetworkTypeUnsafe, l("fd00:2::1"))
+
+	// Unsafe network inside one of our vpn networks: all of it is overlap
+	l = lookup("1.2.3.128/25")
+	assert.Equal(t, NetworkTypeUnsafeVPNOverlap, l("1.2.3.200"))
+	assert.Equal(t, NetworkTypeVPN, l("1.2.3.9"))
+
+	// Unsafe network equal to the peer's own address: the overlap does not replace it
+	l = lookup("1.2.3.9/32")
+	assert.Equal(t, NetworkTypeVPN, l("1.2.3.9"))
+
+	// Unsafe network with no overlap: unchanged
+	l = lookup("192.168.0.0/16")
+	assert.Equal(t, NetworkTypeUnsafe, l("192.168.1.1"))
 }

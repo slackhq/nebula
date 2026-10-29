@@ -1,5 +1,4 @@
 //go:build darwin && !ios && !e2e_testing
-// +build darwin,!ios,!e2e_testing
 
 package udp
 
@@ -13,6 +12,9 @@ import (
 
 	"golang.org/x/sys/unix"
 )
+
+// watchesNetworkChanges is true where Start does anything
+const watchesNetworkChanges = true
 
 const (
 	// netChangeSettleWindow is how long we keep swallowing routing messages after the first interesting one. A

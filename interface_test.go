@@ -65,10 +65,10 @@ func TestReloadFirewall_CertUnsafeNetworksChanged(t *testing.T) {
 	pki.cs.Store(&CertState{v2Cert: c2, initiatingVersion: cert.Version2})
 
 	// Reload with the same YAML so HasChanged("firewall") reports false.
-	require.NoError(t, cfg.ReloadConfigString(rawYAML))
+	require.NoError(t, cfg.ReloadConfigString(rawYAML).Err)
 	require.False(t, cfg.HasChanged("firewall"))
 
-	f.reloadFirewall(cfg)
+	f.reloadFirewall(cfg, nil)
 
 	assert.NotSame(t, fw, f.firewall, "firewall pointer should have been replaced")
 	assert.Equal(t, newUnsafe, f.firewall.unsafeNetworks)
@@ -113,8 +113,85 @@ func TestReloadFirewall_NoChange(t *testing.T) {
 		l:        l,
 	}
 
-	require.NoError(t, cfg.ReloadConfigString(rawYAML))
-	f.reloadFirewall(cfg)
+	require.NoError(t, cfg.ReloadConfigString(rawYAML).Err)
+	f.reloadFirewall(cfg, nil)
 
 	assert.Same(t, fw, f.firewall, "firewall should not have been replaced")
+}
+
+// Rules that don't parse keep the old firewall, and the reload says it could not apply them
+func TestReloadFirewall_BadRulesFailTheReload(t *testing.T) {
+	l := test.NewLogger()
+	pki := &PKI{}
+	pki.cs.Store(&CertState{v2Cert: &dummyCert{version: cert.Version2, networks: []netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")}}, initiatingVersion: cert.Version2})
+
+	rules := func(proto string) string {
+		return "firewall:\n  outbound:\n    - port: any\n      proto: any\n      host: any\n  inbound:\n    - port: any\n      proto: " + proto + "\n      host: any\n"
+	}
+	cfg := config.NewC(l)
+	require.NoError(t, cfg.LoadString(rules("any")))
+	fw, err := NewFirewallFromConfig(l, pki.getCertState(), cfg)
+	require.NoError(t, err)
+	f := &Interface{pki: pki, firewall: fw, l: l}
+	cfg.RegisterReloadCallback(f.reloadFirewall)
+
+	// The running firewall still isn't built from what the config asks for, so the same reload fails again
+	for range 2 {
+		res := cfg.ReloadConfigString(rules("nope"))
+		require.NoError(t, res.Err)
+		assert.True(t, res.Failed)
+		assert.Same(t, fw, f.firewall)
+	}
+
+	res := cfg.ReloadConfigString(rules("tcp"))
+	require.NoError(t, res.Err)
+	assert.False(t, res.Failed)
+	assert.NotSame(t, fw, f.firewall)
+}
+
+// Every input the firewall is built from rebuilds it when it changes, and nothing else does
+func TestReloadFirewall_RebuildsOnAnyInput(t *testing.T) {
+	l := test.NewLogger()
+	networks := []netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")}
+	base := "firewall:\n  inbound:\n    - port: any\n      proto: any\n      host: any\n"
+	setup := func() (*config.C, *Interface, *PKI) {
+		pki := &PKI{}
+		pki.cs.Store(&CertState{v2Cert: &dummyCert{version: cert.Version2, networks: networks}, initiatingVersion: cert.Version2})
+		cfg := config.NewC(l)
+		require.NoError(t, cfg.LoadString(base))
+		fw, err := NewFirewallFromConfig(l, pki.getCertState(), cfg)
+		require.NoError(t, err)
+		f := &Interface{pki: pki, firewall: fw, l: l}
+		cfg.RegisterReloadCallback(f.reloadFirewall)
+		return cfg, f, pki
+	}
+	setCert := func(pki *PKI, networks, unsafe []netip.Prefix) {
+		pki.cs.Store(&CertState{v2Cert: &dummyCert{version: cert.Version2, networks: networks, unsafeNetworks: unsafe}, initiatingVersion: cert.Version2})
+	}
+
+	cases := map[string]struct {
+		cfg  string
+		cert func(*PKI)
+		want bool
+	}{
+		"nothing":         {base + "punchy:\n  punch: true\n", nil, false},
+		"rules":           {base + "  outbound:\n    - port: any\n      proto: any\n      host: any\n", nil, true},
+		"inbound_action":  {base + "  inbound_action: reject\n", nil, true},
+		"conntrack":       {base + "  conntrack:\n    tcp_timeout: 1m\n", nil, true},
+		"networks":        {base, func(p *PKI) { setCert(p, []netip.Prefix{netip.MustParsePrefix("10.0.0.2/24")}, nil) }, true},
+		"unsafe_networks": {base, func(p *PKI) { setCert(p, networks, []netip.Prefix{netip.MustParsePrefix("192.168.0.0/24")}) }, true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg, f, pki := setup()
+			old := f.firewall
+			if tc.cert != nil {
+				tc.cert(pki)
+			}
+			res := cfg.ReloadConfigString(tc.cfg)
+			require.NoError(t, res.Err)
+			assert.False(t, res.Failed)
+			assert.Equal(t, tc.want, f.firewall != old)
+		})
+	}
 }

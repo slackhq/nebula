@@ -1,5 +1,4 @@
 //go:build darwin && !ios && !e2e_testing
-// +build darwin,!ios,!e2e_testing
 
 package udp
 

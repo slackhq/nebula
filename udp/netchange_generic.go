@@ -1,5 +1,4 @@
 //go:build !darwin || ios || e2e_testing
-// +build !darwin ios e2e_testing
 
 package udp
 
@@ -7,6 +6,9 @@ import (
 	"context"
 	"log/slog"
 )
+
+// watchesNetworkChanges is true where Start does anything
+const watchesNetworkChanges = false
 
 // watchNetworkChanges is a no-op outside of darwin.
 //

@@ -8,6 +8,7 @@ import (
 	"github.com/kardianos/service"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/localapi"
 	"github.com/slackhq/nebula/logging"
 )
 
@@ -17,6 +18,7 @@ type program struct {
 	configPath *string
 	build      string
 	control    *nebula.Control
+	local      *localapi.Endpoints
 }
 
 func (p *program) Start(s service.Service) error {
@@ -34,9 +36,10 @@ func (p *program) Start(s service.Service) error {
 	if err := logging.ApplyConfig(l, c); err != nil {
 		return fmt.Errorf("failed to apply logging config: %s", err)
 	}
-	c.RegisterReloadCallback(func(c *config.C) {
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
 		if err := logging.ApplyConfig(l, c); err != nil {
 			l.Error("Failed to reconfigure logger on reload", "error", err)
+			r.Failed()
 		}
 	})
 
@@ -49,10 +52,16 @@ func (p *program) Start(s service.Service) error {
 		return err
 	}
 
+	// Now that we're started, stand up the local APIs.
+	p.local = localapi.Wire(p.control.Context(), l, c, p.control.Commands(), p.control.InfoHandler())
+
 	// Nebula can stop itself on a fatal packet reader error, make sure to log it if it happens.
 	go func() {
 		if err := p.control.Wait(); err != nil {
 			logger.Error(fmt.Sprintf("Nebula stopped due to fatal error: %v", err))
+			// os.Exit skips deferred calls and races the sockets' own context watchers,
+			// so they are removed here, as cmd/nebula does.
+			p.local.Stop()
 			os.Exit(2)
 		}
 	}()
@@ -62,6 +71,11 @@ func (p *program) Start(s service.Service) error {
 
 func (p *program) Stop(s service.Service) error {
 	logger.Info("Nebula service stopping.")
+
+	if p.local != nil {
+		p.local.Stop()
+	}
+
 	if p.control == nil {
 		return nil
 	}

@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/commands"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/overlay"
 )
@@ -47,11 +48,14 @@ type Control struct {
 
 	f                      *Interface
 	l                      *slog.Logger
+	commands               *commands.Registry
 	ctx                    context.Context
 	cancel                 context.CancelFunc
 	sshStart               func()
 	statsStart             func()
 	dnsStart               func()
+	hostDNSStart           func()
+	hostDNSRestore         func()
 	lighthouseStart        func()
 	networkChangeStart     func(rebind func())
 	connectionManagerStart func(context.Context)
@@ -105,6 +109,9 @@ func (c *Control) Start() error {
 	if c.dnsStart != nil {
 		go c.dnsStart()
 	}
+	if c.hostDNSStart != nil {
+		go c.hostDNSStart()
+	}
 	if c.networkChangeStart != nil {
 		go c.networkChangeStart(c.RebindUDPServer)
 	}
@@ -115,7 +122,7 @@ func (c *Control) Start() error {
 		c.lighthouseStart()
 	}
 
-	c.f.triggerShutdown = c.Stop
+	c.f.triggerShutdown = func() { go c.Stop() }
 
 	// Start reading packets.
 	c.f.run()
@@ -144,6 +151,7 @@ func (c *Control) Stop() {
 
 	case StateReady:
 		// Never started
+		c.restoreHostDNS()
 		c.cancel()
 		c.state = StateStopped
 		if err := c.f.Close(); err != nil {
@@ -161,6 +169,9 @@ func (c *Control) Stop() {
 	c.state = StateStopping
 	c.stateLock.Unlock()
 
+	// Restore the host's DNS before anything else comes down.
+	c.restoreHostDNS()
+
 	// Closing tunnels can be slow with a large hostmap, don't hold the lock for it
 	c.cancel()
 	c.CloseAllTunnels(false)
@@ -171,6 +182,13 @@ func (c *Control) Stop() {
 		c.l.Error("Close interface failed", "error", err)
 	}
 	c.stateLock.Unlock()
+}
+
+// restoreHostDNS restores the host's DNS configuration if we changed it.
+func (c *Control) restoreHostDNS() {
+	if c.hostDNSRestore != nil {
+		c.hostDNSRestore()
+	}
 }
 
 // Wait blocks until nebula has fully stopped, either via Stop or an internal fatal error,
@@ -212,7 +230,7 @@ func (c *Control) RebindUDPServer() {
 	c.f.lightHouse.SendUpdate()
 
 	// Let the main interface know that we rebound so that underlying tunnels know to trigger punches from their remotes
-	c.f.rebindCount++
+	c.f.rebindEpoch.Add(1)
 }
 
 // ListHostmapHosts returns details about the actual or pending (handshaking) hostmap by vpn ip
@@ -370,6 +388,13 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 		shutdown(h)
 	}
 	return
+}
+
+// Commands returns the registry the daemon's surfaces serve from. It is the live
+// registry, not a copy: a command registered on it is served to every ssh session that
+// starts afterwards. Clone it to run commands without that reach.
+func (c *Control) Commands() *commands.Registry {
+	return c.commands
 }
 
 func (c *Control) Device() overlay.Device {

@@ -7,8 +7,10 @@ import (
 	"testing"
 
 	"github.com/gaissmai/bart"
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestStartRelaysLogDedupe verifies that repeated attempts with the same relay set drop the log
@@ -94,4 +96,59 @@ func TestStartRelaysLogDedupe(t *testing.T) {
 		assert.Nil(t, hh.lastRelays, "with relays disabled lastRelays should be cleared")
 		assert.NotContains(t, buf.String(), msg, "should not log when we shortcut out")
 	})
+}
+
+// TestHandleCreateRelayRequestRejectsSpoofedFrom verifies that a relay only forwards a CreateRelayRequest
+// when relayFrom is the peer that sent it. Otherwise any peer could reset another host's established
+// relay back to Requested, or allocate unbounded relay entries on the target's hostinfo.
+func TestHandleCreateRelayRequestRejectsSpoofedFrom(t *testing.T) {
+	l := test.NewLogger()
+	relayAddr := netip.MustParseAddr("10.128.0.128")
+	malloryAddr := netip.MustParseAddr("10.128.0.3")
+	victimAddr := netip.MustParseAddr("10.128.0.1")
+	targetAddr := netip.MustParseAddr("10.128.0.2")
+
+	addrTable := new(bart.Lite)
+	addrTable.Insert(netip.PrefixFrom(relayAddr, relayAddr.BitLen()))
+	hm := newHostMap(l)
+	f := &Interface{myVpnAddrsTable: addrTable, hostMap: hm}
+	rm := &relayManager{l: l, hostmap: hm}
+	rm.amRelay.Store(true)
+
+	newRelayState := func() RelayState {
+		return RelayState{relayForByAddr: map[netip.Addr]*Relay{}, relayForByIdx: map[uint32]*Relay{}}
+	}
+	mallory := &HostInfo{vpnAddrs: []netip.Addr{malloryAddr}, localIndexId: 1, relayState: newRelayState()}
+	target := &HostInfo{
+		vpnAddrs:     []netip.Addr{targetAddr},
+		localIndexId: 2,
+		remotes:      NewRemoteList([]netip.Addr{targetAddr}, nil),
+		relayState:   newRelayState(),
+	}
+	target.SetRemote(netip.MustParseAddrPort("192.0.2.2:4242"))
+	hm.unlockedAddHostInfo(mallory, f)
+	hm.unlockedAddHostInfo(target, f)
+
+	// The victim already has a working relay to the target through us.
+	_, err := AddRelay(l, target, hm, victimAddr, nil, ForwardingType, Established)
+	require.NoError(t, err)
+	relaysBefore := len(hm.Relays)
+
+	for i := range 10 {
+		spoofed := netip.AddrFrom4([4]byte{10, 128, 1, byte(i)})
+		for _, from := range []netip.Addr{victimAddr, spoofed} {
+			rm.handleCreateRelayRequest(cert.Version2, mallory, f, &NebulaControl{
+				Type:                NebulaControl_CreateRelayRequest,
+				InitiatorRelayIndex: uint32(100 + i),
+				RelayFromAddr:       netAddrToProtoAddr(from),
+				RelayToAddr:         netAddrToProtoAddr(targetAddr),
+			})
+		}
+	}
+
+	r, ok := target.relayState.QueryRelayForByIp(victimAddr)
+	require.True(t, ok)
+	assert.Equal(t, Established, r.State, "victim's relay must not be reset by a request from another peer")
+	assert.Len(t, hm.Relays, relaysBefore, "spoofed requests must not allocate relay entries")
+	assert.Empty(t, mallory.relayState.CopyAllRelayFor(), "spoofed requests must not create state on the sender")
 }

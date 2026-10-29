@@ -1,10 +1,15 @@
 package nebula
 
 import (
+	"context"
 	"encoding/binary"
+	"fmt"
+	"net"
 	"net/netip"
 	"testing"
+	"time"
 
+	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -328,6 +333,55 @@ func BenchmarkSortRebuild(b *testing.B) {
 	})
 }
 
+func TestApplyLookup(t *testing.T) {
+	prev := []netip.AddrPort{netip.MustParseAddrPort("1.1.1.1:4242")}
+
+	// A successful lookup replaces the previous addresses
+	got := applyLookup(prev, 4242, []netip.Addr{netip.MustParseAddr("::ffff:2.2.2.2")}, nil)
+	assert.Equal(t, []netip.AddrPort{netip.MustParseAddrPort("2.2.2.2:4242")}, got)
+
+	// A not found answer means the record is gone
+	assert.Empty(t, applyLookup(prev, 4242, nil, &net.DNSError{Err: "no such host", IsNotFound: true}))
+
+	// Anything else is not new information, keep what we had
+	assert.Equal(t, prev, applyLookup(prev, 4242, nil, &net.DNSError{Err: "i/o timeout", IsTimeout: true}))
+	assert.Equal(t, prev, applyLookup(prev, 4242, nil, &net.DNSError{Err: "server misbehaving", IsTemporary: true}))
+	assert.Equal(t, prev, applyLookup(prev, 4242, nil, context.DeadlineExceeded))
+}
+
+func TestNewHostnameResults_CarriesKnown(t *testing.T) {
+	// A canceled context keeps the background lookup from learning anything, as if DNS were down
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	known := netip.MustParseAddrPort("1.1.1.1:4242")
+	prev := &hostnamesResults{network: "ip4"}
+	prev.known.Store(&map[hostnamePort][]netip.AddrPort{{name: "lh.invalid", port: 4242}: {known}})
+
+	hostPorts := []string{"lh.invalid:4242", "10.0.0.1:4242"}
+	literal := netip.MustParseAddrPort("10.0.0.1:4242")
+
+	hr, err := NewHostnameResults(ctx, test.NewLogger(), time.Hour, "ip4", time.Second, hostPorts, prev, func() {})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []netip.AddrPort{known, literal}, hr.GetAddrs())
+	assert.Equal(t, []netip.AddrPort{literal}, hr.literalAddrs())
+
+	// And again from the new one, before it has finished a lookup of its own
+	hr2, err := NewHostnameResults(ctx, test.NewLogger(), time.Hour, "ip4", time.Second, hostPorts, hr, func() {})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []netip.AddrPort{known, literal}, hr2.GetAddrs())
+
+	// A port change is a different entry
+	hr3, err := NewHostnameResults(ctx, test.NewLogger(), time.Hour, "ip4", time.Second, []string{"lh.invalid:4243"}, prev, func() {})
+	require.NoError(t, err)
+	assert.Empty(t, hr3.GetAddrs())
+
+	// So is a network change
+	hr4, err := NewHostnameResults(ctx, test.NewLogger(), time.Hour, "ip6", time.Second, hostPorts, prev, func() {})
+	require.NoError(t, err)
+	assert.Equal(t, []netip.AddrPort{literal}, hr4.GetAddrs())
+}
+
 func newIp4AndPortFromString(s string) *V4AddrPort {
 	a := netip.MustParseAddrPort(s)
 	v4Addr := a.Addr().As4()
@@ -345,4 +399,58 @@ func newIp6AndPortFromString(s string) *V6AddrPort {
 		Lo:   binary.BigEndian.Uint64(v6Addr[8:]),
 		Port: uint32(a.Port()),
 	}
+}
+
+func TestRemoteList_SetFiltersBeforeCap(t *testing.T) {
+	owner := netip.MustParseAddr("0.0.0.0")
+	rl := NewRemoteList([]netip.Addr{owner}, nil)
+
+	// MaxRemotes denied addrs first, then the only allowed one, then enough allowed to exceed the cap
+	var v4 []*V4AddrPort
+	for i := 0; i < MaxRemotes; i++ {
+		v4 = append(v4, newIp4AndPortFromString(fmt.Sprintf("172.17.0.%d:4242", i+1)))
+	}
+	for i := 0; i < MaxRemotes+1; i++ {
+		v4 = append(v4, newIp4AndPortFromString(fmt.Sprintf("70.199.182.%d:4242", i+1)))
+	}
+	rl.unlockedSetV4(owner, owner, v4, func(_ netip.Addr, a *V4AddrPort) bool {
+		return protoV4AddrPortToNetAddrPort(a).Addr().As4()[0] != 172
+	})
+
+	var v6 []*V6AddrPort
+	for i := 0; i < MaxRemotes; i++ {
+		v6 = append(v6, newIp6AndPortFromString(fmt.Sprintf("[fd00::%d]:4242", i+1)))
+	}
+	for i := 0; i < MaxRemotes+1; i++ {
+		v6 = append(v6, newIp6AndPortFromString(fmt.Sprintf("[2001:db8::%d]:4242", i+1)))
+	}
+	rl.unlockedSetV6(owner, owner, v6, func(_ netip.Addr, a *V6AddrPort) bool {
+		return protoV6AddrPortToNetAddrPort(a).Addr().As16()[0] != 0xfd
+	})
+
+	rl.Rebuild([]netip.Prefix{})
+	assert.Len(t, rl.addrs, MaxRemotes*2)
+	for _, a := range rl.addrs {
+		assert.NotEqual(t, byte(172), a.Addr().As16()[12], "denied v4 addr %v was kept", a)
+		assert.NotEqual(t, byte(0xfd), a.Addr().As16()[0], "denied v6 addr %v was kept", a)
+	}
+}
+
+func TestRemoteList_V4OnlySkipsIPv6(t *testing.T) {
+	owner := netip.MustParseAddr("10.0.0.1")
+	rl := NewRemoteList([]netip.Addr{owner}, nil)
+	rl.v4Only = true
+	rl.unlockedSetV4(owner, owner, []*V4AddrPort{newIp4AndPortFromString("1.2.3.4:4242")},
+		func(netip.Addr, *V4AddrPort) bool { return true })
+	rl.unlockedSetV6(owner, owner, []*V6AddrPort{newIp6AndPortFromString("[1::1]:4242")},
+		func(netip.Addr, *V6AddrPort) bool { return true })
+	rl.unlockedSetHostnamesResults(trackedHostnameResults(func() {}, "5.6.7.8:4242", "[2::2]:4242"))
+
+	assert.ElementsMatch(t, []netip.AddrPort{
+		netip.MustParseAddrPort("1.2.3.4:4242"),
+		netip.MustParseAddrPort("5.6.7.8:4242"),
+	}, rl.CopyAddrs(nil))
+
+	// The cache keeps the IPv6 address, a lighthouse still answers with it
+	assert.Contains(t, (*rl.CopyCache())[owner.String()].Reported, netip.MustParseAddrPort("[1::1]:4242"))
 }

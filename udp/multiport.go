@@ -30,23 +30,29 @@ type MultiPortConn struct {
 	conns []Conn
 }
 
-// NewMultiPortConn opens ports-1 additional UDP sockets bound to ip on
-// basePort+1 through basePort+ports-1. These sockets are only used to send,
-// nebula never reads from them.
-func NewMultiPortConn(l *slog.Logger, ip netip.Addr, basePort uint16, ports int) (*MultiPortConn, error) {
+// NewMultiPortConn opens ports-1 additional UDP sockets bound to base.Listen's address on base.Listen's port + 1
+// through port + ports-1, with base's offload setting. These sockets are only used to send, nebula never reads
+// from them.
+func NewMultiPortConn(l *slog.Logger, base Settings, ports int) (*MultiPortConn, error) {
+	basePort := int(base.Listen.Port())
 	if ports < 1 {
 		return nil, fmt.Errorf("multiport tx_ports must be at least 1, got %d", ports)
 	}
-	if int(basePort)+ports-1 > 65535 {
+	if basePort+ports-1 > 65535 {
 		return nil, fmt.Errorf("multiport tx_ports %d from base port %d exceeds 65535", ports, basePort)
 	}
 
 	m := &MultiPortConn{conns: make([]Conn, 0, ports-1)}
 	for i := 1; i < ports; i++ {
-		c, err := NewListener(l, ip, int(basePort)+i, false, 1)
+		port := basePort + i
+		c, err := NewListener(l, Settings{
+			Listen:   netip.AddrPortFrom(base.Listen.Addr(), uint16(port)),
+			Batch:    1,
+			Offloads: base.Offloads,
+		})
 		if err != nil {
 			_ = m.Close()
-			return nil, fmt.Errorf("failed to open multiport socket on port %d: %w", int(basePort)+i, err)
+			return nil, fmt.Errorf("failed to open multiport socket on port %d: %w", port, err)
 		}
 		m.conns = append(m.conns, c)
 	}
@@ -59,18 +65,22 @@ func (m *MultiPortConn) Ports() int {
 	return len(m.conns) + 1
 }
 
-// WriteTo sends b to addr from the source port at index port. Index 0 (and
-// any index out of range) is sent via base.
-func (m *MultiPortConn) WriteTo(b []byte, port uint16, addr netip.AddrPort, base Conn) error {
+// Conn returns the socket for the source port at index port. Index 0 (and any index out of range) is base.
+func (m *MultiPortConn) Conn(port uint16, base Conn) Conn {
 	if port == 0 || int(port) > len(m.conns) {
-		return base.WriteTo(b, addr)
+		return base
 	}
-	return m.conns[port-1].WriteTo(b, addr)
+	return m.conns[port-1]
 }
 
-func (m *MultiPortConn) ReloadConfig(c *config.C) {
+// WriteTo sends b to addr from the source port at index port, see Conn.
+func (m *MultiPortConn) WriteTo(b []byte, port uint16, addr netip.AddrPort, base Conn) error {
+	return m.Conn(port, base).WriteTo(b, addr)
+}
+
+func (m *MultiPortConn) ReloadConfig(c *config.C, r *config.Reload) {
 	for _, conn := range m.conns {
-		conn.ReloadConfig(c)
+		conn.ReloadConfig(c, r)
 	}
 }
 

@@ -5,17 +5,14 @@ import (
 	"fmt"
 	mathrand "math/rand"
 	"net/netip"
+
+	"github.com/slackhq/nebula/iputil"
 )
 
 type m = map[string]any
 
 const (
-	ProtoAny    = 0 // When we want to handle HOPOPT (0) we can change this, if ever
-	ProtoTCP    = 6
-	ProtoUDP    = 17
-	ProtoICMP   = 1
-	ProtoICMPv6 = 58
-
+	ProtoAny     = 0  // When we want to handle HOPOPT (0) we can change this, if ever
 	PortAny      = 0  // Special value for matching `port: any`
 	PortFragment = -1 // Special value for matching `port: fragment`
 )
@@ -46,13 +43,13 @@ func (fp *Packet) Copy() *Packet {
 func (fp Packet) MarshalJSON() ([]byte, error) {
 	var proto string
 	switch fp.Protocol {
-	case ProtoTCP:
+	case iputil.IPProtocolTCP:
 		proto = "tcp"
-	case ProtoICMP:
+	case iputil.IPProtocolICMP:
 		proto = "icmp"
-	case ProtoICMPv6:
+	case iputil.IPProtocolICMPv6:
 		proto = "icmpv6"
-	case ProtoUDP:
+	case iputil.IPProtocolUDP:
 		proto = "udp"
 	default:
 		proto = fmt.Sprintf("unknown %v", fp.Protocol)
@@ -92,4 +89,13 @@ func (fp Packet) UDPSendPort(numBuckets int) uint16 {
 	x ^= x >> 15
 
 	return uint16(x) % uint16(numBuckets)
+}
+
+// ParsedPacket is a Packet plus the parse byproducts the RX path reuses
+type ParsedPacket struct {
+	Packet
+	IPHdrLen int
+	// FragAny reports any fragmentation at all: MF flag or nonzero offset for IPv4, a fragment extension header for IPv6.
+	// Distinct from Packet.Fragment, which is true only for NON-FIRST fragments
+	FragAny bool
 }

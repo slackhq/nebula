@@ -1,5 +1,4 @@
 //go:build e2e_testing
-// +build e2e_testing
 
 package overlay
 
@@ -10,10 +9,11 @@ import (
 	"log/slog"
 	"net/netip"
 	"os"
-	"sync/atomic"
+	"sync"
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/udp"
 )
@@ -25,13 +25,17 @@ type TestTun struct {
 	routeTree   *bart.Table[routing.Gateways]
 	l           *slog.Logger
 
-	closed    atomic.Bool
 	rxPackets chan []byte // Packets to receive into nebula
 	TxPackets chan []byte // Packets transmitted outside by nebula
+
+	// done is closed exactly once by Close. Senders select on it so they never race with a channel close; readers
+	// exit when it fires. The packet channels are never closed, mirroring udp.TesterConn.
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*TestTun, error) {
-	_, routes, err := getAllRoutesFromConfig(c, vpnNetworks, true)
+	_, routes, err := getAllRoutesFromConfig(l, c, vpnNetworks, true)
 	if err != nil {
 		return nil, err
 	}
@@ -48,6 +52,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*T
 		l:           l,
 		rxPackets:   make(chan []byte, 10),
 		TxPackets:   make(chan []byte, 10),
+		done:        make(chan struct{}),
 	}, nil
 }
 
@@ -62,16 +67,16 @@ func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (*TestTu
 // Send copies the input via the freelist, so the caller is free to mutate
 // or reuse it after the call returns.
 func (t *TestTun) Send(packet []byte) {
-	if t.closed.Load() {
-		return
-	}
-
 	if t.l.Enabled(context.Background(), slog.LevelDebug) {
 		t.l.Debug("Tun receiving injected packet", "dataLen", len(packet))
 	}
 	buf := acquireTunBuf(len(packet))
 	copy(buf, packet)
-	t.rxPackets <- buf
+	select {
+	case <-t.done:
+		ReleaseTunBuf(buf)
+	case t.rxPackets <- buf:
+	}
 }
 
 // Get will pull an unencrypted ip layer frame from the transmit queue
@@ -79,7 +84,12 @@ func (t *TestTun) Send(packet []byte) {
 // packets were ingested from the udp side, you can send them with udpConn.Send
 func (t *TestTun) Get(block bool) []byte {
 	if block {
-		return <-t.TxPackets
+		select {
+		case <-t.done:
+			return nil
+		case p := <-t.TxPackets:
+			return p
+		}
 	}
 
 	select {
@@ -112,14 +122,15 @@ func (t *TestTun) Name() string {
 }
 
 func (t *TestTun) Write(b []byte) (n int, err error) {
-	if t.closed.Load() {
-		return 0, io.ErrClosedPipe
-	}
-
 	packet := acquireTunBuf(len(b))
 	copy(packet, b)
-	t.TxPackets <- packet
-	return len(b), nil
+	select {
+	case <-t.done:
+		ReleaseTunBuf(packet)
+		return 0, io.ErrClosedPipe
+	case t.TxPackets <- packet:
+		return len(b), nil
+	}
 }
 
 // ReleaseTunBuf returns a slice from TxPackets to the harness freelist, don't use the bytes after the call.
@@ -155,17 +166,16 @@ func acquireTunBuf(n int) []byte {
 }
 
 func (t *TestTun) Close() error {
-	if t.closed.CompareAndSwap(false, true) {
-		close(t.rxPackets)
-		close(t.TxPackets)
-	}
+	t.closeOnce.Do(func() { close(t.done) })
 	return nil
 }
 
 func (t *TestTun) Read(b []byte) (int, error) {
-	p, ok := <-t.rxPackets
-	if !ok {
+	var p []byte
+	select {
+	case <-t.done:
 		return 0, os.ErrClosed
+	case p = <-t.rxPackets:
 	}
 	n := len(p)
 	copy(b, p)
@@ -177,10 +187,6 @@ func (t *TestTun) Read(b []byte) (int, error) {
 	return n, nil
 }
 
-func (t *TestTun) SupportsMultiqueue() bool {
-	return false
-}
-
-func (t *TestTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented")
+func (t *TestTun) Queues(int) ([]tio.Queue, error) {
+	return []tio.Queue{tio.NewSingleQueue(t, udp.MTU)}, nil
 }

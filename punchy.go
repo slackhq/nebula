@@ -67,7 +67,8 @@ func NewPunchyFromConfig(l *slog.Logger, c *config.C, punchConn udp.Conn) *Punch
 	}
 
 	p.reload(c, true)
-	c.RegisterReloadCallback(func(c *config.C) {
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		r.RestartRequiredIfChanged("stats.lighthouse_metrics")
 		p.reload(c, false)
 	})
 

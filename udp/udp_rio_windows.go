@@ -1,5 +1,4 @@
 //go:build !e2e_testing
-// +build !e2e_testing
 
 // Inspired by https://git.zx2c4.com/wireguard-go/tree/conn/bind_windows.go
 
@@ -31,7 +30,8 @@ func procyield(cycles uint32)
 
 const (
 	packetsPerRing = 1024
-	bytesPerPacket = 2048 - 32
+	// Fits a relayed packet at overlay.MaxMTU, which tun.mtu and route mtus are capped to. 17.6MB page locked per socket.
+	bytesPerPacket = MTU
 	receiveSpins   = 15
 )
 
@@ -53,6 +53,7 @@ type ringBuffer struct {
 
 type RIOConn struct {
 	isOpen  atomic.Bool
+	isV4    bool
 	l       *slog.Logger
 	sock    windows.Handle
 	rx, tx  ringBuffer
@@ -65,16 +66,19 @@ func NewRIOListener(l *slog.Logger, addr netip.Addr, port int) (*RIOConn, error)
 		return nil, errors.New("could not initialize winrio")
 	}
 
-	u := &RIOConn{l: l}
+	// An IPv4 addr is bound as IPv4-mapped, which leaves the dual stack socket only able to reach IPv4
+	u := &RIOConn{l: l, isV4: addr.Unmap().Is4()}
 
 	err := u.bind(l, &windows.SockaddrInet6{Addr: addr.As16(), Port: port})
 	if err != nil {
+		u.close()
 		return nil, fmt.Errorf("bind: %w", err)
 	}
 
 	for i := 0; i < packetsPerRing; i++ {
 		err = u.insertReceiveRequest()
 		if err != nil {
+			u.close()
 			return nil, fmt.Errorf("init rx ring: %w", err)
 		}
 	}
@@ -140,7 +144,7 @@ func (u *RIOConn) bind(l *slog.Logger, sa windows.Sockaddr) error {
 	return nil
 }
 
-func (u *RIOConn) ListenOut(r EncReader) error {
+func (u *RIOConn) ListenOut(r EncReader, flush func()) error {
 	buffer := make([]byte, MTU)
 
 	var lastRecvErr time.Time
@@ -161,7 +165,8 @@ func (u *RIOConn) ListenOut(r EncReader) error {
 			continue
 		}
 
-		r(netip.AddrPortFrom(netip.AddrFrom16(rua.Addr).Unmap(), (rua.Port>>8)|((rua.Port&0xff)<<8)), buffer[:n])
+		r(netip.AddrPortFrom(netip.AddrFrom16(rua.Addr).Unmap(), (rua.Port>>8)|((rua.Port&0xff)<<8)), buffer[:n:n])
+		flush()
 	}
 }
 
@@ -316,6 +321,23 @@ func (u *RIOConn) WriteTo(buf []byte, ip netip.AddrPort) error {
 	return winrio.SendEx(u.rq, dataBuffer, 1, nil, addressBuffer, nil, nil, 0, 0)
 }
 
+func (u *RIOConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) (int, error) {
+	// An un-sendable destination costs its own packet, never the ones behind it in the batch.
+	written := 0
+	for i, b := range bufs {
+		if err := u.WriteTo(b, addrs[i]); err == nil {
+			written++
+		} else {
+			u.l.Debug("failed to write packet in batch", "udpAddr", addrs[i], "error", err)
+		}
+	}
+	return written, nil
+}
+
+func (u *RIOConn) IPv4Only() bool {
+	return u.isV4
+}
+
 func (u *RIOConn) LocalAddr() (netip.AddrPort, error) {
 	sa, err := windows.Getsockname(u.sock)
 	if err != nil {
@@ -335,22 +357,32 @@ func (u *RIOConn) Rebind() error {
 	return nil
 }
 
-func (u *RIOConn) ReloadConfig(*config.C) {}
+func (u *RIOConn) ReloadConfig(*config.C, *config.Reload) {}
 
 func (u *RIOConn) Close() error {
 	if !u.isOpen.CompareAndSwap(true, false) {
 		return nil
 	}
 
+	u.close()
+	return nil
+}
+
+// Also unwinds a partial build from NewRIOListener, where isOpen is false and Close would no-op.
+// Socket first, unlike wireguard-go: receive() re-arms every slot, so freeing the rings under a live socket
+// hands the kernel freed pages for all packetsPerRing outstanding receives.
+func (u *RIOConn) close() {
+	// WSASocket reports failure as InvalidHandle, not zero.
+	if u.sock != 0 && u.sock != windows.InvalidHandle {
+		windows.CloseHandle(u.sock)
+	}
+	u.sock = 0
+
 	windows.PostQueuedCompletionStatus(u.rx.iocp, 0, 0, nil)
 	windows.PostQueuedCompletionStatus(u.tx.iocp, 0, 0, nil)
 
 	u.rx.CloseAndZero()
 	u.tx.CloseAndZero()
-	if u.sock != 0 {
-		windows.CloseHandle(u.sock)
-	}
-	return nil
 }
 
 func (ring *ringBuffer) Push() *ringPacket {

@@ -24,14 +24,14 @@ func TestMultiPortConn(t *testing.T) {
 	dst := recv.LocalAddr().(*net.UDPAddr).AddrPort()
 
 	// Use the kernel to find a free base port
-	base, err := NewListener(l, lo, 0, false, 1)
+	base, err := NewListener(l, Settings{Listen: netip.AddrPortFrom(lo, 0), Batch: 1})
 	require.NoError(t, err)
 	defer base.Close()
 	baseAddr, err := base.LocalAddr()
 	require.NoError(t, err)
 
 	const ports = 4
-	mp, err := NewMultiPortConn(l, lo, baseAddr.Port(), ports)
+	mp, err := NewMultiPortConn(l, Settings{Listen: baseAddr}, ports)
 	if err != nil {
 		t.Skipf("unable to bind consecutive ports after %d: %v", baseAddr.Port(), err)
 	}
@@ -53,13 +53,13 @@ func TestNewMultiPortConnErrors(t *testing.T) {
 	l := slog.New(slog.DiscardHandler)
 	lo := netip.MustParseAddr("127.0.0.1")
 
-	_, err := NewMultiPortConn(l, lo, 4242, 0)
+	_, err := NewMultiPortConn(l, Settings{Listen: netip.AddrPortFrom(lo, 4242)}, 0)
 	assert.Error(t, err)
 
-	_, err = NewMultiPortConn(l, lo, 65530, 10)
+	_, err = NewMultiPortConn(l, Settings{Listen: netip.AddrPortFrom(lo, 65530)}, 10)
 	assert.Error(t, err)
 
-	mp, err := NewMultiPortConn(l, lo, 4242, 1)
+	mp, err := NewMultiPortConn(l, Settings{Listen: netip.AddrPortFrom(lo, 4242)}, 1)
 	require.NoError(t, err)
 	assert.Equal(t, 1, mp.Ports())
 	assert.NoError(t, mp.Close())

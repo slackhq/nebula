@@ -57,7 +57,8 @@ func newConnectionManagerFromConfig(l *slog.Logger, c *config.C, hm *HostMap, p 
 	}
 
 	cm.reload(c, true)
-	c.RegisterReloadCallback(func(c *config.C) {
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		r.RestartRequiredIfChanged("timers.connection_alive_interval", "timers.pending_deletion_interval")
 		cm.reload(c, false)
 	})
 
@@ -105,11 +106,18 @@ func (cm *connectionManager) getInactivityTimeout() time.Duration {
 }
 
 func (cm *connectionManager) In(h *HostInfo) {
-	h.in.Store(true)
+	h.markIn()
 }
 
-func (cm *connectionManager) Out(h *HostInfo) {
-	h.out.Store(true)
+// OutNoRebind records outbound traffic without consuming the rebind epoch, for relayed sends: the direct path
+// to the relay consumes the edge, the via send must not.
+func (cm *connectionManager) OutNoRebind(h *HostInfo) {
+	h.markOutOnly()
+}
+
+// Out records outbound traffic and reports whether we rebound since this tunnel last sent
+func (cm *connectionManager) Out(h *HostInfo) bool {
+	return h.markOut(cm.intf.rebindEpoch.Load())
 }
 
 func (cm *connectionManager) RelayUsed(localIndex uint32) {
@@ -128,8 +136,7 @@ func (cm *connectionManager) RelayUsed(localIndex uint32) {
 // getAndResetTrafficCheck returns if there was any inbound or outbound traffic within the last tick and
 // resets the state for this local index
 func (cm *connectionManager) getAndResetTrafficCheck(h *HostInfo, now time.Time) (bool, bool) {
-	in := h.in.Swap(false)
-	out := h.out.Swap(false)
+	in, out := h.takeTraffic()
 	if in || out {
 		h.lastUsed = now
 	}
@@ -168,10 +175,8 @@ func (cm *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte
 
 	switch decision {
 	case deleteTunnel:
-		if cm.hostMap.DeleteHostInfo(hostinfo) {
-			// Only clearing the lighthouse cache if this is the last hostinfo for this vpn ip in the hostmap
-			cm.intf.lightHouse.DeleteVpnAddrs(hostinfo.vpnAddrs)
-		}
+		// Local delete only, clearing the lighthouse cache if this was the last hostinfo for the vpn addr
+		cm.intf.closeTunnel(hostinfo)
 
 	case closeTunnel:
 		cm.intf.sendCloseTunnel(hostinfo)
@@ -323,6 +328,12 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 		return closeTunnel, hostinfo, nil
 	}
 
+	if hostinfo.ConnectionState != nil && hostinfo.ConnectionState.messageCounter.Load() >= RejectAfterMessages {
+		// Send path can't encrypt a CloseTunnel notify, so just delete locally; the peer recovers via recv_error.
+		hostinfo.logger(cm.l).Error("Dropping tunnel, message counter is exhausted")
+		return deleteTunnel, hostinfo, nil
+	}
+
 	primary := cm.hostMap.Hosts[hostinfo.vpnAddrs[0]]
 	mainHostInfo := true
 	if primary != nil && primary != hostinfo {
@@ -340,7 +351,7 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 				"tunnelCheck", m{"state": "alive", "method": "passive"},
 			)
 		}
-		hostinfo.pendingDeletion.Store(false)
+		hostinfo.setPendingDeletion(false)
 
 		if mainHostInfo {
 			decision = tryRehandshake
@@ -363,11 +374,17 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 		return decision, hostinfo, primary
 	}
 
-	if hostinfo.pendingDeletion.Load() {
+	if hostinfo.isPendingDeletion() {
 		// We have already sent a test packet and nothing was returned, this hostinfo is dead
 		hostinfo.logger(cm.l).Info("Tunnel status",
 			"tunnelCheck", m{"state": "dead", "method": "active"},
 		)
+
+		// A dead primary tunnel is as good a sign a gateway is down as a handshake timing out, so packets for a
+		// multi-gateway route go to its other gateways right away instead of waiting on a handshake with this one
+		if mainHostInfo {
+			cm.intf.handshakeManager.ecmpGateways.markDown(hostinfo.vpnAddrs...)
+		}
 
 		return deleteTunnel, hostinfo, nil
 	}
@@ -414,7 +431,7 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 		}
 	}
 
-	hostinfo.pendingDeletion.Store(true)
+	hostinfo.setPendingDeletion(true)
 	cm.trafficTimer.Add(hostinfo.localIndexId, cm.pendingDeletionInterval)
 	return decision, hostinfo, nil
 }
@@ -445,6 +462,11 @@ func (cm *connectionManager) shouldSwapPrimary(current *HostInfo) bool {
 	// use that to determine if we should consider swapping.
 	if current.vpnAddrs[0].Compare(cm.intf.myVpnAddrs[0]) < 0 {
 		// Their primary vpn addr is less than mine. Do not swap.
+		return false
+	}
+
+	if current.ConnectionState.messageCounter.Load() >= RehandshakeAfterMessages {
+		// This tunnel is being rolled for counter exhaustion, never swap back onto its spent key.
 		return false
 	}
 
@@ -542,6 +564,15 @@ func (cm *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 		cm.l.Info("Re-handshaking with remote",
 			"vpnAddrs", hostinfo.vpnAddrs,
 			"reason", "current cert version < pki.initiatingVersion",
+		)
+
+		cm.intf.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], nil)
+		return
+	}
+	if hostinfo.ConnectionState.messageCounter.Load() >= RehandshakeAfterMessages {
+		cm.l.Info("Re-handshaking with remote",
+			"vpnAddrs", hostinfo.vpnAddrs,
+			"reason", "message counter rehandshake threshold reached",
 		)
 
 		cm.intf.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], nil)

@@ -1,13 +1,12 @@
 package sshd
 
 import (
-	"fmt"
+	"errors"
 	"log/slog"
 	"sort"
 	"strings"
 
-	"github.com/anmitsu/go-shlex"
-	"github.com/armon/go-radix"
+	"github.com/slackhq/nebula/commands"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 )
@@ -16,29 +15,54 @@ type session struct {
 	l        *slog.Logger
 	c        *ssh.ServerConn
 	term     *term.Terminal
-	commands *radix.Tree
+	commands *commands.Registry
 	cancel   func()
 }
 
-func NewSession(commands *radix.Tree, conn *ssh.ServerConn, chans <-chan ssh.NewChannel, cancel func(), l *slog.Logger) *session {
+func NewSession(reg *commands.Registry, conn *ssh.ServerConn, chans <-chan ssh.NewChannel, cancel func(), l *slog.Logger) *session {
 	s := &session{
-		commands: radix.NewFromMap(commands.ToMap()),
+		commands: reg.Clone(),
 		l:        l,
 		c:        conn,
 		cancel:   cancel,
 	}
+	s.commands.DefaultFormat = DefaultFormat
 
-	s.commands.Insert("logout", &Command{
-		Name:             "logout",
-		ShortDescription: "Ends the current session",
-		Callback: func(a any, args []string, w StringWriter) error {
-			s.Close()
-			return nil
-		},
-	})
+	s.commands.Register(LogoutCommand(s.Close))
 
 	go s.handleChannels(chans)
 	return s
+}
+
+// LogoutCommand is the logout command a session registers on its clone of the registry,
+// with end as what it does. Exported so a test can serve what a session serves.
+func LogoutCommand(end func()) *commands.Command {
+	return &commands.Command{
+		Name:             commands.Logout,
+		ShortDescription: "Ends the current session",
+		Run: func(a any, args []string) (commands.Result, error) {
+			end()
+			return commands.Nothing(), nil
+		},
+	}
+}
+
+// DefaultFormat is what an ssh session renders when the operator gave neither -json nor
+// -pretty: text where a command has a human form, and compact JSON for the ones that
+// have none (print-tunnel, print-relays, query-lighthouse). It is ssh's policy, exported so a test
+// can dispatch through the same choice, and ssh's to change.
+func DefaultFormat(c *commands.Command, r commands.Result) commands.Format {
+	if !c.JSONOnly {
+		return commands.FormatText
+	}
+
+	// A JSON-only command's refusal ("No vpn address was provided") is a sentence for a
+	// person, so an outcome renders as text here; ssh users and scripts expect it.
+	if r.Value == nil {
+		return commands.FormatText
+	}
+
+	return commands.FormatJSON
 }
 
 func (s *session) handleChannels(chans <-chan ssh.NewChannel) {
@@ -87,9 +111,13 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 			}
 
 			req.Reply(true, nil)
-			s.dispatchCommand(payload.Value, &stringWriter{channel})
+			err := s.dispatchCommand(payload.Value, commands.MergedOutput(channel))
 
+			// A command that failed exits 1, so `ssh host cmd` callers can tell.
 			status := struct{ Status uint32 }{uint32(0)}
+			if err != nil {
+				status.Status = 1
+			}
 			channel.SendRequest("exit-status", false, ssh.Marshal(status))
 			channel.Close()
 			return
@@ -111,7 +139,7 @@ func (s *session) createTerm(channel ssh.Channel) *term.Terminal {
 	term.AutoCompleteCallback = func(line string, pos int, key rune) (newLine string, newPos int, ok bool) {
 		// key 9 is tab
 		if key == 9 {
-			cmds := matchCommand(s.commands, line)
+			cmds := s.commands.Match(line)
 			if len(cmds) == 1 {
 				return cmds[0] + " ", len(cmds[0]) + 1, true
 			}
@@ -128,7 +156,7 @@ func (s *session) createTerm(channel ssh.Channel) *term.Terminal {
 }
 
 func (s *session) handleInput() {
-	w := &stringWriter{w: s.term}
+	w := commands.MergedOutput(s.term)
 	for {
 		line, err := s.term.ReadLine()
 		if err != nil {
@@ -139,36 +167,20 @@ func (s *session) handleInput() {
 	}
 }
 
-func (s *session) dispatchCommand(line string, w StringWriter) {
-	args, err := shlex.Split(line, true)
-	if err != nil {
-		return
+// dispatchCommand runs line and returns the command's error, which it has logged unless
+// the command already told the user everything: the log line is for the operator reading
+// the daemon's log, who learns nothing from a failure the user caused.
+func (s *session) dispatchCommand(line string, w commands.Output) error {
+	err := s.commands.Dispatch(line, w)
+	if err == nil {
+		return nil
 	}
 
-	if len(args) == 0 {
-		dumpCommands(s.commands, w)
-		return
+	var f *commands.Failure
+	if !errors.As(err, &f) {
+		s.l.Debug("Command returned an error", "line", line, "error", err)
 	}
-
-	c, err := lookupCommand(s.commands, args[0])
-	if err != nil {
-		return
-	}
-
-	if c == nil {
-		err := w.WriteLine(fmt.Sprintf("did not understand: %s", line))
-		_ = err
-
-		dumpCommands(s.commands, w)
-		return
-	}
-
-	if checkHelpArgs(args) {
-		s.dispatchCommand(fmt.Sprintf("%s %s", "help", c.Name), w)
-		return
-	}
-
-	_ = execCommand(c, args[1:], w)
+	return err
 }
 
 func (s *session) Close() {

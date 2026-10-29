@@ -1,5 +1,4 @@
 //go:build !e2e_testing
-// +build !e2e_testing
 
 package overlay
 
@@ -13,6 +12,7 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 )
@@ -38,16 +38,17 @@ func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip
 		l:               l,
 	}
 
-	err := t.reload(c, true)
+	err := t.reload(c, true, nil)
 	if err != nil {
 		_ = file.Close()
 		return nil, err
 	}
 
-	c.RegisterReloadCallback(func(c *config.C) {
-		err := t.reload(c, false)
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		err := t.reload(c, false, r)
 		if err != nil {
 			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
+			r.Failed()
 		}
 	})
 
@@ -63,12 +64,12 @@ func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 	return r
 }
 
-func (t tun) Activate() error {
+func (t *tun) Activate() error {
 	return nil
 }
 
-func (t *tun) reload(c *config.C, initial bool) error {
-	change, routes, err := getAllRoutesFromConfig(c, t.vpnNetworks, initial)
+func (t *tun) reload(c *config.C, initial bool, r *config.Reload) error {
+	change, routes, err := getAllRoutesFromConfig(t.l, c, t.vpnNetworks, initial)
 	if err != nil {
 		return err
 	}
@@ -96,10 +97,6 @@ func (t *tun) Name() string {
 	return "android"
 }
 
-func (t *tun) SupportsMultiqueue() bool {
-	return false
-}
-
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented for android")
+func (t *tun) Queues(int) ([]tio.Queue, error) {
+	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}, nil
 }
