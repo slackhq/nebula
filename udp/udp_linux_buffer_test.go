@@ -123,3 +123,34 @@ func TestReloadConfigBufferLogLevel(t *testing.T) {
 		})
 	}
 }
+
+// TestSendOnlyRecvBuffer checks a send only socket keeps the minimum receive buffer, even when listen.read_buffer
+// is set, while listen.write_buffer still applies.
+func TestSendOnlyRecvBuffer(t *testing.T) {
+	c, err := NewListener(testLogger(), Settings{Listen: netip.MustParseAddrPort("127.0.0.1:0"), Batch: 1, SendOnly: true})
+	if err != nil {
+		t.Skipf("NewListener: %v", err)
+	}
+	sc := c.(*StdConn)
+	defer sc.Close()
+
+	minBuf, err := sc.GetRecvBuffer()
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	// The kernel minimum is a few KB, well below any default rmem
+	if minBuf > 16<<10 {
+		t.Fatalf("send only receive buffer is %d, want the kernel minimum", minBuf)
+	}
+
+	cfg := config.NewC(testLogger())
+	cfg.Settings["listen"] = map[string]any{"read_buffer": 1 << 20, "write_buffer": 1 << 20}
+	sc.ReloadConfig(cfg, nil)
+
+	if got, err := sc.GetRecvBuffer(); err != nil || got != minBuf {
+		t.Errorf("receive buffer after reload = %d, %v, want %d", got, err, minBuf)
+	}
+	if got, err := sc.GetSendBuffer(); err != nil || got < 1<<20 {
+		t.Errorf("send buffer after reload = %d, %v, want at least %d", got, err, 1<<20)
+	}
+}

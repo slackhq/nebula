@@ -29,7 +29,8 @@ type MultiPortConn struct {
 
 // NewMultiPortConn opens ports-1 additional UDP sockets per queue, bound to base.Listen's address on base.Listen's
 // port + 1 through port + ports-1, with base's offload setting. With more than one queue each port is bound with
-// SO_REUSEPORT, once per queue. These sockets are only used to send, nebula never reads from them.
+// SO_REUSEPORT, once per queue. These sockets are only used to send, nebula never reads from them, so they are
+// opened SendOnly.
 func NewMultiPortConn(l *slog.Logger, base Settings, ports, queues int) (*MultiPortConn, error) {
 	basePort := int(base.Listen.Port())
 	if ports < 1 {
@@ -52,6 +53,7 @@ func NewMultiPortConn(l *slog.Logger, base Settings, ports, queues int) (*MultiP
 				Multi:    queues > 1,
 				Batch:    1,
 				Offloads: base.Offloads,
+				SendOnly: true,
 			})
 			if err != nil {
 				_ = m.Close()

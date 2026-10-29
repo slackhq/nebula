@@ -24,6 +24,8 @@ type StdConn struct {
 	isV4   bool
 	l      *slog.Logger
 	batch  int
+	// sendOnly is never read, see Settings.SendOnly
+	sendOnly bool
 
 	// bw owns the sendmmsg/UDP-GSO transmit path: the per-queue write
 	// scratch and the GSO capability state probed at socket creation. See
@@ -55,6 +57,14 @@ func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 		}
 	}
 
+	if s.SendOnly {
+		// Before bind so nothing queues against a larger buffer first, the kernel rounds 0 up to its minimum
+		if err = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, 0); err != nil {
+			_ = unix.Close(fd)
+			return nil, fmt.Errorf("unable to set SO_RCVBUF: %w", err)
+		}
+	}
+
 	var sa unix.Sockaddr
 	port := int(s.Listen.Port())
 	if s.Listen.Addr().Is4() {
@@ -71,7 +81,7 @@ func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 		return nil, fmt.Errorf("unable to bind to socket: %w", err)
 	}
 
-	out := &StdConn{sysFd: fd, isV4: s.Listen.Addr().Is4(), l: l, batch: s.Batch}
+	out := &StdConn{sysFd: fd, isV4: s.Listen.Addr().Is4(), l: l, batch: s.Batch, sendOnly: s.SendOnly}
 
 	out.bw = newBatchWriter(fd, out.isV4, l, s.Offloads)
 
@@ -413,7 +423,7 @@ func writeSockaddr(buf []byte, addr netip.AddrPort, isV4 bool) (int, error) {
 
 func (u *StdConn) ReloadConfig(c *config.C, r *config.Reload) {
 	b := c.GetInt("listen.read_buffer", 0)
-	if b > 0 {
+	if b > 0 && !u.sendOnly {
 		if err := u.SetRecvBuffer(b); err == nil {
 			// The kernel reports double the requested size
 			if s, err := u.GetRecvBuffer(); err == nil && s >= 2*b {

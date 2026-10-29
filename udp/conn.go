@@ -24,6 +24,9 @@ type Settings struct {
 	Multi    bool
 	Batch    int
 	Offloads bool
+	// SendOnly is for a socket that is never read: its receive buffer is kept at the kernel minimum and
+	// listen.read_buffer is not applied, so stray traffic to it can't pin memory. Only Linux acts on it.
+	SendOnly bool
 }
 
 type Conn interface {
