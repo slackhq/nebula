@@ -99,7 +99,8 @@ type Interface struct {
 	// triggerShutdown is a function that will be run exactly once, when onFatal swaps something non-nil into fatalErr
 	triggerShutdown func()
 
-	udpRaw    *udp.RawConn
+	// udpMulti holds the extra send sockets for multiport tx, nil until tun.multiport.tx_enabled is set
+	udpMulti  atomic.Pointer[udp.MultiPortConn]
 	multiPort config.MultiPortConfig
 
 	metricHandshakes    metrics.Histogram
@@ -519,8 +520,6 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 
 	udpStats := udp.NewUDPStatsEmitter(f.writers)
 
-	var rawStats func()
-
 	certExpirationGauge := metrics.GetOrRegisterGauge("certificate.ttl_seconds", nil)
 	certInitiatingVersion := metrics.GetOrRegisterGauge("certificate.initiating_version", nil)
 	certMaxVersion := metrics.GetOrRegisterGauge("certificate.max_version", nil)
@@ -534,13 +533,6 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 		defaultCrt := certState.GetDefaultCertificate()
 		certExpirationGauge.Update(int64(defaultCrt.NotAfter().Sub(time.Now()) / time.Second))
 		certInitiatingVersion.Update(int64(defaultCrt.Version()))
-
-		if f.udpRaw != nil {
-			if rawStats == nil {
-				rawStats = udp.NewRawStatsEmitter(f.udpRaw)
-			}
-			rawStats()
-		}
 
 		// Report the max certificate version we are capable of using
 		if certState.v2Cert != nil {
@@ -587,6 +579,13 @@ func (f *Interface) Close() error {
 		err := u.Close()
 		if err != nil {
 			f.l.Error("Error while closing udp socket", "error", err, "writer", i)
+			errs = append(errs, err)
+		}
+	}
+
+	if mp := f.udpMulti.Load(); mp != nil {
+		if err := mp.Close(); err != nil {
+			f.l.Error("Error while closing multiport udp sockets", "error", err)
 			errs = append(errs, err)
 		}
 	}

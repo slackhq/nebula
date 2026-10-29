@@ -141,9 +141,9 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		}
 	}()
 
+	var listenHost netip.Addr
 	if !configTest {
 		rawListenHost := c.GetString("listen.host", "0.0.0.0")
-		var listenHost netip.Addr
 		if rawListenHost == "[::]" {
 			// Old guidance was to provide the literal `[::]` in `listen.host` but that won't resolve.
 			listenHost = netip.IPv6Unspecified()
@@ -249,26 +249,34 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 
 			tx := c.GetBool("tun.multiport.tx_enabled", false)
 
-			if tx && ifce.udpRaw == nil {
-				ifce.udpRaw, err = udp.NewRawConn(l, c.GetString("listen.host", "0.0.0.0"), port, uint16(port))
+			txPorts := c.GetInt("tun.multiport.tx_ports", 100)
+
+			// The send sockets are opened once and never replaced, since the send path uses them without locking
+			mp := ifce.udpMulti.Load()
+			if tx && mp == nil {
+				mp, err = udp.NewMultiPortConn(l, listenHost, uint16(port), txPorts)
 				if err != nil {
-					l.Error("Failed to get raw socket for tun.multiport.tx_enabled", "error", err)
-					ifce.udpRaw = nil
+					l.Error("Failed to open udp sockets for tun.multiport.tx_enabled", "error", err)
+					mp = nil
 					tx = false
+				} else {
+					ifce.udpMulti.Store(mp)
 				}
+			} else if tx && mp.Ports() != txPorts {
+				l.Warn("tun.multiport.tx_ports is not reloadable, a restart is required to change it",
+					"current", mp.Ports(), "configured", txPorts)
 			}
 
 			if tx {
 				ifce.multiPort.TxBasePort = uint16(port)
-				ifce.multiPort.TxPorts = c.GetInt("tun.multiport.tx_ports", 100)
+				ifce.multiPort.TxPorts = mp.Ports()
 				ifce.multiPort.TxHandshake = c.GetBool("tun.multiport.tx_handshake", false)
 				ifce.multiPort.TxHandshakeDelay = int64(c.GetInt("tun.multiport.tx_handshake_delay", 2))
-				ifce.udpRaw.ReloadConfig(c)
+				mp.ReloadConfig(c)
 			}
 			ifce.multiPort.Tx = tx
 
 			// TODO: if we upstream this, make this cleaner
-			handshakeManager.udpRaw = ifce.udpRaw
 			handshakeManager.multiPort = ifce.multiPort
 
 			l.Info("Multiport configured", "multiPort", ifce.multiPort)

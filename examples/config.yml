@@ -341,8 +341,10 @@ tun:
   # NOTE: you cannot use multiport on a host if you are relying on UDP hole
   # punching to get through a NAT or firewall.
   #
-  # NOTE: Linux only (uses raw sockets to send). Also currently only works
-  # with IPv4 underlay network remotes.
+  # NOTE: With tx_enabled, nebula binds tx_ports - 1 additional UDP sockets on
+  # listen.host, using ports listen.port + 1 through listen.port + tx_ports - 1.
+  # These ports must be free and allowed through any local firewall. They are
+  # only used for sending.
   #
   # The default values are listed below:
   #multiport:
@@ -354,6 +356,7 @@ tun:
     #
     # How many UDP ports to use when sending. The lowest source port will be
     # listen.port and go up to (but not including) listen.port + tx_ports.
+    # Changing this requires a restart.
     #tx_ports: 100
     #
     # NOTE: All of your hosts must be running a version of Nebula that supports

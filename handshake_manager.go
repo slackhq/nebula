@@ -73,7 +73,6 @@ type HandshakeManager struct {
 	l                      *slog.Logger
 
 	multiPort config.MultiPortConfig
-	udpRaw    *udp.RawConn
 
 	// can be used to trigger outbound handshake for the given vpnIp
 	trigger chan netip.Addr
@@ -318,18 +317,14 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		}
 
 		// Attempt a multiport handshake if we are past the TxHandshakeDelay attempts
-		if hm.multiPort.TxHandshake && hm.udpRaw != nil && hh.counter >= hm.multiPort.TxHandshakeDelay && udp.RawSupported(addr) {
+		if !hm.multiPort.Tx || !hm.multiPort.TxHandshake || hh.counter < hm.multiPort.TxHandshakeDelay {
+			return
+		}
+		if multiport := hm.f.udpMulti.Load(); multiport != nil {
 			sentMultiport = true
-			// We need to re-allocate with 8 bytes at the start of SOCK_RAW
-			raw := hostinfo.HandshakePacket[0x80]
-			if raw == nil {
-				raw = make([]byte, len(hostinfo.HandshakePacket[0])+udp.RawOverhead)
-				copy(raw[udp.RawOverhead:], hostinfo.HandshakePacket[0])
-				hostinfo.HandshakePacket[0x80] = raw
-			}
-
-			hm.messageMetrics.Tx(header.Handshake, header.MessageSubType(hostinfo.HandshakePacket[0][1]), 1)
-			err = hm.udpRaw.WriteTo(raw, udp.RandomSendPort.UDPSendPort(hm.multiPort.TxPorts), addr)
+			hm.messageMetrics.Tx(header.Handshake, hh.machine.Subtype(), 1)
+			port := udp.RandomSendPort.UDPSendPort(multiport.Ports())
+			err = multiport.WriteTo(stage0, port, addr, hm.outside)
 			if err != nil {
 				hostinfo.logger(hm.l).Error("Failed to send handshake message",
 					"error", err,
