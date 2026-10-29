@@ -401,7 +401,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		if multiport := hm.f.udpMulti.Load(); multiport != nil {
 			sentMultiport = true
 			hm.messageMetrics.Tx(header.Handshake, hh.machine.Subtype(), 1)
-			port := udp.RandomSendPort.UDPSendPort(multiport.Ports())
+			port := udp.RandomSendPort(multiport.Ports())
 			err = multiport.WriteTo(stage0, port, addr, hm.outside)
 			if err != nil {
 				hostinfo.logger(hm.l).Error("Failed to send handshake message",

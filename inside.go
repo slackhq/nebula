@@ -288,7 +288,7 @@ func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *
 		return
 	}
 
-	f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, out, nb, encryptBuf, q, nil)
+	f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, out, nb, encryptBuf, q)
 }
 
 // Handshake will attempt to initiate a tunnel with the provided vpn address. This is a no-op if the tunnel is already established or being established
@@ -401,7 +401,7 @@ func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubTyp
 		return
 	}
 
-	f.sendNoMetrics(header.Message, st, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, p, nb, out, 0, nil)
+	f.sendNoMetrics(header.Message, st, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, p, nb, out, 0)
 }
 
 // SendMessageToVpnAddr handles real addr:port lookup and sends to the current best known address for vpnAddr.
@@ -433,12 +433,12 @@ func (f *Interface) SendMessageToHostInfo(t header.MessageType, st header.Messag
 
 func (f *Interface) send(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, p, nb, out []byte) {
 	f.messageMetrics.Tx(t, st, 1)
-	f.sendNoMetrics(t, st, ci, hostinfo, netip.AddrPort{}, p, nb, out, 0, nil)
+	f.sendNoMetrics(t, st, ci, hostinfo, netip.AddrPort{}, p, nb, out, 0)
 }
 
 func (f *Interface) sendTo(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb, out []byte) {
 	f.messageMetrics.Tx(t, st, 1)
-	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out, 0, nil)
+	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out, 0)
 }
 
 // dropExhausted records an exhaustion drop and logs once, on the crossing send, for a spent tunnel.
@@ -533,7 +533,7 @@ func (f *Interface) SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, noc
 	}
 }
 
-func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb, out []byte, q int, udpPortGetter udp.SendPortGetter) {
+func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb, out []byte, q int) {
 	if ci.eKey == nil {
 		return
 	}
@@ -541,9 +541,6 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	var multiport *udp.MultiPortConn
 	if hostinfo.multiportTx && f.multiPort.Load().Tx {
 		multiport = f.udpMulti.Load()
-		if udpPortGetter == nil {
-			udpPortGetter = udp.RandomSendPort
-		}
 	}
 
 	useRelay := !remote.IsValid() && !hostinfo.GetRemote().IsValid()
@@ -612,7 +609,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 
 	if remote.IsValid() {
 		if multiport != nil {
-			port := udpPortGetter.UDPSendPort(multiport.Ports())
+			port := udp.RandomSendPort(multiport.Ports())
 			err = multiport.WriteTo(out, port, remote, f.writers[q])
 		} else {
 			err = f.writers[q].WriteTo(out, remote)
@@ -627,7 +624,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		}
 	} else if hr := hostinfo.GetRemote(); hr.IsValid() {
 		if multiport != nil {
-			port := udpPortGetter.UDPSendPort(multiport.Ports())
+			port := udp.RandomSendPort(multiport.Ports())
 			err = multiport.WriteTo(out, port, hr, f.writers[q])
 		} else {
 			err = f.writers[q].WriteTo(out, hr)

@@ -10,18 +10,10 @@ import (
 	"github.com/slackhq/nebula/config"
 )
 
-type SendPortGetter interface {
-	// UDPSendPort returns the port index to use, from [0, maxPort)
-	UDPSendPort(maxPort int) uint16
+// RandomSendPort returns a random multiport send port index, from [0, ports)
+func RandomSendPort(ports int) uint16 {
+	return uint16(mathrand.Intn(ports))
 }
-
-type randomSendPort struct{}
-
-func (randomSendPort) UDPSendPort(maxPort int) uint16 {
-	return uint16(mathrand.Intn(maxPort))
-}
-
-var RandomSendPort = randomSendPort{}
 
 // MultiPortConn holds the extra UDP sockets used to send from multiple source
 // ports. Port index 0 is the base port, which is served by the caller's main
