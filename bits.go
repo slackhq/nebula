@@ -125,7 +125,9 @@ func (b *Bits) strictlyWithinWindow(i uint64) bool {
 	return false //not within window!
 }
 
-// Check returns true if i is within (or way out in front of) the window, and not a replay
+// Check returns true if i is within (or way out in front of) the window, and not a replay.
+// A rejection is counted as a duplicate or out of window here, the packet never reaches Update. These counts happen
+// before the packet is authenticated.
 func (b *Bits) Check(l *slog.Logger, i uint64) bool {
 	// If i is the next number, return true.
 	if i > b.current {
@@ -133,10 +135,15 @@ func (b *Bits) Check(l *slog.Logger, i uint64) bool {
 	}
 
 	if b.strictlyWithinWindow(i) {
-		return !b.get(i)
+		if b.get(i) {
+			b.dupeCounter.Inc(1)
+			return false
+		}
+		return true
 	}
 
 	// Not within the window
+	b.outOfWindowCounter.Inc(1)
 	if l.Enabled(context.Background(), slog.LevelDebug) {
 		l.Debug("rejected a packet (top)", "current", b.current, "incoming", i)
 	}

@@ -436,3 +436,36 @@ func BenchmarkBitsUpdateLargeJumps(b *testing.B) {
 		z.Update(l, uint64(n+1)*1000)
 	}
 }
+
+// TestBitsCheckCounters checks a packet Check rejects is counted, Decrypt never hands it to Update
+func TestBitsCheckCounters(t *testing.T) {
+	l := test.NewLogger()
+	b := NewBits(16)
+	b.lostCounter.Clear()
+	b.dupeCounter.Clear()
+	b.outOfWindowCounter.Clear()
+
+	for n := uint64(1); n <= 29; n++ {
+		assert.True(t, b.Update(l, n))
+	}
+
+	// In window and unseen, in front of the window, accepted and not counted
+	b.bits[0] &^= 1 // forget 16, slot 0, so it is unseen and in window (29-16 < 16)
+	assert.True(t, b.Check(l, 16))
+	assert.True(t, b.Check(l, 30))
+	assert.Equal(t, int64(0), b.dupeCounter.Count())
+	assert.Equal(t, int64(0), b.outOfWindowCounter.Count())
+
+	// Seen and in window is a duplicate
+	assert.False(t, b.Check(l, 29))
+	assert.False(t, b.Check(l, 20))
+	assert.Equal(t, int64(2), b.dupeCounter.Count())
+
+	// Below the window is out of window
+	assert.False(t, b.Check(l, 13))
+	assert.False(t, b.Check(l, 1))
+	assert.Equal(t, int64(2), b.outOfWindowCounter.Count())
+
+	assert.Equal(t, int64(2), b.dupeCounter.Count())
+	assert.Equal(t, int64(0), b.lostCounter.Count())
+}
