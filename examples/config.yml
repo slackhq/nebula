@@ -469,6 +469,16 @@ tun:
     # How many unresponded handshakes we should send before we attempt to
     # send multiport handshakes.
     #tx_handshake_delay: 2
+    #
+    # Replay window, in packets, for every tunnel on this host, multiport or
+    # not. Multiport spreads one tunnel's packets across every routine on both
+    # hosts, so they arrive further out of order, and a packet more than a
+    # window behind the newest one is dropped (network.packets.out_of_window).
+    # Raise it if that counter grows, 65536 covered 8 routines at ~24 Gbps in
+    # testing. Must be a power of two from 8192 to 1048576, each tunnel's
+    # window costs replay_window / 8 bytes. Applies to tunnels created after a
+    # change.
+    #replay_window: 8192
 
 # EXPERIMENTAL: this option may change or disappear in the future.
 # The dns section configures this host's OS resolver to send queries to a user specified DNS server.

@@ -351,7 +351,8 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		loadMultiPortConfig := func(c *config.C, r *config.Reload) {
 			// Build the whole config before storing it, readers load it without locking
 			mpc := config.MultiPortConfig{
-				Rx: c.GetBool("tun.multiport.rx_enabled", false),
+				Rx:           c.GetBool("tun.multiport.rx_enabled", false),
+				ReplayWindow: multiPortReplayWindow(l, c.GetInt("tun.multiport.replay_window", ReplayWindow)),
 			}
 
 			tx := c.GetBool("tun.multiport.tx_enabled", false)

@@ -113,7 +113,7 @@ func TestConnectionState_NextMessageCounter(t *testing.T) {
 // TestSendNoMetricsDropsExhausted drives the send path to the exhausted drop; metric and out flag prove it.
 func TestSendNoMetricsDropsExhausted(t *testing.T) {
 	initR, _ := runTestHandshake(t)
-	ci, err := newConnectionStateFromResult(initR)
+	ci, err := newConnectionStateFromResult(initR, ReplayWindow)
 	require.NoError(t, err)
 	ci.messageCounter.Store(RejectAfterMessages - 1)
 
@@ -131,7 +131,7 @@ func TestSendNoMetricsDropsExhausted(t *testing.T) {
 // packet on a re-established tunnel still needs that edge to trigger the far-side punch.
 func TestSendNoMetricsCloseTunnelKeepsRebindEpoch(t *testing.T) {
 	initR, _ := runTestHandshake(t)
-	ci, err := newConnectionStateFromResult(initR)
+	ci, err := newConnectionStateFromResult(initR, ReplayWindow)
 	require.NoError(t, err)
 
 	f := &Interface{
@@ -185,9 +185,9 @@ func TestSendNoMetricsViaRelay(t *testing.T) {
 			// One tunnel to the target, carried end to end, and one to the relay that wraps it
 			targetInit, targetResp := runTestHandshake(t)
 			relayInit, relayResp := runTestHandshake(t)
-			ci, err := newConnectionStateFromResult(targetInit)
+			ci, err := newConnectionStateFromResult(targetInit, ReplayWindow)
 			require.NoError(t, err)
-			relayCI, err := newConnectionStateFromResult(relayInit)
+			relayCI, err := newConnectionStateFromResult(relayInit, ReplayWindow)
 			require.NoError(t, err)
 
 			targetAddr := netip.MustParseAddr("10.0.0.2")
@@ -250,7 +250,7 @@ func TestSendNoMetricsViaRelay(t *testing.T) {
 			require.NoError(t, outer.Parse(pkt))
 			assert.Equal(t, header.MessageRelay, outer.Subtype)
 			assert.Equal(t, relay.RemoteIndex, outer.RemoteIndex)
-			relayPeer, err := newConnectionStateFromResult(relayResp)
+			relayPeer, err := newConnectionStateFromResult(relayResp, ReplayWindow)
 			require.NoError(t, err)
 			require.NoError(t, relayPeer.VerifyRelay(l, outer.MessageCounter, pkt, make([]byte, 12)))
 
@@ -260,7 +260,7 @@ func TestSendNoMetricsViaRelay(t *testing.T) {
 			require.NoError(t, h.Parse(inner))
 			assert.Equal(t, header.Message, h.Type)
 			assert.Equal(t, hostinfo.remoteIndexId, h.RemoteIndex)
-			targetPeer, err := newConnectionStateFromResult(targetResp)
+			targetPeer, err := newConnectionStateFromResult(targetResp, ReplayWindow)
 			require.NoError(t, err)
 			got, err := targetPeer.Decrypt(l, h.MessageCounter, inner, make([]byte, 12))
 			require.NoError(t, err)
@@ -273,7 +273,7 @@ func TestNewConnectionStateFromResult(t *testing.T) {
 	initR, respR := runTestHandshake(t)
 
 	t.Run("initiator", func(t *testing.T) {
-		ci, err := newConnectionStateFromResult(initR)
+		ci, err := newConnectionStateFromResult(initR, ReplayWindow)
 		require.NoError(t, err)
 		assert.True(t, ci.initiator)
 		assert.Equal(t, initR.MyCert, ci.myCert)
@@ -296,13 +296,25 @@ func TestNewConnectionStateFromResult(t *testing.T) {
 	t.Run("message index too large is refused", func(t *testing.T) {
 		bad := *initR
 		bad.MessageIndex = ReplayWindow
-		ci, err := newConnectionStateFromResult(&bad)
+		ci, err := newConnectionStateFromResult(&bad, ReplayWindow)
 		require.Error(t, err)
 		assert.Nil(t, ci)
 	})
 
+	t.Run("replay window length", func(t *testing.T) {
+		ci, err := newConnectionStateFromResult(initR, 1<<16)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(1<<16), ci.window.length)
+
+		for _, w := range []uint64{0, ReplayWindow / 2, ReplayWindow + 1} {
+			ci, err := newConnectionStateFromResult(initR, w)
+			require.Error(t, err, "window %d", w)
+			assert.Nil(t, ci)
+		}
+	})
+
 	t.Run("responder", func(t *testing.T) {
-		ci, err := newConnectionStateFromResult(respR)
+		ci, err := newConnectionStateFromResult(respR, ReplayWindow)
 		require.NoError(t, err)
 		assert.False(t, ci.initiator)
 		assert.Equal(t, respR.MyCert, ci.myCert)

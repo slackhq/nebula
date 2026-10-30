@@ -51,8 +51,12 @@ type ConnectionState struct {
 // newConnectionStateFromResult builds a fully-populated ConnectionState from a
 // completed handshake.Result. It seeds messageCounter and the replay window so
 // that the post-handshake message indices already used on the wire don't count
-// as missed traffic in the data plane.
-func newConnectionStateFromResult(r *handshake.Result) (*ConnectionState, error) {
+// as missed traffic in the data plane. window is the replay window length, a power of two of at least ReplayWindow.
+func newConnectionStateFromResult(r *handshake.Result, window uint64) (*ConnectionState, error) {
+	if window < ReplayWindow || window&(window-1) != 0 {
+		return nil, fmt.Errorf("replay window %d must be a power of two of at least %d", window, ReplayWindow)
+	}
+
 	// Refuse a MessageIndex too big for the replay window: it can only be a bug, and would spin the seed loop below.
 	if r.MessageIndex >= ReplayWindow {
 		return nil, fmt.Errorf("handshake message index %d exceeds replay window", r.MessageIndex)
@@ -64,7 +68,7 @@ func newConnectionStateFromResult(r *handshake.Result) (*ConnectionState, error)
 		peerCert:  r.RemoteCert,
 		eKey:      noiseutil.NewCipherState(r.EKey, r.Cipher),
 		dKey:      noiseutil.NewCipherState(r.DKey, r.Cipher),
-		window:    NewBits(ReplayWindow),
+		window:    NewBits(window),
 		epoch:     sessionEpoch.Add(1),
 	}
 	ci.messageCounter.Add(r.MessageIndex)
