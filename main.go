@@ -354,6 +354,9 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 				Rx:           c.GetBool("tun.multiport.rx_enabled", false),
 				ReplayWindow: multiPortReplayWindow(l, c.GetInt("tun.multiport.replay_window", ReplayWindow)),
 			}
+			if c.GetBool("tun.multiport.parallel_encrypt", true) {
+				mpc.EncryptQueues = routines
+			}
 
 			tx := c.GetBool("tun.multiport.tx_enabled", false)
 			txPorts := c.GetInt("tun.multiport.tx_ports", 100)

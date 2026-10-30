@@ -874,7 +874,7 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		return
 	}
 
-	connState, err := newConnectionStateFromResult(result, replayWindow(multiPort))
+	connState, err := newConnectionStateFromResult(result, replayWindow(multiPort), multiPort.EncryptQueues)
 	if err != nil {
 		f.l.Error("Discarding handshake with an invalid message index", "error", err, "vpnAddrs", vpnAddrs)
 		return
@@ -1016,7 +1016,7 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	hostinfo.multiportRx = multiPort.Rx && result.MultiportTx
 
 	// Handshake complete; build the ConnectionState now that we have keys and a verified peer cert.
-	cs, err := newConnectionStateFromResult(result, replayWindow(multiPort))
+	cs, err := newConnectionStateFromResult(result, replayWindow(multiPort), multiPort.EncryptQueues)
 	if err != nil {
 		f.l.Error("Discarding handshake with an invalid message index", "error", err, "vpnAddrs", hostinfo.vpnAddrs)
 		hm.DeleteHostInfo(hostinfo)

@@ -44,6 +44,8 @@ type ConnectionState struct {
 	window         *Bits
 	decryptLock    sync.Mutex
 	writeLock      sync.Mutex
+	// queueKeys, when set, holds one send cipher per routine for a cipher that needs writeLock, see encrypter
+	queueKeys []queueKey
 	// epoch is this session's sessionEpoch ordinal. Immutable after creation.
 	epoch uint64
 }
@@ -52,7 +54,8 @@ type ConnectionState struct {
 // completed handshake.Result. It seeds messageCounter and the replay window so
 // that the post-handshake message indices already used on the wire don't count
 // as missed traffic in the data plane. window is the replay window length, a power of two of at least ReplayWindow.
-func newConnectionStateFromResult(r *handshake.Result, window uint64) (*ConnectionState, error) {
+// encryptQueues above 1 gives the tunnel one send cipher per routine when noiseutil.EncryptLockNeeded, see encrypter.
+func newConnectionStateFromResult(r *handshake.Result, window uint64, encryptQueues int) (*ConnectionState, error) {
 	if window < ReplayWindow || window&(window-1) != 0 {
 		return nil, fmt.Errorf("replay window %d must be a power of two of at least %d", window, ReplayWindow)
 	}
@@ -71,11 +74,51 @@ func newConnectionStateFromResult(r *handshake.Result, window uint64) (*Connecti
 		window:    NewBits(window),
 		epoch:     sessionEpoch.Add(1),
 	}
+	if encryptQueues > 1 && noiseutil.EncryptLockNeeded {
+		ci.queueKeys = newQueueKeys(r, encryptQueues)
+	}
 	ci.messageCounter.Add(r.MessageIndex)
 	for i := uint64(1); i <= r.MessageIndex; i++ {
 		ci.window.Update(nil, i)
 	}
 	return ci, nil
+}
+
+// queueKey is one of a tunnel's per routine send ciphers and the lock serializing its encryptions
+type queueKey struct {
+	mu  sync.Mutex
+	key noiseutil.CipherState
+	// Keep each routine's lock on its own cache line
+	_ [64 - 8 - 16]byte
+}
+
+// newQueueKeys builds n send ciphers from the tunnel's send key, nil if the cipher can't be built that way.
+//
+// A cipher that needs writeLock (FIPS 140, boringcrypto) refuses a nonce that is not strictly increasing. Every
+// routine reserves its counters from the shared messageCounter under its own cipher's lock, so the counters each
+// cipher sees still strictly increase, and every counter is used once across all of them.
+func newQueueKeys(r *handshake.Result, n int) []queueKey {
+	k := r.EKey.UnsafeKey()
+	keys := make([]queueKey, n)
+	for i := range keys {
+		cs, ok := r.Cipher.Cipher(k).(noiseutil.CipherState)
+		if !ok {
+			return nil
+		}
+		keys[i].key = cs
+	}
+	return keys
+}
+
+// encrypter returns the cipher queue q sends with and the lock to hold around reserving a counter and encrypting
+// when noiseutil.EncryptLockNeeded. That is queue q's own cipher when the tunnel has per routine ciphers, otherwise
+// the tunnel's one cipher and writeLock.
+func (cs *ConnectionState) encrypter(q int) (noiseutil.CipherState, *sync.Mutex) {
+	if n := len(cs.queueKeys); n > 0 {
+		k := &cs.queueKeys[q%n]
+		return k.key, &k.mu
+	}
+	return cs.eKey, &cs.writeLock
 }
 
 func (cs *ConnectionState) MarshalJSON() ([]byte, error) {

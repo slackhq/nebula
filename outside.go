@@ -233,7 +233,7 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 				// Forward this packet through the relay tunnel, rebuilding it in place.
 				// Encode overwrites the old outer header, and the new AEAD tag lands where the old one was
 				fwdBuf := packet[:0]
-				out, err := f.prepareSendVia(targetHI, targetRelay, signedPayload, rxc.nb, fwdBuf, true)
+				out, err := f.prepareSendVia(targetHI, targetRelay, signedPayload, rxc.nb, fwdBuf, true, rxc.q)
 				if err == nil {
 					// Borrows the receive buffer, the listener's flush callback drains it before the buffer is reused
 					rxc.relayBatch.Commit(out, targetHI.GetRemote())

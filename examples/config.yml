@@ -479,6 +479,17 @@ tun:
     # window costs replay_window / 8 bytes. Applies to tunnels created after a
     # change.
     #replay_window: 8192
+    #
+    # Only affects FIPS 140 and boringcrypto builds, where AES-GCM refuses a
+    # nonce that is not strictly increasing, so encryption for a tunnel is
+    # serialized by a lock. Multiport spreads a tunnel's traffic over every
+    # routine, which then all wait on that one lock. When true, each tunnel
+    # gets one AES-GCM instance per routine under the same send key, each with
+    # its own lock and its own strictly increasing slice of the tunnel's
+    # counter. Confirm this meets your FIPS 140 requirements, the module can no
+    # longer guarantee nonce uniqueness across the instances on its own.
+    # Applies to tunnels created after a change.
+    #parallel_encrypt: true
 
 # EXPERIMENTAL: this option may change or disappear in the future.
 # The dns section configures this host's OS resolver to send queries to a user specified DNS server.

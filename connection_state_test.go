@@ -14,6 +14,7 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
@@ -25,6 +26,12 @@ import (
 // peers and returns the initiator and responder Results. Used to produce
 // real cipher states for tests that need to exercise post-handshake glue.
 func runTestHandshake(t *testing.T) (initR, respR *handshake.Result) {
+	t.Helper()
+	return runTestHandshakeCipher(t, noise.CipherChaChaPoly)
+}
+
+// runTestHandshakeCipher is runTestHandshake with the given data cipher
+func runTestHandshakeCipher(t *testing.T, cipher noise.CipherFunc) (initR, respR *handshake.Result) {
 	t.Helper()
 
 	ca, _, caKey, _ := ct.NewTestCaCert(
@@ -41,7 +48,7 @@ func runTestHandshake(t *testing.T) (initR, respR *handshake.Result) {
 		require.NoError(t, err)
 		hsBytes, err := c.MarshalForHandshakes()
 		require.NoError(t, err)
-		ncs := noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
+		ncs := noise.NewCipherSuite(noise.DH25519, cipher, noise.HashSHA256)
 		cred := handshake.NewCredential(c, hsBytes, priv, ncs)
 		return func(v cert.Version) *handshake.Credential {
 			if v == cert.Version2 {
@@ -113,7 +120,7 @@ func TestConnectionState_NextMessageCounter(t *testing.T) {
 // TestSendNoMetricsDropsExhausted drives the send path to the exhausted drop; metric and out flag prove it.
 func TestSendNoMetricsDropsExhausted(t *testing.T) {
 	initR, _ := runTestHandshake(t)
-	ci, err := newConnectionStateFromResult(initR, ReplayWindow)
+	ci, err := newConnectionStateFromResult(initR, ReplayWindow, 0)
 	require.NoError(t, err)
 	ci.messageCounter.Store(RejectAfterMessages - 1)
 
@@ -131,7 +138,7 @@ func TestSendNoMetricsDropsExhausted(t *testing.T) {
 // packet on a re-established tunnel still needs that edge to trigger the far-side punch.
 func TestSendNoMetricsCloseTunnelKeepsRebindEpoch(t *testing.T) {
 	initR, _ := runTestHandshake(t)
-	ci, err := newConnectionStateFromResult(initR, ReplayWindow)
+	ci, err := newConnectionStateFromResult(initR, ReplayWindow, 0)
 	require.NoError(t, err)
 
 	f := &Interface{
@@ -185,9 +192,9 @@ func TestSendNoMetricsViaRelay(t *testing.T) {
 			// One tunnel to the target, carried end to end, and one to the relay that wraps it
 			targetInit, targetResp := runTestHandshake(t)
 			relayInit, relayResp := runTestHandshake(t)
-			ci, err := newConnectionStateFromResult(targetInit, ReplayWindow)
+			ci, err := newConnectionStateFromResult(targetInit, ReplayWindow, 0)
 			require.NoError(t, err)
-			relayCI, err := newConnectionStateFromResult(relayInit, ReplayWindow)
+			relayCI, err := newConnectionStateFromResult(relayInit, ReplayWindow, 0)
 			require.NoError(t, err)
 
 			targetAddr := netip.MustParseAddr("10.0.0.2")
@@ -250,7 +257,7 @@ func TestSendNoMetricsViaRelay(t *testing.T) {
 			require.NoError(t, outer.Parse(pkt))
 			assert.Equal(t, header.MessageRelay, outer.Subtype)
 			assert.Equal(t, relay.RemoteIndex, outer.RemoteIndex)
-			relayPeer, err := newConnectionStateFromResult(relayResp, ReplayWindow)
+			relayPeer, err := newConnectionStateFromResult(relayResp, ReplayWindow, 0)
 			require.NoError(t, err)
 			require.NoError(t, relayPeer.VerifyRelay(l, outer.MessageCounter, pkt, make([]byte, 12)))
 
@@ -260,7 +267,7 @@ func TestSendNoMetricsViaRelay(t *testing.T) {
 			require.NoError(t, h.Parse(inner))
 			assert.Equal(t, header.Message, h.Type)
 			assert.Equal(t, hostinfo.remoteIndexId, h.RemoteIndex)
-			targetPeer, err := newConnectionStateFromResult(targetResp, ReplayWindow)
+			targetPeer, err := newConnectionStateFromResult(targetResp, ReplayWindow, 0)
 			require.NoError(t, err)
 			got, err := targetPeer.Decrypt(l, h.MessageCounter, inner, make([]byte, 12))
 			require.NoError(t, err)
@@ -273,7 +280,7 @@ func TestNewConnectionStateFromResult(t *testing.T) {
 	initR, respR := runTestHandshake(t)
 
 	t.Run("initiator", func(t *testing.T) {
-		ci, err := newConnectionStateFromResult(initR, ReplayWindow)
+		ci, err := newConnectionStateFromResult(initR, ReplayWindow, 0)
 		require.NoError(t, err)
 		assert.True(t, ci.initiator)
 		assert.Equal(t, initR.MyCert, ci.myCert)
@@ -296,25 +303,25 @@ func TestNewConnectionStateFromResult(t *testing.T) {
 	t.Run("message index too large is refused", func(t *testing.T) {
 		bad := *initR
 		bad.MessageIndex = ReplayWindow
-		ci, err := newConnectionStateFromResult(&bad, ReplayWindow)
+		ci, err := newConnectionStateFromResult(&bad, ReplayWindow, 0)
 		require.Error(t, err)
 		assert.Nil(t, ci)
 	})
 
 	t.Run("replay window length", func(t *testing.T) {
-		ci, err := newConnectionStateFromResult(initR, 1<<16)
+		ci, err := newConnectionStateFromResult(initR, 1<<16, 0)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(1<<16), ci.window.length)
 
 		for _, w := range []uint64{0, ReplayWindow / 2, ReplayWindow + 1} {
-			ci, err := newConnectionStateFromResult(initR, w)
+			ci, err := newConnectionStateFromResult(initR, w, 0)
 			require.Error(t, err, "window %d", w)
 			assert.Nil(t, ci)
 		}
 	})
 
 	t.Run("responder", func(t *testing.T) {
-		ci, err := newConnectionStateFromResult(respR, ReplayWindow)
+		ci, err := newConnectionStateFromResult(respR, ReplayWindow, 0)
 		require.NoError(t, err)
 		assert.False(t, ci.initiator)
 		assert.Equal(t, respR.MyCert, ci.myCert)
@@ -322,5 +329,68 @@ func TestNewConnectionStateFromResult(t *testing.T) {
 		assert.NotNil(t, ci.eKey)
 		assert.NotNil(t, ci.dKey)
 		assert.Equal(t, uint64(2), ci.messageCounter.Load())
+	})
+}
+
+func TestConnectionStateQueueKeys(t *testing.T) {
+	if !noiseutil.EncryptLockNeeded {
+		// Every cipher is safe to share without a lock, one cipher per tunnel
+		initR, _ := runTestHandshakeCipher(t, noiseutil.CipherAESGCM)
+		ci, err := newConnectionStateFromResult(initR, ReplayWindow, 4)
+		require.NoError(t, err)
+		assert.Nil(t, ci.queueKeys)
+		key, lock := ci.encrypter(2)
+		assert.Same(t, &ci.writeLock, lock)
+		assert.Equal(t, ci.eKey, key)
+		t.Skip("per routine send ciphers only apply when encryption needs a lock, run with GODEBUG=fips140=on")
+	}
+
+	t.Run("aes", func(t *testing.T) {
+		initR, respR := runTestHandshakeCipher(t, noiseutil.CipherAESGCM)
+		ci, err := newConnectionStateFromResult(initR, ReplayWindow, 4)
+		require.NoError(t, err)
+		require.Len(t, ci.queueKeys, 4)
+		peer, err := newConnectionStateFromResult(respR, ReplayWindow, 0)
+		require.NoError(t, err)
+
+		// Each queue has its own cipher and lock, a queue past the count wraps around
+		_, lock0 := ci.encrypter(0)
+		_, lock1 := ci.encrypter(1)
+		_, lock4 := ci.encrypter(4)
+		assert.NotSame(t, lock0, lock1)
+		assert.Same(t, lock0, lock4)
+
+		// Interleave the queues: every counter is used once, and each cipher's own counters still strictly
+		// increase, so the nonce check passes and the peer decrypts every packet
+		nb := make([]byte, 12)
+		for i, q := range []int{0, 1, 2, 3, 1, 0, 3, 2, 2, 1, 1, 0} {
+			key, lock := ci.encrypter(q)
+			lock.Lock()
+			c := ci.messageCounter.Add(1)
+			hdr := header.Encode(make([]byte, header.Len, header.Len+64), header.Version, header.Message, 0, 1, c)
+			out, err := key.EncryptDanger(hdr, hdr, []byte{byte(i)}, c, nb)
+			lock.Unlock()
+			require.NoError(t, err, "queue %d counter %d", q, c)
+
+			pt, err := peer.dKey.DecryptDanger(nil, out[:header.Len], out[header.Len:], c, nb)
+			require.NoError(t, err, "queue %d counter %d", q, c)
+			assert.Equal(t, []byte{byte(i)}, pt)
+		}
+	})
+
+	t.Run("cipher that can't be duplicated keeps one cipher", func(t *testing.T) {
+		initR, _ := runTestHandshakeCipher(t, noise.CipherChaChaPoly)
+		ci, err := newConnectionStateFromResult(initR, ReplayWindow, 4)
+		require.NoError(t, err)
+		assert.Nil(t, ci.queueKeys)
+		_, lock := ci.encrypter(3)
+		assert.Same(t, &ci.writeLock, lock)
+	})
+
+	t.Run("one queue keeps one cipher", func(t *testing.T) {
+		initR, _ := runTestHandshakeCipher(t, noiseutil.CipherAESGCM)
+		ci, err := newConnectionStateFromResult(initR, ReplayWindow, 1)
+		require.NoError(t, err)
+		assert.Nil(t, ci.queueKeys)
 	})
 }

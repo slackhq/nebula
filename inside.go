@@ -113,7 +113,7 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Parse
 
 	dropReason := f.firewall.Drop(fwPacket.Packet, false, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason == nil {
-		f.sendInsideMessage(hostinfo, pkt, &fwPacket.Packet, nb, sendBatch)
+		f.sendInsideMessage(hostinfo, pkt, &fwPacket.Packet, nb, sendBatch, q)
 	} else {
 		f.rejectInside(packet, rejectBuf, q)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
@@ -125,17 +125,18 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Parse
 	}
 }
 
-func (f *Interface) sendInsideEncrypt(hostinfo *HostInfo, ci *ConnectionState, seg, scratch, nb []byte) []byte {
+func (f *Interface) sendInsideEncrypt(hostinfo *HostInfo, ci *ConnectionState, seg, scratch, nb []byte, q int) []byte {
+	key, lock := ci.encrypter(q)
 	if noiseutil.EncryptLockNeeded {
-		ci.writeLock.Lock()
+		lock.Lock()
 	}
 	c := ci.messageCounter.Add(1)
 
 	out := header.Encode(scratch, header.Version, header.Message, 0, hostinfo.remoteIndexId, c)
 
-	out, encErr := ci.eKey.EncryptDanger(out, out, seg, c, nb)
+	out, encErr := key.EncryptDanger(out, out, seg, c, nb)
 	if noiseutil.EncryptLockNeeded {
-		ci.writeLock.Unlock()
+		lock.Unlock()
 	}
 	if encErr != nil {
 		hostinfo.logger(f.l).Error("Failed to encrypt outgoing packet",
@@ -156,7 +157,7 @@ func (f *Interface) sendInsideEncrypt(hostinfo *HostInfo, ci *ConnectionState, s
 // kernel-supplied superpacket bytes never get written into a separate
 // scratch arena: SegmentSuperpacket builds each segment's plaintext in
 // segScratch[:segLen] in turn, and we encrypt directly into a fresh SendBatch slot.
-func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, fwPacket *firewall.Packet, nb []byte, sendBatch *batch.SendBatch) {
+func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, fwPacket *firewall.Packet, nb []byte, sendBatch *batch.SendBatch, q int) {
 	ci := hostinfo.ConnectionState
 	if ci.eKey == nil {
 		return
@@ -203,13 +204,13 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, fwPack
 			//relay header + header + plaintext + AEAD tag + relay tag
 			scratch := sendBatch.Reserve(len(seg) + header.MaxOverhead)
 
-			innerPacket := f.sendInsideEncrypt(hostinfo, ci, seg, scratch[header.Len:], nb)
+			innerPacket := f.sendInsideEncrypt(hostinfo, ci, seg, scratch[header.Len:], nb, q)
 			if innerPacket == nil {
 				return nil
 			}
 
 			//now we need to do a relay-encrypt:
-			toSend, err := f.prepareSendVia(relayHostInfo, relay, innerPacket, nb, scratch, true)
+			toSend, err := f.prepareSendVia(relayHostInfo, relay, innerPacket, nb, scratch, true, q)
 			if err != nil {
 				//already logged
 				return nil
@@ -236,7 +237,7 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, fwPack
 		// header + plaintext + AEAD tag (16 bytes for both AES-GCM and ChaCha20-Poly1305)
 		scratch := sendBatch.Reserve(header.Len + len(seg) + 16)
 
-		out := f.sendInsideEncrypt(hostinfo, ci, seg, scratch, nb)
+		out := f.sendInsideEncrypt(hostinfo, ci, seg, scratch, nb, q)
 		if out == nil {
 			return nil
 		}
@@ -456,15 +457,17 @@ func (f *Interface) prepareSendVia(via *HostInfo,
 	nb,
 	out []byte,
 	nocopy bool,
+	q int,
 ) ([]byte, error) {
+	key, lock := via.ConnectionState.encrypter(q)
 	if noiseutil.EncryptLockNeeded {
 		// NOTE: for goboring AESGCMTLS we need to lock because of the nonce check
-		via.ConnectionState.writeLock.Lock()
+		lock.Lock()
 	}
 	c, ok := via.ConnectionState.NextMessageCounter()
 	if !ok {
 		if noiseutil.EncryptLockNeeded {
-			via.ConnectionState.writeLock.Unlock()
+			lock.Unlock()
 		}
 		f.dropExhausted(via, c, "Dropping outbound relay packets, tunnel message counter is exhausted")
 		return nil, fmt.Errorf("tunnel message counter is exhausted")
@@ -477,7 +480,7 @@ func (f *Interface) prepareSendVia(via *HostInfo,
 	// The payload consists of the inner, unencrypted Nebula header, as well as the end-to-end encrypted payload.
 	if len(out)+len(ad)+via.ConnectionState.eKey.Overhead() > cap(out) {
 		if noiseutil.EncryptLockNeeded {
-			via.ConnectionState.writeLock.Unlock()
+			lock.Unlock()
 		}
 		via.logger(f.l).Error("SendVia out buffer not large enough for relay",
 			"outCap", cap(out),
@@ -499,9 +502,9 @@ func (f *Interface) prepareSendVia(via *HostInfo,
 	}
 
 	var err error
-	out, err = via.ConnectionState.eKey.EncryptDanger(out, out, nil, c, nb)
+	out, err = key.EncryptDanger(out, out, nil, c, nb)
 	if noiseutil.EncryptLockNeeded {
-		via.ConnectionState.writeLock.Unlock()
+		lock.Unlock()
 	}
 	if err != nil {
 		via.logger(f.l).Info("Failed to EncryptDanger in sendVia", "error", err)
@@ -520,7 +523,7 @@ func (f *Interface) prepareSendVia(via *HostInfo,
 // out is a buffer used to store the result of the Encrypt operation
 // q indicates which writer to use to send the packet.
 func (f *Interface) SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, nocopy bool, q int) {
-	toSend, err := f.prepareSendVia(via, relay, ad, nb, out, nocopy)
+	toSend, err := f.prepareSendVia(via, relay, ad, nb, out, nocopy, q)
 	if err != nil {
 		// already logged by prepareSendVia
 		return
@@ -577,14 +580,15 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		out = out[header.Len:header.Len]
 	}
 
+	key, lock := ci.encrypter(q)
 	if noiseutil.EncryptLockNeeded {
 		// NOTE: for goboring AESGCMTLS we need to lock because of the nonce check
-		ci.writeLock.Lock()
+		lock.Lock()
 	}
 	c, ok := ci.NextMessageCounter()
 	if !ok {
 		if noiseutil.EncryptLockNeeded {
-			ci.writeLock.Unlock()
+			lock.Unlock()
 		}
 		f.dropExhausted(hostinfo, c, "Dropping outbound packets, tunnel message counter is exhausted")
 		return
@@ -605,9 +609,9 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	}
 
 	var err error
-	out, err = ci.eKey.EncryptDanger(out, out, p, c, nb)
+	out, err = key.EncryptDanger(out, out, p, c, nb)
 	if noiseutil.EncryptLockNeeded {
-		ci.writeLock.Unlock()
+		lock.Unlock()
 	}
 	if err != nil {
 		hostinfo.logger(f.l).Error("Failed to encrypt outgoing packet",
