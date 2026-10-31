@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -32,6 +33,10 @@ const maxRoutines = 1 << 16
 const _ = noiseutil.RejectHeadroom - 4*maxRoutines
 
 func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, deviceFactory overlay.DeviceFactory) (retcon *Control, reterr error) {
+	// Apply before starting services or selecting per-reader pin CPUs.
+	if err := configureAvoidCPUs(c, l, configTest); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	// The goroutines started below stop only when this context does, and only a caller holding the
 	// Control can arrange that. Cancel whenever we are not handing one back, which covers an error
@@ -461,6 +466,41 @@ func parseCpuAffinity(c *config.C, l *slog.Logger, routines int) []int {
 			"affinityLen", len(cpus), "routines", routines)
 	}
 	return cpus
+}
+
+// configureAvoidCPUs applies tun.avoid_cpus, a list of CPU IDs to keep every thread of the process off. Unlike
+// tun.cpu_affinity, a bad entry fails startup rather than being ignored. Configuration tests only validate it.
+func configureAvoidCPUs(c *config.C, l *slog.Logger, configTest bool) error {
+	raw := c.Get("tun.avoid_cpus")
+	if raw == nil {
+		return nil
+	}
+	values, ok := raw.([]any)
+	if !ok {
+		return fmt.Errorf("tun.avoid_cpus must be a list of non-negative integers")
+	}
+	cpus := make([]int, 0, len(values))
+	for _, value := range values {
+		cpu, ok := value.(int)
+		if !ok || cpu < 0 {
+			return fmt.Errorf("tun.avoid_cpus must contain non-negative integers, got %v", value)
+		}
+		cpus = append(cpus, cpu)
+	}
+	if len(cpus) == 0 {
+		return nil
+	}
+	if err := util.AvoidCPUs(cpus, !configTest); err != nil {
+		if errors.Is(err, errors.ErrUnsupported) {
+			l.Warn("tun.avoid_cpus is only supported on Linux; ignoring")
+			return nil
+		}
+		return fmt.Errorf("tun.avoid_cpus: %w", err)
+	}
+	if !configTest {
+		l.Info("Excluded CPUs from process threads", "cpus", cpus)
+	}
+	return nil
 }
 
 func moduleVersion() string {

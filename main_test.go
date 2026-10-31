@@ -59,6 +59,27 @@ func TestParseCpuAffinity(t *testing.T) {
 	}
 }
 
+func TestConfigureAvoidCPUs(t *testing.T) {
+	l := test.NewLogger()
+	for _, tc := range []struct {
+		value any
+		valid bool
+	}{
+		{nil, true}, {[]any{}, true}, {"auto", false}, {"1,2", false}, {[]any{-1}, false}, {[]any{1.5}, false},
+		{[]any{"2"}, false},
+	} {
+		c := config.NewC(l)
+		if tc.value != nil {
+			c.Settings["tun"] = map[string]any{"avoid_cpus": tc.value}
+		}
+		if err := configureAvoidCPUs(c, l, true); tc.valid {
+			require.NoError(t, err)
+		} else {
+			require.Error(t, err, "%v", tc.value)
+		}
+	}
+}
+
 // TestMain_ConfigTestReleasesItsGoroutines pins the rule that Main only leaves goroutines running
 // when it hands back a Control to stop them with.
 //
