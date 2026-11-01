@@ -23,6 +23,9 @@ package overlay
 //
 // Addresses, netmasks, the MTU and the UP flag are set with the SIOC*LIF* ioctls, and
 // routes with routing socket messages, the same interfaces ifconfig(8) and route(8) use.
+// As on Linux, the interface MTU is the largest of tun.mtu and every route MTU, and each
+// route nebula installs carries its own MTU (tun.mtu unless the route sets one), so
+// tun.routes and unsafe_routes MTUs take effect in both directions.
 // The first vpn network of each family goes on tunN itself; any further ones get a
 // logical interface each (tunN:1, tunN:2, ...), which is how illumos carries more than
 // one address of a family on an interface.
@@ -60,7 +63,8 @@ var illumosTunNameRE = regexp.MustCompile(`^tun([0-9]+)$`)
 type tun struct {
 	Device      string
 	vpnNetworks []netip.Prefix
-	MTU         int
+	MTU         int // tun.mtu, the MTU of routes that do not set one
+	maxMTU      int // the interface MTU: the largest of MTU and every route MTU
 	Routes      atomic.Pointer[[]Route]
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	l           *slog.Logger
@@ -203,15 +207,13 @@ func plumbFamily(name string, ppa int, v6 bool) (_ ipLink, err error) {
 	// The I_PLINK below is persistent, it survives closing this fd
 	defer unix.Close(ifFd)
 
-	ipMod := []byte("ip\x00")
-	if err = ioctlPtr(ifFd, unix.I_PUSH, unsafe.Pointer(&ipMod[0])); err != nil {
+	if err = unix.IoctlSetString(ifFd, unix.I_PUSH, "ip"); err != nil {
 		return ipLink{muxFd: -1}, fmt.Errorf("could not push the ip module onto %s for %s: %w", name, family, err)
 	}
 
 	if !v6 {
 		// IPv4 is what IF_UNITSEL selects; OpenVPN plumbs its tun interfaces this way.
-		unit := int32(ppa)
-		if err = ioctlPtr(ifFd, unix.IF_UNITSEL, unsafe.Pointer(&unit)); err != nil {
+		if err = unix.IoctlSetPointerInt(ifFd, unix.IF_UNITSEL, ppa); err != nil {
 			return ipLink{muxFd: -1}, fmt.Errorf("could not select unit %d: %w", ppa, err)
 		}
 	} else {
@@ -306,13 +308,6 @@ func newPPA(fd int, want int) (int, error) {
 	}
 	return -1, fmt.Errorf("could not allocate a tun unit: all are in use")
 }
-
-// ioctlPtr is linkname'd to x/sys/unix's own pointer taking ioctl, which keeps arg
-// alive and pinned for the call; x/sys exports no such wrapper for these requests.
-//
-//go:linkname ioctlPtr golang.org/x/sys/unix.ioctlPtr
-//go:noescape
-func ioctlPtr(fd int, req int, arg unsafe.Pointer) (err error)
 
 func (t *tun) Close() error {
 	t.closeOnce.Do(func() {
@@ -417,25 +412,61 @@ func (t *tun) Activate() error {
 			}
 		}
 
-		if err := t.configureIf(sock, name, cidr, *first); err != nil {
+		if err := configureIf(sock, name, cidr); err != nil {
 			return fmt.Errorf("failed to configure %s for %v: %w", name, cidr, err)
 		}
 		*first = false
 
-		if err := t.addRoute(cidr.Masked(), cidr.Addr()); err != nil {
+		t.l.Info("Configured vpn network", "interface", name, "network", cidr)
+	}
+
+	if err := t.setMTU(t.maxMTU); err != nil {
+		return err
+	}
+
+	// Routes go in once the interface MTU is set, as the kernel holds route MTUs to it
+	for _, cidr := range t.vpnNetworks {
+		if err := t.addRoute(cidr.Masked(), cidr.Addr(), t.MTU); err != nil {
 			return fmt.Errorf("failed to set route for vpn network %v: %w", cidr, err)
 		}
-		t.l.Info("Configured vpn network", "interface", name, "network", cidr)
 	}
 
 	return t.addRoutes(false, nil)
 }
 
+// setMTU sets the MTU of the interface for every family it is plumbed for. Logical
+// interfaces share it.
+func (t *tun) setMTU(mtu int) error {
+	for _, f := range []struct {
+		link   ipLink
+		family int
+		name   string
+	}{{t.ip4, unix.AF_INET, "IPv4"}, {t.ip6, unix.AF_INET6, "IPv6"}} {
+		if f.link.muxFd < 0 {
+			continue
+		}
+		sock, err := unix.Socket(f.family, unix.SOCK_DGRAM, 0)
+		if err != nil {
+			return fmt.Errorf("could not open an %s socket: %w", f.name, err)
+		}
+		var lifr unix.Lifreq
+		err = lifr.SetName(t.Device)
+		if err == nil {
+			*(*uint32)(unsafe.Pointer(&lifr.Lifru[0])) = uint32(mtu) // lifr_mtu
+			err = unix.IoctlLifreq(sock, unix.SIOCSLIFMTU, &lifr)
+		}
+		_ = unix.Close(sock)
+		if err != nil {
+			return fmt.Errorf("could not set the %s mtu of %s to %d: %w", f.name, t.Device, mtu, err)
+		}
+	}
+	return nil
+}
+
 // configureIf gives the (possibly logical) interface name the address of cidr, as a point
 // to point link whose far end is this host itself, and brings it up; addRoute then sends
-// the whole network through it. This is the "topology subnet" setup OpenVPN uses. The
-// MTU belongs to the interface, so it is set on the first one of each family only.
-func (t *tun) configureIf(sock int, name string, cidr netip.Prefix, setMTU bool) error {
+// the whole network through it. This is the "topology subnet" setup OpenVPN uses.
+func configureIf(sock int, name string, cidr netip.Prefix) error {
 	steps := []struct {
 		what string
 		req  int
@@ -444,13 +475,6 @@ func (t *tun) configureIf(sock int, name string, cidr netip.Prefix, setMTU bool)
 		{"address", unix.SIOCSLIFADDR, func(l *unix.Lifreq) { setLifrAddr(l, cidr.Addr()) }},
 		{"destination", unix.SIOCSLIFDSTADDR, func(l *unix.Lifreq) { setLifrAddr(l, cidr.Addr()) }},
 		{"netmask", unix.SIOCSLIFNETMASK, func(l *unix.Lifreq) { setLifrAddr(l, prefixToMask(cidr)) }},
-	}
-	if setMTU {
-		steps = append(steps, struct {
-			what string
-			req  int
-			set  func(*unix.Lifreq)
-		}{"mtu", unix.SIOCSLIFMTU, func(l *unix.Lifreq) { *(*uint32)(unsafe.Pointer(&l.Lifru[0])) = uint32(t.MTU) }})
 	}
 
 	for _, step := range steps {
@@ -563,29 +587,49 @@ func (t *tun) reload(c *config.C, initial bool, r *config.Reload) error {
 		return nil
 	}
 
-	routeTree, err := makeRouteTree(t.l, routes, false)
+	routeTree, err := makeRouteTree(t.l, routes, true)
 	if err != nil {
 		return err
+	}
+
+	maxMTU := t.MTU
+	for _, route := range routes {
+		if route.Install && route.MTU > maxMTU {
+			maxMTU = route.MTU
+		}
 	}
 
 	// Teach nebula how to handle the routes before establishing them in the system table
 	oldRoutes := t.Routes.Swap(&routes)
 	t.routeTree.Store(routeTree)
 
-	if !initial {
-		// Remove first, if the system removes a wanted route hopefully it will be re-added next
-		err := t.removeRoutes(findRemovedRoutes(routes, *oldRoutes), r)
-		if err != nil {
-			util.LogWithContextIfNeeded("Failed to remove routes", err, t.l)
-			r.Failed()
-		}
+	if initial {
+		// Activate sets it on the interface
+		t.maxMTU = maxMTU
+		return nil
+	}
 
-		// Ensure any routes we actually want are installed
-		err = t.addRoutes(true, r)
-		if err != nil {
-			util.LogWithContextIfNeeded("Failed to add routes", err, t.l)
-			r.Failed()
+	// The kernel holds route MTUs to the interface's, so the interface grows before
+	// larger routes go in, and shrinks only once they are gone.
+	if maxMTU > t.maxMTU {
+		t.reloadMTU(maxMTU, r)
+	}
+	defer func() {
+		if maxMTU < t.maxMTU {
+			t.reloadMTU(maxMTU, r)
 		}
+	}()
+
+	// Remove first, if the system removes a wanted route hopefully it will be re-added next
+	if err := t.removeRoutes(findRemovedRoutes(routes, *oldRoutes), r); err != nil {
+		util.LogWithContextIfNeeded("Failed to remove routes", err, t.l)
+		r.Failed()
+	}
+
+	// Ensure any routes we actually want are installed
+	if err := t.addRoutes(true, r); err != nil {
+		util.LogWithContextIfNeeded("Failed to add routes", err, t.l)
+		r.Failed()
 	}
 
 	return nil
@@ -612,14 +656,16 @@ func (t *tun) addRoutes(logErrors bool, rl *config.Reload) error {
 	routes := *t.Routes.Load()
 
 	for _, r := range routes {
-		if len(r.Via) == 0 || !r.Install {
-			// We don't allow route MTUs so only install routes with a via
+		if !r.Install {
 			continue
 		}
 
+		// tun.routes entries are inside a vpn network and unsafe_routes ones outside of
+		// them; either way the route goes into the interface through a vpn address of the
+		// same family.
 		gw, err := selectGateway(r.Cidr, t.vpnNetworks)
 		if err == nil {
-			err = t.addRoute(r.Cidr, gw.Addr())
+			err = t.addRoute(r.Cidr, gw.Addr(), t.routeMTU(r))
 		}
 		if err != nil {
 			retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
@@ -639,14 +685,22 @@ func (t *tun) addRoutes(logErrors bool, rl *config.Reload) error {
 
 func (t *tun) removeRoutes(routes []Route, rl *config.Reload) error {
 	for _, r := range routes {
-		if len(r.Via) == 0 || !r.Install {
+		if !r.Install {
 			// addRoutes never installs these
 			continue
 		}
 
-		gw, err := selectGateway(r.Cidr, t.vpnNetworks)
-		if err == nil {
-			err = t.delRoute(r.Cidr, gw.Addr())
+		var err error
+		if local, ok := t.vpnNetworkAddr(r.Cidr); ok {
+			// A tun.routes entry for a whole vpn network replaced that network's own
+			// route; put the network's route back rather than leave it without one.
+			err = t.addRoute(r.Cidr, local, t.MTU)
+		} else {
+			var gw netip.Prefix
+			gw, err = selectGateway(r.Cidr, t.vpnNetworks)
+			if err == nil {
+				err = t.delRoute(r.Cidr, gw.Addr())
+			}
 		}
 		if errors.Is(err, unix.ESRCH) {
 			t.l.Info("Route was already removed", "route", r)
@@ -660,26 +714,74 @@ func (t *tun) removeRoutes(routes []Route, rl *config.Reload) error {
 	return nil
 }
 
+func (t *tun) reloadMTU(mtu int, r *config.Reload) {
+	if err := t.setMTU(mtu); err != nil {
+		util.LogWithContextIfNeeded("Failed to set the interface mtu", err, t.l)
+		r.Failed()
+		return
+	}
+	t.l.Info("Set interface mtu", "mtu", mtu, "oldMTU", t.maxMTU)
+	t.maxMTU = mtu
+}
+
+// vpnNetworkAddr returns this host's address in the vpn network that prefix is exactly,
+// if it is one. Such a prefix carries the network's own route.
+func (t *tun) vpnNetworkAddr(prefix netip.Prefix) (netip.Addr, bool) {
+	for _, n := range t.vpnNetworks {
+		if n.Masked() == prefix.Masked() {
+			return n.Addr(), true
+		}
+	}
+	return netip.Addr{}, false
+}
+
+// routeMTU is the MTU a route is installed with: its own, or tun.mtu when it sets none.
+func (t *tun) routeMTU(r Route) int {
+	if r.MTU > 0 {
+		return r.MTU
+	}
+	return t.MTU
+}
+
 // addRoute sends everything in prefix straight into the tun interface. local is one of
 // this host's own vpn addresses of the same family; it names the interface, so the route
-// is an interface route (RTF_GATEWAY clear), what route(8) calls -interface.
-func (t *tun) addRoute(prefix netip.Prefix, local netip.Addr) error {
-	err := t.routeMsg(unix.RTM_ADD, prefix, local)
+// is an interface route (RTF_GATEWAY clear), what route(8) calls -interface. mtu is the
+// route's MTU, 0 to leave it to the interface.
+func (t *tun) addRoute(prefix netip.Prefix, local netip.Addr, mtu int) error {
+	err := t.writeRouteMsg(buildRouteMsg(unix.RTM_ADD, t.seq.Add(1), prefix, local, mtu))
 	if errors.Is(err, unix.EEXIST) {
-		err = t.routeMsg(unix.RTM_CHANGE, prefix, local)
+		err = t.writeRouteMsg(buildRouteMsg(unix.RTM_CHANGE, t.seq.Add(1), prefix, local, mtu))
 	}
-	return err
+	if err != nil {
+		return fmt.Errorf("routing socket refused the route for %v: %w", prefix.Masked(), err)
+	}
+	return nil
 }
 
 // delRoute removes a route addRoute installed. It returns unix.ESRCH if there was none.
 func (t *tun) delRoute(prefix netip.Prefix, local netip.Addr) error {
-	return t.routeMsg(unix.RTM_DELETE, prefix, local)
+	if err := t.writeRouteMsg(buildRouteMsg(unix.RTM_DELETE, t.seq.Add(1), prefix, local, 0)); err != nil {
+		return fmt.Errorf("routing socket refused to remove the route for %v: %w", prefix.Masked(), err)
+	}
+	return nil
 }
 
-// routeMsg writes one message to a routing socket. illumos sockaddrs carry no length, so
-// each one is the size of its family's sockaddr, appended right after the header in
-// RTA_* bit order, as route(8) lays them out.
-func (t *tun) routeMsg(typ uint8, prefix netip.Prefix, local netip.Addr) error {
+func (t *tun) writeRouteMsg(msg []byte) error {
+	sock, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW, unix.AF_UNSPEC)
+	if err != nil {
+		return fmt.Errorf("unable to create AF_ROUTE socket: %w", err)
+	}
+	defer unix.Close(sock)
+
+	_, err = unix.Write(sock, msg)
+	return err
+}
+
+// buildRouteMsg lays out one routing socket message. illumos sockaddrs carry no length,
+// so each one is the size of its family's sockaddr, appended right after the header in
+// RTA_* bit order, as route(8) lays them out. A single address prefix becomes a host
+// route, which takes no netmask. mtu above 0 sets the route's MTU.
+func buildRouteMsg(typ uint8, seq int32, prefix netip.Prefix, local netip.Addr, mtu int) []byte {
 	prefix = prefix.Masked()
 	hdr := unix.RtMsghdr{
 		Version: unix.RTM_VERSION,
@@ -687,7 +789,11 @@ func (t *tun) routeMsg(typ uint8, prefix netip.Prefix, local netip.Addr) error {
 		Flags:   unix.RTF_UP | unix.RTF_STATIC,
 		Addrs:   unix.RTA_DST | unix.RTA_GATEWAY,
 		Pid:     int32(os.Getpid()),
-		Seq:     t.seq.Add(1),
+		Seq:     seq,
+	}
+	if mtu > 0 {
+		hdr.Inits = unix.RTV_MTU
+		hdr.Rmx.Mtu = uint32(mtu)
 	}
 
 	msg := make([]byte, unix.SizeofRtMsghdr, unix.SizeofRtMsghdr+3*unix.SizeofSockaddrInet6)
@@ -701,17 +807,7 @@ func (t *tun) routeMsg(typ uint8, prefix netip.Prefix, local netip.Addr) error {
 	}
 	hdr.Msglen = uint16(len(msg))
 	copy(msg, unsafe.Slice((*byte)(unsafe.Pointer(&hdr)), unix.SizeofRtMsghdr))
-
-	sock, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW, unix.AF_UNSPEC)
-	if err != nil {
-		return fmt.Errorf("unable to create AF_ROUTE socket: %w", err)
-	}
-	defer unix.Close(sock)
-
-	if _, err := unix.Write(sock, msg); err != nil {
-		return fmt.Errorf("routing socket refused the route for %v: %w", prefix, err)
-	}
-	return nil
+	return msg
 }
 
 func appendSockaddr(b []byte, a netip.Addr) []byte {

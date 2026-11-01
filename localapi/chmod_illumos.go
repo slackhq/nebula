@@ -1,4 +1,4 @@
-//go:build illumos || solaris
+//go:build illumos
 
 package localapi
 
