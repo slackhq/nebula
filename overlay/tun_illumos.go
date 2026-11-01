@@ -155,6 +155,13 @@ func (t *tun) plumb(want int) (err error) {
 	}
 	t.Device = fmt.Sprintf("tun%d", ppa)
 
+	// In both families, whichever this config uses, so nothing of an old interface lingers
+	for _, f := range []struct{ muxDev, family string }{{illumosIPMux, "IPv4"}, {illumosIP6Mux, "IPv6"}} {
+		if err = removeStaleIf(t.l, f.muxDev, t.Device, f.family); err != nil {
+			return err
+		}
+	}
+
 	var want4, want6 bool
 	for _, n := range t.vpnNetworks {
 		want4 = want4 || n.Addr().Is4()
@@ -253,6 +260,47 @@ func plumbFamily(name string, ppa int, v6 bool) (_ ipLink, err error) {
 	}
 
 	return ipLink{muxFd: muxFd, muxID: muxID}, nil
+}
+
+// removeStaleIf unplumbs an interface called name that is left over in one family. The
+// links made by plumbFamily outlive the process that made them, so a nebula that dies
+// without running Close (kill -9, a crash) leaves its interface behind, and the unit
+// can't be named again. The caller has just been given this unit by the tun driver, so
+// nothing holds it there anymore: whatever still carries its name is stale. This is
+// what ifconfig(8) unplumb does.
+func removeStaleIf(l *slog.Logger, muxDev, name, family string) error {
+	muxFd, err := unix.Open(muxDev, unix.O_RDWR|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("could not open %s: %w", muxDev, err)
+	}
+	defer unix.Close(muxFd)
+
+	var lifr unix.Lifreq
+	if err := lifr.SetName(name); err != nil {
+		return err
+	}
+	err = unix.IoctlLifreq(muxFd, unix.SIOCGLIFMUXID, &lifr)
+	if errors.Is(err, unix.ENXIO) {
+		return nil // nothing left over, the usual case
+	}
+	if err != nil {
+		return fmt.Errorf("could not check for a stale %s %s interface: %w", family, name, err)
+	}
+
+	// lif_muxid[0] is the ip stream, lif_muxid[1] an arp stream, if there is one
+	ipMuxID := int(*(*int32)(unsafe.Pointer(&lifr.Lifru[0])))
+	arpMuxID := int(*(*int32)(unsafe.Pointer(&lifr.Lifru[4])))
+	l.Warn("removing a stale interface, probably left by a nebula that did not shut down cleanly",
+		"interface", name, "family", family)
+	if arpMuxID > 0 {
+		if _, err := unix.IoctlSetIntRetInt(muxFd, unix.I_PUNLINK, arpMuxID); err != nil {
+			return fmt.Errorf("could not remove the stale %s %s interface: %w", family, name, err)
+		}
+	}
+	if _, err := unix.IoctlSetIntRetInt(muxFd, unix.I_PUNLINK, ipMuxID); err != nil {
+		return fmt.Errorf("could not remove the stale %s %s interface: %w", family, name, err)
+	}
+	return nil
 }
 
 // unplumb removes the interface from every family it was linked into. Logical
