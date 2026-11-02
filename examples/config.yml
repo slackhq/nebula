@@ -470,15 +470,22 @@ tun:
     # send multiport handshakes.
     #tx_handshake_delay: 2
     #
-    # Replay window, in packets, for every tunnel on this host, multiport or
-    # not. Multiport spreads one tunnel's packets across every routine on both
-    # hosts, so they arrive further out of order, and a packet more than a
-    # window behind the newest one is dropped (network.packets.out_of_window).
-    # Raise it if that counter grows, 65536 covered 8 routines at ~24 Gbps in
-    # testing. Must be a power of two from 8192 to 1048576, each tunnel's
-    # window costs replay_window / 8 bytes. Applies to tunnels created after a
-    # change.
+    # Replay window, in packets, every tunnel on this host starts with,
+    # multiport or not. Multiport spreads one tunnel's packets across every
+    # routine on both hosts, so they arrive further out of order, and a packet
+    # more than a window behind the newest one is dropped
+    # (network.packets.out_of_window). Must be a power of two from 8192 to
+    # 1048576, each tunnel's window costs replay_window / 8 bytes. Applies to
+    # tunnels created after a change.
     #replay_window: 8192
+    #
+    # How far a tunnel's replay window may grow. The first authenticated
+    # packet to arrive 1-4 windows behind the newest one grows that tunnel's
+    # window 4x, up to this, so later packets that late are accepted
+    # (network.replay_window.grown). That packet itself is still dropped.
+    # 65536 covered 8 routines at ~24 Gbps in testing. Set it to replay_window
+    # to never grow. A power of two from replay_window to 1048576.
+    #replay_window_max: 65536
     #
     # Only affects FIPS 140 and boringcrypto builds, where AES-GCM refuses a
     # nonce that is not strictly increasing, so encryption for a tunnel is

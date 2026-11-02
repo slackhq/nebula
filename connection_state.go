@@ -49,6 +49,8 @@ type ConnectionState struct {
 	lazyQueues *lazyQueueKeys
 	// queueKeys holds one send cipher per queue once lazyQueues has built them
 	queueKeys atomic.Pointer[[]queueKey]
+	// replayWindowMax is how far window may grow, see growReplayWindow
+	replayWindowMax uint64
 	// epoch is this session's sessionEpoch ordinal. Immutable after creation.
 	epoch uint64
 }
@@ -114,6 +116,7 @@ func (cs *ConnectionState) Decrypt(l *slog.Logger, messageCounter uint64, packet
 	result := cs.window.Check(l, messageCounter)
 	cs.decryptLock.Unlock()
 	if !result {
+		cs.growReplayWindow(l, messageCounter, packet, nb)
 		return nil, ErrAlreadySeen
 	}
 

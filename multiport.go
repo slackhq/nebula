@@ -43,6 +43,31 @@ func replayWindow(mpc config.MultiPortConfig) uint64 {
 	return max(mpc.ReplayWindow, ReplayWindow)
 }
 
+// defaultReplayWindowMax is how far a tunnel's replay window may grow by default, it covered 8 routines at ~24 Gbps
+const defaultReplayWindowMax = 1 << 16
+
+// newTunnelConnectionState builds a tunnel's ConnectionState from its handshake result and the multiport config
+func newTunnelConnectionState(r *handshake.Result, mpc config.MultiPortConfig) (*ConnectionState, error) {
+	cs, err := newConnectionStateFromResult(r, replayWindow(mpc), mpc.EncryptQueues)
+	if err != nil {
+		return nil, err
+	}
+	cs.replayWindowMax = mpc.ReplayWindowMax
+	return cs, nil
+}
+
+// multiPortReplayWindowMax validates tun.multiport.replay_window_max, a power of two from window to maxReplayWindow.
+// Anything else falls back to window, which turns growth off.
+func multiPortReplayWindowMax(l *slog.Logger, configured int, window uint64) uint64 {
+	w := uint64(configured)
+	if configured < 0 || w < window || w > maxReplayWindow || w&(w-1) != 0 {
+		l.Warn("tun.multiport.replay_window_max must be a power of two from tun.multiport.replay_window to 1048576, not growing replay windows",
+			"configured", configured, "replayWindow", window)
+		return window
+	}
+	return w
+}
+
 // multiPortReplayWindow validates tun.multiport.replay_window, a power of two from ReplayWindow to maxReplayWindow.
 // Anything else falls back to ReplayWindow.
 func multiPortReplayWindow(l *slog.Logger, configured int) uint64 {

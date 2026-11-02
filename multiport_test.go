@@ -64,3 +64,14 @@ func TestMultiportAgreed(t *testing.T) {
 	assert.False(t, tx)
 	assert.True(t, rx)
 }
+
+func TestMultiPortReplayWindowMax(t *testing.T) {
+	l := test.NewLogger()
+	assert.Equal(t, uint64(1<<16), multiPortReplayWindowMax(l, 1<<16, ReplayWindow))
+	assert.Equal(t, uint64(ReplayWindow), multiPortReplayWindowMax(l, ReplayWindow, ReplayWindow))
+	// Below the starting window, not a power of two, too big, negative: no growth
+	assert.Equal(t, uint64(1<<16), multiPortReplayWindowMax(l, 1<<15, 1<<16))
+	assert.Equal(t, uint64(ReplayWindow), multiPortReplayWindowMax(l, 50000, ReplayWindow))
+	assert.Equal(t, uint64(ReplayWindow), multiPortReplayWindowMax(l, maxReplayWindow*2, ReplayWindow))
+	assert.Equal(t, uint64(ReplayWindow), multiPortReplayWindowMax(l, -1, ReplayWindow))
+}
