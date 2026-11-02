@@ -498,6 +498,7 @@ logging:
   # the defaults. Zero disables read_timeout and write_timeout.
   # A zero read_header_timeout or idle_timeout falls back to read_timeout.
   # Keep a nonzero read_header_timeout or read_timeout for slowloris defense.
+  # Negative durations are rejected; invalid duration syntax uses the defaults.
   # All are reloadable along with the rest of the stats: section.
   #read_header_timeout: 10s
   #read_timeout: 15s

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -798,9 +799,7 @@ func TestLoadStatsConfig_PromTimeouts_Overrides(t *testing.T) {
 				"listen":   "127.0.0.1:0",
 				"path":     "/metrics",
 			}
-			for k, v := range tc.override {
-				base[k] = v
-			}
+			maps.Copy(base, tc.override)
 			setStatsConfig(c, base)
 
 			cfg, err := loadStatsConfig(c)
@@ -820,30 +819,126 @@ func TestLoadStatsConfig_PromTimeouts_Overrides(t *testing.T) {
 	}
 }
 
-// TestLoadStatsConfig_PromTimeouts_NegativeRejected verifies that a
-// negative duration on any of the four timeout keys is rejected at
-// config-load time with an error naming the key.
-func TestLoadStatsConfig_PromTimeouts_NegativeRejected(t *testing.T) {
-	tests := []string{
-		"read_header_timeout",
-		"read_timeout",
-		"write_timeout",
-		"idle_timeout",
+// Invalid syntax follows GetDuration's existing fallback behavior; parsed negative
+// durations are rejected. Exercise each field at the duration boundaries as well.
+func TestLoadStatsConfig_PromTimeouts_Validation(t *testing.T) {
+	fields := []struct {
+		key      string
+		fallback time.Duration
+	}{
+		{"read_header_timeout", defaultStatsReadHeaderTimeout},
+		{"read_timeout", defaultStatsReadTimeout},
+		{"write_timeout", defaultStatsWriteTimeout},
+		{"idle_timeout", defaultStatsIdleTimeout},
 	}
-	for _, key := range tests {
+	for _, field := range fields {
+		t.Run(field.key, func(t *testing.T) {
+			tests := []struct {
+				name      string
+				value     any
+				want      time.Duration
+				wantError bool
+			}{
+				{"nil uses default", nil, field.fallback, false},
+				{"empty uses default", "", field.fallback, false},
+				{"malformed uses default", "invalid", field.fallback, false},
+				{"unitless uses default", "15", field.fallback, false},
+				{"wrong type uses default", true, field.fallback, false},
+				{"overflow uses default", "9223372036854775808ns", field.fallback, false},
+				{"negative overflow uses default", "-9223372036854775809ns", field.fallback, false},
+				{"numeric zero", 0, 0, false},
+				{"zero duration", "0s", 0, false},
+				{"smallest positive", "1ns", time.Nanosecond, false},
+				{"largest positive", "9223372036854775807ns", time.Duration(1<<63 - 1), false},
+				{"negative", "-5s", 0, true},
+				{"smallest negative magnitude", "-1ns", 0, true},
+				{"most negative", "-9223372036854775808ns", 0, true},
+			}
+			for _, test := range tests {
+				t.Run(test.name, func(t *testing.T) {
+					_, conf := newTestStatsServer(t)
+					setStatsConfig(conf, map[string]any{
+						"type": "prometheus", "interval": "1s",
+						"listen": "127.0.0.1:0", "path": "/metrics",
+						field.key: test.value,
+					})
+					cfg, err := loadStatsConfig(conf)
+					if test.wantError {
+						require.ErrorContains(t, err, "stats."+field.key)
+						return
+					}
+					require.NoError(t, err)
+					values := map[string]time.Duration{
+						"read_header_timeout": cfg.prom.readHeaderTimeout,
+						"read_timeout":        cfg.prom.readTimeout,
+						"write_timeout":       cfg.prom.writeTimeout,
+						"idle_timeout":        cfg.prom.idleTimeout,
+					}
+					assert.Equal(t, test.want, values[field.key])
+				})
+			}
+		})
+	}
+}
+
+// A timeout-only reload must update the live server, while invalid reloads leave
+// the current listener and its protection in place.
+func TestStatsServer_reload_PromTimeouts(t *testing.T) {
+	for _, key := range []string{"read_header_timeout", "read_timeout", "write_timeout", "idle_timeout"} {
 		t.Run(key, func(t *testing.T) {
-			_, c := newTestStatsServer(t)
-			setStatsConfig(c, map[string]any{
-				"type":     "prometheus",
-				"interval": "1s",
-				"listen":   "127.0.0.1:0",
-				"path":     "/metrics",
-				key:        "-5s",
-			})
-			_, err := loadStatsConfig(c)
-			require.Error(t, err, "negative %s must be rejected", key)
-			require.Contains(t, err.Error(), "stats."+key,
-				"error must name the offending key so the operator can find it")
+			server, conf := newTestStatsServer(t)
+			server.ctx = stopAtCleanup(t, &server)
+			settings := map[string]any{
+				"type": "prometheus", "interval": "1h",
+				"listen": "127.0.0.1:0", "path": "/metrics",
+				key: "1s",
+			}
+			setStatsConfig(conf, settings)
+			require.NoError(t, server.reload(conf, true))
+			go server.Start()
+			waitFor(t, func() bool { return currentRuntime(server) != nil })
+
+			tests := []struct {
+				name        string
+				value       string
+				want        time.Duration
+				wantRestart bool
+				wantError   bool
+			}{
+				{"unchanged", "1s", time.Second, false, false},
+				{"changed", "2s", 2 * time.Second, true, false},
+				{"invalid preserves current runtime", "-1s", 2 * time.Second, false, true},
+				{"zero is applied", "0s", 0, true, false},
+			}
+			for _, test := range tests {
+				t.Run(test.name, func(t *testing.T) {
+					before := currentRuntime(server)
+					settings[key] = test.value
+					err := server.reload(conf, false)
+					if test.wantError {
+						require.ErrorContains(t, err, "stats."+key)
+					} else {
+						require.NoError(t, err)
+					}
+					if test.wantRestart {
+						waitFor(t, func() bool {
+							after := currentRuntime(server)
+							return after != nil && after != before
+						})
+					} else {
+						assert.Same(t, before, currentRuntime(server))
+					}
+					runtime := currentRuntime(server)
+					require.NotNil(t, runtime)
+					values := map[string]time.Duration{
+						"read_header_timeout": runtime.listener.ReadHeaderTimeout,
+						"read_timeout":        runtime.listener.ReadTimeout,
+						"write_timeout":       runtime.listener.WriteTimeout,
+						"idle_timeout":        runtime.listener.IdleTimeout,
+					}
+					assert.Equal(t, test.want, values[key])
+				})
+			}
 		})
 	}
 }
@@ -896,9 +991,9 @@ func TestStatsServer_Slowloris_ReadHeaderTimeout(t *testing.T) {
 	})
 	waitForListening(t, "127.0.0.1:"+port)
 
-	conn, err := net.Dial("tcp", "127.0.0.1:"+port)
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", "127.0.0.1:"+port)
 	require.NoError(t, err)
-	defer conn.Close()
+	t.Cleanup(func() { assert.NoError(t, conn.Close()) })
 
 	// Write a request line + one header but no terminating CRLF, then
 	// stop. A non-defended server would block here forever; this server

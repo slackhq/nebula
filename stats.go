@@ -433,7 +433,7 @@ func loadStatsConfig(c *config.C) (statsConfig, error) {
 		cfg.prom.readTimeout = c.GetDuration("stats.read_timeout", defaultStatsReadTimeout)
 		cfg.prom.writeTimeout = c.GetDuration("stats.write_timeout", defaultStatsWriteTimeout)
 		cfg.prom.idleTimeout = c.GetDuration("stats.idle_timeout", defaultStatsIdleTimeout)
-		for _, e := range []struct {
+		for _, timeout := range []struct {
 			key string
 			v   time.Duration
 		}{
@@ -442,8 +442,8 @@ func loadStatsConfig(c *config.C) (statsConfig, error) {
 			{"stats.write_timeout", cfg.prom.writeTimeout},
 			{"stats.idle_timeout", cfg.prom.idleTimeout},
 		} {
-			if e.v < 0 {
-				return cfg, fmt.Errorf("%s must be >= 0, got %s", e.key, e.v)
+			if timeout.v < 0 {
+				return cfg, fmt.Errorf("%s must be >= 0, got %s", timeout.key, timeout.v)
 			}
 		}
 	default:
