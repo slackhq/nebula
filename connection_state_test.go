@@ -34,8 +34,9 @@ func runTestHandshake(t *testing.T) (initR, respR *handshake.Result) {
 func runTestHandshakeCipher(t *testing.T, cipher noise.CipherFunc) (initR, respR *handshake.Result) {
 	t.Helper()
 
+	// Not the cert_test default, which expires a minute after the test binary starts and cuts long benchmarks short
 	ca, _, caKey, _ := ct.NewTestCaCert(
-		cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil,
+		cert.Version2, cert.Curve_CURVE25519, time.Now().Add(-time.Minute), time.Now().Add(time.Hour), nil, nil, nil,
 	)
 	caPool := ct.NewTestCAPool(ca)
 
@@ -332,58 +333,163 @@ func TestNewConnectionStateFromResult(t *testing.T) {
 	})
 }
 
+// encryptOne encrypts one byte payload on queue q and returns its counter and the packet
+func encryptOne(t testing.TB, ci *ConnectionState, q int, payload byte, nb []byte) (uint64, []byte) {
+	key, lock := ci.lockEncrypter(q)
+	c := ci.messageCounter.Add(1)
+	hdr := header.Encode(make([]byte, header.Len, header.Len+64), header.Version, header.Message, 0, 1, c)
+	out, err := key.EncryptDanger(hdr, hdr, []byte{payload}, c, nb)
+	if lock != nil {
+		lock.Unlock()
+	}
+	require.NoError(t, err, "queue %d counter %d", q, c)
+	return c, out
+}
+
+func requireDecrypts(t testing.TB, peer *ConnectionState, c uint64, out []byte, payload byte, nb []byte) {
+	pt, err := peer.dKey.DecryptDanger(nil, out[:header.Len], out[header.Len:], c, nb)
+	require.NoError(t, err, "counter %d", c)
+	require.Equal(t, []byte{payload}, pt)
+}
+
 func TestConnectionStateQueueKeys(t *testing.T) {
 	if !noiseutil.EncryptLockNeeded {
-		// Every cipher is safe to share without a lock, one cipher per tunnel
+		// Every cipher is safe to share without a lock, one cipher per tunnel and no lock
 		initR, _ := runTestHandshakeCipher(t, noiseutil.CipherAESGCM)
 		ci, err := newConnectionStateFromResult(initR, ReplayWindow, 4)
 		require.NoError(t, err)
-		assert.Nil(t, ci.queueKeys)
-		key, lock := ci.encrypter(2)
-		assert.Same(t, &ci.writeLock, lock)
+		assert.Nil(t, ci.lazyQueues)
+		key, lock := ci.lockEncrypter(2)
+		assert.Nil(t, lock)
 		assert.Equal(t, ci.eKey, key)
 		t.Skip("per routine send ciphers only apply when encryption needs a lock, run with GODEBUG=fips140=on")
 	}
 
-	t.Run("aes", func(t *testing.T) {
+	t.Run("built on contention", func(t *testing.T) {
 		initR, respR := runTestHandshakeCipher(t, noiseutil.CipherAESGCM)
 		ci, err := newConnectionStateFromResult(initR, ReplayWindow, 4)
 		require.NoError(t, err)
-		require.Len(t, ci.queueKeys, 4)
+		peer, err := newConnectionStateFromResult(respR, ReplayWindow, 0)
+		require.NoError(t, err)
+		require.NotNil(t, ci.lazyQueues)
+		nb := make([]byte, 12)
+
+		// Uncontended, every queue uses the tunnel's one cipher
+		for q := range 4 {
+			key, lock := ci.lockEncrypter(q)
+			assert.Same(t, &ci.writeLock, lock)
+			assert.Equal(t, ci.eKey, key)
+			lock.Unlock()
+		}
+		assert.Nil(t, ci.queueKeys.Load())
+
+		// Interleave queues across the switch, every packet must still encrypt and decrypt
+		qs := []int{0, 1, 2, 3, 1, 0, 3, 2}
+		for i, q := range qs {
+			c, out := encryptOne(t, ci, q, byte(i), nb)
+			requireDecrypts(t, peer, c, out, byte(i), nb)
+		}
+		for range queueContentionUpgrade - 1 {
+			ci.noteContention()
+		}
+		assert.Nil(t, ci.queueKeys.Load(), "built before the threshold")
+		ci.noteContention()
+		keys := ci.queueKeys.Load()
+		require.NotNil(t, keys)
+		assert.Len(t, *keys, 4)
+		assert.Nil(t, ci.lazyQueues.sendKey)
+
+		// Past the threshold nothing is rebuilt
+		ci.noteContention()
+		assert.Same(t, keys, ci.queueKeys.Load())
+
+		for i, q := range qs {
+			c, out := encryptOne(t, ci, q, byte(100+i), nb)
+			requireDecrypts(t, peer, c, out, byte(100+i), nb)
+		}
+
+		// Every queue has its own cipher and lock, queue 0 too, a queue past the count wraps around
+		_, lock0 := ci.lockEncrypter(0)
+		lock0.Unlock()
+		assert.NotSame(t, &ci.writeLock, lock0)
+		_, lock1 := ci.lockEncrypter(1)
+		lock1.Unlock()
+		_, lock5 := ci.lockEncrypter(5)
+		lock5.Unlock()
+		assert.NotSame(t, lock0, lock1)
+		assert.Same(t, lock1, lock5)
+	})
+
+	t.Run("slow contention never upgrades", func(t *testing.T) {
+		initR, _ := runTestHandshakeCipher(t, noiseutil.CipherAESGCM)
+		ci, err := newConnectionStateFromResult(initR, ReplayWindow, 4)
+		require.NoError(t, err)
+
+		// Just short of the threshold, then the window passes, the count starts over
+		for range queueContentionUpgrade - 1 {
+			ci.noteContention()
+		}
+		ci.lazyQueues.windowStart.Store(time.Now().Add(-2 * queueContentionWindow).UnixNano())
+		ci.noteContention()
+		assert.Nil(t, ci.queueKeys.Load())
+		assert.Equal(t, uint32(1), ci.lazyQueues.contended.Load())
+
+		// A full burst inside the window does upgrade
+		for range queueContentionUpgrade - 1 {
+			ci.noteContention()
+		}
+		assert.NotNil(t, ci.queueKeys.Load())
+	})
+
+	t.Run("concurrent senders upgrade once", func(t *testing.T) {
+		initR, respR := runTestHandshakeCipher(t, noiseutil.CipherAESGCM)
+		ci, err := newConnectionStateFromResult(initR, ReplayWindow, 8)
+		require.NoError(t, err)
 		peer, err := newConnectionStateFromResult(respR, ReplayWindow, 0)
 		require.NoError(t, err)
 
-		// Each queue has its own cipher and lock, a queue past the count wraps around
-		_, lock0 := ci.encrypter(0)
-		_, lock1 := ci.encrypter(1)
-		_, lock4 := ci.encrypter(4)
-		assert.NotSame(t, lock0, lock1)
-		assert.Same(t, lock0, lock4)
-
-		// Interleave the queues: every counter is used once, and each cipher's own counters still strictly
-		// increase, so the nonce check passes and the peer decrypts every packet
-		nb := make([]byte, 12)
-		for i, q := range []int{0, 1, 2, 3, 1, 0, 3, 2, 2, 1, 1, 0} {
-			key, lock := ci.encrypter(q)
-			lock.Lock()
-			c := ci.messageCounter.Add(1)
-			hdr := header.Encode(make([]byte, header.Len, header.Len+64), header.Version, header.Message, 0, 1, c)
-			out, err := key.EncryptDanger(hdr, hdr, []byte{byte(i)}, c, nb)
-			lock.Unlock()
-			require.NoError(t, err, "queue %d counter %d", q, c)
-
-			pt, err := peer.dKey.DecryptDanger(nil, out[:header.Len], out[header.Len:], c, nb)
-			require.NoError(t, err, "queue %d counter %d", q, c)
-			assert.Equal(t, []byte{byte(i)}, pt)
+		type sent struct {
+			c       uint64
+			out     []byte
+			payload byte
 		}
+		const perQueue = 20000
+		results := make([][]sent, 8)
+		var wg sync.WaitGroup
+		for q := range 8 {
+			wg.Go(func() {
+				nb := make([]byte, 12)
+				for i := range perQueue {
+					c, out := encryptOne(t, ci, q, byte(i), nb)
+					results[q] = append(results[q], sent{c, out, byte(i)})
+				}
+			})
+		}
+		wg.Wait()
+
+		require.NotNil(t, ci.queueKeys.Load(), "8 senders on one tunnel never contended enough to upgrade")
+		seen := map[uint64]bool{}
+		nb := make([]byte, 12)
+		for _, rs := range results {
+			for _, r := range rs {
+				require.False(t, seen[r.c], "counter %d used twice", r.c)
+				seen[r.c] = true
+				requireDecrypts(t, peer, r.c, r.out, r.payload, nb)
+			}
+		}
+		assert.Len(t, seen, 8*perQueue)
 	})
 
 	t.Run("cipher that can't be duplicated keeps one cipher", func(t *testing.T) {
 		initR, _ := runTestHandshakeCipher(t, noise.CipherChaChaPoly)
 		ci, err := newConnectionStateFromResult(initR, ReplayWindow, 4)
 		require.NoError(t, err)
-		assert.Nil(t, ci.queueKeys)
-		_, lock := ci.encrypter(3)
+		for range queueContentionUpgrade {
+			ci.noteContention()
+		}
+		assert.Nil(t, ci.queueKeys.Load())
+		_, lock := ci.lockEncrypter(3)
+		lock.Unlock()
 		assert.Same(t, &ci.writeLock, lock)
 	})
 
@@ -391,6 +497,10 @@ func TestConnectionStateQueueKeys(t *testing.T) {
 		initR, _ := runTestHandshakeCipher(t, noiseutil.CipherAESGCM)
 		ci, err := newConnectionStateFromResult(initR, ReplayWindow, 1)
 		require.NoError(t, err)
-		assert.Nil(t, ci.queueKeys)
+		assert.Nil(t, ci.lazyQueues)
+		ci.noteContention()
+		_, lock := ci.lockEncrypter(0)
+		lock.Unlock()
+		assert.Same(t, &ci.writeLock, lock)
 	})
 }

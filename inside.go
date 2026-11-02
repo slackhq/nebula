@@ -11,7 +11,6 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/logging"
-	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/overlay/batch"
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
@@ -126,16 +125,13 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Parse
 }
 
 func (f *Interface) sendInsideEncrypt(hostinfo *HostInfo, ci *ConnectionState, seg, scratch, nb []byte, q int) []byte {
-	key, lock := ci.encrypter(q)
-	if noiseutil.EncryptLockNeeded {
-		lock.Lock()
-	}
+	key, lock := ci.lockEncrypter(q)
 	c := ci.messageCounter.Add(1)
 
 	out := header.Encode(scratch, header.Version, header.Message, 0, hostinfo.remoteIndexId, c)
 
 	out, encErr := key.EncryptDanger(out, out, seg, c, nb)
-	if noiseutil.EncryptLockNeeded {
+	if lock != nil {
 		lock.Unlock()
 	}
 	if encErr != nil {
@@ -459,14 +455,11 @@ func (f *Interface) prepareSendVia(via *HostInfo,
 	nocopy bool,
 	q int,
 ) ([]byte, error) {
-	key, lock := via.ConnectionState.encrypter(q)
-	if noiseutil.EncryptLockNeeded {
-		// NOTE: for goboring AESGCMTLS we need to lock because of the nonce check
-		lock.Lock()
-	}
+	// NOTE: for goboring AESGCMTLS we need to lock because of the nonce check
+	key, lock := via.ConnectionState.lockEncrypter(q)
 	c, ok := via.ConnectionState.NextMessageCounter()
 	if !ok {
-		if noiseutil.EncryptLockNeeded {
+		if lock != nil {
 			lock.Unlock()
 		}
 		f.dropExhausted(via, c, "Dropping outbound relay packets, tunnel message counter is exhausted")
@@ -479,7 +472,7 @@ func (f *Interface) prepareSendVia(via *HostInfo,
 	// Authenticate the header and payload, but do not encrypt for this message type.
 	// The payload consists of the inner, unencrypted Nebula header, as well as the end-to-end encrypted payload.
 	if len(out)+len(ad)+via.ConnectionState.eKey.Overhead() > cap(out) {
-		if noiseutil.EncryptLockNeeded {
+		if lock != nil {
 			lock.Unlock()
 		}
 		via.logger(f.l).Error("SendVia out buffer not large enough for relay",
@@ -503,7 +496,7 @@ func (f *Interface) prepareSendVia(via *HostInfo,
 
 	var err error
 	out, err = key.EncryptDanger(out, out, nil, c, nb)
-	if noiseutil.EncryptLockNeeded {
+	if lock != nil {
 		lock.Unlock()
 	}
 	if err != nil {
@@ -580,14 +573,11 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		out = out[header.Len:header.Len]
 	}
 
-	key, lock := ci.encrypter(q)
-	if noiseutil.EncryptLockNeeded {
-		// NOTE: for goboring AESGCMTLS we need to lock because of the nonce check
-		lock.Lock()
-	}
+	// NOTE: for goboring AESGCMTLS we need to lock because of the nonce check
+	key, lock := ci.lockEncrypter(q)
 	c, ok := ci.NextMessageCounter()
 	if !ok {
-		if noiseutil.EncryptLockNeeded {
+		if lock != nil {
 			lock.Unlock()
 		}
 		f.dropExhausted(hostinfo, c, "Dropping outbound packets, tunnel message counter is exhausted")
@@ -610,7 +600,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 
 	var err error
 	out, err = key.EncryptDanger(out, out, p, c, nb)
-	if noiseutil.EncryptLockNeeded {
+	if lock != nil {
 		lock.Unlock()
 	}
 	if err != nil {
