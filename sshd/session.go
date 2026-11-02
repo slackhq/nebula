@@ -112,7 +112,9 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 
 			if replyErr := replyAndLog(req, true, nil, s.l); replyErr != nil {
 				// Accept never reached the client; skip dispatch.
-				channel.Close()
+				if err := channel.Close(); err != nil {
+					s.l.Warn("ssh: failed to close rejected exec channel", "error", err)
+				}
 				return
 			}
 			err := s.dispatchCommand(payload.Value, commands.MergedOutput(channel))
