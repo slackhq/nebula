@@ -42,25 +42,53 @@ func TestConfig_Load(t *testing.T) {
 	assert.Equal(t, expected, c.Settings)
 }
 
-func TestC_Load_StatErrorReturned(t *testing.T) {
-	l := test.NewLogger()
-	c := NewC(l)
-	dir := filepath.Join(os.TempDir(), "nebula-config-does-not-exist-1bf6f0a0")
-	_ = os.RemoveAll(dir)
-
-	require.Error(t, c.Load(dir))
-}
-
-func TestC_Load_AddFileErrorPropagates(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, "x.yml")
-	require.NoError(t, os.WriteFile(target, []byte("k: v\n"), 0o644))
-
-	origAbs := filepathAbs
-	t.Cleanup(func() { filepathAbs = origAbs })
-	filepathAbs = func(string) (string, error) { return "", errors.New("injected") }
-
-	require.Error(t, NewC(test.NewLogger()).Load(target))
+func TestC_Load_PathErrors(t *testing.T) {
+	tests := []struct {
+		description                                       string
+		directory, missing, brokenLink, empty, absFailure bool
+		wantError                                         bool
+	}{
+		{description: "direct config file succeeds"},
+		{description: "config directory succeeds", directory: true},
+		{description: "missing direct path is rejected", missing: true, wantError: true},
+		{description: "empty config directory is rejected", directory: true, empty: true, wantError: true},
+		{description: "broken direct symlink is rejected", brokenLink: true, wantError: true},
+		{description: "broken descendant is skipped beside a valid file", directory: true, brokenLink: true},
+		{description: "direct addFile error propagates", absFailure: true, wantError: true},
+		{description: "descendant addFile error propagates", directory: true, absFailure: true, wantError: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.description, func(t *testing.T) {
+			dir := t.TempDir()
+			target := filepath.Join(dir, "config.yml")
+			if !tt.missing && !tt.empty {
+				require.NoError(t, os.WriteFile(target, []byte("k: v\n"), 0o600))
+			}
+			if tt.brokenLink {
+				link := filepath.Join(dir, "broken.yml")
+				if err := os.Symlink(filepath.Join(dir, "missing"), link); err != nil {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
+				target = link
+			}
+			if tt.directory {
+				target = dir
+			}
+			if tt.absFailure {
+				original := filepathAbs
+				t.Cleanup(func() { filepathAbs = original })
+				filepathAbs = func(string) (string, error) { return "", errors.New("injected") }
+			}
+			c := NewC(test.NewLogger())
+			err := c.Load(target)
+			if tt.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, "v", c.GetString("k", ""))
+			}
+		})
+	}
 }
 
 func TestConfig_Get(t *testing.T) {
