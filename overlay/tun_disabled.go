@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"strings"
+	"sync"
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/iputil"
@@ -17,6 +18,10 @@ import (
 type disabledTun struct {
 	read        chan []byte
 	vpnNetworks []netip.Prefix
+	// Serialize nonblocking sends with Close; read remains immutable so readers
+	// can drain the closed channel and observe EOF without taking this lock.
+	writeMu sync.Mutex
+	closed  bool
 
 	// Track these metrics since we don't have the tun device to do it for us
 	tx metrics.Counter
@@ -82,10 +87,17 @@ func (t *disabledTun) handleICMPEchoRequest(b []byte) bool {
 		return false
 	}
 
-	// attempt to write it, but don't block
-	select {
-	case t.read <- out:
-	default:
+	t.writeMu.Lock()
+	queued := false
+	if !t.closed {
+		select {
+		case t.read <- out:
+			queued = true
+		default:
+		}
+	}
+	t.writeMu.Unlock()
+	if !queued {
 		t.l.Debug("tun_disabled: dropped ICMP Echo Reply response")
 	}
 
@@ -117,9 +129,11 @@ func (t *disabledTun) Queues(n int) ([]tio.Queue, error) {
 }
 
 func (t *disabledTun) Close() error {
-	if t.read != nil {
+	t.writeMu.Lock()
+	defer t.writeMu.Unlock()
+	if !t.closed {
+		t.closed = true
 		close(t.read)
-		t.read = nil
 	}
 	return nil
 }
