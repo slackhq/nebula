@@ -87,7 +87,9 @@ type HandshakeHostInfo struct {
 	counter                   int64            // How many attempts have we made so far
 	lastRemotes               []netip.AddrPort // Remotes that we sent to during the previous attempt
 	lastRelays                []netip.Addr     // Relays we attempted to use during the previous attempt
-	packetStore               []*cachedPacket  // A set of packets to be transmitted once the handshake completes
+	// While pending, packetStore is guarded by HandshakeManager's mutex (not
+	// this mutex). Complete removes the entry under that lock before replay.
+	packetStore []*cachedPacket
 
 	hostinfo *HostInfo
 	machine  *handshake.Machine // The handshake state machine, set during stage 0 (initiator) or beginHandshake (responder multi-message)
@@ -1051,6 +1053,14 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	}
 
 	duration := time.Since(hh.startTime).Nanoseconds()
+	hostinfo.vpnAddrs = vpnAddrs
+	hostinfo.buildNetworks(f.myVpnNetworksTable, remoteCert.Certificate)
+
+	hm.Complete(hostinfo, f)
+	// Complete waits out cache callbacks and removes their pending lookup.
+	// No writer can now append to this handshake's store.
+	packets := hh.packetStore
+
 	msg := "Handshake message received"
 	if !anyVpnAddrsInCommon {
 		msg = "Handshake message received, but no vpnNetworks in common."
@@ -1066,27 +1076,22 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		"responderIndex", result.RemoteIndex,
 		"handshake", m{"stage": uint64(machine.MessageIndex()), "style": header.SubTypeName(header.Handshake, machine.Subtype())},
 		"durationNs", duration,
-		"sentCachedPackets", len(hh.packetStore),
+		"sentCachedPackets", len(packets),
 	)
 
-	hostinfo.vpnAddrs = vpnAddrs
-	hostinfo.buildNetworks(f.myVpnNetworksTable, remoteCert.Certificate)
-
-	hm.Complete(hostinfo, f)
-
-	if len(hh.packetStore) > 0 {
+	if len(packets) > 0 {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.logger(f.l).Debug("Sending stored packets", "count", len(hh.packetStore))
+			hostinfo.logger(f.l).Debug("Sending stored packets", "count", len(packets))
 		}
 		nb := make([]byte, 12, 12)
 		out := make([]byte, mtu)
-		for _, cp := range hh.packetStore {
+		for _, cp := range packets {
 			// TODO: use a SendBatch here. Each callback lands in
 			// sendNoMetrics -> WriteTo: one syscall per cached packet,
 			// where one sendmmsg could flush the whole store.
 			cp.callback(cp.messageType, cp.messageSubType, hostinfo, cp.packet, nb, out)
 		}
-		f.cachedPacketMetrics.sent.Inc(int64(len(hh.packetStore)))
+		f.cachedPacketMetrics.sent.Inc(int64(len(packets)))
 	}
 
 	hostinfo.remotes.RefreshFromHandshake(vpnAddrs)
