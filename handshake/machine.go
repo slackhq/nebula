@@ -3,7 +3,6 @@ package handshake
 import (
 	"bytes"
 	"fmt"
-	"math"
 	"slices"
 	"time"
 
@@ -410,28 +409,13 @@ func (m *Machine) marshalOutgoing(flags msgFlags) ([]byte, error) {
 
 		if m.result.Initiator {
 			p.InitiatorIndex = m.result.LocalIndex
-			if m.multiport.Rx || m.multiport.Tx {
-				p.InitiatorMultiPort = &PayloadMultiPortDetails{
-					RxSupported: m.multiport.Rx,
-					TxSupported: m.multiport.Tx,
-					BasePort:    uint32(m.multiport.TxBasePort),
-					TotalPorts:  uint32(m.multiport.TxPorts),
-				}
-			}
+			p.InitiatorMultiPort = m.multiportDetails()
 		} else {
 			p.ResponderIndex = m.result.LocalIndex
 			p.InitiatorIndex = m.result.RemoteIndex
-			if m.multiport.Rx || m.multiport.Tx {
-				p.ResponderMultiPort = &PayloadMultiPortDetails{
-					RxSupported: m.multiport.Rx,
-					TxSupported: m.multiport.Tx,
-					BasePort:    uint32(m.multiport.TxBasePort),
-					TotalPorts:  uint32(m.multiport.TxPorts),
-				}
-			}
+			p.ResponderMultiPort = m.multiportDetails()
 		}
 		p.Time = uint64(time.Now().UnixNano())
-
 	}
 	if flags.expectsCert {
 		cred := m.getCred(m.myVersion)
@@ -481,17 +465,4 @@ func (m *Machine) buildResponse(out []byte) ([]byte, *noise.CipherState, *noise.
 	}
 
 	return out, dKey, eKey, nil
-}
-
-// setMultiport records the peer's multiport details. A peer claiming tx with a base port we can't send to is treated
-// as not supporting tx, otherwise we would send to port 0 or a truncated port.
-func (r *Result) setMultiport(d *PayloadMultiPortDetails) {
-	if d == nil {
-		return
-	}
-	r.MultiportRx = d.RxSupported
-	if d.TxSupported && d.BasePort > 0 && d.BasePort <= math.MaxUint16 {
-		r.MultiportTx = true
-		r.MultiportBasePort = uint16(d.BasePort)
-	}
 }
