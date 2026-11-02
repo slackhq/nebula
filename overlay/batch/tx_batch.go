@@ -22,11 +22,9 @@ type SendBatch struct {
 	dsts  []netip.AddrPort
 	arena *Arena
 
-	// ports holds the multiport send port of each slot, only kept once mixed is set by a nonzero port so a batch
-	// without multiport packets pays nothing for it
-	ports []uint16
+	// mixed is set by the first nonzero CommitPort, a batch without multiport packets pays nothing for runs
 	mixed bool
-	// runs marks each change of port in commit order, also only kept once mixed is set
+	// runs marks each change of send port in commit order, only kept once mixed is set
 	runs []portRun
 	// seen is a bitset over ports, flushPorts uses it to find a port with more than one run
 	seen *[65536 / 64]uint64
@@ -52,7 +50,6 @@ func NewSendBatch(out BatchWriter, batchCap, arenaSize int) *SendBatch {
 		out:   out,
 		bufs:  make([][]byte, 0, batchCap),
 		dsts:  make([]netip.AddrPort, 0, batchCap),
-		ports: make([]uint16, 0, batchCap),
 		arena: NewArena(arenaSize),
 	}
 }
@@ -70,7 +67,6 @@ func (b *SendBatch) Commit(pkt []byte, dst netip.AddrPort) {
 	b.bufs = append(b.bufs, pkt)
 	b.dsts = append(b.dsts, dst)
 	if b.mixed {
-		b.ports = append(b.ports, 0)
 		b.addRun(0)
 	}
 }
@@ -95,10 +91,7 @@ func (b *SendBatch) CommitPort(pkt []byte, dst netip.AddrPort, port uint16) {
 		return
 	}
 	if !b.mixed {
-		// Backfill port 0 for the slots committed before this one
-		// bufs can outgrow the batch cap, Grow only allocates then
-		b.ports = slices.Grow(b.ports[:0], len(b.bufs))[:len(b.bufs)]
-		clear(b.ports)
+		// The slots committed before this one are a run on port 0
 		b.runs = b.runs[:0]
 		if len(b.bufs) > 0 {
 			b.runs = append(b.runs, portRun{start: 0, port: 0})
@@ -107,7 +100,6 @@ func (b *SendBatch) CommitPort(pkt []byte, dst netip.AddrPort, port uint16) {
 	}
 	b.bufs = append(b.bufs, pkt)
 	b.dsts = append(b.dsts, dst)
-	b.ports = append(b.ports, port)
 	b.addRun(port)
 }
 
@@ -124,7 +116,6 @@ func (b *SendBatch) Flush() (int, error) {
 	clear(b.bufs)
 	b.bufs = b.bufs[:0]
 	b.dsts = b.dsts[:0]
-	b.ports = b.ports[:0]
 	b.runs = b.runs[:0]
 	b.mixed = false
 	b.arena.Reset()
