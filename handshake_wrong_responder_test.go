@@ -253,3 +253,34 @@ func TestWrongResponderRetryConcurrentAdmission(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkWrongResponderRetry(b *testing.B) {
+	for _, bb := range []struct {
+		name                   string
+		oldPackets, newPackets int
+	}{
+		{name: "empty", oldPackets: 0, newPackets: 0},
+		{name: "transfer_1", oldPackets: 1, newPackets: 0},
+		{name: "transfer_100", oldPackets: 100, newPackets: 0},
+		{name: "merge", oldPackets: 50, newPackets: 50},
+		{name: "full", oldPackets: 100, newPackets: 100},
+	} {
+		b.Run(bb.name, func(b *testing.B) {
+			hm, vpnAddr, via := newWrongResponderManager()
+			old := &HandshakeHostInfo{hostinfo: &HostInfo{vpnAddrs: []netip.Addr{vpnAddr}}}
+			oldPackets := make([]*cachedPacket, bb.oldPackets)
+			newPackets := make([]*cachedPacket, bb.newPackets)
+			var replacement *HandshakeHostInfo
+			hm.StartHandshake(vpnAddr, func(hh *HandshakeHostInfo) { replacement = hh })
+			replacement.hostinfo.remotes.BlockRemote(via)
+			old.Lock()
+			defer old.Unlock()
+			b.ReportAllocs()
+			for b.Loop() {
+				old.packetStore = oldPackets
+				replacement.packetStore = newPackets
+				hm.retryHandshake(old, via)
+			}
+		})
+	}
+}

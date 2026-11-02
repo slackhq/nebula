@@ -1278,13 +1278,13 @@ func (hm *HandshakeManager) retryHandshake(hh *HandshakeHostInfo, via ViaSender)
 		// Traffic may have started this replacement after DeleteHostInfo, so its
 		// packets are newer than the old cache's. Keep arrival order and, like
 		// cachePacket, drop the newest packets beyond the limit.
-		packets := append(hh.packetStore, newHH.packetStore...)
-		if dropped := len(packets) - maxCachedPackets; dropped > 0 {
-			hm.f.cachedPacketMetrics.dropped.Inc(int64(dropped))
-			clear(packets[maxCachedPackets:])
-			packets = packets[:maxCachedPackets]
+		if len(hh.packetStore) > 0 {
+			n := min(len(newHH.packetStore), maxCachedPackets-len(hh.packetStore))
+			if dropped := len(newHH.packetStore) - n; dropped > 0 {
+				hm.f.cachedPacketMetrics.dropped.Inc(int64(dropped))
+			}
+			newHH.packetStore = append(hh.packetStore, newHH.packetStore[:n]...)
 		}
-		newHH.packetStore = packets
 		hh.packetStore = nil
 	})
 }
