@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -228,14 +229,14 @@ func UnmarshalNebulaEncryptedData(b []byte) (*NebulaEncryptedData, error) {
 
 func unmarshalArgon2Parameters(params *RawNebulaArgon2Parameters) (*Argon2Parameters, error) {
 	if params.Memory == 0 {
-		return nil, fmt.Errorf("Argon2Parameters Memory must be greater than 0")
+		return nil, errors.New("Argon2Parameters Memory must be greater than 0")
 	}
 	// Parallelism is uint32 in the proto but uint8 in the struct cast below.
 	if params.Parallelism == 0 || params.Parallelism > math.MaxUint8 {
 		return nil, fmt.Errorf("Argon2Parameters Parallelism must be greater than 0 and no more than %d", math.MaxUint8)
 	}
 	if params.Iterations == 0 {
-		return nil, fmt.Errorf("-argon-iterations must be greater than 0")
+		return nil, errors.New("-argon-iterations must be greater than 0")
 	}
 
 	return &Argon2Parameters{
