@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"sync/atomic"
 
+	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/handshake"
@@ -28,8 +29,10 @@ func (s *multiPortSettings) Load() config.MultiPortConfig {
 	return config.MultiPortConfig{}
 }
 
+// Store replaces the config and reports its tx ports, 0 when tx is off
 func (s *multiPortSettings) Store(c config.MultiPortConfig) {
 	s.p.Store(&c)
+	metrics.GetOrRegisterGauge("multiport.tx_ports", nil).Update(int64(c.TxPorts))
 }
 
 // maxReplayWindow caps tun.multiport.replay_window, 128KB per tunnel

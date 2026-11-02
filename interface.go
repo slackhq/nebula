@@ -331,8 +331,6 @@ func (f *Interface) activate() error {
 
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
 
-	metrics.GetOrRegisterGauge("multiport.tx_ports", nil).Update(int64(f.multiPort.Load().TxPorts))
-
 	for i := range f.queues {
 		f.batchers[i] = batch.NewMultiCoalescer(f.queues[i], f.l)
 	}
