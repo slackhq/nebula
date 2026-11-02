@@ -5,6 +5,8 @@ import (
 	"sync/atomic"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/firewall"
+	"github.com/slackhq/nebula/udp"
 )
 
 // multiPortSettings holds the reloadable multiport config. The interface and the handshake manager share one, the
@@ -46,4 +48,36 @@ func multiPortReplayWindow(l *slog.Logger, configured int) uint64 {
 		return ReplayWindow
 	}
 	return w
+}
+
+// multiportConn returns the multiport send sockets for packets to hostinfo, nil when they are not sent multiport
+func (f *Interface) multiportConn(hostinfo *HostInfo) *udp.MultiPortConn {
+	if !hostinfo.multiportTx || !f.multiPort.Load().Tx {
+		return nil
+	}
+	return f.udpMulti.Load()
+}
+
+// multiportSendPort returns the multiport send port for every segment of an inside packet of flow to hostinfo, 0 (the
+// main listener) when it is not sent multiport. Segments of a superpacket share one 5-tuple, so one port.
+func (f *Interface) multiportSendPort(hostinfo *HostInfo, flow *firewall.Packet) uint16 {
+	if mp := f.multiportConn(hostinfo); mp != nil {
+		return flow.UDPSendPort(mp.Ports())
+	}
+	return 0
+}
+
+// multiportWriter returns the socket queue q sends a packet to hostinfo from: the socket for flow's multiport send
+// port, a random one when flow is nil so there is no flow to keep together, or the main listener when it is not sent
+// multiport.
+func (f *Interface) multiportWriter(hostinfo *HostInfo, q int, flow *firewall.Packet) udp.Conn {
+	mp := f.multiportConn(hostinfo)
+	if mp == nil {
+		return f.writers[q]
+	}
+	port := udp.RandomSendPort(mp.Ports())
+	if flow != nil {
+		port = flow.UDPSendPort(mp.Ports())
+	}
+	return mp.Conn(port, q, f.writers[q])
 }

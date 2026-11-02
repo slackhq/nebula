@@ -41,7 +41,7 @@ func TestMultiPortConn(t *testing.T) {
 
 	buf := make([]byte, 16)
 	for i := uint16(0); i < ports; i++ {
-		require.NoError(t, mp.WriteTo([]byte{byte(i)}, i, 0, dst, base))
+		require.NoError(t, mp.Conn(i, 0, base).WriteTo([]byte{byte(i)}, dst))
 		require.NoError(t, recv.SetReadDeadline(time.Now().Add(time.Second)))
 		n, from, err := recv.ReadFromUDPAddrPort(buf)
 		require.NoError(t, err)
@@ -95,7 +95,7 @@ func TestMultiPortConnQueues(t *testing.T) {
 
 	buf := make([]byte, 16)
 	for q := range queues {
-		require.NoError(t, mp.WriteTo([]byte{byte(q)}, 2, q, dst, base))
+		require.NoError(t, mp.Conn(2, q, base).WriteTo([]byte{byte(q)}, dst))
 		require.NoError(t, recv.SetReadDeadline(time.Now().Add(time.Second)))
 		n, from, err := recv.ReadFromUDPAddrPort(buf)
 		require.NoError(t, err)

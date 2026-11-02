@@ -14,7 +14,6 @@ import (
 	"github.com/slackhq/nebula/overlay/batch"
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
-	"github.com/slackhq/nebula/udp"
 )
 
 func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.ParsedPacket, nb []byte, sendBatch *batch.SendBatch, rejectBuf []byte, q int, localCache firewall.ConntrackCache) {
@@ -221,13 +220,7 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, fwPack
 		return
 	}
 
-	// Every segment of a superpacket shares one 5-tuple, so they all leave from the same multiport send port
-	var sendPort uint16
-	if hostinfo.multiportTx && f.multiPort.Load().Tx {
-		if mp := f.udpMulti.Load(); mp != nil {
-			sendPort = fwPacket.UDPSendPort(mp.Ports())
-		}
-	}
+	sendPort := f.multiportSendPort(hostinfo, fwPacket)
 
 	err := tio.SegmentSuperpacket(pkt, func(seg []byte) error {
 		// header + plaintext + AEAD tag (16 bytes for both AES-GCM and ChaCha20-Poly1305)
@@ -530,26 +523,12 @@ func (f *Interface) SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, noc
 	}
 }
 
-// multiportSendPort picks the send port for a packet of flow, a random one when there is no flow to keep together
-func multiportSendPort(flow *firewall.Packet, mp *udp.MultiPortConn) uint16 {
-	if flow == nil {
-		return udp.RandomSendPort(mp.Ports())
-	}
-	return flow.UDPSendPort(mp.Ports())
-}
-
 // sendNoMetrics encrypts and sends p to hostinfo. flow is the inside packet p carries, if any, it picks the multiport
 // send port so the packet leaves with the rest of its flow. nil sends from a random port.
 func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb, out []byte, q int, flow *firewall.Packet) {
 	if ci.eKey == nil {
 		return
 	}
-
-	var multiport *udp.MultiPortConn
-	if hostinfo.multiportTx && f.multiPort.Load().Tx {
-		multiport = f.udpMulti.Load()
-	}
-
 	useRelay := !remote.IsValid() && !hostinfo.GetRemote().IsValid()
 
 	// The encrypt appends to out in place and a relayed packet is then wrapped in place,
@@ -612,13 +591,9 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		return
 	}
 
+	w := f.multiportWriter(hostinfo, q, flow)
 	if remote.IsValid() {
-		if multiport != nil {
-			port := multiportSendPort(flow, multiport)
-			err = multiport.WriteTo(out, port, q, remote, f.writers[q])
-		} else {
-			err = f.writers[q].WriteTo(out, remote)
-		}
+		err = w.WriteTo(out, remote)
 		if err != nil {
 			if l, ok := logging.RateLimited(f.l, f.udpTxErrLimiter); ok {
 				hostinfo.logger(l).Error("Failed to write outgoing packet",
@@ -628,12 +603,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 			}
 		}
 	} else if hr := hostinfo.GetRemote(); hr.IsValid() {
-		if multiport != nil {
-			port := multiportSendPort(flow, multiport)
-			err = multiport.WriteTo(out, port, q, hr, f.writers[q])
-		} else {
-			err = f.writers[q].WriteTo(out, hr)
-		}
+		err = w.WriteTo(out, hr)
 		if err != nil {
 			if l, ok := logging.RateLimited(f.l, f.udpTxErrLimiter); ok {
 				hostinfo.logger(l).Error("Failed to write outgoing packet",

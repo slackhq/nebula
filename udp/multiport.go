@@ -83,11 +83,6 @@ func (m *MultiPortConn) Conn(port uint16, q int, base Conn) Conn {
 	return m.conns[q][port-1]
 }
 
-// WriteTo sends b to addr from queue q's source port at index port, see Conn.
-func (m *MultiPortConn) WriteTo(b []byte, port uint16, q int, addr netip.AddrPort, base Conn) error {
-	return m.Conn(port, q, base).WriteTo(b, addr)
-}
-
 func (m *MultiPortConn) ReloadConfig(c *config.C, r *config.Reload) {
 	for _, conns := range m.conns {
 		for _, conn := range conns {
