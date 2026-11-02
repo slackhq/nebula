@@ -29,11 +29,18 @@ type packetCacheLog struct {
 func (h *packetCacheLog) Enabled(_ context.Context, level slog.Level) bool {
 	return level >= slog.LevelInfo
 }
+func (h *packetCacheLog) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *packetCacheLog) WithGroup(string) slog.Handler      { return h }
 func (h *packetCacheLog) Handle(_ context.Context, record slog.Record) error {
 	if record.Message == "Handshake message received" {
 		h.observe(record)
 	}
 	return nil
+}
+
+type packetCacheOutcome struct {
+	sent, dropped int
+	complete      bool // the handshake reached the main hostmap
 }
 
 type packetCacheFixture struct {
@@ -112,19 +119,19 @@ func (f packetCacheFixture) enqueue(packet []byte, callback packetCallback) {
 
 func TestHandshakePacketCacheCompletion(t *testing.T) {
 	tests := []struct {
-		name, description              string
-		packets, wantSent, wantDropped int
-		malformed, duplicate           bool
-		wantComplete                   bool
+		name, description    string
+		packets              int
+		malformed, duplicate bool
+		expected             packetCacheOutcome
 	}{
-		{"empty", "an empty handshake publishes before logging zero", 0, 0, 0, false, false, true},
-		{"one", "one copied packet is replayed once", 1, 1, 0, false, false, true},
-		{"typical", "multiple packets preserve admission order", 4, 4, 0, false, false, true},
-		{"below_limit", "the penultimate slot is accepted", maxCachedPackets - 1, maxCachedPackets - 1, 0, false, false, true},
-		{"at_limit", "the final cache slot is accepted", maxCachedPackets, maxCachedPackets, 0, false, false, true},
-		{"over_limit", "excess packets are dropped and counted", maxCachedPackets + 1, maxCachedPackets, 1, false, false, true},
-		{"malformed", "a rejected response never drains the cache", 2, 0, 0, true, false, false},
-		{"duplicate", "a late duplicate cannot replay the cache twice", 2, 2, 0, false, true, true},
+		{name: "empty", description: "an empty handshake publishes before logging zero", packets: 0, expected: packetCacheOutcome{sent: 0, complete: true}},
+		{name: "one", description: "one copied packet is replayed once", packets: 1, expected: packetCacheOutcome{sent: 1, complete: true}},
+		{name: "typical", description: "multiple packets preserve admission order", packets: 4, expected: packetCacheOutcome{sent: 4, complete: true}},
+		{name: "below_limit", description: "the penultimate slot is accepted", packets: maxCachedPackets - 1, expected: packetCacheOutcome{sent: maxCachedPackets - 1, complete: true}},
+		{name: "at_limit", description: "the final cache slot is accepted", packets: maxCachedPackets, expected: packetCacheOutcome{sent: maxCachedPackets, complete: true}},
+		{name: "over_limit", description: "excess packets are dropped and counted", packets: maxCachedPackets + 1, expected: packetCacheOutcome{sent: maxCachedPackets, dropped: 1, complete: true}},
+		{name: "malformed", description: "a rejected response never drains the cache", packets: 2, malformed: true, expected: packetCacheOutcome{sent: 0, complete: false}},
+		{name: "duplicate", description: "a late duplicate cannot replay the cache twice", packets: 2, duplicate: true, expected: packetCacheOutcome{sent: 2, complete: true}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -159,15 +166,15 @@ func TestHandshakePacketCacheCompletion(t *testing.T) {
 			if tc.duplicate {
 				fixture.manager.continueHandshake(fixture.via, fixture.pending, response)
 			}
-			want := make([]byte, tc.wantSent)
+			want := make([]byte, tc.expected.sent)
 			for i := range want {
 				want[i] = byte(i)
 			}
 			assert.Equal(t, want, received)
-			assert.Equal(t, int64(tc.wantSent), fixture.manager.f.cachedPacketMetrics.sent.Count())
-			assert.Equal(t, int64(tc.wantDropped), fixture.manager.f.cachedPacketMetrics.dropped.Count())
-			if tc.wantComplete {
-				assert.Equal(t, []int64{int64(tc.wantSent)}, counts)
+			assert.Equal(t, int64(tc.expected.sent), fixture.manager.f.cachedPacketMetrics.sent.Count())
+			assert.Equal(t, int64(tc.expected.dropped), fixture.manager.f.cachedPacketMetrics.dropped.Count())
+			if tc.expected.complete {
+				assert.Equal(t, []int64{int64(tc.expected.sent)}, counts)
 				assert.Equal(t, []bool{false}, pendingAtLog, "completion must exclude further cache writers before logging")
 				assert.Same(t, fixture.pending.hostinfo, fixture.manager.mainHostMap.QueryVpnAddr(netip.MustParseAddr("10.0.0.2")))
 			} else {
@@ -178,13 +185,14 @@ func TestHandshakePacketCacheCompletion(t *testing.T) {
 	}
 }
 
-func TestHandshakePacketCacheConcurrentCompletion(t *testing.T) {
+func TestHandshakePacketCacheCompletionOrdering(t *testing.T) {
 	for _, tc := range []struct {
 		name, description string
-		packets, wantSent int
+		packets           int
+		expected          int // packets replayed
 	}{
-		{"one", "completion includes an admitted callback that still holds the manager lock", 1, 1},
-		{"full", "completion includes all admitted packets through the cache boundary", maxCachedPackets, maxCachedPackets},
+		{name: "one", description: "completion includes an admitted callback that still holds the manager lock", packets: 1, expected: 1},
+		{name: "full", description: "completion includes all admitted packets through the cache boundary", packets: maxCachedPackets, expected: maxCachedPackets},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Log(tc.description)
@@ -232,12 +240,12 @@ func TestHandshakePacketCacheConcurrentCompletion(t *testing.T) {
 			waitPacketCacheSignal(t, cached)
 			waitPacketCacheSignal(t, finished)
 			assert.True(t, <-observed, "logged before the pending handshake was removed")
-			want := make([]byte, tc.wantSent)
+			want := make([]byte, tc.expected)
 			for i := range want {
 				want[i] = byte(i)
 			}
 			assert.Equal(t, want, received)
-			assert.Equal(t, int64(tc.wantSent), fixture.manager.f.cachedPacketMetrics.sent.Count())
+			assert.Equal(t, int64(tc.expected), fixture.manager.f.cachedPacketMetrics.sent.Count())
 		})
 	}
 }
