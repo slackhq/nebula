@@ -3,11 +3,12 @@
 package overlay
 
 import (
-	"github.com/DefinedNet/netlink"
-	"github.com/stretchr/testify/assert"
 	"net"
 	"net/netip"
 	"testing"
+
+	"github.com/DefinedNet/netlink"
+	"github.com/stretchr/testify/assert"
 )
 
 var runAdvMSSTests = []struct {
