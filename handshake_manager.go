@@ -1275,18 +1275,16 @@ func (hm *HandshakeManager) certVerifier() handshake.CertVerifier {
 func (hm *HandshakeManager) retryHandshake(hh *HandshakeHostInfo, via ViaSender) {
 	hm.StartHandshake(hh.hostinfo.vpnAddrs[0], func(newHH *HandshakeHostInfo) {
 		newHH.hostinfo.remotes.BlockRemote(via)
-		// Traffic may have started this replacement after DeleteHostInfo. Keep
-		// its accepted packets first, then transfer as much of the old cache as
-		// fits. Preserve order within each cache and account for overflow.
-		if len(newHH.packetStore) == 0 {
-			newHH.packetStore = hh.packetStore
-		} else {
-			n := min(len(hh.packetStore), maxCachedPackets-len(newHH.packetStore))
-			newHH.packetStore = append(newHH.packetStore, hh.packetStore[:n]...)
-			if dropped := len(hh.packetStore) - n; dropped > 0 {
-				hm.f.cachedPacketMetrics.dropped.Inc(int64(dropped))
-			}
+		// Traffic may have started this replacement after DeleteHostInfo, so its
+		// packets are newer than the old cache's. Keep arrival order and, like
+		// cachePacket, drop the newest packets beyond the limit.
+		packets := append(hh.packetStore, newHH.packetStore...)
+		if dropped := len(packets) - maxCachedPackets; dropped > 0 {
+			hm.f.cachedPacketMetrics.dropped.Inc(int64(dropped))
+			clear(packets[maxCachedPackets:])
+			packets = packets[:maxCachedPackets]
 		}
+		newHH.packetStore = packets
 		hh.packetStore = nil
 	})
 }

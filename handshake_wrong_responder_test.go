@@ -23,107 +23,102 @@ func newWrongResponderManager() (*HandshakeManager, netip.Addr, ViaSender) {
 	return hm, netip.MustParseAddr("10.0.0.3"), ViaSender{UdpAddr: netip.MustParseAddrPort("198.51.100.7:4242")}
 }
 
+// retryOutcome counts the packets kept from each cache, old first.
+type retryOutcome struct {
+	old, replacement int
+	dropped          int64
+}
+
 func TestWrongResponderRetry(t *testing.T) {
 	tests := []struct {
-		name            string
-		description     string
-		expectedOutcome string
-		oldPackets      int
-		newPackets      int
-		replacement     bool
-		relayed         bool
-		wantTransferred int
-		wantDropped     int64
+		name        string
+		description string
+		oldPackets  int
+		newPackets  int
+		replacement bool
+		relayed     bool
+		expected    retryOutcome
 	}{
 		{
-			name:            "fresh",
-			description:     "no sender starts a replacement",
-			expectedOutcome: "all old packets transfer",
-			oldPackets:      2,
-			wantTransferred: 2,
+			name:        "fresh",
+			description: "no sender starts a replacement, so all old packets transfer",
+			oldPackets:  2,
+			expected:    retryOutcome{old: 2},
 		},
 		{
-			name:            "empty",
-			description:     "neither cache has packets",
-			expectedOutcome: "retry has an empty cache",
+			name:        "empty",
+			description: "neither cache has packets, so the retry starts empty",
+			expected:    retryOutcome{},
 		},
 		{
-			name:            "fresh_full",
-			description:     "old cache is at the limit",
-			expectedOutcome: "all 100 packets transfer",
-			oldPackets:      100,
-			wantTransferred: 100,
+			name:        "fresh_full",
+			description: "an old cache at the limit transfers whole",
+			oldPackets:  maxCachedPackets,
+			expected:    retryOutcome{old: maxCachedPackets},
 		},
 		{
-			name:            "replacement_empty",
-			description:     "replacement exists without packets",
-			expectedOutcome: "all old packets transfer",
-			oldPackets:      2,
-			replacement:     true,
-			wantTransferred: 2,
+			name:        "replacement_empty",
+			description: "a replacement without packets receives all old packets",
+			oldPackets:  2,
+			replacement: true,
+			expected:    retryOutcome{old: 2},
 		},
 		{
-			name:            "replacement_only",
-			description:     "old cache is empty",
-			expectedOutcome: "replacement packets survive",
-			newPackets:      2,
-			replacement:     true,
+			name:        "replacement_only",
+			description: "with an empty old cache the replacement packets survive",
+			newPackets:  2,
+			replacement: true,
+			expected:    retryOutcome{replacement: 2},
 		},
 		{
-			name:            "merge",
-			description:     "both caches contain packets",
-			expectedOutcome: "replacement packets precede old packets",
-			oldPackets:      2,
-			newPackets:      2,
-			replacement:     true,
-			wantTransferred: 2,
+			name:        "merge",
+			description: "old packets precede the newer replacement packets",
+			oldPackets:  2,
+			newPackets:  2,
+			replacement: true,
+			expected:    retryOutcome{old: 2, replacement: 2},
 		},
 		{
-			name:            "exact_limit",
-			description:     "combined caches reach the limit",
-			expectedOutcome: "100 packets survive without drops",
-			oldPackets:      1,
-			newPackets:      99,
-			replacement:     true,
-			wantTransferred: 1,
+			name:        "exact_limit",
+			description: "combined caches reach the limit without drops",
+			oldPackets:  1,
+			newPackets:  maxCachedPackets - 1,
+			replacement: true,
+			expected:    retryOutcome{old: 1, replacement: maxCachedPackets - 1},
 		},
 		{
-			name:            "overflow",
-			description:     "combined caches exceed the limit by one",
-			expectedOutcome: "one old packet is counted as dropped",
-			oldPackets:      2,
-			newPackets:      99,
-			replacement:     true,
-			wantTransferred: 1,
-			wantDropped:     1,
+			name:        "overflow",
+			description: "one packet over the limit drops the newest replacement packet",
+			oldPackets:  2,
+			newPackets:  maxCachedPackets - 1,
+			replacement: true,
+			expected:    retryOutcome{old: 2, replacement: maxCachedPackets - 2, dropped: 1},
 		},
 		{
-			name:            "both_full",
-			description:     "both caches are full",
-			expectedOutcome: "replacement survives and 100 old packets are counted as dropped",
-			oldPackets:      100,
-			newPackets:      100,
-			replacement:     true,
-			wantDropped:     100,
+			name:        "both_full",
+			description: "with both caches full the old cache survives and the replacement is dropped",
+			oldPackets:  maxCachedPackets,
+			newPackets:  maxCachedPackets,
+			replacement: true,
+			expected:    retryOutcome{old: maxCachedPackets, dropped: maxCachedPackets},
 		},
 		{
-			name:            "relayed",
-			description:     "wrong response arrived over a relay",
-			expectedOutcome: "packets merge without blocking a UDP address",
-			oldPackets:      2,
-			newPackets:      1,
-			replacement:     true,
-			relayed:         true,
-			wantTransferred: 2,
+			name:        "relayed",
+			description: "a relayed wrong response merges without blocking a UDP address",
+			oldPackets:  2,
+			newPackets:  1,
+			replacement: true,
+			relayed:     true,
+			expected:    retryOutcome{old: 2, replacement: 1},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Logf("%s; expected: %s", tt.description, tt.expectedOutcome)
+			t.Log(tt.description)
 			hm, vpnAddr, via := newWrongResponderManager()
 			via.IsRelayed = tt.relayed
 			var old, replacement *HandshakeHostInfo
-			replayed := make([]byte, 0, tt.newPackets+tt.wantTransferred)
+			var replayed []byte
 			callback := func(mt header.MessageType, st header.MessageSubType, _ *HostInfo, packet, _, _ []byte) {
 				assert.Equal(t, header.Message, mt)
 				assert.Equal(t, header.MessageNone, st)
@@ -146,17 +141,17 @@ func TestWrongResponderRetry(t *testing.T) {
 
 			// Reproduce the gap between DeleteHostInfo and retryHandshake without
 			// sleeps: another sender has already created and populated a replacement.
+			var newPackets []*cachedPacket
 			if tt.replacement {
 				hm.StartHandshake(vpnAddr, func(hh *HandshakeHostInfo) {
 					replacement = hh
 					cache(hh, tt.newPackets, 100)
 				})
+				newPackets = append(newPackets, replacement.packetStore...)
 			}
 			var wantPackets []*cachedPacket
-			if replacement != nil {
-				wantPackets = append(wantPackets, replacement.packetStore...)
-			}
-			wantPackets = append(wantPackets, oldPackets[:tt.wantTransferred]...)
+			wantPackets = append(wantPackets, oldPackets[:tt.expected.old]...)
+			wantPackets = append(wantPackets, newPackets[:tt.expected.replacement]...)
 
 			hm.retryHandshake(old, via)
 			retried := hm.vpnIps[vpnAddr]
@@ -166,7 +161,7 @@ func TestWrongResponderRetry(t *testing.T) {
 				assert.Same(t, replacement, retried)
 			}
 			require.Len(t, retried.packetStore, len(wantPackets))
-			wantReplay := make([]byte, 0, len(wantPackets))
+			var wantReplay []byte
 			for i, cp := range retried.packetStore {
 				require.Same(t, wantPackets[i], cp, "packet %d retains its payload and callback", i)
 				wantReplay = append(wantReplay, wantPackets[i].packet[0])
@@ -174,7 +169,7 @@ func TestWrongResponderRetry(t *testing.T) {
 			}
 			assert.Equal(t, wantReplay, replayed)
 			assert.Empty(t, old.packetStore)
-			assert.Equal(t, tt.wantDropped, hm.f.cachedPacketMetrics.dropped.Count())
+			assert.Equal(t, tt.expected.dropped, hm.f.cachedPacketMetrics.dropped.Count())
 			assert.Zero(t, hm.f.cachedPacketMetrics.sent.Count(), "transfer does not send packets")
 			if tt.relayed {
 				assert.Empty(t, retried.hostinfo.remotes.CopyBlockedRemotes())
@@ -187,35 +182,30 @@ func TestWrongResponderRetry(t *testing.T) {
 
 func TestWrongResponderRetryConcurrentAdmission(t *testing.T) {
 	tests := []struct {
-		name            string
-		description     string
-		expectedOutcome string
-		oldPackets      int
-		newPackets      int
-		wantCached      int
-		wantDropped     int64
+		name        string
+		description string
+		oldPackets  int
+		newPackets  int
+		expected    retryOutcome // replacement counts the other senders' packets
 	}{
 		{
-			name:            "fits",
-			description:     "retry and another sender contend for the replacement",
-			expectedOutcome: "all 31 packets survive once",
-			oldPackets:      10,
-			newPackets:      20,
-			wantCached:      31,
+			name:        "fits",
+			description: "retry and another sender contend for the replacement; every packet survives once",
+			oldPackets:  10,
+			newPackets:  20,
+			expected:    retryOutcome{old: 10, replacement: 21},
 		},
 		{
-			name:            "full",
-			description:     "retry and another sender exceed capacity",
-			expectedOutcome: "100 packets survive and 21 drops are counted",
-			oldPackets:      100,
-			newPackets:      20,
-			wantCached:      100,
-			wantDropped:     21,
+			name:        "full",
+			description: "retry and another sender exceed capacity; the old cache survives and 21 drops are counted",
+			oldPackets:  maxCachedPackets,
+			newPackets:  20,
+			expected:    retryOutcome{old: maxCachedPackets, dropped: 21},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Logf("%s; expected: %s", tt.description, tt.expectedOutcome)
+			t.Log(tt.description)
 			hm, vpnAddr, via := newWrongResponderManager()
 			var old *HandshakeHostInfo
 			cache := func(hh *HandshakeHostInfo, id byte) {
@@ -228,7 +218,7 @@ func TestWrongResponderRetryConcurrentAdmission(t *testing.T) {
 				}
 			})
 			hm.DeleteHostInfo(old.hostinfo)
-			// This packet must survive whichever goroutine acquires the manager lock first.
+			// Ensure a replacement exists whichever goroutine acquires the manager lock first.
 			hm.StartHandshake(vpnAddr, func(hh *HandshakeHostInfo) { cache(hh, 200) })
 			start := make(chan struct{})
 			var workers sync.WaitGroup
@@ -248,46 +238,18 @@ func TestWrongResponderRetryConcurrentAdmission(t *testing.T) {
 			})
 			close(start)
 			workers.Wait()
+			store := hm.vpnIps[vpnAddr].packetStore
+			require.Len(t, store, tt.expected.old+tt.expected.replacement)
+			for i := range tt.expected.old {
+				assert.Equal(t, byte(i), store[i].packet[0], "old packets lead in arrival order")
+			}
 			seen := make(map[byte]bool)
-			for _, cp := range hm.vpnIps[vpnAddr].packetStore {
+			for _, cp := range store {
 				require.False(t, seen[cp.packet[0]], "no duplicate packets")
 				seen[cp.packet[0]] = true
 			}
-			assert.True(t, seen[200], "the replacement's original packet survives")
-			assert.Len(t, seen, tt.wantCached)
-			assert.Equal(t, tt.wantDropped, hm.f.cachedPacketMetrics.dropped.Count())
+			assert.Equal(t, tt.expected.dropped, hm.f.cachedPacketMetrics.dropped.Count())
 			assert.Empty(t, old.packetStore)
-		})
-	}
-}
-
-func BenchmarkWrongResponderRetry(b *testing.B) {
-	for _, bb := range []struct {
-		name                   string
-		oldPackets, newPackets int
-	}{
-		{name: "empty", oldPackets: 0, newPackets: 0},
-		{name: "transfer_1", oldPackets: 1, newPackets: 0},
-		{name: "transfer_100", oldPackets: 100, newPackets: 0},
-		{name: "merge", oldPackets: 50, newPackets: 50},
-		{name: "full", oldPackets: 100, newPackets: 100},
-	} {
-		b.Run(bb.name, func(b *testing.B) {
-			hm, vpnAddr, via := newWrongResponderManager()
-			old := &HandshakeHostInfo{hostinfo: &HostInfo{vpnAddrs: []netip.Addr{vpnAddr}}}
-			oldPackets := make([]*cachedPacket, bb.oldPackets)
-			newPackets := make([]*cachedPacket, bb.newPackets)
-			var replacement *HandshakeHostInfo
-			hm.StartHandshake(vpnAddr, func(hh *HandshakeHostInfo) { replacement = hh })
-			replacement.hostinfo.remotes.BlockRemote(via)
-			old.Lock()
-			defer old.Unlock()
-			b.ReportAllocs()
-			for b.Loop() {
-				old.packetStore = oldPackets
-				replacement.packetStore = newPackets
-				hm.retryHandshake(old, via)
-			}
 		})
 	}
 }
