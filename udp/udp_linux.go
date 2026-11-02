@@ -3,7 +3,6 @@
 package udp
 
 import (
-	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -84,7 +83,7 @@ func NewListener(l *slog.Logger, s Settings) (Conn, error) {
 
 	out := &StdConn{sysFd: fd, isV4: s.Listen.Addr().Is4(), l: l, batch: s.Batch, sendOnly: s.SendOnly}
 
-	out.bw = newBatchWriter(fd, out.isV4, l, s.Offloads, s.SendOnly)
+	out.bw = newBatchWriter(fd, out.isV4, l, s.Offloads)
 
 	// GRO coalesces same-flow datagrams into superpackets that must be split back apart via the delivered gso_size cmsg
 	// batch == 1 means the caller wants plain single-datagram reads with MTU-sized buffers, so leave it off.
@@ -446,13 +445,13 @@ func (u *StdConn) ReloadConfig(c *config.C, r *config.Reload) {
 	if b > 0 {
 		if err := u.SetSendBuffer(b); err == nil {
 			if s, err := u.GetSendBuffer(); err == nil && s >= 2*b {
-				u.l.Log(context.Background(), u.reloadLogLevel(slog.LevelInfo), "listen.write_buffer was set", "size", s)
+				u.l.Info("listen.write_buffer was set", "size", s)
 			} else if err == nil {
-				u.l.Log(context.Background(), u.reloadLogLevel(slog.LevelWarn), "listen.write_buffer was limited by the system",
+				u.l.Warn("listen.write_buffer was limited by the system",
 					"requested", b, "size", s,
 					"hint", "raise net.core.wmem_max or grant CAP_NET_ADMIN")
 			} else {
-				u.l.Log(context.Background(), u.reloadLogLevel(slog.LevelWarn), "Failed to get listen.write_buffer", "error", err)
+				u.l.Warn("Failed to get listen.write_buffer", "error", err)
 			}
 		} else {
 			u.l.Error("Failed to set listen.write_buffer", "error", err)
@@ -465,24 +464,15 @@ func (u *StdConn) ReloadConfig(c *config.C, r *config.Reload) {
 	if b > 0 || (err == nil && s != 0) {
 		if err := u.SetSoMark(b); err == nil {
 			if s, err := u.GetSoMark(); err == nil {
-				u.l.Log(context.Background(), u.reloadLogLevel(slog.LevelInfo), "listen.so_mark was set", "mark", s)
+				u.l.Info("listen.so_mark was set", "mark", s)
 			} else {
-				u.l.Log(context.Background(), u.reloadLogLevel(slog.LevelWarn), "Failed to get listen.so_mark", "error", err)
+				u.l.Warn("Failed to get listen.so_mark", "error", err)
 			}
 		} else {
 			u.l.Error("Failed to set listen.so_mark", "error", err)
 			r.Failed()
 		}
 	}
-}
-
-// reloadLogLevel is the level for ReloadConfig's non-error logs. A send only socket is one of many opened alongside a
-// main listener that already logs the same outcome, so it only logs at debug.
-func (u *StdConn) reloadLogLevel(level slog.Level) slog.Level {
-	if u.sendOnly {
-		return slog.LevelDebug
-	}
-	return level
 }
 
 func (u *StdConn) getMemInfo(meminfo *[unix.SK_MEMINFO_VARS]uint32) error {

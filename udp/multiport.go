@@ -1,6 +1,7 @@
 package udp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -43,12 +44,14 @@ func NewMultiPortConn(l *slog.Logger, base Settings, ports, queues int) (*MultiP
 		return nil, fmt.Errorf("multiport needs at least 1 queue, got %d", queues)
 	}
 
+	// Each socket logs what the main listener already logged for the same settings, keep that out of info
+	quiet := sendOnlyLogger(l)
 	m := &MultiPortConn{conns: make([][]Conn, queues), ports: ports}
 	for q := range m.conns {
 		m.conns[q] = make([]Conn, 0, ports-1)
 		for i := 1; i < ports; i++ {
 			port := basePort + i
-			c, err := NewListener(l, Settings{
+			c, err := NewListener(quiet, Settings{
 				Listen:   netip.AddrPortFrom(base.Listen.Addr(), uint16(port)),
 				Multi:    queues > 1,
 				Batch:    1,
@@ -103,4 +106,38 @@ func (m *MultiPortConn) Close() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// sendOnlyLogger returns l with every record below error logged at debug instead. The multiport send sockets would
+// otherwise each repeat the main listener's setup and reload logs, routines * (tx_ports - 1) times.
+func sendOnlyLogger(l *slog.Logger) *slog.Logger {
+	return slog.New(sendOnlyHandler{l.Handler()})
+}
+
+type sendOnlyHandler struct {
+	slog.Handler
+}
+
+func sendOnlyLevel(level slog.Level) slog.Level {
+	if level < slog.LevelError {
+		return min(level, slog.LevelDebug)
+	}
+	return level
+}
+
+func (h sendOnlyHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.Handler.Enabled(ctx, sendOnlyLevel(level))
+}
+
+func (h sendOnlyHandler) Handle(ctx context.Context, r slog.Record) error {
+	r.Level = sendOnlyLevel(r.Level)
+	return h.Handler.Handle(ctx, r)
+}
+
+func (h sendOnlyHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return sendOnlyHandler{h.Handler.WithAttrs(attrs)}
+}
+
+func (h sendOnlyHandler) WithGroup(name string) slog.Handler {
+	return sendOnlyHandler{h.Handler.WithGroup(name)}
 }

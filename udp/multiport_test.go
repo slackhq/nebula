@@ -4,6 +4,7 @@
 package udp
 
 import (
+	"bytes"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -101,4 +102,26 @@ func TestMultiPortConnQueues(t *testing.T) {
 		assert.Equal(t, []byte{byte(q)}, buf[:n])
 		assert.Equal(t, baseAddr.Port()+2, from.Port())
 	}
+}
+
+func TestSendOnlyLogger(t *testing.T) {
+	var buf bytes.Buffer
+	l := sendOnlyLogger(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	l.Info("info")
+	l.Warn("warn")
+	l.Error("error")
+	l.With("k", "v").Info("with")
+	out := buf.String()
+	assert.Contains(t, out, `level=DEBUG msg=info`)
+	assert.Contains(t, out, `level=DEBUG msg=warn`)
+	assert.Contains(t, out, `level=ERROR msg=error`)
+	assert.Contains(t, out, `level=DEBUG msg=with k=v`)
+
+	// Demoted records are dropped by a handler that does not log debug
+	buf.Reset()
+	l = sendOnlyLogger(slog.New(slog.NewTextHandler(&buf, nil)))
+	l.Warn("warn")
+	l.Error("error")
+	assert.NotContains(t, buf.String(), "warn")
+	assert.Contains(t, buf.String(), "level=ERROR")
 }
