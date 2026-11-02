@@ -2,10 +2,12 @@ package nebula
 
 import (
 	"log/slog"
+	"net/netip"
 	"sync/atomic"
 
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
+	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -80,4 +82,20 @@ func (f *Interface) multiportWriter(hostinfo *HostInfo, q int, flow *firewall.Pa
 		port = flow.UDPSendPort(mp.Ports())
 	}
 	return mp.Conn(port, q, f.writers[q])
+}
+
+// multiportAgreed returns whether we send to the peer of a handshake result multiport and whether it sends to us
+// multiport. Each needs the sender to have tx and the receiver rx.
+func multiportAgreed(mpc config.MultiPortConfig, r *handshake.Result) (tx, rx bool) {
+	return mpc.Tx && r.MultiportRx, mpc.Rx && r.MultiportTx
+}
+
+// multiportVia aims via at the peer's multiport base port when the peer sends multiport and we agreed to receive it:
+// its handshake may have come from any of its send ports, and responses go to the base port. Without our rx agreement
+// the source port is the real one, possibly rewritten by a NAT on the way, so via is left alone.
+func multiportVia(via ViaSender, mpc config.MultiPortConfig, r *handshake.Result) ViaSender {
+	if !via.IsRelayed && mpc.Rx && r.MultiportTx && r.MultiportBasePort != via.UdpAddr.Port() {
+		via.UdpAddr = netip.AddrPortFrom(via.UdpAddr.Addr(), r.MultiportBasePort)
+	}
+	return via
 }

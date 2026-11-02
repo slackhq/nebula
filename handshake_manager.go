@@ -855,12 +855,7 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		return
 	}
 
-	if !via.IsRelayed && multiPort.Rx && result.MultiportTx && result.MultiportBasePort != via.UdpAddr.Port() {
-		// The other side sent us a handshake from a different port, make sure
-		// we send responses back to the BasePort. Only when we agreed to multiport rx, otherwise the
-		// source port is the real one, it may have been rewritten by a NAT on the way to us.
-		via.UdpAddr = netip.AddrPortFrom(via.UdpAddr.Addr(), result.MultiportBasePort)
-	}
+	via = multiportVia(via, multiPort, result)
 
 	remoteCert := result.RemoteCert
 	if remoteCert == nil {
@@ -892,9 +887,8 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 			relayForByAddr: map[netip.Addr]*Relay{},
 			relayForByIdx:  map[uint32]*Relay{},
 		},
-		multiportTx: multiPort.Tx && result.MultiportRx,
-		multiportRx: multiPort.Rx && result.MultiportTx,
 	}
+	hostinfo.multiportTx, hostinfo.multiportRx = multiportAgreed(multiPort, result)
 
 	msg := "Handshake message received"
 	if !anyVpnAddrsInCommon {
@@ -1006,14 +1000,8 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	}
 
 	multiPort := hm.multiPort.Load()
-	if !via.IsRelayed && multiPort.Rx && result.MultiportTx && result.MultiportBasePort != via.UdpAddr.Port() {
-		// The other side sent us a handshake from a different port, make sure
-		// we send responses back to the BasePort. Only when we agreed to multiport rx, otherwise the
-		// source port is the real one, it may have been rewritten by a NAT on the way to us.
-		via.UdpAddr = netip.AddrPortFrom(via.UdpAddr.Addr(), result.MultiportBasePort)
-	}
-	hostinfo.multiportTx = multiPort.Tx && result.MultiportRx
-	hostinfo.multiportRx = multiPort.Rx && result.MultiportTx
+	via = multiportVia(via, multiPort, result)
+	hostinfo.multiportTx, hostinfo.multiportRx = multiportAgreed(multiPort, result)
 
 	// Handshake complete; build the ConnectionState now that we have keys and a verified peer cert.
 	cs, err := newConnectionStateFromResult(result, replayWindow(multiPort), multiPort.EncryptQueues)
