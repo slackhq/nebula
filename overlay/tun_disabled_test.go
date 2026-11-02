@@ -26,19 +26,20 @@ func disabledTunEchoPacket(tb testing.TB, ipv6 bool) []byte {
 
 func TestDisabledTunPackets(t *testing.T) {
 	tests := []struct {
-		name, description             string
-		packet                        []byte
-		capacity, writes, wantReplies int
-		closeFirst                    bool
+		name, description string
+		packet            []byte
+		capacity, writes  int
+		closeFirst        bool
+		expected          int // queued replies
 	}{
-		{"ipv4", "an echo request produces one reply", disabledTunEchoPacket(t, false), 1, 1, 1, false},
-		{"ipv6", "an IPv6 echo request produces one reply", disabledTunEchoPacket(t, true), 1, 1, 1, false},
-		{"empty", "empty input is discarded", nil, 1, 1, 0, false},
-		{"truncated", "a truncated header is discarded", []byte{0x45}, 1, 1, 0, false},
-		{"non_echo", "an echo reply does not generate another reply", append(disabledTunEchoPacket(t, false)[:20], make([]byte, 8)...), 1, 1, 0, false},
-		{"unbuffered", "without a waiting reader a zero-capacity queue drops", disabledTunEchoPacket(t, false), 0, 1, 0, false},
-		{"full", "a full queue drops the next reply without blocking", disabledTunEchoPacket(t, false), 1, 2, 1, false},
-		{"closed", "writes after closure succeed but enqueue nothing", disabledTunEchoPacket(t, false), 1, 1, 0, true},
+		{name: "ipv4", description: "an echo request produces one reply", packet: disabledTunEchoPacket(t, false), capacity: 1, writes: 1, expected: 1},
+		{name: "ipv6", description: "an IPv6 echo request produces one reply", packet: disabledTunEchoPacket(t, true), capacity: 1, writes: 1, expected: 1},
+		{name: "empty", description: "empty input is discarded", packet: nil, capacity: 1, writes: 1, expected: 0},
+		{name: "truncated", description: "a truncated header is discarded", packet: []byte{0x45}, capacity: 1, writes: 1, expected: 0},
+		{name: "non_echo", description: "an echo reply does not generate another reply", packet: append(disabledTunEchoPacket(t, false)[:20], make([]byte, 8)...), capacity: 1, writes: 1, expected: 0},
+		{name: "unbuffered", description: "without a waiting reader a zero-capacity queue drops", packet: disabledTunEchoPacket(t, false), capacity: 0, writes: 1, expected: 0},
+		{name: "full", description: "a full queue drops the next reply without blocking", packet: disabledTunEchoPacket(t, false), capacity: 1, writes: 2, expected: 1},
+		{name: "closed", description: "writes after closure succeed but enqueue nothing", packet: disabledTunEchoPacket(t, false), capacity: 1, writes: 1, closeFirst: true, expected: 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -53,8 +54,8 @@ func TestDisabledTunPackets(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, len(tc.packet), n)
 			}
-			assert.Len(t, device.read, tc.wantReplies)
-			if tc.wantReplies == 0 {
+			assert.Len(t, device.read, tc.expected)
+			if tc.expected == 0 {
 				return
 			}
 			buf := make([]byte, 64)
@@ -79,13 +80,13 @@ func TestDisabledTunClose(t *testing.T) {
 		name, description         string
 		buffered, readers, closes int
 		readAfterClose            bool
-		wantPackets               int
+		expected                  int // packets read before EOF
 	}{
-		{"blocked_reader", "closing wakes an empty-queue reader with EOF", 0, 1, 1, false, 0},
-		{"multiple_readers", "all shared readers wake with EOF", 0, 4, 1, false, 0},
-		{"read_after_close", "a new read sees EOF rather than a nil-channel wait", 0, 1, 1, true, 0},
-		{"buffered_drain", "accepted packets drain before EOF", 1, 1, 1, true, 1},
-		{"repeated_close", "concurrent repeated closes are idempotent", 0, 4, 8, false, 0},
+		{name: "blocked_reader", description: "closing wakes an empty-queue reader with EOF", buffered: 0, readers: 1, closes: 1, expected: 0},
+		{name: "multiple_readers", description: "all shared readers wake with EOF", buffered: 0, readers: 4, closes: 1, expected: 0},
+		{name: "read_after_close", description: "a new read sees EOF rather than a nil-channel wait", buffered: 0, readers: 1, closes: 1, readAfterClose: true, expected: 0},
+		{name: "buffered_drain", description: "accepted packets drain before EOF", buffered: 1, readers: 1, closes: 1, readAfterClose: true, expected: 1},
+		{name: "repeated_close", description: "concurrent repeated closes are idempotent", buffered: 0, readers: 4, closes: 8, expected: 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -145,7 +146,7 @@ func TestDisabledTunClose(t *testing.T) {
 						t.Fatal("reader did not finish after close")
 					}
 				}
-				assert.Equal(t, tc.wantPackets, packets)
+				assert.Equal(t, tc.expected, packets)
 			})
 		})
 	}
@@ -155,10 +156,10 @@ func TestDisabledTunConcurrentWriteClose(t *testing.T) {
 	for _, tc := range []struct {
 		name, description          string
 		capacity, writers, closers int
-		wantWriteError             error
+		expected                   error // final read once writers and closers finish
 	}{
-		{"unbuffered", "writers and closers finish without a receiver", 0, 4, 4, nil},
-		{"buffered", "writers cannot send on the channel while it closes", 1, 8, 8, nil},
+		{name: "unbuffered", description: "writers and closers finish without a receiver", capacity: 0, writers: 4, closers: 4, expected: io.EOF},
+		{name: "buffered", description: "writers cannot send on the channel while it closes", capacity: 1, writers: 8, closers: 8, expected: io.EOF},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Log(tc.description)
@@ -194,8 +195,14 @@ func TestDisabledTunConcurrentWriteClose(t *testing.T) {
 				}
 				close(results)
 				for err := range results {
-					assert.ErrorIs(t, err, tc.wantWriteError)
+					require.NoError(t, err)
 				}
+				buf := make([]byte, len(packet))
+				var err error
+				for err == nil {
+					_, err = device.Read(buf)
+				}
+				assert.ErrorIs(t, err, tc.expected)
 			}
 		})
 	}
@@ -203,11 +210,12 @@ func TestDisabledTunConcurrentWriteClose(t *testing.T) {
 
 func TestDisabledTunQueueOwnership(t *testing.T) {
 	for _, tc := range []struct {
-		name, description   string
-		queues, wantReplies int
+		name, description string
+		queues            int
+		expected          int // replies read through a wrapper
 	}{
-		{"single", "closing a queue wrapper leaves its device usable", 1, 1},
-		{"shared", "closing all wrappers leaves the shared device usable", 4, 1},
+		{name: "single", description: "closing a queue wrapper leaves its device usable", queues: 1, expected: 1},
+		{name: "shared", description: "closing all wrappers leaves the shared device usable", queues: 4, expected: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Log(tc.description)
@@ -224,7 +232,7 @@ func TestDisabledTunQueueOwnership(t *testing.T) {
 			assert.Equal(t, len(packet), n)
 			packets, err := queues[tc.queues-1].Read()
 			require.NoError(t, err)
-			require.Len(t, packets, tc.wantReplies)
+			require.Len(t, packets, tc.expected)
 			assert.Equal(t, byte(0), packets[0].Bytes[20])
 		})
 	}
