@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -711,8 +710,6 @@ func TestStatsServer_buildRuntime_AppliesDefaultTimeouts(t *testing.T) {
 				"%s must be set to its default constant", tc.name)
 		})
 	}
-	assert.Equal(t, defaultStatsHandlerTimeout, cfg.prom.handlerTimeout,
-		"cfg.prom.handlerTimeout must default to defaultStatsHandlerTimeout")
 }
 
 // TestLoadStatsConfig_PromTimeouts_Overrides asserts that each
@@ -734,7 +731,6 @@ func TestLoadStatsConfig_PromTimeouts_Overrides(t *testing.T) {
 				readTimeout:       defaultStatsReadTimeout,
 				writeTimeout:      defaultStatsWriteTimeout,
 				idleTimeout:       defaultStatsIdleTimeout,
-				handlerTimeout:    defaultStatsHandlerTimeout,
 			},
 		},
 		{
@@ -745,7 +741,6 @@ func TestLoadStatsConfig_PromTimeouts_Overrides(t *testing.T) {
 				readTimeout:       7 * time.Second,
 				writeTimeout:      defaultStatsWriteTimeout,
 				idleTimeout:       defaultStatsIdleTimeout,
-				handlerTimeout:    defaultStatsHandlerTimeout,
 			},
 		},
 		{
@@ -756,7 +751,6 @@ func TestLoadStatsConfig_PromTimeouts_Overrides(t *testing.T) {
 				readTimeout:       defaultStatsReadTimeout,
 				writeTimeout:      45 * time.Second,
 				idleTimeout:       defaultStatsIdleTimeout,
-				handlerTimeout:    defaultStatsHandlerTimeout,
 			},
 		},
 		{
@@ -767,41 +761,37 @@ func TestLoadStatsConfig_PromTimeouts_Overrides(t *testing.T) {
 				readTimeout:       defaultStatsReadTimeout,
 				writeTimeout:      defaultStatsWriteTimeout,
 				idleTimeout:       200 * time.Second,
-				handlerTimeout:    defaultStatsHandlerTimeout,
 			},
 		},
 		{
-			name:     "handler_timeout zero disables the wrap",
-			override: map[string]any{"handler_timeout": "0s"},
-			want: promConfig{
-				readHeaderTimeout: defaultStatsReadHeaderTimeout,
-				readTimeout:       defaultStatsReadTimeout,
-				writeTimeout:      defaultStatsWriteTimeout,
-				idleTimeout:       defaultStatsIdleTimeout,
-				handlerTimeout:    0,
-			},
-		},
-		{
-			name: "all five overridden together",
+			name: "all four overridden together",
 			override: map[string]any{
 				"read_header_timeout": "1s",
 				"read_timeout":        "2s",
 				"write_timeout":       "3s",
 				"idle_timeout":        "4s",
-				"handler_timeout":     "5s",
 			},
 			want: promConfig{
 				readHeaderTimeout: 1 * time.Second,
 				readTimeout:       2 * time.Second,
 				writeTimeout:      3 * time.Second,
 				idleTimeout:       4 * time.Second,
-				handlerTimeout:    5 * time.Second,
 			},
+		},
+		{
+			name: "explicit zeros are preserved",
+			override: map[string]any{
+				"read_header_timeout": "0s",
+				"read_timeout":        "0s",
+				"write_timeout":       "0s",
+				"idle_timeout":        "0s",
+			},
+			want: promConfig{},
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, c := newTestStatsServer(t)
+			s, c := newTestStatsServer(t)
 			base := map[string]any{
 				"type":     "prometheus",
 				"interval": "1s",
@@ -819,23 +809,26 @@ func TestLoadStatsConfig_PromTimeouts_Overrides(t *testing.T) {
 			assert.Equal(t, tc.want.readTimeout, cfg.prom.readTimeout, "readTimeout")
 			assert.Equal(t, tc.want.writeTimeout, cfg.prom.writeTimeout, "writeTimeout")
 			assert.Equal(t, tc.want.idleTimeout, cfg.prom.idleTimeout, "idleTimeout")
-			assert.Equal(t, tc.want.handlerTimeout, cfg.prom.handlerTimeout, "handlerTimeout")
+
+			_, server := s.buildRuntime(t.Context(), cfg)
+			require.NotNil(t, server)
+			assert.Equal(t, tc.want.readHeaderTimeout, server.ReadHeaderTimeout)
+			assert.Equal(t, tc.want.readTimeout, server.ReadTimeout)
+			assert.Equal(t, tc.want.writeTimeout, server.WriteTimeout)
+			assert.Equal(t, tc.want.idleTimeout, server.IdleTimeout)
 		})
 	}
 }
 
 // TestLoadStatsConfig_PromTimeouts_NegativeRejected verifies that a
-// negative duration on any of the five timeout keys is rejected at
-// config-load time. A negative net/http timeout silently breaks the
-// server in non-obvious ways (zero would be the safer "no limit"
-// interpretation), so we reject rather than silently substitute.
+// negative duration on any of the four timeout keys is rejected at
+// config-load time with an error naming the key.
 func TestLoadStatsConfig_PromTimeouts_NegativeRejected(t *testing.T) {
 	tests := []string{
 		"read_header_timeout",
 		"read_timeout",
 		"write_timeout",
 		"idle_timeout",
-		"handler_timeout",
 	}
 	for _, key := range tests {
 		t.Run(key, func(t *testing.T) {
@@ -865,83 +858,6 @@ func TestStatsTimeoutDefaults_AreConsistent(t *testing.T) {
 	require.GreaterOrEqual(t,
 		defaultStatsReadTimeout, defaultStatsReadHeaderTimeout,
 		"defaultStatsReadTimeout must be >= defaultStatsReadHeaderTimeout")
-}
-
-// TestWrapPromHandler_ZeroTimeoutPassesThrough asserts that the wrap
-// is truly a noop when handlerTimeout is 0 - the returned handler is
-// the same function value as the input, so a future edit that
-// accidentally wraps with a zero timeout is caught.
-func TestWrapPromHandler_ZeroTimeoutPassesThrough(t *testing.T) {
-	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	innerPC := reflect.ValueOf(inner).Pointer()
-
-	got := wrapPromHandler(inner, 0)
-	gotFn, ok := got.(http.HandlerFunc)
-	require.True(t, ok, "wrapPromHandler with handlerTimeout=0 must return the input handler type")
-	require.Equal(t, innerPC, reflect.ValueOf(gotFn).Pointer(),
-		"wrapPromHandler must return its input unchanged when handlerTimeout is 0")
-
-	gotNeg := wrapPromHandler(inner, -1*time.Second)
-	gotNegFn, ok := gotNeg.(http.HandlerFunc)
-	require.True(t, ok, "wrapPromHandler with negative handlerTimeout must return the input handler type")
-	require.Equal(t, innerPC, reflect.ValueOf(gotNegFn).Pointer(),
-		"wrapPromHandler must return its input unchanged when handlerTimeout is negative")
-}
-
-// TestWrapPromHandler_FiresOn503 asserts the integration: a real
-// httptest listener, a deliberately slow handler, GET via the standard
-// HTTP client, and a 503 + the canned timeout body. Gated by
-// testing.Short because it sleeps ~150ms total.
-func TestWrapPromHandler_FiresOn503(t *testing.T) {
-	if testing.Short() {
-		t.Skip("integration: real listener + 150ms wait for timeout handler to fire")
-	}
-	slow := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Sleep well past the handlerTimeout to guarantee the wrap fires.
-		time.Sleep(200 * time.Millisecond)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("would-have-been-the-real-body"))
-	})
-	wrapped := wrapPromHandler(slow, 50*time.Millisecond)
-	srv := httptest.NewServer(wrapped)
-	defer srv.Close()
-
-	resp, err := http.Get(srv.URL)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
-		"a slow handler must surface as 503 via TimeoutHandler")
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	assert.Contains(t, string(body), promScrapeTimeoutBody,
-		"the canned timeout body must reach the client")
-	assert.NotContains(t, string(body), "would-have-been-the-real-body",
-		"the slow handler's body must NOT leak through the wrap")
-}
-
-// TestWrapPromHandler_NoWrap_ResponseFlowsThrough asserts that when
-// handlerTimeout is 0 the real response body reaches the client even
-// when the handler is slightly slow. Cheap (no sleep needed) and proves
-// the conditional in wrapPromHandler did the right thing end-to-end.
-func TestWrapPromHandler_NoWrap_ResponseFlowsThrough(t *testing.T) {
-	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("real-body"))
-	})
-	wrapped := wrapPromHandler(inner, 0)
-	srv := httptest.NewServer(wrapped)
-	defer srv.Close()
-
-	resp, err := http.Get(srv.URL)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	assert.Equal(t, "real-body", string(body),
-		"with handlerTimeout=0 the real response body must reach the client")
 }
 
 // TestStatsServer_Slowloris_ReadHeaderTimeout proves the slowloris
@@ -994,6 +910,6 @@ func TestStatsServer_Slowloris_ReadHeaderTimeout(t *testing.T) {
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(1*time.Second)))
 	buf := make([]byte, 1)
 	_, readErr := conn.Read(buf)
-	require.Error(t, readErr,
+	require.ErrorIs(t, readErr, io.EOF,
 		"server must close the partial-header connection within ReadHeaderTimeout")
 }

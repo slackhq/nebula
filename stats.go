@@ -45,12 +45,6 @@ const (
 	// server closes the connection. Sized to span ~8 scrapes at a 15s
 	// interval so a steady scrape cadence reuses one TCP/TLS handshake.
 	defaultStatsIdleTimeout = 120 * time.Second
-
-	// defaultStatsHandlerTimeout bounds a single Prometheus scrape via
-	// http.TimeoutHandler so a slow registry surfaces as a clean 503
-	// rather than an abrupt connection close. A zero config value
-	// disables the wrap entirely.
-	defaultStatsHandlerTimeout = 30 * time.Second
 )
 
 // statsServer owns nebula's stats subsystem: the periodic metric capture
@@ -112,16 +106,13 @@ type promConfig struct {
 	subsystem string
 
 	// HTTP server timeouts. See the default* constants for the meaning
-	// of each field; zero means "no limit" per net/http semantics, but
-	// loadStatsConfig substitutes the default when a key is absent.
+	// of each field. Zero disables read/write timeouts; header and idle
+	// timeouts fall back to readTimeout when zero. loadStatsConfig uses
+	// the defaults when keys are absent.
 	readHeaderTimeout time.Duration
 	readTimeout       time.Duration
 	writeTimeout      time.Duration
 	idleTimeout       time.Duration
-	// handlerTimeout drives the optional http.TimeoutHandler wrap.
-	// A zero value disables the wrap; non-zero installs it with this
-	// budget.
-	handlerTimeout time.Duration
 }
 
 // newStatsServerFromConfig builds a statsServer, applies the initial config,
@@ -370,8 +361,7 @@ func (s *statsServer) buildRuntime(ctx context.Context, cfg statsConfig) ([]func
 		// so bridge our slog.Logger back to a *log.Logger that emits at Error.
 		errLog := slog.NewLogLogger(s.l.Handler(), slog.LevelError)
 		mux := http.NewServeMux()
-		prom := promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: errLog})
-		mux.Handle(cfg.prom.path, wrapPromHandler(prom, cfg.prom.handlerTimeout))
+		mux.Handle(cfg.prom.path, promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: errLog}))
 		return captureFns, &http.Server{
 			Addr:              cfg.prom.listen,
 			Handler:           mux,
@@ -382,20 +372,6 @@ func (s *statsServer) buildRuntime(ctx context.Context, cfg statsConfig) ([]func
 		}
 	}
 	return captureFns, nil
-}
-
-// promScrapeTimeoutBody is the response body http.TimeoutHandler emits
-// when a prometheus scrape exceeds its handlerTimeout budget.
-const promScrapeTimeoutBody = "prometheus scrape timeout"
-
-// wrapPromHandler conditionally wraps h with http.TimeoutHandler. A
-// non-positive handlerTimeout returns h unchanged so the wrap can be
-// disabled by configuring stats.handler_timeout: 0.
-func wrapPromHandler(h http.Handler, handlerTimeout time.Duration) http.Handler {
-	if handlerTimeout <= 0 {
-		return h
-	}
-	return http.TimeoutHandler(h, handlerTimeout, promScrapeTimeoutBody)
 }
 
 // captureStatsLoop runs each fn on every tick of d until ctx is cancelled, then
@@ -457,7 +433,6 @@ func loadStatsConfig(c *config.C) (statsConfig, error) {
 		cfg.prom.readTimeout = c.GetDuration("stats.read_timeout", defaultStatsReadTimeout)
 		cfg.prom.writeTimeout = c.GetDuration("stats.write_timeout", defaultStatsWriteTimeout)
 		cfg.prom.idleTimeout = c.GetDuration("stats.idle_timeout", defaultStatsIdleTimeout)
-		cfg.prom.handlerTimeout = c.GetDuration("stats.handler_timeout", defaultStatsHandlerTimeout)
 		for _, e := range []struct {
 			key string
 			v   time.Duration
@@ -466,7 +441,6 @@ func loadStatsConfig(c *config.C) (statsConfig, error) {
 			{"stats.read_timeout", cfg.prom.readTimeout},
 			{"stats.write_timeout", cfg.prom.writeTimeout},
 			{"stats.idle_timeout", cfg.prom.idleTimeout},
-			{"stats.handler_timeout", cfg.prom.handlerTimeout},
 		} {
 			if e.v < 0 {
 				return cfg, fmt.Errorf("%s must be >= 0, got %s", e.key, e.v)
