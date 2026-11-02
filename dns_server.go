@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/slackhq/nebula/cert"
 	"github.com/rcrowley/go-metrics"
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 )
 

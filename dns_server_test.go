@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -747,25 +749,105 @@ func TestDNSWriteWarnLimiter(t *testing.T) {
 	}
 }
 
-func TestDnsServer_HandleDnsRequest_WriteMsgFailure_LogsAndMeters(t *testing.T) {
-	var logBuf bytes.Buffer
-	l := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	counter := metrics.NewCounter()
-	ds := &dnsServer{
-		l:                   l,
-		dnsMap4:             make(map[string]netip.Addr),
-		dnsMap6:             make(map[string]netip.Addr),
-		hostMap:             &HostMap{},
-		metricWriteFailures: counter,
-		warnLimiter:         newDNSWriteWarnLimiter(dnsWriteWarnLogWindow),
+func TestDnsServer_HandleDnsRequest_WriteOutcome(t *testing.T) {
+	tests := []struct {
+		description  string
+		writer       dns.ResponseWriter
+		calls        int
+		wantFailures int64
+		wantWarn     bool
+	}{
+		{"no requests", stubDNSWriter{}, 0, 0, false},
+		{"successful response", stubDNSWriter{}, 1, 0, false},
+		{"failed response", failingDNSWriter{}, 1, 1, true},
+		{"repeated failures are all counted", failingDNSWriter{}, 3, 3, true},
 	}
-	ds.enabled.Store(true)
+	for _, tt := range tests {
+		t.Run(tt.description, func(t *testing.T) {
+			var logBuf bytes.Buffer
+			counter := metrics.NewCounter()
+			ds := &dnsServer{
+				l:       slog.New(slog.NewTextHandler(&logBuf, nil)),
+				dnsMap4: make(map[string]netip.Addr), dnsMap6: make(map[string]netip.Addr),
+				hostMap: &HostMap{}, metricWriteFailures: counter,
+				warnLimiter: newDNSWriteWarnLimiter(dnsWriteWarnLogWindow),
+			}
+			ds.enabled.Store(true)
+			q := new(dns.Msg)
+			q.SetQuestion("example.test.", dns.TypeA)
+			for range tt.calls {
+				ds.handleDnsRequest(tt.writer, q)
+			}
+			assert.Equal(t, tt.wantFailures, counter.Count())
+			if tt.wantWarn {
+				assert.Contains(t, logBuf.String(), "dns: failed to write response")
+			} else {
+				assert.Empty(t, logBuf.String())
+			}
+		})
+	}
+}
 
-	q := new(dns.Msg)
-	q.SetQuestion("example.test.", dns.TypeA)
+func TestDNSWriteWarnLimiterConcurrent(t *testing.T) {
+	for _, tt := range []struct {
+		description                string
+		workers                    int
+		wantLogged, wantSuppressed int64
+	}{
+		{"single caller", 1, 1, 0},
+		{"two simultaneous callers", 2, 1, 1},
+		{"burst of simultaneous callers", 64, 1, 63},
+	} {
+		t.Run(tt.description, func(t *testing.T) {
+			lim := newDNSWriteWarnLimiter(time.Second)
+			var logged atomic.Int64
+			var reported atomic.Int64
+			var wg sync.WaitGroup
+			start := make(chan struct{})
+			for range tt.workers {
+				wg.Go(func() {
+					<-start
+					if ok, count := lim.shouldLog(0); ok {
+						reported.Add(count)
+						logged.Add(1)
+					}
+				})
+			}
+			close(start)
+			wg.Wait()
+			assert.Equal(t, tt.wantLogged, logged.Load())
+			ok, suppressed := lim.shouldLog(int64(time.Second))
+			assert.True(t, ok)
+			// A suppressed caller may finish before the winning caller swaps the counter.
+			assert.Equal(t, tt.wantSuppressed, reported.Load()+suppressed)
+			assert.Zero(t, lim.suppressed.Load())
+		})
+	}
+}
 
-	ds.handleDnsRequest(failingDNSWriter{}, q)
-
-	assert.Equal(t, int64(1), counter.Count())
-	assert.Contains(t, logBuf.String(), "dns: failed to write response")
+func BenchmarkDNSWriteWarnLimiter(b *testing.B) {
+	b.Run("suppressed", func(b *testing.B) {
+		lim := newDNSWriteWarnLimiter(time.Second)
+		lim.shouldLog(0)
+		for b.Loop() {
+			lim.shouldLog(0)
+		}
+	})
+	b.Run("new_window", func(b *testing.B) {
+		lim := newDNSWriteWarnLimiter(time.Second)
+		now := int64(0)
+		for b.Loop() {
+			lim.shouldLog(now)
+			now += int64(time.Second)
+		}
+	})
+	b.Run("parallel_suppressed", func(b *testing.B) {
+		lim := newDNSWriteWarnLimiter(time.Second)
+		lim.shouldLog(0)
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				lim.shouldLog(0)
+			}
+		})
+	})
 }
