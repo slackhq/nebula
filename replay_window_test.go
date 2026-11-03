@@ -106,6 +106,48 @@ func TestGrowReplayWindow(t *testing.T) {
 		assert.Equal(t, uint64(1<<16), recv.window.length)
 	})
 
+	t.Run("replays stay rejected across a grow", func(t *testing.T) {
+		send, recv := setup(t, 1<<16)
+		pkts := map[uint64][]byte{}
+		seal := func(c uint64) []byte {
+			pkts[c] = sealAt(t, send, c, byte(c))
+			return append([]byte(nil), pkts[c]...)
+		}
+		replay := func(c uint64) []byte { return append([]byte(nil), pkts[c]...) }
+
+		require.NoError(t, decrypt(recv, 12000, seal(12000)))
+		require.NoError(t, decrypt(recv, 20000, seal(20000)))
+		assert.ErrorIs(t, decrypt(recv, 10000, seal(10000)), ErrAlreadySeen)
+		require.Equal(t, uint64(4*ReplayWindow), recv.window.length)
+
+		// The packet that grew the window was dropped, and resending it is still a replay
+		assert.ErrorIs(t, decrypt(recv, 10000, replay(10000)), ErrAlreadySeen)
+		// Packets accepted before the grow are still seen
+		assert.ErrorIs(t, decrypt(recv, 12000, replay(12000)), ErrAlreadySeen)
+		assert.ErrorIs(t, decrypt(recv, 20000, replay(20000)), ErrAlreadySeen)
+	})
+
+	t.Run("replays can't grow it past the max", func(t *testing.T) {
+		send, recv := setup(t, 1<<16)
+		var old [][]byte
+		var olds []uint64
+		for c := uint64(1000); c <= 300000; c += 1000 {
+			pkt := sealAt(t, send, c, byte(c))
+			old = append(old, pkt)
+			olds = append(olds, c)
+			_ = decrypt(recv, c, append([]byte(nil), pkt...))
+		}
+		// Replay every authentic packet seen so far, over and over, from every distance
+		for range 3 {
+			for i, pkt := range old {
+				assert.ErrorIs(t, decrypt(recv, olds[i], append([]byte(nil), pkt...)), ErrAlreadySeen)
+				assert.LessOrEqual(t, recv.window.length, uint64(1<<16))
+			}
+		}
+		// Authentic replays from 1-4 windows behind do grow it, only up to the max
+		assert.Equal(t, uint64(1<<16), recv.window.length)
+	})
+
 	t.Run("forged packets don't grow it", func(t *testing.T) {
 		send, recv := setup(t, 1<<16)
 		require.NoError(t, decrypt(recv, 20000, sealAt(t, send, 20000, 1)))
