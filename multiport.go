@@ -127,3 +127,66 @@ func multiportVia(via ViaSender, mpc config.MultiPortConfig, r *handshake.Result
 	}
 	return via
 }
+
+// multiPortLoader loads tun.multiport at startup and on every reload
+type multiPortLoader struct {
+	l        *slog.Logger
+	settings *multiPortSettings
+	// conn holds the send sockets once tx is first enabled, they are never replaced since the send path uses them
+	// without locking
+	conn *atomic.Pointer[udp.MultiPortConn]
+	open func(l *slog.Logger, base udp.Settings, ports, queues int) (*udp.MultiPortConn, error)
+
+	listen   netip.AddrPort
+	queues   int
+	routines int
+}
+
+func (m *multiPortLoader) load(c *config.C, r *config.Reload) {
+	l := m.l
+	// Build the whole config before storing it, readers load it without locking
+	mpc := config.MultiPortConfig{
+		Rx:           c.GetBool("tun.multiport.rx_enabled", false),
+		ReplayWindow: multiPortReplayWindow(l, c.GetInt("tun.multiport.replay_window", ReplayWindow)),
+	}
+	mpc.ReplayWindowMax = multiPortReplayWindowMax(l,
+		c.GetInt("tun.multiport.replay_window_max", int(max(defaultReplayWindowMax, mpc.ReplayWindow))), mpc.ReplayWindow)
+	if c.GetBool("tun.multiport.parallel_encrypt", true) {
+		mpc.EncryptQueues = m.routines
+	}
+
+	tx := c.GetBool("tun.multiport.tx_enabled", false)
+	txPorts := c.GetInt("tun.multiport.tx_ports", 100)
+
+	mp := m.conn.Load()
+	if tx && mp == nil {
+		var err error
+		mp, err = m.open(l, udp.Settings{Listen: m.listen, Offloads: c.GetBool("listen.udp_offloads", true)}, txPorts, m.queues)
+		if err != nil {
+			// Keep running without multiport tx, but a reload reports it failed. Nil at startup, a no-op there.
+			l.Error("Failed to open udp sockets for tun.multiport.tx_enabled", "error", err)
+			r.Failed()
+			mp = nil
+			tx = false
+		} else {
+			m.conn.Store(mp)
+		}
+	} else if mp != nil && mp.Ports() != txPorts {
+		// The sockets keep the port count they were opened with. A different tx_ports needs a restart, including one
+		// changed by an earlier reload while tx was off.
+		r.RestartRequiredIfChanged("tun.multiport.tx_ports")
+		r.RestartRequired()
+	}
+
+	if tx {
+		mpc.Tx = true
+		mpc.TxBasePort = m.listen.Port()
+		mpc.TxPorts = mp.Ports()
+		mpc.TxHandshake = c.GetBool("tun.multiport.tx_handshake", false)
+		mpc.TxHandshakeDelay = int64(c.GetInt("tun.multiport.tx_handshake_delay", 2))
+		mp.ReloadConfig(c, r)
+	}
+	m.settings.Store(mpc)
+
+	l.Info("Multiport configured", "multiPort", mpc)
+}

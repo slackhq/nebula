@@ -347,57 +347,12 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		multiPort := &multiPortSettings{}
 		ifce.multiPort = multiPort
 		handshakeManager.multiPort = multiPort
-
-		loadMultiPortConfig := func(c *config.C, r *config.Reload) {
-			// Build the whole config before storing it, readers load it without locking
-			mpc := config.MultiPortConfig{
-				Rx:           c.GetBool("tun.multiport.rx_enabled", false),
-				ReplayWindow: multiPortReplayWindow(l, c.GetInt("tun.multiport.replay_window", ReplayWindow)),
-			}
-			mpc.ReplayWindowMax = multiPortReplayWindowMax(l, c.GetInt("tun.multiport.replay_window_max", defaultReplayWindowMax), mpc.ReplayWindow)
-			if c.GetBool("tun.multiport.parallel_encrypt", true) {
-				mpc.EncryptQueues = routines
-			}
-
-			tx := c.GetBool("tun.multiport.tx_enabled", false)
-			txPorts := c.GetInt("tun.multiport.tx_ports", 100)
-
-			// The send sockets are opened once and never replaced, since the send path uses them without locking
-			mp := ifce.udpMulti.Load()
-			if tx && mp == nil {
-				var mpErr error
-				mp, mpErr = udp.NewMultiPortConn(l, udp.Settings{
-					Listen:   netip.AddrPortFrom(listenHost, uint16(port)),
-					Offloads: c.GetBool("listen.udp_offloads", true),
-				}, txPorts, len(udpConns))
-				if mpErr != nil {
-					// Keep running without multiport tx, but a reload reports it failed. Nil at startup, a no-op there.
-					l.Error("Failed to open udp sockets for tun.multiport.tx_enabled", "error", mpErr)
-					r.Failed()
-					mp = nil
-					tx = false
-				} else {
-					ifce.udpMulti.Store(mp)
-				}
-			} else if tx && mp.Ports() != txPorts {
-				r.RestartRequiredIfChanged("tun.multiport.tx_ports")
-			}
-
-			if tx {
-				mpc.Tx = true
-				mpc.TxBasePort = uint16(port)
-				mpc.TxPorts = mp.Ports()
-				mpc.TxHandshake = c.GetBool("tun.multiport.tx_handshake", false)
-				mpc.TxHandshakeDelay = int64(c.GetInt("tun.multiport.tx_handshake_delay", 2))
-				mp.ReloadConfig(c, r)
-			}
-			multiPort.Store(mpc)
-
-			l.Info("Multiport configured", "multiPort", mpc)
+		mpLoader := &multiPortLoader{
+			l: l, settings: multiPort, conn: &ifce.udpMulti, open: udp.NewMultiPortConn,
+			listen: netip.AddrPortFrom(listenHost, uint16(port)), queues: len(udpConns), routines: routines,
 		}
-
-		loadMultiPortConfig(c, nil)
-		c.RegisterReloadCallback(loadMultiPortConfig)
+		mpLoader.load(c, nil)
+		c.RegisterReloadCallback(mpLoader.load)
 
 		ifce.RegisterConfigChangeCallbacks(c)
 		// These are only read at startup
