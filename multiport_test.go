@@ -161,3 +161,39 @@ func TestMultiPortLoaderTxPortsRestart(t *testing.T) {
 	assert.True(t, res.RestartRequired)
 	assert.Equal(t, 3, m.settings.Load().TxPorts)
 }
+
+func TestHandleHostRoamingMultiport(t *testing.T) {
+	newRoamer := func(multiportRx bool, remote netip.AddrPort) (*Interface, *HostInfo) {
+		lh := &LightHouse{}
+		lh.remoteAllowList.Store(&RemoteAllowList{})
+		vpnAddrs := []netip.Addr{netip.MustParseAddr("10.0.0.2")}
+		hi := &HostInfo{vpnAddrs: vpnAddrs, remotes: NewRemoteList(vpnAddrs, nil), multiportRx: multiportRx}
+		hi.SetRemote(remote)
+		return &Interface{l: test.NewLogger(), lightHouse: lh}, hi
+	}
+	base := netip.MustParseAddrPort("1.1.1.1:4242")
+
+	t.Run("another multiport source port on the same ip is not a roam", func(t *testing.T) {
+		f, hi := newRoamer(true, base)
+		f.handleHostRoaming(hi, ViaSender{UdpAddr: netip.MustParseAddrPort("1.1.1.1:4300")})
+		assert.Equal(t, base, hi.GetRemote())
+	})
+
+	t.Run("a new ip roams, keeping the base port", func(t *testing.T) {
+		f, hi := newRoamer(true, base)
+		f.handleHostRoaming(hi, ViaSender{UdpAddr: netip.MustParseAddrPort("2.2.2.2:4300")})
+		assert.Equal(t, netip.MustParseAddrPort("2.2.2.2:4242"), hi.GetRemote())
+	})
+
+	t.Run("without multiport rx a new port roams", func(t *testing.T) {
+		f, hi := newRoamer(false, base)
+		f.handleHostRoaming(hi, ViaSender{UdpAddr: netip.MustParseAddrPort("1.1.1.1:4300")})
+		assert.Equal(t, netip.MustParseAddrPort("1.1.1.1:4300"), hi.GetRemote())
+	})
+
+	t.Run("relayed packets never roam", func(t *testing.T) {
+		f, hi := newRoamer(true, base)
+		f.handleHostRoaming(hi, ViaSender{IsRelayed: true})
+		assert.Equal(t, base, hi.GetRemote())
+	})
+}
