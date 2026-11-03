@@ -90,9 +90,9 @@ func unmarshalPayloadMultiPortDetails(p *PayloadMultiPortDetails, b []byte) erro
 		b = b[n:]
 
 		// For known field numbers, reject any non-matching wire type as a
-		// hard error rather than silently skipping. The caller will catch
-		// missing-field cases downstream, but a wire-type mismatch on a tag
-		// we know is a peer protocol violation worth flagging here.
+		// hard error rather than silently skipping, it is a peer protocol
+		// violation. A missing field keeps its zero value, which reads as no
+		// rx or tx support, and setMultiport ignores tx with a zero base port.
 		// Repeated occurrences of a singular field follow proto3 last-wins.
 		switch num {
 		case fieldMultiportRxSupported:
