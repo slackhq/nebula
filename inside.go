@@ -448,7 +448,7 @@ func (f *Interface) prepareSendVia(via *HostInfo,
 	nocopy bool,
 	q int,
 ) ([]byte, error) {
-	// NOTE: for goboring AESGCMTLS we need to lock because of the nonce check
+	// lockEncrypter locks when the cipher refuses a nonce that is not strictly increasing (FIPS 140, boringcrypto)
 	key, lock := via.ConnectionState.lockEncrypter(q)
 	c, ok := via.ConnectionState.NextMessageCounter()
 	if !ok {
@@ -552,7 +552,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		out = out[header.Len:header.Len]
 	}
 
-	// NOTE: for goboring AESGCMTLS we need to lock because of the nonce check
+	// lockEncrypter locks when the cipher refuses a nonce that is not strictly increasing (FIPS 140, boringcrypto)
 	key, lock := ci.lockEncrypter(q)
 	c, ok := ci.NextMessageCounter()
 	if !ok {

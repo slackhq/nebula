@@ -431,9 +431,9 @@ tun:
   # Some example issues this could work around:
   #  - UDP rate limits on a per flow basis.
   #  - Partial underlay network failure in which some flows work and some don't
-  # Agreement is done during the handshake to decide if multiport mode will
-  # be used for a given tunnel (one side must have tx_enabled set, the other
-  # side must have rx_enabled set)
+  # Agreement is done during the handshake, for each direction of a tunnel on
+  # its own: a host sends multiport to a peer when it has tx_enabled and the
+  # peer has rx_enabled.
   #
   # NOTE: you cannot use multiport on a host if you are relying on UDP hole
   # punching to get through a NAT or firewall.
@@ -446,7 +446,7 @@ tun:
   #
   # The default values are listed below:
   #multiport:
-    # This host support sending via multiple UDP ports.
+    # This host supports sending via multiple UDP ports.
     #tx_enabled: false
     #
     # This host supports receiving packets sent from multiple UDP ports.
@@ -463,11 +463,11 @@ tun:
     #
     # If handshakes are not getting a response, attempt to transmit handshakes
     # using random UDP source ports (to get around partial underlay network
-    # failures).
+    # failures). Needs tx_enabled.
     #tx_handshake: false
     #
     # How many unresponded handshakes we should send before we attempt to
-    # send multiport handshakes.
+    # send multiport handshakes. Needs tx_handshake.
     #tx_handshake_delay: 2
     #
     # Replay window, in packets, every tunnel on this host starts with,
@@ -484,16 +484,18 @@ tun:
     # window 4x, up to this, so later packets that late are accepted
     # (network.replay_window.grown). That packet itself is still dropped.
     # 65536 covered 8 routines at ~24 Gbps in testing. Set it to replay_window
-    # to never grow. A power of two from replay_window to 1048576.
+    # to never grow. A power of two from replay_window to 1048576, defaults to
+    # 65536 or replay_window if that's larger.
     #replay_window_max: 65536
     #
-    # Only affects FIPS 140 and boringcrypto builds, where AES-GCM refuses a
-    # nonce that is not strictly increasing, so encryption for a tunnel is
-    # serialized by a lock. Multiport spreads a tunnel's traffic over every
-    # routine, which then all wait on that one lock. When true, a tunnel whose
-    # lock is contended (64 times within 100ms) gets one AES-GCM instance per
-    # routine under the same send key, each with its own lock and its own
-    # strictly increasing slice of the tunnel's counter. That costs ~1.5KB per
+    # Only affects FIPS 140 and boringcrypto builds with more than one routine,
+    # where AES-GCM refuses a nonce that is not strictly increasing, so
+    # encryption for a tunnel is serialized by a lock. Multiport spreads a
+    # tunnel's traffic over every routine, which then all wait on that one
+    # lock. When true, any tunnel, multiport or not, whose lock is contended
+    # (64 times within 100ms) gets one AES-GCM instance per routine under the
+    # same send key, each with its own lock and its own strictly increasing
+    # subset of the tunnel's counter (the routines take interleaved counters). That costs ~1.5KB per
     # routine, only for busy tunnels, idle ones keep their one cipher. Confirm
     # this meets your FIPS 140 requirements, the module can no longer guarantee
     # nonce uniqueness across the instances on its own. Applies to tunnels
