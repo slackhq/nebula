@@ -371,7 +371,9 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 					Offloads: c.GetBool("listen.udp_offloads", true),
 				}, txPorts, len(udpConns))
 				if mpErr != nil {
+					// Keep running without multiport tx, but a reload reports it failed. Nil at startup, a no-op there.
 					l.Error("Failed to open udp sockets for tun.multiport.tx_enabled", "error", mpErr)
+					r.Failed()
 					mp = nil
 					tx = false
 				} else {
