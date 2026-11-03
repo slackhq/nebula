@@ -522,21 +522,29 @@ func Test_IPv6FindUpperProtocol(t *testing.T) {
 	dst := net.ParseIP("fd00::2")
 
 	// 8 byte extension/transport stand-ins, first byte is the next header, second is the length field
-	extToTCP := []byte{6, 0, 0, 0, 0, 0, 0, 0}        // len 0 -> 8 bytes, next = TCP
-	extToUDP := []byte{17, 0, 0, 0, 0, 0, 0, 0}       // len 0 -> 8 bytes, next = UDP
-	extToRouting := []byte{43, 0, 0, 0, 0, 0, 0, 0}   // len 0 -> 8 bytes, next = Routing
-	ahToUDP := []byte{17, 0, 0, 0, 0, 0, 0, 0}        // AH len 0 -> (0+2)<<2 = 8 bytes, next = UDP
-	firstFragToUDP := []byte{17, 0, 0, 1, 0, 0, 0, 1} // frag offset 0, M=1, next = UDP
-	nonFirstFrag := []byte{17, 0, 0, 9, 0, 0, 0, 1}   // frag offset non-zero, next = UDP
-	transport := []byte{0, 80, 1, 187, 0, 0, 0, 0}    // stand-in bytes, IPv6FindUpperProtocol never reads ports
-	extToHbH := []byte{0, 0, 0, 0, 0, 0, 0, 0}        // len 0 -> 8 bytes, next = Hop-by-Hop
+	extToTCP := []byte{6, 0, 0, 0, 0, 0, 0, 0}           // len 0 -> 8 bytes, next = TCP
+	extToUDP := []byte{17, 0, 0, 0, 0, 0, 0, 0}          // len 0 -> 8 bytes, next = UDP
+	extToRouting := []byte{43, 0, 0, 0, 0, 0, 0, 0}      // len 0 -> 8 bytes, next = Routing
+	ahToUDP := []byte{17, 0, 0, 0, 0, 0, 0, 0}           // AH len 0 -> (0+2)<<2 = 8 bytes, next = UDP
+	firstFragToUDP := []byte{17, 0, 0, 1, 0, 0, 0, 1}    // frag offset 0, M=1, next = UDP
+	nonFirstFrag := []byte{17, 0, 0, 9, 0, 0, 0, 1}      // frag offset non-zero, next = UDP
+	transport := []byte{0, 80, 1, 187, 0, 0, 0, 0}       // stand-in bytes, IPv6FindUpperProtocol never reads ports
+	extToHbH := []byte{0, 0, 0, 0, 0, 0, 0, 0}           // len 0 -> 8 bytes, next = Hop-by-Hop
+	extToDst := []byte{60, 0, 0, 0, 0, 0, 0, 0}          // len 0 -> 8 bytes, next = Destination
+	extToFrag := []byte{44, 0, 0, 0, 0, 0, 0, 0}         // len 0 -> 8 bytes, next = Fragment
+	firstFragToDst := []byte{60, 0, 0, 1, 0, 0, 0, 1}    // frag offset 0, M=1, next = Destination
+	firstFragToAH := []byte{51, 0, 0, 1, 0, 0, 0, 1}     // frag offset 0, M=1, next = AH
+	firstFragToFrag := []byte{44, 0, 0, 1, 0, 0, 0, 1}   // frag offset 0, M=1, next = Fragment
+	firstFragToESP := []byte{50, 0, 0, 1, 0, 0, 0, 1}    // frag offset 0, M=1, next = ESP
+	atomicFragToDst := []byte{60, 0, 0, 0, 0, 0, 0, 1}   // frag offset 0, M=0, next = Destination
+	nonFirstFragToDst := []byte{60, 0, 0, 9, 0, 0, 0, 1} // frag offset non-zero, next = Destination
 
 	// 8 walked headers spend the budget before the 9th slot's terminal is ever classified. This is the
 	// report 4040546 shape: without failing closed the walk hands back offset 104, and a caller reads ports
-	// from the attacker's bytes there.
+	// from the attacker's bytes there. Destination is the header that may legally repeat.
 	var budgetChain []byte
 	for range 7 {
-		budgetChain = append(budgetChain, extToHbH...)
+		budgetChain = append(budgetChain, extToDst...)
 	}
 	budgetChain = append(budgetChain, extToTCP...)
 	budgetChain = append(budgetChain, transport...)
@@ -559,11 +567,20 @@ func Test_IPv6FindUpperProtocol(t *testing.T) {
 		{"ah then udp", 51, append(ahToUDP, transport...), 17, ipv6.HeaderLen + 8, false, false, nil},
 		{"first fragment walks to transport", 44, append(firstFragToUDP, transport...), 17, ipv6.HeaderLen + 8, false, true, nil},
 		{"non-first fragment stops", 44, append(nonFirstFrag, transport...), 17, ipv6.HeaderLen, true, true, nil},
+		{"non-first fragment reports its claimed protocol", 44, append(nonFirstFragToDst, transport...), 60, ipv6.HeaderLen, true, true, nil},
+		{"routing then first fragment", 43, append(append(extToFrag, firstFragToUDP...), transport...), 17, ipv6.HeaderLen + 16, false, true, nil},
+		{"first fragment of a non-transport protocol is terminal", 44, append(firstFragToESP, transport...), 50, ipv6.HeaderLen + 8, false, true, nil},
+		{"destination after first fragment", 44, append(append(firstFragToDst, extToTCP...), transport...), 0, 0, false, false, ErrIPv6ExtensionHeaderAfterFragment},
+		{"ah after first fragment", 44, append(append(firstFragToAH, ahToUDP...), transport...), 0, 0, false, false, ErrIPv6ExtensionHeaderAfterFragment},
+		{"fragment after first fragment", 44, append(append(firstFragToFrag, nonFirstFrag...), transport...), 0, 0, false, false, ErrIPv6ExtensionHeaderAfterFragment},
+		{"destination after atomic fragment", 44, append(append(atomicFragToDst, extToTCP...), transport...), 0, 0, false, false, ErrIPv6ExtensionHeaderAfterFragment},
+		{"hop-by-hop after destination", 60, append(append(extToHbH, extToTCP...), transport...), 0, 0, false, false, ErrIPv6HopByHopHeadersMustBeFirst},
+		{"hop-by-hop twice", 0, append(append(extToHbH, extToTCP...), transport...), 0, 0, false, false, ErrIPv6HopByHopHeadersMustBeFirst},
 		{"unknown protocol is terminal", 132, transport, 132, ipv6.HeaderLen, false, false, nil}, // SCTP
 		{"truncated extension header", 0, nil, 0, 0, false, false, ErrIPv6CouldNotFindPayload},
 		// Destination Options with a declared length (255+1)*8 = 2048 that runs past the 48 byte buffer, next = SCTP
 		{"extension length past buffer", 0, []byte{132, 255, 0, 0, 0, 0, 0, 0}, 0, 0, false, false, ErrIPv6CouldNotFindPayload},
-		{"budget exhausted fails closed", 0, budgetChain, 0, 0, false, false, ErrIPv6CouldNotFindPayload},
+		{"budget exhausted fails closed", 60, budgetChain, 0, 0, false, false, ErrIPv6CouldNotFindPayload},
 	}
 
 	for _, tt := range tests {

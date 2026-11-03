@@ -710,6 +710,26 @@ func Test_newPacket_v6ExtHeaderPastBuffer(t *testing.T) {
 	require.ErrorIs(t, newPacket(pkt, true, p), iputil.ErrIPv6CouldNotFindPayload)
 }
 
+// Test_newPacket_v6ExtHeaderAfterFragment rejects a first fragment whose transport header sits behind another extension
+// header. The ports would then start 8 or more bytes into the fragmentable part, where a non-first fragment, filtered
+// only as `port: fragment`, could overlap them on a receiver that splices overlapping fragments.
+func Test_newPacket_v6ExtHeaderAfterFragment(t *testing.T) {
+	p := &firewall.ParsedPacket{}
+
+	pkt := make([]byte, 60)
+	pkt[0] = 0x60                                    // version 6
+	pkt[6] = byte(layers.IPProtocolIPv6Fragment)     // NextHeader -> Fragment
+	pkt[7] = 64                                      // hop limit
+	pkt[40] = byte(layers.IPProtocolIPv6Destination) // Fragment NextHeader -> Destination Options
+	pkt[43] = 0x01                                   // offset 0, M=1: a first fragment
+	pkt[48] = byte(iputil.IPProtocolTCP)             // Destination Options NextHeader -> TCP
+	pkt[49] = 0                                      // HdrExtLen 0 -> 8 bytes, TCP begins at 56
+	binary.BigEndian.PutUint16(pkt[58:60], 443)      // TCP dst port, reachable by a fragment at offset 8
+
+	require.ErrorIs(t, newPacket(pkt, true, p), iputil.ErrIPv6ExtensionHeaderAfterFragment)
+	require.ErrorIs(t, newPacket(pkt, false, p), iputil.ErrIPv6ExtensionHeaderAfterFragment)
+}
+
 // Test_newPacket_v6ExtHeaderConfusion is a regression test for parseV6 walking any unrecognized
 // Next Header as if it were an ipv6 extension header. A real upper layer protocol Nebula doesn't
 // dissect (SCTP here) is not walkable, so applying the (len+1)*8 formula marched into the SCTP
