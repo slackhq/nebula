@@ -2,6 +2,7 @@ package batch
 
 import (
 	"errors"
+	"fmt"
 	"net/netip"
 	"slices"
 )
@@ -102,7 +103,7 @@ func (b *SendBatch) flushPorts() (int, error) {
 		n, err := out.WriteBatch(bufs, dsts)
 		written += n
 		if err != nil {
-			errs = append(errs, err)
+			errs = append(errs, fmt.Errorf("multiport send port %d: %w", port, err))
 		}
 	}
 
