@@ -2,9 +2,15 @@ package handshake
 
 import (
 	"math"
+	"net/netip"
 	"reflect"
 	"testing"
+	"time"
 
+	"github.com/slackhq/nebula/cert"
+	ct "github.com/slackhq/nebula/cert_test"
+	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/header"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -116,6 +122,81 @@ func FuzzPayloadMultiPort(f *testing.F) {
 		if !payloadsEqual(p1, p2) || !reflect.DeepEqual(p1.InitiatorMultiPort, p2.InitiatorMultiPort) ||
 			!reflect.DeepEqual(p1.ResponderMultiPort, p2.ResponderMultiPort) {
 			t.Fatalf("re-marshal not idempotent\nfirst:  %+v\nsecond: %+v", p1, p2)
+		}
+	})
+}
+
+// doMultiportHandshake runs a full IX handshake with each side's multiport config
+func doMultiportHandshake(t *testing.T, initMP, respMP config.MultiPortConfig) (initR, respR *Result) {
+	t.Helper()
+	ca, _, caKey, _ := ct.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	v := testVerifier(ct.NewTestCAPool(ca))
+	initCS := newTestCertState(t, ca, caKey, "initiator", []netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")})
+	respCS := newTestCertState(t, ca, caKey, "responder", []netip.Prefix{netip.MustParsePrefix("10.0.0.2/24")})
+
+	initM, err := NewMachine(initCS.version, initCS.getCredential, v, func() (uint32, error) { return 1000, nil },
+		true, header.HandshakeIXPSK0, initMP)
+	require.NoError(t, err)
+	respM, err := NewMachine(respCS.version, respCS.getCredential, v, func() (uint32, error) { return 2000, nil },
+		false, header.HandshakeIXPSK0, respMP)
+	require.NoError(t, err)
+
+	msg1, err := initM.Initiate(nil)
+	require.NoError(t, err)
+	resp, respR, err := respM.ProcessPacket(nil, msg1)
+	require.NoError(t, err)
+	require.NotNil(t, respR)
+	_, initR, err = initM.ProcessPacket(nil, resp)
+	require.NoError(t, err)
+	require.NotNil(t, initR)
+	return initR, respR
+}
+
+func TestMultiportHandshake(t *testing.T) {
+	t.Run("each side learns the other's", func(t *testing.T) {
+		// Different base ports on each side, a swapped initiator and responder field shows up as the wrong port
+		initR, respR := doMultiportHandshake(t,
+			config.MultiPortConfig{Tx: true, Rx: true, TxBasePort: 4242, TxPorts: 100},
+			config.MultiPortConfig{Tx: true, TxBasePort: 5000, TxPorts: 10},
+		)
+		assert.True(t, respR.MultiportTx)
+		assert.True(t, respR.MultiportRx)
+		assert.Equal(t, uint16(4242), respR.MultiportBasePort)
+
+		assert.True(t, initR.MultiportTx)
+		assert.False(t, initR.MultiportRx)
+		assert.Equal(t, uint16(5000), initR.MultiportBasePort)
+	})
+
+	t.Run("rx only advertises no base port", func(t *testing.T) {
+		initR, respR := doMultiportHandshake(t,
+			config.MultiPortConfig{Rx: true},
+			config.MultiPortConfig{Tx: true, TxBasePort: 5000, TxPorts: 10},
+		)
+		assert.True(t, respR.MultiportRx)
+		assert.False(t, respR.MultiportTx)
+		assert.Zero(t, respR.MultiportBasePort)
+		assert.True(t, initR.MultiportTx)
+		assert.Equal(t, uint16(5000), initR.MultiportBasePort)
+	})
+
+	t.Run("a peer without multiport looks like an old one", func(t *testing.T) {
+		initR, respR := doMultiportHandshake(t,
+			config.MultiPortConfig{},
+			config.MultiPortConfig{Tx: true, Rx: true, TxBasePort: 5000, TxPorts: 10},
+		)
+		assert.False(t, respR.MultiportRx)
+		assert.False(t, respR.MultiportTx)
+		assert.True(t, initR.MultiportRx)
+		assert.True(t, initR.MultiportTx)
+	})
+
+	t.Run("neither side", func(t *testing.T) {
+		initR, respR := doMultiportHandshake(t, config.MultiPortConfig{}, config.MultiPortConfig{})
+		for _, r := range []*Result{initR, respR} {
+			assert.False(t, r.MultiportRx)
+			assert.False(t, r.MultiportTx)
+			assert.Zero(t, r.MultiportBasePort)
 		}
 	})
 }
