@@ -6,8 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -66,7 +68,11 @@ func TestCommandOutput(t *testing.T) {
 	t.Cleanup(func() { control.Stop() })
 
 	srv := localapi.NewServer(test.NewLogger(), control.Commands())
-	path := filepath.Join(test.ShortTempDir(t), "s.sock")
+	// The control socket is a named pipe on windows and a unix socket everywhere else.
+	path := fmt.Sprintf(`\\.\pipe\nebula-output-golden-%d`, os.Getpid())
+	if runtime.GOOS != "windows" {
+		path = filepath.Join(test.ShortTempDir(t), "s.sock")
+	}
 	require.NoError(t, srv.Rebind(context.Background(), path, localapi.OwnerOnly()))
 	t.Cleanup(srv.Stop)
 
