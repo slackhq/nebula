@@ -31,13 +31,13 @@ type Config interface {
 const LevelTrace = slog.Level(-8)
 
 // NewLogger returns a *slog.Logger whose level, format, and timestamp
-// emission can be reconfigured at runtime via ApplyConfig and the SSH debug
-// commands. The default configuration is info-level text output so log
+// emission can be reconfigured at runtime via ApplyConfig and the log-level
+// and log-format commands. The default configuration is info-level text output so log
 // calls made before ApplyConfig runs still produce output. Timestamps
 // follow slog's default RFC3339Nano format; set logging.disable_timestamp
 // in config to suppress them.
 //
-// ApplyConfig and the SSH commands discover the reconfig surface via
+// ApplyConfig and those commands discover the reconfig surface via
 // structural type-assertion on l.Handler(), so replacement implementations
 // (tests, platform-specific sinks) need only implement the subset of
 // {SetLevel(slog.Level), SetFormat(string) error, SetDisableTimestamp(bool)}

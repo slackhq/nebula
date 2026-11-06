@@ -2,17 +2,9 @@ package commands
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 )
-
-// ErrNoTextRendering is returned by Render when a command's Value has no human rendering
-// and text was asked for anyway. A command declares this by leaving Text nil and saying
-// so with JSONOnly; it is not a fallback situation but a statement that no such form
-// exists yet, so nobody builds a script around an interim one. Each surface's default
-// policy avoids ever asking.
-var ErrNoTextRendering = errors.New("no human readable output yet; pass -json or -pretty")
 
 // Format is how a result should be presented.
 type Format int
@@ -57,8 +49,7 @@ const (
 // that declared either would never receive it there.
 var reservedFlags = []string{"h", "help", FlagJSON, FlagPretty, FlagConfig, FlagSocket}
 
-// Render writes r in the requested format. Every surface calls it, so a hostmap looks
-// the same over ssh as it does through the control socket, and a change to either
+// Render writes r in the requested format. Every surface calls it, so a change to a
 // rendering happens once.
 func Render(c *Command, r Result, f Format, w io.Writer) error {
 	switch f {
@@ -80,11 +71,8 @@ func Render(c *Command, r Result, f Format, w io.Writer) error {
 			return c.Text(r.Value, w)
 		}
 
-		name := "this command"
-		if c != nil {
-			name = string(c.Name)
-		}
-		return fmt.Errorf("%s has %w", name, ErrNoTextRendering)
+		// A command without a rendering of its own answers in JSON.
+		return renderJSON(r.Value, w, false)
 	}
 }
 

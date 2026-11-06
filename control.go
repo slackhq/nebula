@@ -51,7 +51,6 @@ type Control struct {
 	commands               *commands.Registry
 	ctx                    context.Context
 	cancel                 context.CancelFunc
-	sshStart               func()
 	statsStart             func()
 	dnsStart               func()
 	hostDNSStart           func()
@@ -100,9 +99,6 @@ func (c *Control) Start() error {
 	}
 
 	// Call all the delayed funcs that waited patiently for the interface to be created.
-	if c.sshStart != nil {
-		go c.sshStart()
-	}
 	if c.statsStart != nil {
 		go c.statsStart()
 	}
@@ -390,9 +386,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	return
 }
 
-// Commands returns the registry the daemon's surfaces serve from. It is the live
-// registry, not a copy: a command registered on it is served to every ssh session that
-// starts afterwards. Clone it to run commands without that reach.
+// Commands returns the registry the daemon's surfaces serve from
 func (c *Control) Commands() *commands.Registry {
 	return c.commands
 }

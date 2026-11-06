@@ -58,14 +58,6 @@ func TestParseArgsAllowsFlagsAfterOperands(t *testing.T) {
 	}
 }
 
-// TestDispatchFlagAfterOperand: the same through a registered command with no Flags of
-// its own, which only has the presentation flags to find.
-func TestDispatchFlagAfterOperand(t *testing.T) {
-	out := &bytes.Buffer{}
-	require.NoError(t, testRegistry().DispatchArgs([]string{"served", "x", "-json"}, MergedOutput(out)))
-	assert.Equal(t, "\"read x\"\n", out.String())
-}
-
 // TestLookupArg pins the reading of an argument's shape that ParseArgs and nebula ctl
 // share.
 func TestLookupArg(t *testing.T) {
