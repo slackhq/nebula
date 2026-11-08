@@ -581,8 +581,7 @@ firewall:
 
   inbound:
     # Allow icmp between any nebula hosts
-    - port: any
-      proto: icmp
+    - proto: icmp
       host: any
 
     # Allow tcp/443 from any host with BOTH laptop and home group
