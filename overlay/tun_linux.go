@@ -42,6 +42,8 @@ type tun struct {
 	routeChan                 chan struct{}
 	useSystemRoutes           bool
 	useSystemRoutesBufferSize int
+	policyRules               []netlink.Rule
+	policyRoutes              []netlink.Route
 
 	// These are routes learned from `tun.use_system_route_table`
 	// stored here to make it easier to restore them after a reload
@@ -292,6 +294,10 @@ func (t *tun) reload(c *config.C, initial bool, r *config.Reload) error {
 		if r.MTU > newMaxMTU {
 			newMaxMTU = r.MTU
 		}
+	}
+
+	if err = t.applyPolicyRules(routes, netlink.RuleAdd, netlink.RuleDel); err != nil {
+		return err
 	}
 
 	t.MaxMTU = newMaxMTU
@@ -551,7 +557,7 @@ func (t *tun) setDefaultRoute(cidr netip.Prefix) error {
 		Scope:     unix.RT_SCOPE_LINK,
 		Src:       net.IP(cidr.Addr().AsSlice()),
 		Protocol:  unix.RTPROT_KERNEL,
-		Table:     unix.RT_TABLE_MAIN,
+		Table:     mainRouteTable,
 		Type:      unix.RTN_UNICAST,
 	}
 	// Match the metric the kernel uses for its auto-installed connected route,
@@ -587,6 +593,14 @@ func (t *tun) setDefaultRoute(cidr netip.Prefix) error {
 }
 
 func (t *tun) addRoutes(logErrors bool, rl *config.Reload) error {
+	if err := t.syncPolicyRoutes(*t.Routes.Load(), netlink.RouteAdd, netlink.RouteDel); err != nil {
+		if !logErrors {
+			return err
+		}
+		t.l.Error("Failed to refresh overlay policy routes", "error", err)
+		rl.Failed()
+	}
+
 	// Path routes
 	routes := *t.Routes.Load()
 	for _, r := range routes {
@@ -605,6 +619,7 @@ func (t *tun) addRoutes(logErrors bool, rl *config.Reload) error {
 			MTU:       r.MTU,
 			AdvMSS:    t.advMSS(r),
 			Scope:     unix.RT_SCOPE_LINK,
+			Table:     r.Table,
 		}
 
 		if r.Metric > 0 {
@@ -628,6 +643,140 @@ func (t *tun) addRoutes(logErrors bool, rl *config.Reload) error {
 	return nil
 }
 
+func (t *tun) syncPolicyRoutes(routes []Route, add, del func(*netlink.Route) error) error {
+	customTables := make(map[int]struct{})
+	for _, r := range routes {
+		if r.Install && r.Table != mainRouteTable {
+			customTables[r.Table] = struct{}{}
+		}
+	}
+	var errs error
+	owned := make([]netlink.Route, 0, len(t.policyRoutes))
+	for _, route := range t.policyRoutes {
+		if _, keep := customTables[route.Table]; !keep {
+			if err := del(&route); err == nil || errors.Is(err, unix.ESRCH) || errors.Is(err, unix.ENOENT) {
+				continue
+			} else {
+				errs = errors.Join(errs, fmt.Errorf("failed to remove overlay route from table %d: %w", route.Table, err))
+			}
+		}
+		owned = append(owned, route)
+	}
+	t.policyRoutes = owned
+	for table := range customTables {
+		for _, network := range t.vpnNetworks {
+			nr := netlink.Route{
+				LinkIndex: t.deviceIndex,
+				Dst:       &net.IPNet{IP: network.Masked().Addr().AsSlice(), Mask: net.CIDRMask(network.Bits(), network.Addr().BitLen())},
+				Scope:     unix.RT_SCOPE_LINK,
+				Table:     table,
+				Protocol:  unix.RTPROT_STATIC,
+			}
+			if err := add(&nr); err != nil {
+				if !errors.Is(err, unix.EEXIST) {
+					errs = errors.Join(errs, fmt.Errorf("failed to add overlay route to table %d: %w", table, err))
+				}
+				continue
+			}
+			// Only delete routes that we created, never pre-existing routes.
+			tracked := false
+			for _, route := range t.policyRoutes {
+				if route.Equal(nr) {
+					tracked = true
+					break
+				}
+			}
+			if !tracked {
+				t.policyRoutes = append(t.policyRoutes, nr)
+			}
+		}
+	}
+
+	return errs
+}
+
+func policyRulesForRoutes(routes []Route) []netlink.Rule {
+	newRules := make([]netlink.Rule, 0)
+	seen := make(map[string]struct{})
+	for _, r := range routes {
+		if !r.Install || r.Source == nil || r.Table == mainRouteTable {
+			continue
+		}
+		rule := netlink.NewRule()
+		rule.Priority = r.Priority
+		rule.Table = r.Table
+		rule.Src = &net.IPNet{IP: r.Source.Masked().Addr().AsSlice(), Mask: net.CIDRMask(r.Source.Bits(), r.Source.Addr().BitLen())}
+		key := rule.String()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		newRules = append(newRules, *rule)
+	}
+	return newRules
+}
+
+func (t *tun) applyPolicyRules(routes []Route, add, del func(*netlink.Rule) error) (retErr error) {
+	newRules := policyRulesForRoutes(routes)
+	oldRules := t.policyRules
+	active := make(map[string]netlink.Rule, len(oldRules))
+	wanted := make(map[string]bool, len(newRules))
+	for _, rule := range oldRules {
+		active[rule.String()] = rule
+	}
+	var added, removed []netlink.Rule
+	defer func() {
+		if retErr != nil {
+			for _, rule := range removed {
+				if err := add(&rule); err != nil && !errors.Is(err, unix.EEXIST) {
+					retErr = errors.Join(retErr, fmt.Errorf("failed to restore policy rule %s: %w", rule.String(), err))
+				} else if err == nil {
+					active[rule.String()] = rule
+				}
+			}
+			for _, rule := range added {
+				if err := del(&rule); err != nil && !errors.Is(err, unix.ESRCH) && !errors.Is(err, unix.ENOENT) {
+					retErr = errors.Join(retErr, fmt.Errorf("failed to roll back policy rule %s: %w", rule.String(), err))
+				} else {
+					delete(active, rule.String())
+				}
+			}
+		}
+		t.policyRules = make([]netlink.Rule, 0, len(active))
+		for _, rule := range active {
+			t.policyRules = append(t.policyRules, rule)
+		}
+	}()
+
+	// Keep existing rules active until all replacements have been installed.
+	for _, rule := range newRules {
+		key := rule.String()
+		wanted[key] = true
+		if _, ok := active[key]; ok {
+			continue
+		}
+		if err := add(&rule); err != nil {
+			if errors.Is(err, unix.EEXIST) {
+				continue
+			}
+			return fmt.Errorf("failed to add policy rule %s: %w", rule.String(), err)
+		}
+		active[key] = rule
+		added = append(added, rule)
+	}
+	for _, rule := range oldRules {
+		if wanted[rule.String()] {
+			continue
+		}
+		if err := del(&rule); err != nil && !errors.Is(err, unix.ESRCH) && !errors.Is(err, unix.ENOENT) {
+			return fmt.Errorf("failed to remove policy rule %s: %w", rule.String(), err)
+		}
+		delete(active, rule.String())
+		removed = append(removed, rule)
+	}
+	return nil
+}
+
 func (t *tun) removeRoutes(routes []Route, rl *config.Reload) {
 	for _, r := range routes {
 		if !r.Install {
@@ -645,6 +794,7 @@ func (t *tun) removeRoutes(routes []Route, rl *config.Reload) {
 			MTU:       r.MTU,
 			AdvMSS:    t.advMSS(r),
 			Scope:     unix.RT_SCOPE_LINK,
+			Table:     r.Table,
 		}
 
 		if r.Metric > 0 {
@@ -840,6 +990,15 @@ func (t *tun) Shutdown() error {
 func (t *tun) Close() error {
 	t.closeLock.Lock()
 	defer t.closeLock.Unlock()
+	for _, rule := range t.policyRules {
+		if err := netlink.RuleDel(&rule); err != nil && !errors.Is(err, unix.ESRCH) {
+			t.l.Warn("Failed to remove policy rule", "error", err, "rule", rule.String())
+		}
+	}
+	t.policyRules = nil
+	if err := t.syncPolicyRoutes(nil, netlink.RouteAdd, netlink.RouteDel); err != nil {
+		t.l.Warn("Failed to remove overlay policy routes", "error", err)
+	}
 
 	if t.routeChan != nil {
 		close(t.routeChan)
