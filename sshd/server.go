@@ -31,7 +31,8 @@ type SSHServer struct {
 
 	// Available commands.
 	commands *commands.Registry
-	listener atomic.Pointer[net.Listener]
+	// listeners is the public handle Stop uses to interrupt the active run
+	listeners atomic.Pointer[[]net.Listener]
 
 	// runs counts the Runs that are listening. A reload's Run can start before the one it replaced has returned
 	runs atomic.Int32
@@ -180,25 +181,31 @@ func (s *SSHServer) AddAuthorizedKey(user, pubKey string) error {
 	return nil
 }
 
-// Run begins listening and accepting connections. Each invocation derives a fresh per-Run context
-// from the constructor-supplied ctx so a Stop+Run sequence (used by config reload) starts clean
-// rather than carrying a permanently-cancelled context across runs.
-func (s *SSHServer) Run(addr string) error {
+// Run begins listening and accepting connections on every address in addrs. Each invocation derives a
+// fresh per-Run context from the constructor-supplied ctx so a Stop+Run sequence (used by config
+// reload) starts clean rather than carrying a permanently-cancelled context across runs.
+//
+// Binding is all-or-nothing: if any address fails to bind, the already-bound listeners for this run
+// are closed and the error is returned so the failure surfaces loudly.
+func (s *SSHServer) Run(addrs []string) error {
 	if s.ctx.Err() != nil {
 		return s.ctx.Err()
 	}
 
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
+	listeners := make([]net.Listener, 0, len(addrs))
+	for _, addr := range addrs {
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			closeListeners(listeners)
+			return err
+		}
+		listeners = append(listeners, listener)
 	}
-	// s.listener is the public handle Stop uses to interrupt the active run; listener (the local) is what
-	// this run owns. They start equal but a fast reload may overwrite s.listener with the next run's
-	// listener before this run's watcher fires, so each run must close its own listener via the local
-	// reference.
-	s.listener.Store(&listener)
+	// listeners (the local) is what this run owns. A fast reload may overwrite s.listeners with the next
+	// run's listeners before this run's watcher fires, so each run must close its own via the local.
+	s.listeners.Store(&listeners)
 	s.runs.Add(1)
-	bound := listener.Addr()
+	bound := listeners[0].Addr()
 	s.addr.Store(&bound)
 
 	runCtx, cancel := context.WithCancel(s.ctx)
@@ -207,21 +214,29 @@ func (s *SSHServer) Run(addr string) error {
 	defer s.runs.Add(-1)
 	defer s.addr.CompareAndSwap(&bound, nil)
 
-	// Close the listener when this run's context is cancelled. That can come from the parent
+	// Close this run's listeners when its context is cancelled. That can come from the parent
 	// (Control.Stop), from Run returning normally (defer cancel above), or transitively when a sibling
-	// run cancels through Stop closing the listener. net.Listener.Close is idempotent so a duplicate
+	// run cancels through Stop closing the listeners. net.Listener.Close is idempotent so a duplicate
 	// close from Stop is benign.
 	go func() {
 		<-runCtx.Done()
-		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		if err := closeListeners(listeners); err != nil {
 			s.l.Warn("Failed to close the sshd listener", "error", err)
 		}
 	}()
 
-	s.l.Info("SSH server is listening", "sshListener", bound)
+	s.l.Info("SSH server is listening", "sshListeners", addrs)
 
-	// Run loops until there is an error
-	s.run(runCtx, listener)
+	// Serve every listener until its accept loop exits, then wait for them all.
+	var wg sync.WaitGroup
+	for _, listener := range listeners {
+		wg.Add(1)
+		go func(listener net.Listener) {
+			defer wg.Done()
+			s.run(runCtx, listener)
+		}(listener)
+	}
+	wg.Wait()
 
 	s.l.Info("SSH server stopped listening")
 	// We don't return an error because run logs for us
@@ -285,9 +300,20 @@ func (s *SSHServer) run(ctx context.Context, listener net.Listener) {
 }
 
 func (s *SSHServer) Stop() {
-	if l := s.listener.Load(); l != nil {
-		if err := (*l).Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+	if ls := s.listeners.Load(); ls != nil {
+		if err := closeListeners(*ls); err != nil {
 			s.l.Warn("Failed to close the sshd listener", "error", err)
 		}
 	}
+}
+
+// closeListeners closes every listener, returning the first error that is not an already closed listener.
+func closeListeners(listeners []net.Listener) error {
+	var first error
+	for _, ln := range listeners {
+		if err := ln.Close(); err != nil && !errors.Is(err, net.ErrClosed) && first == nil {
+			first = err
+		}
+	}
+	return first
 }

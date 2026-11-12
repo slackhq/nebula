@@ -70,17 +70,18 @@ func loadSSHHostKey(c *config.C) ([]byte, error) {
 // failure, it returns nil, error.
 // r is nil at startup, entries that are skipped with a warning fail it on a reload
 func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C, r *config.Reload) (func(), error) {
-	listen := c.GetString("sshd.listen", "")
-	if listen == "" {
+	listenAddrs := getListenAddrs(c, "sshd.listen")
+	if len(listenAddrs) == 0 {
 		return nil, fmt.Errorf("sshd.listen must be provided")
 	}
-
-	_, port, err := net.SplitHostPort(listen)
-	if err != nil {
-		return nil, fmt.Errorf("invalid sshd.listen address: %s", err)
-	}
-	if port == "22" {
-		return nil, fmt.Errorf("sshd.listen can not use port 22")
+	for _, listen := range listenAddrs {
+		_, port, err := net.SplitHostPort(listen)
+		if err != nil {
+			return nil, fmt.Errorf("invalid sshd.listen address %q: %s", listen, err)
+		}
+		if port == "22" {
+			return nil, fmt.Errorf("sshd.listen can not use port 22")
+		}
 	}
 
 	hostKeyBytes, err := loadSSHHostKey(c)
@@ -175,7 +176,7 @@ func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C, r *config.Reloa
 	if c.GetBool("sshd.enabled", false) {
 		ssh.Stop()
 		runner = func() {
-			if err := ssh.Run(listen); err != nil {
+			if err := ssh.Run(listenAddrs); err != nil {
 				l.Warn("Failed to run the SSH server", "error", err)
 			}
 		}
