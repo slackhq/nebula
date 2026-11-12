@@ -39,7 +39,7 @@ func TestCertificateV1_Sign(t *testing.T) {
 	}
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	c, err := tbs.Sign(&certificateV1{details: detailsV1{notBefore: before, notAfter: after}}, Curve_CURVE25519, priv)
+	c, err := tbs.Sign(&certificateV1{details: detailsV1{notBefore: before, notAfter: after, isCA: true}}, Curve_CURVE25519, priv)
 	require.NoError(t, err)
 	assert.NotNil(t, c)
 	assert.True(t, c.CheckSignature(pub))
@@ -80,7 +80,7 @@ func TestCertificateV1_SignP256(t *testing.T) {
 	pub := elliptic.Marshal(elliptic.P256(), priv.PublicKey.X, priv.PublicKey.Y)
 	rawPriv := priv.D.FillBytes(make([]byte, 32))
 
-	c, err := tbs.Sign(&certificateV1{details: detailsV1{notBefore: before, notAfter: after}}, Curve_P256, rawPriv)
+	c, err := tbs.Sign(&certificateV1{details: detailsV1{notBefore: before, notAfter: after, isCA: true}}, Curve_P256, rawPriv)
 	require.NoError(t, err)
 	assert.NotNil(t, c)
 	assert.True(t, c.CheckSignature(pub))
@@ -179,4 +179,30 @@ func TestCertificateV2_SignRejectsUnparseable(t *testing.T) {
 	tbs.Groups = []string{"test-group1", ""}
 	_, err = tbs.Sign(nil, Curve_CURVE25519, priv)
 	require.ErrorAs(t, err, &invalid)
+}
+
+func TestCertificate_SignRejectsNonCASigner(t *testing.T) {
+	before := time.Now().Add(-time.Minute)
+	after := time.Now().Add(time.Minute)
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	tbs := TBSCertificate{
+		Version:   Version2,
+		Name:      "testing",
+		Networks:  []netip.Prefix{mustParsePrefixUnmapped("10.1.1.1/24")},
+		NotBefore: before,
+		NotAfter:  after,
+		PublicKey: []byte("1234567890abcedfghij1234567890ab"),
+		Curve:     Curve_CURVE25519,
+	}
+
+	for _, signer := range []Certificate{
+		&certificateV1{details: detailsV1{name: "host", notBefore: before, notAfter: after}},
+		&certificateV2{details: detailsV2{name: "host", notBefore: before, notAfter: after}},
+	} {
+		c, err := tbs.Sign(signer, Curve_CURVE25519, priv)
+		require.ErrorIs(t, err, ErrNotCA)
+		assert.Nil(t, c)
+	}
 }
