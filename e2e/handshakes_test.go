@@ -631,19 +631,14 @@ func TestReestablishRelays(t *testing.T) {
 	r.Log("Close the tunnel")
 	relayControl.CloseTunnel(theirVpnIpNet[0].Addr(), true)
 
-	start := myControl.GetHostmapIndexCount()
-	curIndexes := myControl.GetHostmapIndexCount()
-	for curIndexes >= start {
-		curIndexes = myControl.GetHostmapIndexCount()
-		r.Logf("Wait for the dead index to go away:start=%v indexes, current=%v indexes", start, curIndexes)
+	// Wait for my tunnel to them specifically. If my tunnel to the relay dies first, a falling index count would
+	// let the next packet go into the dying tunnel, where it is dropped without starting a handshake.
+	for myControl.GetHostInfoByVpnAddr(theirVpnIpNet[0].Addr(), false) != nil {
+		r.Log("Wait for the dead tunnel to go away")
 		myControl.InjectTunPacket(BuildTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me should fail")))
-
-		r.RouteForAllExitFunc(func(p *udp.Packet, c *nebula.Control) router.ExitType {
-			return router.RouteAndExit
-		})
-		time.Sleep(2 * time.Second)
+		r.RouteFor(time.Second)
 	}
-	r.Log("Dead index went away. Woot!")
+	r.Log("Dead tunnel went away. Woot!")
 	r.RenderHostmaps("Me removed hostinfo", myControl, relayControl, theirControl)
 	// Next packet should re-establish a relayed connection and work just great.
 
