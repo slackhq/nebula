@@ -2,7 +2,6 @@ package commands
 
 import (
 	"bytes"
-	"errors"
 	"flag"
 	"io"
 	"strings"
@@ -57,34 +56,6 @@ func TestFilterKeepsWhatKeepSays(t *testing.T) {
 	}
 
 	assert.ElementsMatch(t, []string{"help", "served"}, names)
-}
-
-// TestRefusesWithheldByName covers a client that knows a command exists and asks for it
-// anyway. The filter lives on the serving side, so the answer must not depend on what
-// the client was told was available.
-func TestRefusesWithheldByName(t *testing.T) {
-	out, errOut := &bytes.Buffer{}, &bytes.Buffer{}
-	w := Output{Out: out, Err: errOut}
-
-	err := testRegistry().Filter(notWithheld, testReason).DispatchArgs([]string{"withheld"}, w)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "withheld is not available on this surface")
-	assert.Empty(t, out.String(), "a withheld command must produce no output")
-	assert.Contains(t, errOut.String(), "withheld is not available on this surface")
-	assert.Contains(t, errOut.String(), testReason,
-		"the registry should render the explanation the filter supplied, not one of its own")
-}
-
-// TestWithheldIsNotReportedAsUnknown keeps the two cases distinct: an operator who
-// mistypes and one who asked for a real command should not get the same answer.
-func TestWithheldIsNotReportedAsUnknown(t *testing.T) {
-	out, errOut := &bytes.Buffer{}, &bytes.Buffer{}
-	err := testRegistry().Filter(notWithheld, testReason).DispatchArgs([]string{"no-such-command"}, Output{Out: out, Err: errOut})
-
-	var f *Failure
-	require.ErrorAs(t, err, &f, "an unknown command is a failure to the surface")
-	assert.Contains(t, out.String(), "did not understand: no-such-command")
 }
 
 // paramRegistry holds one command with a bool flag and a duration flag, and reports what
@@ -168,21 +139,15 @@ func TestInvokeWithABadParameterSetsNothing(t *testing.T) {
 }
 
 func TestHelpListsOnlyServedCommands(t *testing.T) {
+	r := testRegistry().Filter(notWithheld, testReason)
+	help := r.Get(Help)
+	res, err := Invoke(Request{Command: help})
+	require.NoError(t, err)
 	out := &bytes.Buffer{}
-	require.NoError(t, testRegistry().Filter(notWithheld, testReason).DispatchArgs(nil, MergedOutput(out)))
+	require.NoError(t, Render(help, res, FormatText, out))
 
 	assert.Contains(t, out.String(), "served")
 	assert.NotContains(t, out.String(), "withheld")
-}
-
-// TestDispatchReportsUnparseableLine pins that a line shlex rejects says so on Err rather
-// than coming back silent, so an operator with an unbalanced quote learns the quote is the
-// problem instead of assuming the command is broken.
-func TestDispatchReportsUnparseableLine(t *testing.T) {
-	out, errOut := &bytes.Buffer{}, &bytes.Buffer{}
-	testRegistry().Dispatch(`served "unterminated`, Output{Out: out, Err: errOut})
-	assert.Empty(t, out.String())
-	assert.Contains(t, errOut.String(), "could not parse the command line")
 }
 
 // TestRegisterRejectsReservedFlags: a command that declares a reserved flag is refused
@@ -207,8 +172,8 @@ func TestRegisterRejectsReservedFlags(t *testing.T) {
 }
 
 // TestRegistryIsSafeForConcurrentUse runs the operations the surfaces perform, filtering
-// and cloning per request or session, against a stream of registrations. It exists to
-// be run under the race detector: the map underneath is not goroutine safe.
+// per request, against a stream of registrations. It exists to be run under the race
+// detector: the map underneath is not goroutine safe.
 func TestRegistryIsSafeForConcurrentUse(t *testing.T) {
 	r := testRegistry()
 
@@ -235,7 +200,6 @@ func TestRegistryIsSafeForConcurrentUse(t *testing.T) {
 				f := r.Filter(notWithheld, testReason)
 				_ = f.Get("served")
 				_ = f.Schema()
-				_ = r.Clone().Match("late-")
 			}
 		}()
 	}
@@ -243,94 +207,7 @@ func TestRegistryIsSafeForConcurrentUse(t *testing.T) {
 	wg.Wait()
 
 	f := r.Filter(notWithheld, testReason)
-	assert.Len(t, f.Match("late-"), 8*50, "every late registration is visible once the writers finish")
-}
-
-// TestCloneHelpSeesCloneCommands: the ssh session registers logout on its clone, and
-// the source does not learn of it. Help on the clone answers for the clone, and -h on a
-// command prints what `help <name>` does, on a clone as on the source: both render
-// through WriteCommandHelp, and Clone rebinds help to the copy.
-func TestCloneHelpSeesCloneCommands(t *testing.T) {
-	r := testRegistry()
-	c := r.Clone()
-	c.Register(&Command{
-		Name:             Logout,
-		ShortDescription: "ends the session",
-		Run:              func(fs any, a []string) (Result, error) { return Nothing(), nil },
-	})
-	assert.Nil(t, r.Get(Logout), "the source is not affected")
-
-	out := &bytes.Buffer{}
-	require.NoError(t, c.DispatchArgs([]string{"help"}, MergedOutput(out)))
-	assert.Contains(t, out.String(), "logout")
-
-	for _, name := range []string{"logout", "served"} {
-		flag := &bytes.Buffer{}
-		c.Dispatch(name+" -h", MergedOutput(flag))
-		cmd := &bytes.Buffer{}
-		c.Dispatch("help "+name, MergedOutput(cmd))
-		assert.Equal(t, cmd.String(), flag.String(), name)
-		assert.Contains(t, flag.String(), name+" - ", name)
-	}
-}
-
-// TestThenRunsAfterTheReply pins the order Then exists for: Run's line is on the writer
-// before the action begins, Then's Result follows it, and Then's outcome is the
-// command's.
-func TestThenRunsAfterTheReply(t *testing.T) {
-	out := &bytes.Buffer{}
-	seen := "never ran"
-	outcome := Did("acted")
-
-	r := New()
-	r.Register(&Command{
-		Name:             "act",
-		ShortDescription: "replies, then acts",
-		Run: func(fs any, a []string) (Result, error) {
-			return Did("about to act"), nil
-		},
-		Then: func() Result {
-			seen = out.String()
-			return outcome
-		},
-	})
-
-	require.NoError(t, r.DispatchArgs([]string{"act"}, MergedOutput(out)))
-	assert.Equal(t, "about to act\n", seen, "the line was written before the action")
-	assert.Equal(t, "about to act\nacted\n", out.String())
-
-	out.Reset()
-	outcome = Failed("could not act")
-	var f *Failure
-	require.ErrorAs(t, r.DispatchArgs([]string{"act"}, MergedOutput(out)), &f)
-	assert.Equal(t, "about to act\ncould not act\n", out.String())
-
-	// In JSON only the outcome travels: one document for the program that asked.
-	out.Reset()
-	require.ErrorAs(t, r.DispatchArgs([]string{"act", "-json"}, MergedOutput(out)), &f)
-	assert.JSONEq(t, `{"ok":false,"reason":"could not act"}`, out.String())
-
-	// A Run that refused is the outcome; the action does not happen.
-	ran := false
-	r.Register(&Command{
-		Name:             "refuse",
-		ShortDescription: "refuses, so never acts",
-		Run: func(fs any, a []string) (Result, error) {
-			return Failed("not like that"), nil
-		},
-		Then: func() Result {
-			ran = true
-			return Did("acted anyway")
-		},
-	})
-	out.Reset()
-	require.ErrorAs(t, r.DispatchArgs([]string{"refuse"}, MergedOutput(out)), &f)
-	assert.Equal(t, "not like that\n", out.String())
-	assert.False(t, ran)
-	out.Reset()
-	require.ErrorAs(t, r.DispatchArgs([]string{"refuse", "-json"}, MergedOutput(out)), &f)
-	assert.JSONEq(t, `{"ok":false,"reason":"not like that"}`, out.String())
-	assert.False(t, ran)
+	assert.Len(t, f.All(), 8*50+2, "every late registration is visible once the writers finish, beside help and served")
 }
 
 // TestWriteCommandHelpIsTheOneRendering pins the layout both `help <command>` on the
@@ -355,66 +232,4 @@ func TestWriteCommandHelpIsTheOneRendering(t *testing.T) {
 		"  -address string\n    \tthe new remote (default 1.2.3.4:4242)\n"+
 		"  -by-index\n    \tmatch by index\n"+
 		"  -json\n    \toutputs as json\n", out.String())
-}
-
-// addrFlags is the flag struct of a test command that takes -address.
-type addrFlags struct{ Address string }
-
-// TestHelpFlagIsReadWhereParseReadsIt: -h asks for help only where the line's parser
-// reads it as a flag. As a flag's value or after -- it reaches the command as the
-// operand it is, and help is rendered by the same function `help <command>` uses.
-func TestHelpFlagIsReadWhereParseReadsIt(t *testing.T) {
-	var seen []string
-	r := New()
-	r.Register(Flagged(&Command{Name: "x", ShortDescription: "takes an address"},
-		func(fl *flag.FlagSet, s *addrFlags) { fl.StringVar(&s.Address, "address", "", "an address") },
-		func(s *addrFlags, a []string) (Result, error) {
-			seen = append(seen, s.Address+"|"+strings.Join(a, ","))
-			return Nothing(), nil
-		}))
-
-	for _, line := range []string{"x -h", "x -help", "x --help", "x 10.0.0.1 -h", "x -address=1 -h"} {
-		out := &bytes.Buffer{}
-		r.Dispatch(line, MergedOutput(out))
-		assert.Contains(t, out.String(), "x - takes an address\n", line)
-		assert.Contains(t, out.String(), "-address string", line)
-	}
-	assert.Empty(t, seen, "asking for help must not run the command")
-
-	for _, line := range []string{"x -address -h", "x -- -h"} {
-		out := &bytes.Buffer{}
-		r.Dispatch(line, MergedOutput(out))
-		assert.Empty(t, out.String(), line)
-	}
-	assert.Equal(t, []string{"-h|", "|-h"}, seen)
-}
-
-// TestBadFlagIsAnsweredWithTheCommandsHelp: a flag the command does not have is reported
-// on the error stream followed by the command's usage, in the rendering help uses.
-func TestBadFlagIsAnsweredWithTheCommandsHelp(t *testing.T) {
-	out, errOut := &bytes.Buffer{}, &bytes.Buffer{}
-	r := New()
-	r.Register(&Command{Name: "x", ShortDescription: "has no flags", Run: func(fs any, a []string) (Result, error) { return Nothing(), nil }})
-
-	require.Error(t, r.DispatchArgs([]string{"x", "-nope"}, Output{Out: out, Err: errOut}))
-	assert.Empty(t, out.String())
-	assert.Equal(t, "flag provided but not defined: -nope\nx - has no flags\n  -json\n    \toutputs as json\n  -pretty\n    \tpretty prints json, assumes -json\n", errOut.String())
-}
-
-// TestRunErrorIsShown: an error Run returns reaches the person at the prompt on the
-// error stream, as well as the surface that logs it.
-func TestRunErrorIsShown(t *testing.T) {
-	r := New()
-	r.Register(&Command{
-		Name:             "broken",
-		ShortDescription: "cannot do what it is asked",
-		Run: func(fs any, a []string) (Result, error) {
-			return Result{}, errors.New("no certificate is loaded")
-		},
-	})
-
-	out, errOut := &bytes.Buffer{}, &bytes.Buffer{}
-	require.EqualError(t, r.DispatchArgs([]string{"broken"}, Output{Out: out, Err: errOut}), "no certificate is loaded")
-	assert.Empty(t, out.String())
-	assert.Equal(t, "no certificate is loaded\n", errOut.String())
 }

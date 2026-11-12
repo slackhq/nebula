@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -39,41 +38,8 @@ type Command struct {
 	// Run produces the command's Result, leaving presentation to Render.
 	Run RunFunc
 
-	// Text renders a Result's Value for a person. Both surfaces call it, so a command
-	// reads the same over ssh as it does through the control socket. It never sees an
-	// outcome: Render prints those itself, the same way for every command. Leaving it
-	// nil declares that no human rendering of the Value exists yet, which JSONOnly says
-	// up front; Render then refuses text rather than inventing an interim form for
-	// people to script against.
+	// Text renders a Result's Value for a human-friendly output that should not be scripted against.
 	Text TextFunc
-
-	// JSONOnly declares that the command's Value has no human rendering yet, so a surface
-	// whose default is text asks for JSON instead, and the schema says so to a client. It
-	// is a statement that no such form exists, not a fallback. A refusal is still
-	// rendered as a sentence, since that always has a human form.
-	JSONOnly bool
-
-	// Then, when set, is the second half of a command that acts: Run says what is about
-	// to happen and Then does it and says how it went, with its Result rendered after
-	// Run's and deciding the outcome. A Run that refused is the outcome, and Then does
-	// not run. It exists for a command whose action can cut off
-	// its own reply: reload restarts the ssh server when the sshd keys changed, which
-	// ends the session that asked, so Run's line has to be on the wire before the reload
-	// begins. A surface that answers in one piece, the control socket, runs Then before
-	// it answers and carries both.
-	Then func() Result
-}
-
-// Failure is the error a surface gets for a refusal the person has already been shown:
-// a Run that returned Failed, a command that is not there, a line that would not parse.
-// The message it rendered is the whole story, so the surface reports the failure, exit
-// status 1 over ssh, and does not log it.
-type Failure struct {
-	Msg string
-}
-
-func (f *Failure) Error() string {
-	return f.Msg
 }
 
 // commandFlags returns the FlagSet a command is driven through, on any surface: the
@@ -83,10 +49,10 @@ func (f *Failure) Error() string {
 //
 // The presentation flags are defined here rather than by each command, because how a
 // result is displayed is not a property of the command that produced it. This is also
-// the one definition of them: the ssh line parses into it, nebula ctl parses its line
-// against the schema derived from it, and help renders from that schema. They are
-// command line flags only: a socket request chooses its rendering with the envelope's
-// format field, and Invoke refuses them as parameters.
+// the one definition of them: nebula ctl parses its line against the schema derived from
+// it, and help renders from that schema. They are command line flags only: a socket
+// request chooses its rendering with the envelope's format field, and Invoke refuses
+// them as parameters.
 func commandFlags(c *Command) (fl *flag.FlagSet, fs any, own bool) {
 	if c.Flags != nil {
 		fl, fs = c.Flags()
@@ -97,11 +63,6 @@ func commandFlags(c *Command) (fl *flag.FlagSet, fs any, own bool) {
 	}
 
 	addPresentationFlags(fl)
-
-	// What Parse prints after a bad flag, and for -h: the command's usage as help renders
-	// it, so a line that went wrong is answered with the same text as `help <command>`.
-	fl.Usage = func() { _ = WriteCommandHelp(schemaOf(c, fl), fl.Output()) }
-
 	return fl, fs, own
 }
 
@@ -137,87 +98,7 @@ func isPresentationFlag(name string) bool {
 	return name == FlagJSON || name == FlagPretty
 }
 
-// execLine runs an ssh command line against c, reporting problems to w. The line is
-// parsed into the command's own FlagSet and Run reads it directly, so a flag.Value whose
-// String does not re-parse, flag.Func above all, arrives as the line said. Invoke fills
-// the same FlagSet through Set.
-func (r *Registry) execLine(c *Command, args []string, w Output) error {
-	fl, fs, _ := commandFlags(c)
-
-	// Parse reports a bad flag to this writer, with the command's usage after it. -h,
-	// -help and --help take the same path with nothing wrong: the usage is the whole
-	// answer, and Parse says so with ErrHelp. A -h that is a flag's value or follows --
-	// is read as the operand it is, since ParseArgs is the one reading of the line.
-	fl.SetOutput(w.Err)
-	operands, err := ParseArgs(fl, args)
-	if err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
-		return err
-	}
-
-	format := presentationFormat(fl)
-
-	// An error from Run is something the command could not do rather than a refusal it
-	// chose, but the person at the prompt still hears it; the surface logs it too.
-	res, err := c.Run(fs, operands)
-	if err != nil {
-		_, _ = fmt.Fprintln(w.Err, err.Error())
-		return err
-	}
-
-	// Run's reply goes out first, and then the action, if the command has one and Run
-	// did not refuse, whose Result is the outcome. In JSON only the outcome travels:
-	// the promise is for a person to read, and a program expects one document.
-	if c.Then == nil || !res.OK || r.formatFor(c, res, format) == FormatText {
-		if err := r.renderLine(c, res, format, w); err != nil {
-			return err
-		}
-	}
-	if c.Then != nil && res.OK {
-		res = c.Then()
-		if err := r.renderLine(c, res, format, w); err != nil {
-			return err
-		}
-	}
-
-	if !res.OK {
-		return &Failure{Msg: res.Reason}
-	}
-	return nil
-}
-
-// formatFor is the format a Result is rendered in. The line wins when it asked for one;
-// otherwise the surface that owns the registry decides, from the command and its
-// Result, so each surface can keep its own default.
-func (r *Registry) formatFor(c *Command, res Result, format Format) Format {
-	if format == FormatUnset {
-		return r.defaultFormatFor(c, res)
-	}
-	return format
-}
-
-// renderLine writes one Result of a command line to w; see formatFor. An empty Result
-// writes nothing.
-func (r *Registry) renderLine(c *Command, res Result, format Format, w Output) error {
-	if res.Empty() {
-		return nil
-	}
-
-	if err := Render(c, res, r.formatFor(c, res, format), w.Out); err != nil {
-		if errors.Is(err, ErrNoTextRendering) {
-			_, _ = fmt.Fprintln(w.Err, err.Error())
-		}
-		return err
-	}
-	return nil
-}
-
 // ParseArgs parses args with fl and returns the operands.
-//
-// It differs from fl.Parse in two ways, and both surfaces parse through here so a line
-// means the same typed at an ssh prompt or to nebula ctl.
 //
 // Flags and operands may come in any order, which is the one way it differs from
 // fl.Parse. Parse stops at the first operand, so `print-tunnel 10.0.0.1 -json` would
