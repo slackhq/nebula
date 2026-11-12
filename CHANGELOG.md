@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Release binaries no longer include DWARF debug info, making them about 25% smaller. `make debug` builds keep it.
+
 ## [1.12.0] - 2026-10-29
 
 This release introduces udp/tun offloading support that can be enabled for greater performance. This will be enabled by default in a future release. See the `listen.udp_offloads` and `tun.use_offloads` example config settings for more details.
