@@ -84,6 +84,42 @@ jobs:
 
     timeout-minutes: 30
 
+  # illumos has no vagrant box for libvirt, so OmniOS runs under vmactions instead.
+  smoke-extra-illumos:
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'smoke-test-extra')
+    name: illumos-amd64
+    runs-on: ubuntu-latest
+    steps:
+
+    - uses: actions/checkout@v7
+
+    - uses: actions/setup-go@v7
+      with:
+        go-version: '1.27'
+        check-latest: true
+
+    - name: build
+      run: |
+        make bin-docker build/illumos-amd64/nebula
+        cd .github/workflows/smoke && ./build.sh illumos-amd64
+
+    - name: start OmniOS
+      id: vm
+      uses: vmactions/omnios-vm@v1
+      with:
+        release: r151058
+        copyback: false
+        prepare: pkg install driver/tuntap
+
+    - name: unit tests
+      run: .github/workflows/smoke/test-illumos.sh
+
+    - name: illumos-amd64
+      if: ${{ !cancelled() && steps.vm.outcome == 'success' }}
+      run: cd .github/workflows/smoke && ./smoke-illumos.sh illumos-amd64
+
+    timeout-minutes: 45
+
   smoke-windows:
     if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'smoke-test-extra')
     name: Run windows smoke test

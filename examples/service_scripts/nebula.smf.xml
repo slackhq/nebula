@@ -1,0 +1,72 @@
+<?xml version="1.0"?>
+<!DOCTYPE service_bundle SYSTEM "/usr/share/lib/xml/dtd/service_bundle.dtd.1">
+<!--
+    SMF manifest for nebula on illumos.
+
+    Install and start:
+        svccfg import nebula.smf.xml
+        svcadm enable nebula
+
+    Nebula runs in the foreground, so the service uses the child model, and
+    its output lands in the SMF log (svcs -L nebula). `svcadm refresh nebula`
+    sends SIGHUP, which makes nebula reload its config; `svcadm disable nebula`
+    stops it and removes the tun interface.
+
+    The binary and config paths below match the other example service files.
+    To keep the config elsewhere, change the config/file property:
+        svccfg -s nebula setprop config/file = /path/to/config.yml
+        svcadm refresh nebula
+    The binary path is in the start method's exec attribute. Where /usr is
+    read-only, as in a sparse zone, point it at the binary after importing:
+        svccfg -s nebula 'setprop start/exec = astring: "/opt/nebula/bin/nebula -config %{config/file}"'
+        svcadm refresh nebula
+-->
+<service_bundle type="manifest" name="nebula">
+  <service name="network/nebula" type="service" version="1">
+
+    <create_default_instance enabled="false"/>
+    <single_instance/>
+
+    <dependency name="network" grouping="require_all" restart_on="none" type="service">
+      <service_fmri value="svc:/milestone/network:default"/>
+    </dependency>
+
+    <dependency name="filesystem" grouping="require_all" restart_on="none" type="service">
+      <service_fmri value="svc:/system/filesystem/local:default"/>
+    </dependency>
+
+    <!-- Runs as root, like the other example service files -->
+    <method_context>
+      <method_credential user="root" group="root"/>
+    </method_context>
+
+    <exec_method type="method" name="start"
+      exec="/usr/local/bin/nebula -config %{config/file}"
+      timeout_seconds="60"/>
+
+    <exec_method type="method" name="stop" exec=":kill" timeout_seconds="60"/>
+
+    <exec_method type="method" name="refresh" exec=":kill -HUP" timeout_seconds="60"/>
+
+    <property_group name="startd" type="framework">
+      <propval name="duration" type="astring" value="child"/>
+      <propval name="ignore_error" type="astring" value="core,signal"/>
+    </property_group>
+
+    <property_group name="config" type="application">
+      <propval name="file" type="astring" value="/etc/nebula/config.yml"/>
+    </property_group>
+
+    <stability value="Evolving"/>
+
+    <template>
+      <common_name>
+        <loctext xml:lang="C">Nebula overlay network</loctext>
+      </common_name>
+      <documentation>
+        <doc_link name="nebula.defined.net" uri="https://nebula.defined.net/docs/"/>
+      </documentation>
+    </template>
+
+  </service>
+</service_bundle>
