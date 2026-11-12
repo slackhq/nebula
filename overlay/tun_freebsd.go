@@ -159,8 +159,8 @@ func (t *tun) Read(to []byte) (int, error) {
 	// first 4 bytes is protocol family, in network byte order
 	var head [4]byte
 	iovecs := [2]syscall.Iovec{
-		{&head[0], 4},
-		{&to[0], uint64(len(to))},
+		{Base: &head[0], Len: 4},
+		{Base: &to[0], Len: uint64(len(to))},
 	}
 	for {
 		n, _, errno := syscall.Syscall(syscall.SYS_READV, uintptr(t.fd), uintptr(unsafe.Pointer(&iovecs[0])), 2)
@@ -205,8 +205,8 @@ func (t *tun) Write(from []byte) (int, error) {
 	}
 
 	iovecs := [2]syscall.Iovec{
-		{&head[0], 4},
-		{&from[0], uint64(len(from))},
+		{Base: &head[0], Len: 4},
+		{Base: &from[0], Len: uint64(len(from))},
 	}
 	for {
 		n, _, errno := syscall.Syscall(syscall.SYS_WRITEV, uintptr(t.fd), uintptr(unsafe.Pointer(&iovecs[0])), 2)
