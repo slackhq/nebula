@@ -7,11 +7,13 @@ import (
 	"os"
 	"testing"
 
+	"github.com/DefinedNet/netlink"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 // Only tun.mtu changes. The system calls fail without a real device, what matters is the routes nebula keeps
@@ -76,7 +78,7 @@ func TestReloadRouteFailures(t *testing.T) {
 			tn := &tun{
 				l:                test.NewLogger(),
 				vpnNetworks:      []netip.Prefix{netip.MustParsePrefix("10.1.0.2/24")},
-				ioctlFd:          ^uintptr(0),
+				ioctlFd:          0, // not activated, the mtu is not checked
 				routesFromSystem: map[netip.Prefix]routing.Gateways{},
 			}
 			require.NoError(t, tn.reload(c, true, nil))
@@ -104,4 +106,84 @@ func TestTunReloadRestartKeys(t *testing.T) {
 	res := c.ReloadConfigString("tun:\n  disabled: true\n  dev: nebrk1\n  tx_queue: 100\n")
 	require.NoError(t, res.Err)
 	assert.ElementsMatch(t, []string{"tun.disabled", "tun.dev", "tun.tx_queue"}, res.RestartKeys)
+}
+
+// There is no device behind this tun, so it refuses every mtu. Repeating the reload tries again rather than reporting
+// it done
+func TestReloadRefusedMaxMTURetries(t *testing.T) {
+	c := config.NewC(test.NewLogger())
+	require.NoError(t, c.LoadString("tun:\n  mtu: 1300\n"))
+	tn := &tun{
+		l:                test.NewLogger(),
+		vpnNetworks:      []netip.Prefix{netip.MustParsePrefix("10.1.0.2/24")},
+		ioctlFd:          ^uintptr(0),
+		routesFromSystem: map[netip.Prefix]routing.Gateways{},
+	}
+	require.NoError(t, tn.reload(c, true, nil))
+	c.RegisterReloadCallback(func(c *config.C, r *config.Reload) {
+		require.NoError(t, tn.reload(c, false, r))
+	})
+
+	for range 2 {
+		res := c.ReloadConfigString("tun:\n  mtu: 1400\n")
+		require.NoError(t, res.Err)
+		assert.True(t, res.Failed)
+	}
+}
+
+// A reload puts the configured mtu back on the device and our network's route when they were changed outside nebula
+func TestTunReloadRestoresMTU(t *testing.T) {
+	c := config.NewC(test.NewLogger())
+	require.NoError(t, c.LoadString("tun:\n  dev: nebmtu0\n  mtu: 1300\n"))
+	tn, err := newTun(c, test.NewLogger(), []netip.Prefix{netip.MustParsePrefix("10.1.0.2/24")}, false)
+	if err != nil {
+		t.Skipf("can't create a tun device here: %v", err)
+	}
+	t.Cleanup(func() { _ = tn.Close() })
+	require.NoError(t, tn.Activate())
+
+	link, err := netlink.LinkByName(tn.Device)
+	require.NoError(t, err)
+	require.NoError(t, netlink.LinkSetMTU(link, 1280))
+	network := &netlink.Route{LinkIndex: tn.deviceIndex, Table: unix.RT_TABLE_MAIN}
+	routeMTU := func() int {
+		routes, err := netlink.RouteListFiltered(netlink.FAMILY_V4, network, netlink.RT_FILTER_OIF|netlink.RT_FILTER_TABLE)
+		require.NoError(t, err)
+		for _, r := range routes {
+			if r.Dst != nil && r.Dst.String() == "10.1.0.0/24" {
+				return r.MTU
+			}
+		}
+		t.Fatal("no route for our network")
+		return 0
+	}
+	require.Equal(t, 1300, routeMTU())
+	setRouteMTU := func(mtu int) {
+		routes, err := netlink.RouteListFiltered(netlink.FAMILY_V4, network, netlink.RT_FILTER_OIF|netlink.RT_FILTER_TABLE)
+		require.NoError(t, err)
+		for _, r := range routes {
+			if r.Dst != nil && r.Dst.String() == "10.1.0.0/24" {
+				r.MTU = mtu
+				require.NoError(t, netlink.RouteReplace(&r))
+			}
+		}
+		require.Equal(t, mtu, routeMTU())
+	}
+	reload := func() {
+		res := c.ReloadConfigString("tun:\n  dev: nebmtu0\n  mtu: 1300\n")
+		require.NoError(t, res.Err)
+		assert.False(t, res.Failed)
+	}
+
+	setRouteMTU(1280)
+	reload()
+	mtu, err := tn.deviceMTU()
+	require.NoError(t, err)
+	assert.Equal(t, 1300, mtu)
+	assert.Equal(t, 1300, routeMTU())
+
+	// Only the route this time
+	setRouteMTU(1280)
+	reload()
+	assert.Equal(t, 1300, routeMTU())
 }
