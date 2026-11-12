@@ -492,6 +492,19 @@ logging:
   #subsystem: nebula
   #interval: 10s
 
+  # Timeouts on the prometheus HTTP listener. Defending against slow
+  # clients (slowloris, slowpost, slow-read) and bounding keep-alive
+  # idle. Each defaults to a conservative value; the values below are
+  # the defaults. Zero disables read_timeout and write_timeout.
+  # A zero read_header_timeout or idle_timeout falls back to read_timeout.
+  # Keep a nonzero read_header_timeout or read_timeout for slowloris defense.
+  # Negative durations are rejected; invalid duration syntax uses the defaults.
+  # All are reloadable along with the rest of the stats: section.
+  #read_header_timeout: 10s
+  #read_timeout: 15s
+  #write_timeout: 30s
+  #idle_timeout: 120s
+
   # enables counter metrics for meta packets
   #   e.g.: `messages.tx.handshake`
   # NOTE: `message.{tx,rx}.recv_error` is always emitted
