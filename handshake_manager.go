@@ -334,11 +334,11 @@ func (hm *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time) {
 	}
 }
 
-// handleOutbound sends the next msg1 to vpnIp. A non-zero attempt that is not the current attempt sends nothing;
-// lighthouse triggers pass 0.
+// handleOutbound sends the next msg1 to vpnIp. A timer retry carries the attempt it was scheduled for and sends nothing
+// if that attempt is no longer current; a lighthouse trigger applies to the current attempt.
 func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, attempt uint64, lighthouseTriggered bool) {
 	hh := hm.queryVpnIp(vpnIp)
-	if hh == nil || (attempt != 0 && hh.attempt != attempt) {
+	if hh == nil || (!lighthouseTriggered && hh.attempt != attempt) {
 		return
 	}
 	hh.Lock()

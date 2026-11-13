@@ -410,9 +410,9 @@ func TestECMPGateways(t *testing.T) {
 	assert.Len(t, g.up, 1)
 }
 
-// A timer entry left by an ended attempt, here one ended as a wrong host answer ends it, must not make the next attempt
-// to the same host send msg1 twice in one tick.
-func TestStaleRetryLeavesNewAttemptAlone(t *testing.T) {
+// A retry left in the timer wheel by an ended attempt must not make the next attempt to the same host send msg1 twice
+// in one tick.
+func TestEndedAttemptRetryIgnored(t *testing.T) {
 	hm, conn := newFragTestManager(t)
 	hm.mainHostMap.preferredRanges.Store(&[]netip.Prefix{})
 	hm.f.relayManager = &relayManager{l: hm.l, hostmap: hm.mainHostMap}
@@ -427,6 +427,7 @@ func TestStaleRetryLeavesNewAttemptAlone(t *testing.T) {
 		return hh
 	}
 	now := time.Now()
+	// The first tick only sets the wheel's clock.
 	hm.NextOutboundHandshakeTimerTick(now)
 	// untilSent ticks until something is sent and returns how many packets went out in that tick.
 	untilSent := func() int {
