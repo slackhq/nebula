@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v7
         with:
@@ -40,6 +42,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v7
         with:
@@ -83,6 +87,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v7
         with:
@@ -209,6 +215,8 @@ jobs:
       - name: Checkout code
         if: ${{ env.HAS_DOCKER_CREDS == 'true' }}
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Download artifacts
         if: ${{ env.HAS_DOCKER_CREDS == 'true' }}
@@ -250,6 +258,8 @@ jobs:
       contents: write # gh release create publishes the release and its binaries
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Download artifacts
         uses: actions/download-artifact@v8
