@@ -784,3 +784,77 @@ func TestMsg2Slots(t *testing.T) {
 		assert.Zero(t, n)
 	})
 }
+
+// A delayed repair is wanted while its hostinfo is pending under its index or, unless pendingOnly, is the tunnel under
+// it, and never once the manager has stopped.
+func TestRepairWanted(t *testing.T) {
+	hm, _ := newFragTestManager(t)
+	pend := func(hostinfo *HostInfo) {
+		hm.Lock()
+		hm.indexes[hostinfo.localIndexId] = &HandshakeHostInfo{hostinfo: hostinfo}
+		hm.Unlock()
+	}
+	establish := func(hostinfo *HostInfo) {
+		hm.mainHostMap.Lock()
+		hm.mainHostMap.Indexes[hostinfo.localIndexId] = hostinfo
+		hm.mainHostMap.Unlock()
+	}
+
+	pending, completed, tunnel, gone := &HostInfo{localIndexId: 1}, &HostInfo{localIndexId: 2}, &HostInfo{localIndexId: 3}, &HostInfo{localIndexId: 4}
+	pend(pending)
+	establish(completed)
+	establish(tunnel)
+
+	for _, tc := range []struct {
+		name  string
+		owner repairOwner
+		want  bool
+	}{
+		{"pending attempt", repairOwner{hostinfo: pending, pendingOnly: true}, true},
+		{"completed attempt, moved to the main hostmap", repairOwner{hostinfo: completed, pendingOnly: true}, false},
+		{"deleted attempt", repairOwner{hostinfo: gone, pendingOnly: true}, false},
+		{"pending responder", repairOwner{hostinfo: pending}, true},
+		{"responder's tunnel", repairOwner{hostinfo: tunnel}, true},
+		{"closed tunnel", repairOwner{hostinfo: gone}, false},
+		{"no hostinfo", repairOwner{}, true},
+	} {
+		assert.Equal(t, tc.want, hm.repairWanted(tc.owner), tc.name)
+	}
+
+	hm.stopped.Store(true)
+	assert.False(t, hm.repairWanted(repairOwner{hostinfo: tunnel}), "nothing once the manager stops")
+}
+
+// Repair fragments go out after the repair delay, and are counted when sent; a repair whose owner ended before the
+// delay is neither sent nor counted.
+func TestSendFragmentedDelayedRepair(t *testing.T) {
+	hm, conn := newFragTestManager(t)
+	hm.frag.Store(&fragmentConfig{repairDelay: 5 * time.Millisecond})
+	hm.messageMetrics = newMessageMetrics()
+	counter := metrics.GetOrRegisterCounter("messages.tx.handshake_ixpsk0_fragmented", nil)
+	pkt := header.Encode(make([]byte, header.Len), header.Version, header.Handshake, header.HandshakeIXPSK0Fragmented, 0, 1)
+	now, later := [][]byte{pkt}, [][]byte{pkt, pkt}
+	send := func(p []byte) error { return conn.WriteTo(p, netip.AddrPort{}) }
+
+	tunnel := &HostInfo{localIndexId: 7}
+	hm.mainHostMap.Lock()
+	hm.mainHostMap.Indexes[7] = tunnel
+	hm.mainHostMap.Unlock()
+
+	before := counter.Count()
+	require.NoError(t, hm.sendFragmented(now, later, send, repairOwner{hostinfo: tunnel}))
+	var sent int
+	require.Eventually(t, func() bool {
+		sent += len(conn.take())
+		return sent == 3
+	}, time.Second, time.Millisecond, "the data fragment and, after the delay, the repair go out")
+	assert.Equal(t, int64(3), counter.Count()-before, "all three are counted")
+
+	// Owned by nothing current, the repair is dropped when due.
+	before = counter.Count()
+	require.NoError(t, hm.sendFragmented(now, later, send, repairOwner{hostinfo: &HostInfo{localIndexId: 8}}))
+	assert.Len(t, conn.take(), 1)
+	time.Sleep(20 * time.Millisecond)
+	assert.Empty(t, conn.take(), "the repair is dropped")
+	assert.Equal(t, int64(1), counter.Count()-before, "and not counted")
+}

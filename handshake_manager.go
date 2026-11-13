@@ -85,6 +85,8 @@ type HandshakeManager struct {
 
 	// frag holds the fragment settings, swapped on reload.
 	frag atomic.Pointer[fragmentConfig]
+	// stopped is set when Run returns; repairWanted sends nothing once it is.
+	stopped atomic.Bool
 	// fragTable reassembles msg1 fragments from senders not yet authenticated, and cookies ask senders to validate
 	// their address under load or before a big answer.
 	fragTable *fragment.Table[fragKey, fragSource]
@@ -241,6 +243,7 @@ func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *Light
 }
 
 func (hm *HandshakeManager) Run(ctx context.Context) {
+	defer hm.stopped.Store(true)
 	clockSource := time.NewTicker(hm.config.tryInterval)
 	defer clockSource.Stop()
 
@@ -425,10 +428,9 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, attempt uint64, lig
 	// Send the handshake to all known ips, stage 2 takes care of assigning the hostinfo.remote based on the first to reply
 	var sentTo []netip.AddrPort
 	hostinfo.remotes.ForEach(hm.mainHostMap.GetPreferredRanges(), func(addr netip.AddrPort, _ bool) {
-		hm.messageMetrics.Tx(header.Handshake, subtype, int64(len(now)+len(later)))
 		err := hm.sendFragmented(now, later, func(p []byte) error {
 			return hm.outside.WriteTo(p, addr)
-		})
+		}, repairOwner{hostinfo: hh.hostinfo, pendingOnly: true})
 		if err != nil {
 			// These repeat every attempt, so match the success log below and only shout when the remotes changed
 			level := slog.LevelDebug
@@ -1274,7 +1276,6 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 			f.l.Error("Failed to send handshake message", append(logFields, "error", err)...)
 			return
 		}
-		subtype = fragmented
 	}
 
 	if via.IsRelayed {
@@ -1283,8 +1284,7 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnAddrs[0])
 		via.relayHI.relayState.UpdateRelayForByIdxState(via.relay.LocalIndex, Established)
 	}
-	f.messageMetrics.Tx(header.Handshake, subtype, int64(len(now)+len(later)))
-	if err := hm.sendFragmented(now, later, send); err != nil {
+	if err := hm.sendFragmented(now, later, send, repairOwner{hostinfo: hostinfo}); err != nil {
 		f.l.Error("Failed to send handshake message", append(logFields, "error", err)...)
 		return
 	}

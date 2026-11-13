@@ -379,30 +379,73 @@ func (hm *HandshakeManager) continueFragmented(via ViaSender, hh *HandshakeHostI
 	hm.continueHandshake(via, hh, reassembled(h, pkt))
 }
 
-// sendFragmented sends packets to a peer: now immediately and later after the repair delay. It returns the first error
-// from the immediate sends; errors from delayed sends are only logged.
-func (hm *HandshakeManager) sendFragmented(now, later [][]byte, send func([]byte) error) error {
+// repairOwner is the hostinfo of the handshake a send's delayed repair fragments belong to. They are sent only if,
+// when due, the hostinfo is still pending under its index or, when pendingOnly is false, is the tunnel under that
+// index in the main hostmap.
+//
+// An initiator's msg1 repair is pendingOnly: a completed handshake no longer needs msg1, though Complete moves the same
+// hostinfo to the main hostmap. A responder's msg2 repair is wanted after its tunnel is up, which for IX is before msg2
+// is sent.
+type repairOwner struct {
+	hostinfo    *HostInfo
+	pendingOnly bool
+}
+
+// repairWanted reports whether o is still current. An owner without a hostinfo always is. Nothing is wanted once the
+// manager has stopped.
+func (hm *HandshakeManager) repairWanted(o repairOwner) bool {
+	if hm.stopped.Load() {
+		return false
+	}
+	if o.hostinfo == nil {
+		return true
+	}
+	if hh := hm.queryIndex(o.hostinfo.localIndexId); hh != nil && hh.hostinfo == o.hostinfo {
+		return true
+	}
+	return !o.pendingOnly && hm.mainHostMap.QueryIndex(o.hostinfo.localIndexId) == o.hostinfo
+}
+
+// sendFragmented sends packets to a peer: now immediately and later after the repair delay, if owner is still current
+// then, and counts them in the message metrics as they go out. It returns the first error from the immediate sends;
+// errors from delayed sends are only logged.
+func (hm *HandshakeManager) sendFragmented(now, later [][]byte, send func([]byte) error, owner repairOwner) error {
+	hm.countSent(now)
 	var first error
 	for _, p := range now {
 		if err := send(p); err != nil && first == nil {
 			first = err
 		}
 	}
-	sendLater := func() {
-		for _, p := range later {
-			if err := send(p); err != nil {
-				hm.l.Debug("Failed to send handshake repair fragment", "error", err)
-			}
-		}
-	}
 	switch delay := hm.fragConfig().repairDelay; {
 	case len(later) == 0:
 	case delay <= 0:
-		sendLater()
+		hm.sendRepair(later, send)
 	default:
-		time.AfterFunc(delay, sendLater)
+		time.AfterFunc(delay, func() {
+			if hm.repairWanted(owner) {
+				hm.sendRepair(later, send)
+			}
+		})
 	}
 	return first
+}
+
+// sendRepair sends and counts repair fragments; errors are only logged.
+func (hm *HandshakeManager) sendRepair(later [][]byte, send func([]byte) error) {
+	hm.countSent(later)
+	for _, p := range later {
+		if err := send(p); err != nil {
+			hm.l.Debug("Failed to send handshake repair fragment", "error", err)
+		}
+	}
+}
+
+// countSent counts handshake packets sent, by the subtype in their header; every packet of one send has the same.
+func (hm *HandshakeManager) countSent(pkts [][]byte) {
+	if len(pkts) > 0 {
+		hm.messageMetrics.Tx(header.Handshake, header.MessageSubType(pkts[0][1]), int64(len(pkts)))
+	}
 }
 
 // msg1Info describes the msg1 a responder answers, for the fragment transport.
@@ -547,7 +590,7 @@ func (hm *HandshakeManager) sendCookie(via ViaSender, subtype header.MessageSubT
 	reply := make([]byte, header.Len, fragCookieReplyLen)
 	header.Encode(reply, header.Version, header.Handshake, subtype, fragID, fragCookieCounter)
 	reply = append(reply, c[:]...)
-	hm.f.messageMetrics.Tx(header.Handshake, subtype, 1)
+	hm.messageMetrics.Tx(header.Handshake, subtype, 1)
 	if err := send(reply); err != nil {
 		hm.l.Debug("Failed to send handshake cookie", "to", via, "error", err)
 	}
@@ -598,8 +641,7 @@ func (hm *HandshakeManager) handleCookie(via ViaSender, packet []byte, h *header
 		hm.l.Debug("Failed to resend handshake with cookie", "to", via, "error", err)
 		return
 	}
-	hm.messageMetrics.Tx(header.Handshake, h.Subtype, int64(len(pkts)+len(later)))
-	if err := hm.sendFragmented(pkts, later, send); err != nil {
+	if err := hm.sendFragmented(pkts, later, send, repairOwner{hostinfo: hh.hostinfo, pendingOnly: true}); err != nil {
 		hm.l.Debug("Failed to resend handshake with cookie", "to", via, "error", err)
 	}
 }

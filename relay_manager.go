@@ -166,7 +166,7 @@ func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hh *Handshak
 			_ = f.handshakeManager.sendFragmented(now, later, func(p []byte) error {
 				f.sendHandshakeVia(relayHostInfo, existingRelay, p)
 				return nil
-			})
+			}, repairOwner{hostinfo: hh.hostinfo, pendingOnly: true})
 		case Disestablished:
 			// Mark this relay as 'requested'
 			relayHostInfo.relayState.UpdateRelayForByIpState(vpnIp, Requested)
