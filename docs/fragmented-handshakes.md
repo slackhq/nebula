@@ -138,11 +138,12 @@ Implemented in `handshake/fragment` (`Sender`, `Assembly`, and the capped `Table
   path the copy came by. An initiator sends msg1 to every address it knows and through its
   relays, the responder counts each path separately, and each path is answered on its own, so a
   path that only works one way is covered by the others in the same attempt. Counting never
-  misses a retry that delivers K fragments; fragments left over from the previous attempt can
-  make a retry, or the trailing repair of the first one, reach K twice when twice the repair
-  count is at least K, which sends one response more than needed. That costs bandwidth within
-  the amplification budget and nothing else: the initiator drops what it no longer needs. Telling
-  the two apart exactly would need the initiator to number its attempts on the wire.
+  misses a retry that delivers K fragments. A retry sends K+m, so the m beyond K carry into the
+  next count and a path gets about (K+m)/K answers per retry: with the default m about one retry
+  in three is answered twice, and a small message's trailing repair can reach K on its own. That
+  costs bandwidth within the amplification budget and nothing else: the initiator drops what it
+  no longer needs. Telling the two apart exactly would need the initiator to number its attempts
+  on the wire.
 - Before an address is validated, a responder sends at most 3x the bytes it received from it as
   fragments (QUIC's rule). Normal handshakes sit near 1x. A response that would need more, a
   responder whose certificate is several times the initiator's, is held back: the responder

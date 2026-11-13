@@ -324,9 +324,9 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 // answerRepeat takes a msg1 fragment of a handshake this node already answered as responder: one matching the msg1
 // cached on the tunnel it made, found by its FragID, the initiator's index. Such fragments are never reassembled. They
 // are counted per path, and every K of them, a whole copy's worth, resend the cached response on that path, as an
-// unfragmented repeat of msg1 does. Fragments trailing the copy that completed msg1 can reach K too when K is no more
-// than the repair count; that sends one response more than needed, never one fewer. It returns false for a fragment of
-// any other message, which goes on to be reassembled.
+// unfragmented repeat of msg1 does. A copy sends K plus its repair fragments, and the repair beyond K counts toward the
+// next answer, so about repair of every K retries are answered twice, never one fewer than once. It returns false for
+// a fragment of any other message, which goes on to be reassembled.
 func (hm *HandshakeManager) answerRepeat(via ViaSender, key fragKey, fh fragment.Header, sym []byte, received int, now time.Time) bool {
 	hostinfo := hm.mainHostMap.QueryReverseIndex(fh.FragID)
 	if hostinfo == nil {

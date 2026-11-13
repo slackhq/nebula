@@ -303,8 +303,8 @@ func TestAnswerRepeat(t *testing.T) {
 	}
 	assert.Zero(t, hm.fragTable.Len(), "a recognised fragment is never reassembled")
 
-	// A retry's first fragment makes K with them and is answered. Its other four make K again: with twice the repair
-	// count at least K, a retry can be answered twice, one response more than needed.
+	// A retry's first fragment makes K with them and is answered. Its other four make K again: the repair beyond K
+	// carries into the next count, so a retry can be answered twice, one response more than needed.
 	answers := 0
 	for _, p := range attempt() {
 		answers += feed(direct, p)
