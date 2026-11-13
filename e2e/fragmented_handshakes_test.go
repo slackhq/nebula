@@ -251,8 +251,8 @@ func TestFragmentedHandshake_CookieForBigResponse(t *testing.T) {
 	theirControl.Stop()
 }
 
-// When the msg1 that needs a cookie came as fragments, the initiator's immediate resend with the cookie is answered,
-// rather than held back until its next scheduled retry by the quiet period the first msg1 started.
+// When the msg1 that needs a cookie came as fragments, the initiator's immediate resend with the cookie is answered
+// within that resend, rather than at its next scheduled retry.
 func TestFragmentedHandshake_CookieResendAnsweredAtOnce(t *testing.T) {
 	t.Parallel()
 	myControl, theirControl, myVpn, theirVpn, r := newFragmentPair(t, nil, groupsOf(120), fragmentMode("always"), nil)

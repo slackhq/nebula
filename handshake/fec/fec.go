@@ -9,6 +9,7 @@
 package fec
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"slices"
@@ -96,6 +97,41 @@ func (e *Encoder) Symbol(dst []byte, index int) ([]byte, error) {
 		mulAdd(out, d, coefficient(index, col))
 	}
 	return dst, nil
+}
+
+// Matches reports whether sym is the symbol with the given index of msg,
+// encoded with maxSymbolSize. A repair symbol is computed into scratch, which
+// must hold one symbol, so nothing is allocated.
+func Matches(msg []byte, maxSymbolSize, index int, sym, scratch []byte) bool {
+	l, err := NewLayout(len(msg), maxSymbolSize)
+	if err != nil || index < 0 || index >= MaxSymbols || len(sym) != l.SymbolSize || len(scratch) < l.SymbolSize {
+		return false
+	}
+	data := func(col int) []byte {
+		return msg[col*l.SymbolSize : min((col+1)*l.SymbolSize, len(msg))]
+	}
+
+	if index < l.K {
+		d := data(index)
+		if !bytes.Equal(sym[:len(d)], d) {
+			return false
+		}
+		for _, b := range sym[len(d):] {
+			if b != 0 {
+				return false
+			}
+		}
+		return true
+	}
+
+	out := scratch[:l.SymbolSize]
+	clear(out)
+	for col := range l.K {
+		// The padding of a short last symbol is zero and adds nothing.
+		d := data(col)
+		mulAdd(out[:len(d)], d, coefficient(index, col))
+	}
+	return bytes.Equal(out, sym)
 }
 
 // Decoder collects symbols for one message until it can reconstruct it.

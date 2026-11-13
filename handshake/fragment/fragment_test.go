@@ -59,6 +59,11 @@ func checkInvariants[K, S comparable](t *testing.T, tb *Table[K, S]) {
 	for _, n := range perSource {
 		require.LessOrEqual(t, n, tb.cfg.MaxPerSource)
 	}
+	require.LessOrEqual(t, len(tb.repeats), tb.cfg.MaxEntries)
+	for key := range tb.repeats {
+		_, assembling := tb.entries[key]
+		require.False(t, assembling, "a key is assembling or repeating, never both")
+	}
 }
 
 func parse(t *testing.T, p []byte) (header.H, Header, []byte) {
@@ -521,6 +526,17 @@ func FuzzTable(f *testing.F) {
 				now = now.Add(600 * time.Millisecond)
 				tb.Expire(now)
 			}
+			if index%5 == 0 {
+				k := int(index%4) + 1
+				received, answer := tb.Repeat(testKey{src, fragID}, now, len(sym), k)
+				if answer {
+					require.Positive(t, received)
+				} else {
+					require.Zero(t, received)
+				}
+				checkInvariants(t, tb)
+				continue
+			}
 			res, err := tb.Add(testKey{src, fragID}, src, now, h, sym)
 			if res != nil {
 				require.NoError(t, err)
@@ -531,95 +547,92 @@ func FuzzTable(f *testing.F) {
 	})
 }
 
-// TestTableQuiet sends many large messages from one source the way a responder
-// sees back to back handshakes: each attempt's data fragments complete the
-// message and its repair fragments trail. The quiet period keeps the stragglers
-// from completing the message again or piling up against the source quota, and
-// a retry after it is reassembled like the first attempt.
-func TestTableQuiet(t *testing.T) {
-	r := rand.New(rand.NewPCG(3, 3))
-	cfg := testConfig()
-	cfg.Quiet = 50 * time.Millisecond
-	tb := NewTable[testKey, string](cfg)
+// TestTableRepeat counts the fragments of handled messages per key and answers
+// every K of them.
+func TestTableRepeat(t *testing.T) {
 	now := time.Unix(1000, 0)
-	const msgLen = 8009 // K=7 data symbols, 3 repair
+	const k = 3
 
-	sendAll := func(key testKey, pkts [][]byte) []*Result {
-		var out []*Result
-		for _, p := range pkts {
-			_, h, sym := parse(t, p)
-			res, err := tb.Add(key, key.src, now, h, sym)
-			require.NoError(t, err)
-			if res != nil {
-				out = append(out, res)
+	t.Run("every k fragments answer once", func(t *testing.T) {
+		tb := NewTable[testKey, string](testConfig())
+		key := testKey{"a", 1}
+		var answers []int
+		for i := range 10 {
+			received, answer := tb.Repeat(key, now, 100+i, k)
+			if answer {
+				answers = append(answers, received)
 			}
 			checkInvariants(t, tb)
 		}
-		return out
-	}
-	attempt := func(s *Sender) (data, repair [][]byte) {
-		data, repair, err := s.Attempt(DefaultRepair(s.Layout().K))
+		assert.Equal(t, []int{100 + 101 + 102, 103 + 104 + 105, 106 + 107 + 108}, answers,
+			"each answer reports the bytes since the one before")
+	})
+
+	t.Run("paths count on their own", func(t *testing.T) {
+		tb := NewTable[testKey, string](testConfig())
+		for range k - 1 {
+			_, answer := tb.Repeat(testKey{"direct", 1}, now, 100, k)
+			require.False(t, answer)
+			_, answer = tb.Repeat(testKey{"relay", 1}, now, 100, k)
+			require.False(t, answer)
+		}
+		_, answer := tb.Repeat(testKey{"relay", 1}, now, 100, k)
+		assert.True(t, answer)
+	})
+
+	t.Run("an assembling key carries its fragments into the count", func(t *testing.T) {
+		tb := NewTable[testKey, string](testConfig())
+		key := testKey{"a", 1}
+		s, err := newSender(make([]byte, 5000), testSubtype, 0, 1, 1) // K=5
 		require.NoError(t, err)
-		return data, repair
-	}
-
-	for i := range 3 * testConfig().MaxPerSource {
-		msg := randMsg(r, msgLen)
-		key := testKey{"a", uint32(i + 1)}
-		s, err := newSender(msg, testSubtype, 0, 1, key.fragID)
+		data, _, err := s.Attempt(0)
 		require.NoError(t, err)
-		data, repair := attempt(s)
-		require.Len(t, data, 7)
-		require.Len(t, repair, 3)
+		received := 0
+		for _, p := range data[:2] {
+			_, h, sym := parse(t, p)
+			res, err := tb.Add(key, "a", now, h, sym)
+			require.NoError(t, err)
+			require.Nil(t, res)
+			received += len(p)
+		}
+		assert.Equal(t, 1, tb.Len())
 
-		res := sendAll(key, data)
-		require.Len(t, res, 1, "message %d was refused", i)
-		require.Equal(t, msg, res[0].Packet[header.Len:])
-		assert.Positive(t, res[0].Received)
+		got, answer := tb.Repeat(key, now, 50, k)
+		assert.True(t, answer, "two held and this one make k")
+		assert.Equal(t, received+50, got)
+		assert.Zero(t, tb.Len(), "the entry is gone")
+		assert.Zero(t, tb.bytes)
+		checkInvariants(t, tb)
+	})
 
-		assert.Empty(t, sendAll(key, repair), "stragglers are not a new message")
-		assert.Zero(t, tb.Len(), "and hold no entry")
-		now = now.Add(100 * time.Millisecond)
-	}
+	t.Run("add takes a repeating key back to assembling", func(t *testing.T) {
+		tb := NewTable[testKey, string](testConfig())
+		key := testKey{"a", 1}
+		_, answer := tb.Repeat(key, now, 100, k)
+		require.False(t, answer)
+		h, sym := firstFragment(t, 5000, 1)
+		_, err := tb.Add(key, "a", now, h, sym)
+		require.NoError(t, err)
+		checkInvariants(t, tb)
 
-	// A retry inside the quiet period is dropped whole; one after it is
-	// reassembled from its fresh symbols.
-	msg := randMsg(r, msgLen)
-	key := testKey{"b", 99}
-	s, err := newSender(msg, testSubtype, 0, 1, key.fragID)
-	require.NoError(t, err)
-	data, repair := attempt(s)
-	require.Len(t, sendAll(key, data), 1)
-	require.Empty(t, sendAll(key, repair))
+		_, answer = tb.Repeat(key, now, 100, k)
+		assert.False(t, answer, "the count started over, with the one fragment the entry held")
+		_, answer = tb.Repeat(key, now, 100, k)
+		assert.True(t, answer)
+	})
 
-	now = now.Add(cfg.Quiet / 2)
-	data, repair = attempt(s)
-	assert.Empty(t, sendAll(key, append(data, repair...)), "a retry inside the quiet period is dropped")
-	assert.Zero(t, tb.Len())
+	t.Run("counts are capped and expire", func(t *testing.T) {
+		cfg := testConfig()
+		cfg.MaxEntries = 4
+		tb := NewTable[testKey, string](cfg)
+		for id := range uint32(10) {
+			tb.Repeat(testKey{"a", id}, now, 100, k)
+			checkInvariants(t, tb)
+		}
+		assert.Len(t, tb.repeats, 4)
 
-	now = now.Add(cfg.Quiet)
-	data, repair = attempt(s)
-	res := sendAll(key, data)
-	require.Len(t, res, 1, "a retry after it is reassembled")
-	assert.Equal(t, msg, res[0].Packet[header.Len:])
-	assert.Empty(t, sendAll(key, repair), "and quiets the key again")
-
-	// Reopened, the key reassembles at once.
-	tb.Reopen(key)
-	data, _ = attempt(s)
-	require.Len(t, sendAll(key, data), 1)
-
-	// Another key, a second path the same message arrives by, is quiet on its
-	// own: the first path's completion does not hold it back.
-	relayed := testKey{"relay", 99}
-	sr, err := newSender(msg, testSubtype, 0, 1, relayed.fragID)
-	require.NoError(t, err)
-	data, _ = attempt(sr)
-	require.Len(t, sendAll(relayed, data), 1)
-
-	// Quiet periods that are over expire.
-	tb.Expire(now.Add(cfg.Quiet))
-	tb.mu.Lock()
-	assert.Empty(t, tb.quiet)
-	tb.mu.Unlock()
+		tb.Repeat(testKey{"b", 1}, now.Add(cfg.TTL), 100, k)
+		tb.Expire(now.Add(cfg.TTL + time.Millisecond))
+		assert.Len(t, tb.repeats, 1, "only the count seen within the TTL is left")
+	})
 }

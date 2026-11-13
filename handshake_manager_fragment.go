@@ -25,8 +25,7 @@ import (
 
 const (
 	// repairDelayDivisor sets the default handshakes.repair_delay, how long repair fragments trail the data fragments,
-	// as a fraction of the retry interval: 10ms at the default 100ms. It keeps the repair fragments well inside the
-	// quiet period of half a retry interval that follows a completed msg1, see fragment.TableConfig.Quiet.
+	// as a fraction of the retry interval: 10ms at the default 100ms.
 	repairDelayDivisor = 10
 
 	// fragAmplification bounds what a responder sends in reply to an unvalidated address, as a multiple of what it
@@ -84,12 +83,6 @@ func fragmentConfigFrom(c *config.C, tryInterval time.Duration) (fragmentConfig,
 	}
 	if cfg.repairDelay < 0 {
 		return cfg, fmt.Errorf("handshakes.repair_delay must not be negative")
-	}
-	// A responder drops a completed msg1's fragments for half a retry interval. Repair fragments trailing by more than
-	// that open an entry that never completes and holds a quota slot until it expires.
-	if cfg.repairDelay >= tryInterval/2 {
-		return cfg, fmt.Errorf("handshakes.repair_delay must be under half of handshakes.try_interval (%v), not %v",
-			tryInterval/2, cfg.repairDelay)
 	}
 	return cfg, nil
 }
@@ -287,6 +280,9 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 		}
 		now := time.Now()
 		key, src := fragKeyFor(via, fh.FragID)
+		if hm.answerRepeat(via, key, fh, sym, len(packet), now) {
+			return
+		}
 		validated := via.IsRelayed || (fh.HasCookie() && hm.cookies.valid(key, fh.Cookie, now))
 		if validated && !via.IsRelayed {
 			// A cookie proves the address, so it counts against a quota of its own: whatever the rest of its prefix
@@ -311,8 +307,10 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 		if res == nil {
 			return
 		}
-		// A retry is handled as an unfragmented one is: the handshake finds the tunnel this msg1 already made and
-		// resends its cached response on the path this copy came by.
+		// Fragments of this msg1 that follow find the tunnel it makes, answerRepeat. That holds for this path's next
+		// fragment because a path's packets are read in order by one reader, and beginHandshake makes the tunnel
+		// before returning. Were it not so, a fragment would only start a second reassembly, which ends in a cached
+		// response as an unfragmented repeat does.
 		in := msg1Info{fragmented: true, validated: validated, received: res.Received}
 		hm.beginHandshake(via, reassembled(h, res.Packet), h, in)
 
@@ -321,6 +319,36 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 			hm.continueFragmented(via, hh, h, fh, sym)
 		}
 	}
+}
+
+// answerRepeat takes a msg1 fragment of a handshake this node already answered as responder: one matching the msg1
+// cached on the tunnel it made, found by its FragID, the initiator's index. Such fragments are never reassembled. They
+// are counted per path, and every K of them, a whole copy's worth, resend the cached response on that path, as an
+// unfragmented repeat of msg1 does. Fragments trailing the copy that completed msg1 can reach K too when K is no more
+// than the repair count; that sends one response more than needed, never one fewer. It returns false for a fragment of
+// any other message, which goes on to be reassembled.
+func (hm *HandshakeManager) answerRepeat(via ViaSender, key fragKey, fh fragment.Header, sym []byte, received int, now time.Time) bool {
+	hostinfo := hm.mainHostMap.QueryReverseIndex(fh.FragID)
+	if hostinfo == nil {
+		return false
+	}
+	// A responder keeps both messages; an initiator keeps no msg2.
+	msg1 := hostinfo.HandshakePacket[handshakePacketStage0]
+	msg2 := hostinfo.HandshakePacket[handshakePacketStage2]
+	if msg2 == nil || !fragment.Matches(msg1, fh, sym) {
+		return false
+	}
+	l, err := fh.Layout()
+	if err != nil {
+		return false
+	}
+	got, answer := hm.fragTable.Repeat(key, now, received, l.K)
+	if !answer {
+		return true
+	}
+	validated := via.IsRelayed || (fh.HasCookie() && hm.cookies.valid(key, fh.Cookie, now))
+	hm.sendHandshakeResponse(via, msg2, hostinfo, true, msg1Info{fragmented: true, validated: validated, received: got})
+	return true
 }
 
 // continueFragmented collects msg2 fragments for an initiator's attempt, one slot per responder FragID, and processes

@@ -66,3 +66,15 @@ func (a *Assembly) Stored() int {
 func (a *Assembly) Received() int {
 	return a.received
 }
+
+// Matches reports whether a fragment parsed by Parse carries a symbol of msg, the
+// message alone without its Nebula header, as a Sender would have encoded it. It
+// lets a receiver that keeps a message it already handled recognise copies of it
+// without reassembling them.
+func Matches(msg []byte, h Header, sym []byte) bool {
+	if int(h.MsgLen) != len(msg) {
+		return false
+	}
+	var scratch [MaxSymbolSize]byte
+	return fec.Matches(msg, MaxSymbolSize, int(h.Index), sym, scratch[:])
+}

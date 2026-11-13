@@ -232,11 +232,7 @@ func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *Light
 	}
 	frag := config.fragment
 	hm.frag.Store(&frag)
-	// A completed msg1 drops the repair fragments trailing its attempt, which arrive within the repair delay, and is
-	// over before the initiator's retry, which comes a retry interval later.
-	tableCfg := fragTableConfig
-	tableCfg.Quiet = config.tryInterval / 2
-	hm.fragTable = fragment.NewTable[fragKey, fragSource](tableCfg)
+	hm.fragTable = fragment.NewTable[fragKey, fragSource](fragTableConfig)
 	hm.cookies = newFragCookies(time.Now())
 	return hm
 }
@@ -1252,10 +1248,9 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 		// Fragments, or a budget to fit them in, are only reached for a subtype with a fragmented form.
 		fragmented, _ := header.FragmentedSubtype(subtype)
 		if errors.Is(err, errOverBudget) {
+			// The initiator resends msg1 with the cookie as soon as it has it, and that copy is answered with this
+			// response, cached.
 			key, _ := fragKeyFor(via, hostinfo.remoteIndexId)
-			// The initiator resends msg1 with the cookie as soon as it has it, so let that through the quiet period
-			// the msg1 just started; it is answered with this response, cached.
-			hm.fragTable.Reopen(key)
 			hm.sendCookie(via, fragmented, hostinfo.remoteIndexId, key, in.received, time.Now())
 			f.l.Debug("Handshake response exceeds the amplification budget, asking the initiator to show its address", logFields...)
 			return

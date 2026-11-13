@@ -1,6 +1,7 @@
 package fec
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"math/rand/v2"
@@ -323,4 +324,65 @@ func BenchmarkDecode(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+func TestMatches(t *testing.T) {
+	r := rand.New(rand.NewPCG(5, 5))
+	for _, msgLen := range []int{1, 999, 1000, 1001, 4321} {
+		msg := make([]byte, msgLen)
+		for i := range msg {
+			msg[i] = byte(r.Uint32())
+		}
+		enc, err := NewEncoder(msg, 1000)
+		require.NoError(t, err)
+		scratch := make([]byte, 1000)
+		for _, index := range []int{0, enc.Layout().K - 1, enc.Layout().K, 100, MaxSymbols - 1} {
+			sym, err := enc.Symbol(nil, index)
+			require.NoError(t, err)
+			assert.True(t, Matches(msg, 1000, index, sym, scratch), "len %d index %d", msgLen, index)
+
+			for _, at := range []int{0, len(sym) - 1} {
+				bad := append([]byte(nil), sym...)
+				bad[at] ^= 1
+				assert.False(t, Matches(msg, 1000, index, bad, scratch), "len %d index %d flipped %d", msgLen, index, at)
+			}
+			other := (index + 1) % MaxSymbols
+			otherSym, err := enc.Symbol(nil, other)
+			require.NoError(t, err)
+			assert.Equal(t, bytes.Equal(sym, otherSym), Matches(msg, 1000, other, sym, scratch), "another index")
+			assert.False(t, Matches(msg, 1000, index, sym[1:], scratch), "a short symbol")
+			assert.False(t, Matches(msg[1:], 1000, index, sym, scratch), "another message length")
+		}
+		sym, err := enc.Symbol(nil, MaxSymbols-1)
+		require.NoError(t, err)
+		assert.False(t, Matches(msg, 1000, MaxSymbols-1, sym, scratch[:len(sym)-1]), "scratch too small")
+	}
+}
+
+func TestMatchesAllocs(t *testing.T) {
+	msg := make([]byte, 4321)
+	enc, err := NewEncoder(msg, 1000)
+	require.NoError(t, err)
+	sym, err := enc.Symbol(nil, 200)
+	require.NoError(t, err)
+	scratch := make([]byte, 1000)
+	assert.Zero(t, testing.AllocsPerRun(100, func() { Matches(msg, 1000, 200, sym, scratch) }))
+}
+
+// FuzzMatches checks Matches agrees with the encoder on every symbol it makes.
+func FuzzMatches(f *testing.F) {
+	f.Add([]byte("hello"), uint16(2), uint8(3))
+	f.Add(make([]byte, 9000), uint16(1176), uint8(200))
+	f.Fuzz(func(t *testing.T, msg []byte, maxSym uint16, index uint8) {
+		if len(msg) == 0 || maxSym == 0 {
+			return
+		}
+		enc, err := NewEncoder(msg, int(maxSym))
+		if err != nil {
+			return
+		}
+		sym, err := enc.Symbol(nil, int(index))
+		require.NoError(t, err)
+		require.True(t, Matches(msg, int(maxSym), int(index), sym, make([]byte, enc.Layout().SymbolSize)))
+	})
 }

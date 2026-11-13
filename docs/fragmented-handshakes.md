@@ -25,8 +25,7 @@ messages are always several packets long, and works the same for classical ones.
 
 Under `auto` and `always` a node reassembles fragments from others. `handshakes.repair_delay` is
 how long repair fragments trail the data fragments; unset, it is a tenth of
-`handshakes.try_interval` (10ms by default), and it must be under half of it, the quiet period a
-receiver keeps after completing a message. Both settings reload. With message metrics on
+`handshakes.try_interval` (10ms by default). Both settings reload. With message metrics on
 (`stats.message_metrics`), fragment packets and cookie replies are counted in
 `messages.{tx,rx}.handshake_ixpsk0_fragmented` (and `handshake_xxpsk0_fragmented`), apart from
 the single-packet `handshake_ixpsk0`.
@@ -111,12 +110,13 @@ Implemented in `handshake/fragment` (`Sender`, `Assembly`, and the capped `Table
 - When K symbols are present the message is decoded and handed to the handshake `Machine` as a
   synthetic `[header | message]`, with the fragmented flag cleared. The Machine never sees
   fragments.
-- Once a msg1 completes, its key goes quiet for half the retry interval: every fragment for it
-  is dropped, outside the memory and per-source caps. That covers the repair fragments trailing
-  the attempt whose data fragments completed it, which would otherwise complete it again or open
-  an entry that can never complete and hold the source's quota. The initiator's retry comes a
-  retry interval later, after the quiet period, and is reassembled like the first attempt; a
-  straggler that comes after it opens an entry the retry completes.
+- Once a msg1 is handled, its fragments are never reassembled again. The tunnel it made keeps
+  the msg1 and is found by the FragID, the initiator's index; a fragment whose symbol matches
+  that msg1 is a copy of it, whether a repair fragment trailing the attempt that completed it or
+  part of a retry. Copies are counted per path and answered as described under retransmission.
+  A fragment that does not match goes on to be reassembled as a message of its own. Nothing here
+  depends on timing: a path's packets are read in order by one reader and the tunnel is made
+  before the next is read.
 - If the handshake rejects a decoded message, the entry is discarded and the next attempt
   supplies fresh symbols.
 - msg1 entries, from senders not yet authenticated, live in a table keyed by (source address or
@@ -133,19 +133,23 @@ Implemented in `handshake/fragment` (`Sender`, `Assembly`, and the capped `Table
 ## Retransmission and amplification
 
 - Only timers cause transmission, with one reactive exception: the responder resends its cached
-  msg2 when a copy of msg1 completes again. A reassembled retry is handled as an unfragmented one
-  is: the handshake finds the tunnel the same msg1 already made and resends its cached response,
-  in symbols it has not sent before, on the path the copy came by. An initiator sends msg1 to
-  every address it knows and through its relays, the responder reassembles each path separately,
-  and each path is answered on its own, so a path that only works one way is covered by the
-  others in the same attempt.
+  msg2 for every K fragments of an already handled msg1 that arrive on a path, a whole copy's
+  worth, as an unfragmented repeat of msg1 gets it, in symbols it has not sent before, on the
+  path the copy came by. An initiator sends msg1 to every address it knows and through its
+  relays, the responder counts each path separately, and each path is answered on its own, so a
+  path that only works one way is covered by the others in the same attempt. Counting never
+  misses a retry that delivers K fragments; fragments left over from the previous attempt can
+  make a retry, or the trailing repair of the first one, reach K twice when twice the repair
+  count is at least K, which sends one response more than needed. That costs bandwidth within
+  the amplification budget and nothing else: the initiator drops what it no longer needs. Telling
+  the two apart exactly would need the initiator to number its attempts on the wire.
 - Before an address is validated, a responder sends at most 3x the bytes it received from it as
   fragments (QUIC's rule). Normal handshakes sit near 1x. A response that would need more, a
   responder whose certificate is several times the initiator's, is held back: the responder
   answers with a cookie reply instead, the initiator resends msg1 as fragments carrying the
-  cookie, which proves its address, and gets the cached response in full. Asking for the cookie
-  ends the msg1's quiet period, so that resend is answered as soon as it arrives. The cookie
-  reply is the same one a responder under load sends.
+  cookie, which proves its address, and gets the cached response in full as soon as K of its
+  fragments arrive. The cookie reply is the same one a responder under load sends. The budget
+  for a copy is 3x the bytes of the fragments counted toward it on that path.
 - A response that fits one packet goes as one, as before, with no budget beyond that.
 
 ## Denial of service

@@ -125,7 +125,6 @@ func TestFragmentConfig(t *testing.T) {
 	for _, bad := range []string{
 		"handshakes: {fragment: sometimes}",
 		"handshakes: {repair_delay: -1ms}",
-		"handshakes: {repair_delay: 50ms}", // half the default retry interval, the receiver's quiet period
 	} {
 		c := config.NewC(test.NewLogger())
 		require.NoError(t, c.LoadString(bad))
@@ -148,9 +147,9 @@ func TestFragmentConfig(t *testing.T) {
 		require.NoError(t, res.Err)
 		assert.Equal(t, hm.config.tryInterval/repairDelayDivisor, hm.fragConfig().repairDelay, "unset, it follows the retry interval in effect")
 
-		res = c.ReloadConfigString("handshakes: {fragment: always, repair_delay: 60ms}")
+		res = c.ReloadConfigString("handshakes: {fragment: always, repair_delay: -1ms}")
 		require.NoError(t, res.Err)
-		assert.True(t, res.Failed, "a repair delay past the quiet period fails the reload")
+		assert.True(t, res.Failed, "a negative repair delay fails the reload")
 
 		res = c.ReloadConfigString("handshakes: {fragment: sometimes}")
 		require.NoError(t, res.Err)
@@ -225,32 +224,13 @@ func TestFragmentResponse(t *testing.T) {
 }
 
 // A response that should go as fragments but is more than its msg1's amplification budget allows is held back for a
-// cookie reply naming the initiator. The msg1's quiet period ends, so the initiator's resend with the cookie is
-// reassembled at once rather than after it.
+// cookie reply naming the initiator.
 func TestResponseOverBudgetAsksForCookie(t *testing.T) {
 	hm, conn := newFragTestManager(t)
 	via := ViaSender{UdpAddr: netip.MustParseAddrPort("192.0.2.1:4242")}
 	msg1 := []byte("a small msg1")
 	hostinfo := &HostInfo{localIndexId: 77, remoteIndexId: 1234, HandshakePacket: map[uint8][]byte{handshakePacketStage0: msg1}, ConnectionState: &ConnectionState{}}
 	msg2 := testMsg2(4000, 2)
-
-	// The msg1 came as one fragment, which completed it and quieted its key.
-	key, src := fragKeyFor(via, hostinfo.remoteIndexId)
-	s, err := fragment.NewSender(testMsg1(msg1), hostinfo.remoteIndexId)
-	require.NoError(t, err)
-	addMsg1 := func() *fragment.Result {
-		t.Helper()
-		pkts, _, err := s.Attempt(0)
-		require.NoError(t, err)
-		require.Len(t, pkts, 1)
-		fh, sym, err := fragment.Parse(pkts[0][header.Len:])
-		require.NoError(t, err)
-		res, err := hm.fragTable.Add(key, src, time.Now(), fh, sym)
-		require.NoError(t, err)
-		return res
-	}
-	require.NotNil(t, addMsg1())
-	require.Nil(t, addMsg1(), "the key is quiet")
 
 	hm.sendHandshakeResponse(via, msg2, hostinfo, false, msg1Info{received: 300})
 	sent := conn.take()
@@ -261,7 +241,6 @@ func TestResponseOverBudgetAsksForCookie(t *testing.T) {
 	assert.Equal(t, header.HandshakeIXPSK0Fragmented, h.Subtype)
 	assert.Equal(t, uint64(fragCookieCounter), h.MessageCounter)
 	assert.Equal(t, uint32(1234), h.RemoteIndex, "the reply names the initiator by its index")
-	assert.NotNil(t, addMsg1(), "the resend with the cookie is reassembled at once")
 
 	// The cookie validates the address, so the retry gets the whole response.
 	hm.sendHandshakeResponse(via, msg2, hostinfo, true, msg1Info{fragmented: true, validated: true, received: 300})
@@ -273,6 +252,79 @@ func TestResponseOverBudgetAsksForCookie(t *testing.T) {
 	sent = conn.take()
 	require.Len(t, sent, 1)
 	assert.Equal(t, small, sent[0])
+}
+
+// A responder that already answered a msg1 recognises its fragments by the tunnel it made, never reassembles them,
+// and answers every K of them on each path with the cached response.
+func TestAnswerRepeat(t *testing.T) {
+	hm, conn := newFragTestManager(t)
+	direct := ViaSender{UdpAddr: netip.MustParseAddrPort("192.0.2.1:4242")}
+	other := ViaSender{UdpAddr: netip.MustParseAddrPort("198.51.100.1:4242")}
+
+	msg1 := make([]byte, 3000) // K=3, 2 repair
+	for i := range msg1 {
+		msg1[i] = byte(i * 7)
+	}
+	msg2 := testMsg2(500, 4) // fits one packet, so an answer is one packet
+	const initiator = 1234
+	hostinfo := &HostInfo{
+		localIndexId:    77,
+		remoteIndexId:   initiator,
+		vpnAddrs:        []netip.Addr{netip.MustParseAddr("10.0.0.2")},
+		HandshakePacket: map[uint8][]byte{handshakePacketStage0: msg1, handshakePacketStage2: msg2},
+		ConnectionState: &ConnectionState{},
+		remotes:         NewRemoteList([]netip.Addr{netip.MustParseAddr("10.0.0.2")}, nil),
+	}
+	hm.mainHostMap.unlockedAddHostInfo(hostinfo, hm.f)
+
+	s, err := fragment.NewSender(testMsg1(msg1), initiator)
+	require.NoError(t, err)
+	attempt := func() [][]byte {
+		data, repair, err := s.Attempt(fragment.DefaultRepair(s.Layout().K))
+		require.NoError(t, err)
+		require.Len(t, data, 3)
+		require.Len(t, repair, 2)
+		return append(data, repair...)
+	}
+	feed := func(via ViaSender, p []byte) int {
+		var h header.H
+		require.NoError(t, h.Parse(p))
+		hm.HandleIncoming(via, p, &h)
+		if len(conn.take()) > 0 {
+			return 1 // an answer, the response in fragments
+		}
+		return 0
+	}
+
+	// The two repair fragments trailing the copy that completed msg1 are fewer than K: no answer, nothing assembled.
+	trailing := attempt()[3:]
+	for _, p := range trailing {
+		assert.Zero(t, feed(direct, p))
+	}
+	assert.Zero(t, hm.fragTable.Len(), "a recognised fragment is never reassembled")
+
+	// A retry's first fragment makes K with them and is answered. Its other four make K again: with twice the repair
+	// count at least K, a retry can be answered twice, one response more than needed.
+	answers := 0
+	for _, p := range attempt() {
+		answers += feed(direct, p)
+	}
+	assert.Equal(t, 2, answers)
+
+	// The same retry by another path is answered on that path, counted on its own.
+	answers = 0
+	for _, p := range attempt() {
+		answers += feed(other, p)
+	}
+	assert.Equal(t, 1, answers)
+
+	// A fragment of another message with the same FragID does not match and is reassembled.
+	forged, err := fragment.NewSender(testMsg1(make([]byte, 3000)), initiator)
+	require.NoError(t, err)
+	data, _, err := forged.Attempt(0)
+	require.NoError(t, err)
+	assert.Zero(t, feed(direct, data[0]))
+	assert.Equal(t, 1, hm.fragTable.Len(), "a fragment that does not match is assembled")
 }
 
 func TestFragKeyFor(t *testing.T) {
