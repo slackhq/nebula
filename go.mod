@@ -10,7 +10,6 @@ require (
 	github.com/DefinedNet/noise v0.0.0-00010101000000-000000000000
 	github.com/Microsoft/go-winio v0.6.4
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
-	github.com/flynn/noise v1.1.0
 	github.com/gaissmai/bart v0.30.0
 	github.com/gogo/protobuf v1.3.2
 	github.com/google/gopacket v1.1.19

@@ -341,14 +341,14 @@ func TestUnmarshalCertificateV2(t *testing.T) {
 func TestUnmarshalCertificateV2_UnknownCurve(t *testing.T) {
 	ca, _, _, _ := NewTestCaCert(Version2, Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
 	c := ca.Copy().(*certificateV2)
-	c.curve = Curve(2)
+	c.curve = Curve(9)
 	b, err := c.Marshal()
 	require.NoError(t, err)
 
 	// It still parses so tools can show it, it is refused where it would be used
 	got, err := unmarshalCertificateV2(b, nil, Curve_CURVE25519)
 	require.NoError(t, err)
-	assert.Equal(t, Curve(2), got.Curve())
+	assert.Equal(t, Curve(9), got.Curve())
 }
 
 func TestCertificateV2_marshalForSigningStability(t *testing.T) {

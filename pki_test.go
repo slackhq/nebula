@@ -291,7 +291,7 @@ func TestNewCertStateFromConfig_Hybrid(t *testing.T) {
 	load := func(certPEM, keyPEM []byte) (*CertState, error) {
 		c := config.NewC(test.NewLogger())
 		require.NoError(t, c.LoadString(fmt.Sprintf("pki:\n  cert: %q\n  key: %q\n", certPEM, keyPEM)))
-		return newCertStateFromConfig(c, "aes")
+		return newCertStateFromConfig(test.NewLogger(), c, "aes")
 	}
 
 	cs, err := load(certPEM, keyPEM)

@@ -332,10 +332,9 @@ func (c *certificateV1) fromTBSCertificate(t *TBSCertificate) error {
 func (c *certificateV1) validate() error {
 	// Empty names are allowed
 
-	switch c.details.curve {
-	case Curve_CURVE25519, Curve_P256:
-	default:
-		// The hybrid curve is defined for v2 only
+	if c.details.curve == Curve_P384_MLKEM1024_MLDSA87 {
+		// The hybrid curve is defined for v2 only. A curve this version does not know still parses, so tools can show
+		// it, and is refused by CheckKnownCurve where it would be used.
 		return fmt.Errorf("invalid curve for a v1 certificate: %s", CurveName(c.details.curve))
 	}
 
