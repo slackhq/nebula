@@ -274,3 +274,83 @@ func TestHybridInitiates(t *testing.T) {
 		assert.LessOrEqual(t, len(p), fragment.MaxPacketLen)
 	}
 }
+
+// Fragments of a hybrid msg1 the responder already answered are recognised and counted, never reassembled, both while
+// it waits for msg3 and once the tunnel is up: the repair trailing the copy that completed msg1 draws nothing, and every
+// retry is answered on each path it comes by.
+func TestHybridRepeatFragments(t *testing.T) {
+	ca, responder, initiator := newHybridPeers(t)
+	hm, conn := newHybridTestManager(t, ca, responder.cs)
+	direct := ViaSender{UdpAddr: netip.MustParseAddrPort("192.0.2.2:4242")}
+	other := ViaSender{UdpAddr: netip.MustParseAddrPort("198.51.100.2:4242")}
+	msg1, im := hybridMsg1(t, ca, initiator)
+
+	s, err := fragment.NewSender(msg1, 777)
+	require.NoError(t, err)
+	k := s.Layout().K
+	repair := fragment.DefaultRepair(k)
+	attempt := func() [][]byte {
+		data, later, err := s.Attempt(repair)
+		require.NoError(t, err)
+		return append(data, later...)
+	}
+	// feed sends pkts by via and returns how many of them drew msg2.
+	feed := func(via ViaSender, pkts [][]byte) (answers int, msg2 [][]byte) {
+		for _, p := range pkts {
+			var h header.H
+			require.NoError(t, h.Parse(p))
+			hm.HandleIncoming(via, p, &h)
+			if sent := conn.take(); len(sent) > 0 {
+				answers++
+				msg2 = append(msg2, sent...)
+			}
+		}
+		return answers, msg2
+	}
+
+	// The first copy: its K data fragments complete msg1 and draw msg2, its repair trails and draws nothing.
+	first := attempt()
+	answers, sent := feed(direct, first[:k])
+	require.Equal(t, 1, answers)
+	require.Equal(t, 1, pendingResponders(hm))
+	answers, _ = feed(direct, first[k:])
+	assert.Zero(t, answers, "trailing repair is not a retry")
+	assert.Zero(t, hm.fragTable.Len(), "nor reassembled")
+
+	// msg2 was lost: each retry is answered once, on each path, by the same pending responder.
+	// A copy is counted as K fragments and a retry sends K+repair, so the surplus carries into the next count and about
+	// repair of every K retries are answered twice: never fewer than once.
+	const retries = 9
+	totals := map[string]int{}
+	for range retries {
+		for name, via := range map[string]ViaSender{"direct": direct, "other": other} {
+			answers, _ = feed(via, attempt())
+			assert.GreaterOrEqual(t, answers, 1, name)
+			assert.LessOrEqual(t, answers, 2, name)
+			totals[name] += answers
+		}
+	}
+	assert.Equal(t, (repair+retries*(k+repair))/k, totals["direct"], "the first copy's repair counts toward the first retry")
+	assert.Equal(t, retries*(k+repair)/k, totals["other"])
+	assert.Zero(t, hm.fragTable.Len())
+	assert.Equal(t, 1, pendingResponders(hm), "no second handshake")
+	assert.Equal(t, 1, pendingIndexes(hm))
+
+	// msg3 completes the tunnel; a retry still in flight is answered from it, the same way.
+	msg3, res, err := im.ProcessPacket(nil, decodeMsg2(t, sent))
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	s3, err := fragment.NewSender(msg3, 777)
+	require.NoError(t, err)
+	pkts, later, err := s3.Attempt(0)
+	require.NoError(t, err)
+	feed(direct, append(pkts, later...))
+	require.Zero(t, pendingResponders(hm), "msg3 completed the responder")
+	require.NotNil(t, hm.mainHostMap.QueryVpnAddr(netip.MustParseAddr("10.0.0.2")))
+
+	answers, _ = feed(direct, attempt())
+	assert.GreaterOrEqual(t, answers, 1)
+	assert.LessOrEqual(t, answers, 2)
+	assert.Zero(t, hm.fragTable.Len())
+	assert.Zero(t, pendingIndexes(hm), "a repeat after completion starts nothing")
+}

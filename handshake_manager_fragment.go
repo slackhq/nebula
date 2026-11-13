@@ -365,16 +365,11 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 // next answer, so about repair of every K retries are answered twice, never one fewer than once. It returns false for
 // a fragment of any other message, which goes on to be reassembled.
 func (hm *HandshakeManager) answerRepeat(via ViaSender, key fragKey, fh fragment.Header, sym []byte, received int, now time.Time) bool {
-	hostinfo := hm.mainHostMap.QueryReverseIndex(fh.FragID)
+	hostinfo := hm.answeredMsg1(fh, sym)
 	if hostinfo == nil {
 		return false
 	}
-	// A responder keeps both messages; an initiator keeps no msg2.
-	msg1 := hostinfo.HandshakePacket[handshakePacketStage0]
 	msg2 := hostinfo.HandshakePacket[handshakePacketStage2]
-	if msg2 == nil || !fragment.Matches(msg1, fh, sym) {
-		return false
-	}
 	l, err := fh.Layout()
 	if err != nil {
 		return false
@@ -386,6 +381,27 @@ func (hm *HandshakeManager) answerRepeat(via ViaSender, key fragKey, fh fragment
 	validated := via.IsRelayed || (fh.HasCookie() && hm.cookies.valid(key, fh.Cookie, now))
 	hm.sendHandshakeResponse(via, msg2, hostinfo, true, msg1Info{fragmented: true, validated: validated, received: got})
 	return true
+}
+
+// answeredMsg1 returns the responder side of the handshake whose msg1 a fragment is part of: the tunnel it made, or a
+// hybrid responder still waiting for msg3, found by the fragment's FragID, the initiator's index, and only when the
+// fragment's symbol matches the msg1 cached there. A responder keeps both messages; an initiator keeps no msg2.
+func (hm *HandshakeManager) answeredMsg1(fh fragment.Header, sym []byte) *HostInfo {
+	answered := func(hostinfo *HostInfo) bool {
+		return hostinfo != nil && hostinfo.HandshakePacket[handshakePacketStage2] != nil &&
+			fragment.Matches(hostinfo.HandshakePacket[handshakePacketStage0], fh, sym)
+	}
+	if hostinfo := hm.mainHostMap.QueryReverseIndex(fh.FragID); answered(hostinfo) {
+		return hostinfo
+	}
+	hm.RLock()
+	defer hm.RUnlock()
+	for _, hh := range hm.hybrid.responders {
+		if hh.responder.initiator == fh.FragID && answered(hh.hostinfo) {
+			return hh.hostinfo
+		}
+	}
+	return nil
 }
 
 // continueFragmented collects msg2 fragments for an initiator's attempt, one slot per responder FragID, and processes

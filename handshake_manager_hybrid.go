@@ -41,8 +41,9 @@ const (
 // hybridResponder is the responder half of a pending hybrid handshake, waiting
 // for msg3.
 type hybridResponder struct {
-	msg3    *fragment.Assembly
-	expires time.Time
+	msg3      *fragment.Assembly
+	expires   time.Time
+	initiator uint32 // the initiator's index, its msg1's FragID; set before the responder is registered, never after
 }
 
 // hybridConfirm is an initiator's completed hybrid handshake that has not yet
@@ -118,6 +119,8 @@ func (hm *HandshakeManager) answersPattern(via ViaSender, subtype header.Message
 
 // resendPendingHybrid answers a repeat of a msg1 a pending responder already answered with its msg2 again, fresh
 // symbols on the path this copy came by, rather than starting a second handshake for it. It reports whether it did.
+// Repeats are normally recognised fragment by fragment before they are reassembled, see answerRepeat; this catches a
+// copy reassembled anyway, one whose fragments started arriving before the responder was registered.
 func (hm *HandshakeManager) resendPendingHybrid(via ViaSender, packet []byte, in msg1Info) bool {
 	var hostinfo *HostInfo
 	hm.RLock()
@@ -195,6 +198,7 @@ func (hm *HandshakeManager) awaitMsg3(via ViaSender, hh *HandshakeHostInfo, mach
 	}
 	hh.machine = machine
 	hh.responder.expires = now.Add(hsTimeout(hm.config.retries, hm.config.tryInterval))
+	hh.responder.initiator = rh.RemoteIndex
 
 	hm.Lock()
 	hm.hybrid.responders[hostinfo.localIndexId] = hh
