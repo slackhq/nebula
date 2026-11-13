@@ -18,12 +18,20 @@ import (
 )
 
 func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.ParsedPacket, nb []byte, sendBatch *batch.SendBatch, rejectBuf []byte, q int, localCache firewall.ConntrackCache) {
+	if hostinfo := f.filterInsidePacket(pkt, fwPacket, rejectBuf, q, localCache); hostinfo != nil {
+		f.sendInsideMessage(hostinfo, pkt, nb, sendBatch)
+	}
+}
+
+// filterInsidePacket parses and filters pkt, handling local traffic, destination lookup, pending handshakes and
+// the outbound firewall. It returns the hostinfo to send pkt to, or nil when pkt was dropped, rejected, forwarded
+// to self or cached for a pending handshake.
+func (f *Interface) filterInsidePacket(pkt tio.Packet, fwPacket *firewall.ParsedPacket, rejectBuf []byte, q int, localCache firewall.ConntrackCache) *HostInfo {
 	// borrowed: pkt.Bytes is owned by the originating tio.Queue and is
-	// only valid until the next Read on that queue. Every consumer below
-	// (parse, self-forward, handshake cache, sendInsideMessage) reads it
-	// synchronously; do not retain pkt outside this call. If a future
-	// caller needs to keep the packet, use pkt.Clone() to detach it from
-	// the borrow.
+	// only valid until the next Read on that queue. Filtering and sending
+	// must finish before then. Self-forwarding writes synchronously and the
+	// handshake cache copies each segment. To retain the packet beyond the
+	// next Read, use pkt.Clone() to detach it from the borrow.
 	//
 	// pkt.Bytes is either one IP datagram (GSO zero) or a TSO/USO
 	// superpacket. In both cases the L3+L4 headers at the start describe
@@ -38,13 +46,13 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Parse
 				"error", err,
 			)
 		}
-		return
+		return nil
 	}
 
 	// Ignore local broadcast packets
 	if f.dropLocalBroadcast {
 		if f.myBroadcastAddrsTable.Contains(fwPacket.RemoteAddr) {
-			return
+			return nil
 		}
 	}
 
@@ -71,12 +79,12 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Parse
 		}
 		// Otherwise, drop. On linux, we should never see these packets - Linux
 		// routes packets from the nebula addr to the nebula addr through the loopback device.
-		return
+		return nil
 	}
 
 	// Ignore multicast packets
 	if f.dropMulticast && fwPacket.RemoteAddr.IsMulticast() {
-		return
+		return nil
 	}
 
 	hostinfo, ready := f.getOrHandshakeConsiderRouting(&fwPacket.Packet, func(hh *HandshakeHostInfo) {
@@ -103,25 +111,26 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Parse
 				"fwPacket", fwPacket,
 			)
 		}
-		return
+		return nil
 	}
 
 	if !ready {
-		return
+		return nil
 	}
 
 	dropReason := f.firewall.Drop(fwPacket.Packet, false, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason == nil {
-		f.sendInsideMessage(hostinfo, pkt, nb, sendBatch)
-	} else {
-		f.rejectInside(packet, rejectBuf, q)
-		if f.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.logger(f.l).Debug("dropping outbound packet",
-				"fwPacket", fwPacket,
-				"reason", dropReason,
-			)
-		}
+		return hostinfo
 	}
+
+	f.rejectInside(packet, rejectBuf, q)
+	if f.l.Enabled(context.Background(), slog.LevelDebug) {
+		hostinfo.logger(f.l).Debug("dropping outbound packet",
+			"fwPacket", fwPacket,
+			"reason", dropReason,
+		)
+	}
+	return nil
 }
 
 func (f *Interface) sendInsideEncrypt(hostinfo *HostInfo, ci *ConnectionState, seg, scratch, nb []byte) []byte {
