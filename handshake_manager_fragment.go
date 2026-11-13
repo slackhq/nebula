@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/handshake/fragment"
 	"github.com/slackhq/nebula/header"
 )
@@ -36,8 +37,8 @@ const (
 	fragMsg2Slots = 2
 )
 
-// fragmentMode says when this node sends its own handshake messages as fragments. It reassembles fragments from others
-// unless the mode is never.
+// fragmentMode says when this node sends its own classical handshake messages as fragments. It reassembles fragments
+// of them from others unless the mode is never. Hybrid handshakes always travel as fragments, they have no other way.
 type fragmentMode int
 
 const (
@@ -112,11 +113,14 @@ func (hm *HandshakeManager) reloadFragment(c *config.C, r *config.Reload) {
 	)
 }
 
-// shouldFragment decides whether a handshake message goes as fragments: always or never as configured, and otherwise
-// when it does not fit one packet or answers a msg1 that came as fragments, whose sender can reassemble them. A
-// message to a peer that can not reassemble goes as fragments anyway when it does not fit, since a packet that size
-// would need IP fragmentation, which too many paths drop.
-func (hm *HandshakeManager) shouldFragment(msgLen int, answeringFragments bool) bool {
+// shouldFragment decides whether a handshake message goes as fragments: always for a hybrid one, always or never as
+// configured for a classical one, and otherwise when it does not fit one packet or answers a msg1 that came as
+// fragments, whose sender can reassemble them. A message to a peer that can not reassemble goes as fragments anyway
+// when it does not fit, since a packet that size would need IP fragmentation, which too many paths drop.
+func (hm *HandshakeManager) shouldFragment(subtype header.MessageSubType, msgLen int, answeringFragments bool) bool {
+	if handshake.IsHybrid(patternOf(subtype)) {
+		return true
+	}
 	switch hm.fragConfig().mode {
 	case fragmentAlways:
 		return true
@@ -233,7 +237,7 @@ func reassembled(h *header.H, pkt []byte) []byte {
 // fragmentStage0 prepares the initiator's msg1 as fragments, named by its local index, when it should travel so.
 func (hm *HandshakeManager) fragmentStage0(hh *HandshakeHostInfo, msg []byte) error {
 	hh.sender = nil
-	if !hm.shouldFragment(len(msg), false) {
+	if !hm.shouldFragment(header.MessageSubType(msg[1]), len(msg), false) {
 		return nil
 	}
 	return hm.useFragments(hh, msg)
@@ -258,6 +262,31 @@ func (hh *HandshakeHostInfo) stage0Packets() (now, later [][]byte, err error) {
 	return hh.sender.Attempt(fragment.DefaultRepair(hh.sender.Layout().K))
 }
 
+// relayEstablished sends the pending handshake with target through a relay that just came up, rather than leaving it
+// for the next retry, which may be a retry interval or more away. A relay is often still being set up when a handshake's
+// first attempt goes out, and re-requested on every attempt after the tunnel to the peer closes.
+// send sends a packet through the relay, whose vpn address is relayAddr.
+func (hm *HandshakeManager) relayEstablished(target, relayAddr netip.Addr, send func([]byte) error) {
+	hh := hm.queryVpnIp(target)
+	if hh == nil {
+		return
+	}
+	hh.Lock()
+	defer hh.Unlock()
+	if hm.queryVpnIp(target) != hh || !hh.ready {
+		return
+	}
+	now, later, err := hh.stage0Packets()
+	if err != nil {
+		return
+	}
+	hh.hostinfo.logger(hm.l).Info("Send handshake via new relay", "relay", relayAddr)
+	hm.messageMetrics.Tx(header.Handshake, header.MessageSubType(now[0][1]), int64(len(now)+len(later)))
+	if err := hm.sendFragmented(now, later, send); err != nil {
+		hh.hostinfo.logger(hm.l).Debug("Failed to send handshake via new relay", "relay", relayAddr, "error", err)
+	}
+}
+
 // handleFragment takes a fragment of a handshake message, or a cookie reply.
 func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *header.H) {
 	if h.MessageCounter == fragCookieCounter {
@@ -273,6 +302,9 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 
 	switch h.MessageCounter {
 	case 1:
+		if !hm.answersPattern(via, h.Subtype) {
+			return
+		}
 		if h.RemoteIndex != 0 {
 			hm.l.Debug("dropping stage-1 handshake with non-zero RemoteIndex",
 				"from", via, "remoteIndex", h.RemoteIndex)
@@ -318,6 +350,11 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 		if hh := hm.queryIndex(h.RemoteIndex); hh != nil {
 			hm.continueFragmented(via, hh, h, fh, sym)
 		}
+
+	case 3:
+		if handshake.IsHybrid(patternOf(h.Subtype)) {
+			hm.continueHybridResponder(via, h, fh, sym)
+		}
 	}
 }
 
@@ -328,16 +365,11 @@ func (hm *HandshakeManager) handleFragment(via ViaSender, packet []byte, h *head
 // next answer, so about repair of every K retries are answered twice, never one fewer than once. It returns false for
 // a fragment of any other message, which goes on to be reassembled.
 func (hm *HandshakeManager) answerRepeat(via ViaSender, key fragKey, fh fragment.Header, sym []byte, received int, now time.Time) bool {
-	hostinfo := hm.mainHostMap.QueryReverseIndex(fh.FragID)
+	hostinfo := hm.answeredMsg1(fh, sym)
 	if hostinfo == nil {
 		return false
 	}
-	// A responder keeps both messages; an initiator keeps no msg2.
-	msg1 := hostinfo.HandshakePacket[handshakePacketStage0]
 	msg2 := hostinfo.HandshakePacket[handshakePacketStage2]
-	if msg2 == nil || !fragment.Matches(msg1, fh, sym) {
-		return false
-	}
 	l, err := fh.Layout()
 	if err != nil {
 		return false
@@ -349,6 +381,27 @@ func (hm *HandshakeManager) answerRepeat(via ViaSender, key fragKey, fh fragment
 	validated := via.IsRelayed || (fh.HasCookie() && hm.cookies.valid(key, fh.Cookie, now))
 	hm.sendHandshakeResponse(via, msg2, hostinfo, true, msg1Info{fragmented: true, validated: validated, received: got})
 	return true
+}
+
+// answeredMsg1 returns the responder side of the handshake whose msg1 a fragment is part of: the tunnel it made, or a
+// hybrid responder still waiting for msg3, found by the fragment's FragID, the initiator's index, and only when the
+// fragment's symbol matches the msg1 cached there. A responder keeps both messages; an initiator keeps no msg2.
+func (hm *HandshakeManager) answeredMsg1(fh fragment.Header, sym []byte) *HostInfo {
+	answered := func(hostinfo *HostInfo) bool {
+		return hostinfo != nil && hostinfo.HandshakePacket[handshakePacketStage2] != nil &&
+			fragment.Matches(hostinfo.HandshakePacket[handshakePacketStage0], fh, sym)
+	}
+	if hostinfo := hm.mainHostMap.QueryReverseIndex(fh.FragID); answered(hostinfo) {
+		return hostinfo
+	}
+	hm.RLock()
+	defer hm.RUnlock()
+	for _, hh := range hm.hybrid.responders {
+		if hh.responder.initiator == fh.FragID && answered(hh.hostinfo) {
+			return hh.hostinfo
+		}
+	}
+	return nil
 }
 
 // continueFragmented collects msg2 fragments for an initiator's attempt, one slot per responder FragID, and processes
@@ -382,6 +435,11 @@ func (hm *HandshakeManager) continueFragmented(via ViaSender, hh *HandshakeHostI
 // sendFragmented sends packets to a peer: now immediately and later after the repair delay. It returns the first error
 // from the immediate sends; errors from delayed sends are only logged.
 func (hm *HandshakeManager) sendFragmented(now, later [][]byte, send func([]byte) error) error {
+	return hm.sendFragmentedAfter(now, later, send, hm.fragConfig().repairDelay)
+}
+
+// sendFragmentedAfter is sendFragmented with the given repair delay.
+func (hm *HandshakeManager) sendFragmentedAfter(now, later [][]byte, send func([]byte) error, delay time.Duration) error {
 	var first error
 	for _, p := range now {
 		if err := send(p); err != nil && first == nil {
@@ -395,7 +453,7 @@ func (hm *HandshakeManager) sendFragmented(now, later [][]byte, send func([]byte
 			}
 		}
 	}
-	switch delay := hm.fragConfig().repairDelay; {
+	switch {
 	case len(later) == 0:
 	case delay <= 0:
 		sendLater()

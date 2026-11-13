@@ -3,7 +3,7 @@ package handshake
 import (
 	"testing"
 
-	"github.com/flynn/noise"
+	"github.com/DefinedNet/noise"
 	"github.com/slackhq/nebula/header"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -136,6 +137,13 @@ func (c *certificateV2) Fingerprint() (string, error) {
 	b[len(c.rawDetails)] = byte(c.curve)
 	copy(b[len(c.rawDetails)+1:], c.publicKey)
 	copy(b[len(c.rawDetails)+1+len(c.publicKey):], c.signature)
+	if c.curve == Curve_P384_MLKEM1024_MLDSA87 {
+		// The hybrid curve is held to CNSA 2.0, which has SHA-384 or SHA-512 for every hash. SHA-512 keeps the
+		// collision resistance of a fingerprint at the 256 bits of the curve's other algorithms (NIST SP 800-57 Part 1
+		// Rev. 5, Table 3; FIPS 204 Appendix D.1).
+		sum := sha512.Sum512(b)
+		return hex.EncodeToString(sum[:]), nil
+	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:]), nil
 }
@@ -162,6 +170,8 @@ func (c *certificateV2) CheckSignature(key []byte) bool {
 		}
 		hashed := sha256.Sum256(b)
 		return ecdsa.VerifyASN1(pubKey, hashed[:], c.signature)
+	case Curve_P384_MLKEM1024_MLDSA87:
+		return compositeVerify(key, b, c.signature)
 	default:
 		return false
 	}
@@ -195,8 +205,16 @@ func (c *certificateV2) VerifyPrivateKey(curve Curve, key []byte) error {
 			if !bytes.Equal(pub, c.publicKey) {
 				return ErrPublicPrivateKeyMismatch
 			}
+		case Curve_P384_MLKEM1024_MLDSA87:
+			pub, err := hybridSigningPublicKey(key)
+			if err != nil {
+				return ErrInvalidPrivateKey
+			}
+			if !bytes.Equal(pub, c.publicKey) {
+				return ErrPublicPrivateKeyMismatch
+			}
 		default:
-			return fmt.Errorf("invalid curve: %s", curve)
+			return fmt.Errorf("invalid curve: %s", CurveName(curve))
 		}
 		return nil
 	}
@@ -215,8 +233,13 @@ func (c *certificateV2) VerifyPrivateKey(curve Curve, key []byte) error {
 			return ErrInvalidPrivateKey
 		}
 		pub = privkey.PublicKey().Bytes()
+	case Curve_P384_MLKEM1024_MLDSA87:
+		var err error
+		if pub, err = hybridPublicKey(key); err != nil {
+			return ErrInvalidPrivateKey
+		}
 	default:
-		return fmt.Errorf("invalid curve: %s", curve)
+		return fmt.Errorf("invalid curve: %s", CurveName(curve))
 	}
 	if !bytes.Equal(pub, c.publicKey) {
 		return ErrPublicPrivateKeyMismatch
@@ -329,7 +352,7 @@ func (c *certificateV2) marshalJSON() (m, error) {
 		},
 		"version":     Version2,
 		"publicKey":   fmt.Sprintf("%x", c.publicKey),
-		"curve":       c.curve.String(),
+		"curve":       CurveName(c.curve),
 		"fingerprint": fp,
 		"signature":   fmt.Sprintf("%x", c.Signature()),
 	}, nil
@@ -402,6 +425,16 @@ func (c *certificateV2) validate() error {
 
 	if len(c.publicKey) == 0 {
 		return ErrInvalidPublicKey
+	}
+
+	if c.curve == Curve_P384_MLKEM1024_MLDSA87 {
+		// Without the curve's algorithms no key can be checked, and the reason is worth more than invalid public key.
+		if err := HybridAvailable(); err != nil {
+			return err
+		}
+		if !checkHybridPublicKey(c.details.isCA, c.publicKey) {
+			return ErrInvalidPublicKey
+		}
 	}
 
 	if !c.details.isCA && len(c.details.networks) == 0 {

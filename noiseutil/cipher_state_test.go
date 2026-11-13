@@ -5,7 +5,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/flynn/noise"
+	"github.com/DefinedNet/noise"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

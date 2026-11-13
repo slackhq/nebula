@@ -5,7 +5,7 @@ package noiseutil
 import (
 	"crypto/boring"
 
-	"github.com/flynn/noise"
+	"github.com/DefinedNet/noise"
 )
 
 var CipherAESGCM noise.CipherFunc = CipherAESGCMFIPS140

@@ -5,7 +5,7 @@ package noiseutil
 import (
 	"crypto/fips140"
 
-	"github.com/flynn/noise"
+	"github.com/DefinedNet/noise"
 )
 
 // EncryptLockNeeded indicates if calls to Encrypt need a lock

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flynn/noise"
+	"github.com/DefinedNet/noise"
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
 	ct "github.com/slackhq/nebula/cert_test"
