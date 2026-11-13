@@ -70,7 +70,7 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	assert.NotContains(t, blah.vpnIps, ip)
 }
 
-func testCountTimerWheelEntries(tw *LockingTimerWheel[netip.Addr]) (c int) {
+func testCountTimerWheelEntries(tw *LockingTimerWheel[outboundRetry]) (c int) {
 	for _, i := range tw.t.wheel {
 		n := i.Head
 		for n != nil {
@@ -281,14 +281,14 @@ func TestBlocklistedHandshakeLogLevelAndCounter(t *testing.T) {
 	hm.f = &Interface{pki: pki, l: logger}
 	via := ViaSender{UdpAddr: netip.MustParseAddrPort("198.51.100.7:4242")}
 
-	hm.beginHandshake(via, packet, nil)
+	hm.beginHandshake(via, packet, nil, msg1Info{})
 	entry := findEntry(t, handler.entries, "Failed to process handshake packet")
 	assert.Equal(t, slog.LevelDebug, entry.Level)
 	require.ErrorIs(t, entry.Attrs["error"].(error), cert.ErrBlockListed)
 	assert.Equal(t, int64(1), hm.metricRejectedBlocklisted.Count())
 
 	handler.entries = nil
-	hm.beginHandshake(via, nil, nil)
+	hm.beginHandshake(via, nil, nil, msg1Info{})
 	entry = findEntry(t, handler.entries, "Failed to process handshake packet")
 	assert.Equal(t, slog.LevelError, entry.Level)
 	assert.Equal(t, int64(1), hm.metricRejectedBlocklisted.Count())
@@ -408,4 +408,46 @@ func TestECMPGateways(t *testing.T) {
 	g.markUp(other, gw)
 	assert.True(t, g.isUp(gw), "a completed handshake marks the gateway up")
 	assert.Len(t, g.up, 1)
+}
+
+// A timer entry left by an ended attempt, here one ended as a wrong host answer ends it, must not make the next attempt
+// to the same host send msg1 twice in one tick.
+func TestStaleRetryLeavesNewAttemptAlone(t *testing.T) {
+	hm, conn := newFragTestManager(t)
+	hm.mainHostMap.preferredRanges.Store(&[]netip.Prefix{})
+	hm.f.relayManager = &relayManager{l: hm.l, hostmap: hm.mainHostMap}
+	vpnAddr := netip.MustParseAddr("10.0.0.2")
+	remote := netip.MustParseAddrPort("192.0.2.2:4242")
+	start := func() *HandshakeHostInfo {
+		var hh *HandshakeHostInfo
+		hm.StartHandshake(vpnAddr, func(h *HandshakeHostInfo) {
+			hh = h
+			h.hostinfo.remotes.LearnRemote(vpnAddr, remote)
+		})
+		return hh
+	}
+	now := time.Now()
+	hm.NextOutboundHandshakeTimerTick(now)
+	// untilSent ticks until something is sent and returns how many packets went out in that tick.
+	untilSent := func() int {
+		for range 5 {
+			now = now.Add(hm.config.tryInterval)
+			hm.NextOutboundHandshakeTimerTick(now)
+			if n := len(conn.take()); n > 0 {
+				return n
+			}
+		}
+		return 0
+	}
+
+	first := start()
+	require.Equal(t, 1, untilSent(), "the first attempt sends msg1")
+	require.Equal(t, int64(1), first.counter)
+
+	// The first attempt ends with its retry still in the wheel, and a new one starts.
+	hm.DeleteHostInfo(first.hostinfo)
+	second := start()
+	require.NotSame(t, first, second)
+	assert.Equal(t, 1, untilSent(), "the new attempt sends msg1 once")
+	assert.Equal(t, int64(1), second.counter, "and counts one try")
 }

@@ -20,7 +20,7 @@ type MessageMetrics struct {
 
 func (m *MessageMetrics) Rx(t header.MessageType, s header.MessageSubType, i int64) {
 	if m != nil {
-		if t >= 0 && int(t) < len(m.rx) && s >= 0 && int(s) < len(m.rx[t]) {
+		if t >= 0 && int(t) < len(m.rx) && s >= 0 && int(s) < len(m.rx[t]) && m.rx[t][s] != nil {
 			m.rx[t][s].Inc(i)
 		} else if m.rxUnknown != nil {
 			m.rxUnknown.Inc(i)
@@ -29,7 +29,7 @@ func (m *MessageMetrics) Rx(t header.MessageType, s header.MessageSubType, i int
 }
 func (m *MessageMetrics) Tx(t header.MessageType, s header.MessageSubType, i int64) {
 	if m != nil {
-		if t >= 0 && int(t) < len(m.tx) && s >= 0 && int(s) < len(m.tx[t]) {
+		if t >= 0 && int(t) < len(m.tx) && s >= 0 && int(s) < len(m.tx[t]) && m.tx[t][s] != nil {
 			m.tx[t][s].Inc(i)
 		} else if m.txUnknown != nil {
 			m.txUnknown.Inc(i)
@@ -51,10 +51,13 @@ func (m *MessageMetrics) TxExhausted(i int64) {
 
 func newMessageMetrics() *MessageMetrics {
 	gen := func(t string) [][]metrics.Counter {
+		// Handshake subtypes are sparse: the fragmented ones sit at 0x80 and up. The gaps are nil and count as other.
+		handshake := make([]metrics.Counter, header.HandshakeXXPSK0Fragmented+1)
+		handshake[header.HandshakeIXPSK0] = metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.handshake_ixpsk0", t), nil)
+		handshake[header.HandshakeIXPSK0Fragmented] = metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.handshake_ixpsk0_fragmented", t), nil)
+		handshake[header.HandshakeXXPSK0Fragmented] = metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.handshake_xxpsk0_fragmented", t), nil)
 		return [][]metrics.Counter{
-			{
-				metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.handshake_ixpsk0", t), nil),
-			},
+			handshake,
 			nil,
 			{metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.recv_error", t), nil)},
 			{metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.lighthouse", t), nil)},
