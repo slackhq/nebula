@@ -22,11 +22,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
 
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@v7.0.1
       with:
         persist-credentials: false
 
-    - uses: actions/setup-go@v7
+    - uses: actions/setup-go@v7.0.0
       with:
         go-version: '1.27'
         check-latest: true
@@ -46,7 +46,7 @@ jobs:
       run: make vet
 
     - name: golangci-lint
-      uses: golangci/golangci-lint-action@v9
+      uses: golangci/golangci-lint-action@v9.3.0
       with:
         version: v2.14
 
@@ -89,11 +89,11 @@ jobs:
           e2e-cmd: make e2evv
     steps:
 
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@v7.0.1
       with:
         persist-credentials: false
 
-    - uses: actions/setup-go@v7
+    - uses: actions/setup-go@v7.0.0
       with:
         go-version: '1.27'
         check-latest: true
@@ -112,7 +112,7 @@ jobs:
       if: matrix.e2e-cmd != ''
       run: ${{ matrix.e2e-cmd }}
 
-    - uses: actions/upload-artifact@v7
+    - uses: actions/upload-artifact@v7.0.2
       if: matrix.e2e-cmd != '' && always()
       with:
         name: e2e packet flow ${{ matrix.name }}
@@ -136,11 +136,11 @@ jobs:
         - {name: mobile,      make-target: build-test-mobile}
     steps:
 
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@v7.0.1
       with:
         persist-credentials: false
 
-    - uses: actions/setup-go@v7
+    - uses: actions/setup-go@v7.0.0
       with:
         go-version: '1.27'
         check-latest: true

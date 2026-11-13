@@ -34,11 +34,11 @@ jobs:
       VAGRANT_DEFAULT_PROVIDER: libvirt
     steps:
 
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@v7.0.1
       with:
         persist-credentials: false
 
-    - uses: actions/setup-go@v7
+    - uses: actions/setup-go@v7.0.0
       with:
         go-version: '1.27'
         check-latest: true
@@ -68,11 +68,11 @@ jobs:
       VAGRANT_DEFAULT_PROVIDER: virtualbox
     steps:
 
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@v7.0.1
       with:
         persist-credentials: false
 
-    - uses: actions/setup-go@v7
+    - uses: actions/setup-go@v7.0.0
       with:
         go-version: '1.27'
         check-latest: true
@@ -98,11 +98,11 @@ jobs:
     runs-on: windows-latest
     steps:
 
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@v7.0.1
       with:
         persist-credentials: false
 
-    - uses: actions/setup-go@v7
+    - uses: actions/setup-go@v7.0.0
       with:
         go-version: '1.27'
         check-latest: true
@@ -110,7 +110,7 @@ jobs:
     # WSL2 + Ubuntu so the smoke can run a real linux peer with its own
     # netns. iputils-ping is needed for the in-WSL ping check. WSL1 has no
     # real kernel and would lack /dev/net/tun, so we have to force WSL2.
-    - uses: Vampire/setup-wsl@v7
+    - uses: Vampire/setup-wsl@v7.2.0
       with:
         distribution: Ubuntu-24.04
         additional-packages: iputils-ping iproute2
