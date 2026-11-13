@@ -281,9 +281,7 @@ func (hm *HandshakeManager) relayEstablished(target, relayAddr netip.Addr, send 
 		return
 	}
 	hh.hostinfo.logger(hm.l).Info("Send handshake via new relay", "relay", relayAddr)
-	subtype := header.MessageSubType(now[0][1])
-	hm.messageMetrics.Tx(header.Handshake, subtype, int64(len(now)))
-	if err := hm.sendFragmented(now, later, send, repairOwner{attempt: hh, subtype: subtype, counted: true}); err != nil {
+	if err := hm.sendFragmented(now, later, send, repairOwner{hostinfo: hh.hostinfo, pendingOnly: true}); err != nil {
 		hh.hostinfo.logger(hm.l).Debug("Failed to send handshake via new relay", "relay", relayAddr, "error", err)
 	}
 }
