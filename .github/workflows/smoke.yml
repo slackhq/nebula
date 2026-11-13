@@ -11,6 +11,10 @@ on:
       - '**.proto'
       - 'go.mod'
       - 'go.sum'
+
+permissions:
+  contents: read
+
 jobs:
 
   smoke:

@@ -5,6 +5,9 @@ on:
 
 name: Create release and upload binaries
 
+permissions:
+  contents: read
+
 jobs:
   build-linux:
     name: Build Linux/BSD All
@@ -243,6 +246,8 @@ jobs:
     name: Create and Upload Release
     needs: [build-linux, build-darwin, build-windows]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # gh release create publishes the release and its binaries
     steps:
       - uses: actions/checkout@v7
 
