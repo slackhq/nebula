@@ -64,12 +64,14 @@ type HandshakeManager struct {
 
 	vpnIps  map[netip.Addr]*HandshakeHostInfo
 	indexes map[uint32]*HandshakeHostInfo
+	// attempts numbers the outbound handshake attempts, see outboundRetry.
+	attempts uint64
 
 	mainHostMap               *HostMap
 	lightHouse                *LightHouse
 	outside                   udp.Conn
 	config                    HandshakeConfig
-	OutboundHandshakeTimer    *LockingTimerWheel[netip.Addr]
+	OutboundHandshakeTimer    *LockingTimerWheel[outboundRetry]
 	messageMetrics            *MessageMetrics
 	metricInitiated           metrics.Counter
 	metricTimedOut            metrics.Counter
@@ -93,6 +95,7 @@ type HandshakeHostInfo struct {
 	sync.Mutex
 
 	startTime                 time.Time        // Time that we first started trying with this handshake
+	attempt                   uint64           // Which outbound attempt this is, fixed when it starts; 0 for a responder
 	ready                     bool             // Is the handshake ready
 	initiatingVersionOverride cert.Version     // Should we use a non-default cert version for this handshake?
 	counter                   int64            // How many attempts have we made so far
@@ -222,7 +225,7 @@ func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *Light
 		outside:                   outside,
 		config:                    config,
 		trigger:                   make(chan netip.Addr, config.triggerBuffer),
-		OutboundHandshakeTimer:    NewLockingTimerWheel[netip.Addr](config.tryInterval, hsTimeout(config.retries, config.tryInterval)),
+		OutboundHandshakeTimer:    NewLockingTimerWheel[outboundRetry](config.tryInterval, hsTimeout(config.retries, config.tryInterval)),
 		messageMetrics:            config.messageMetrics,
 		metricInitiated:           metrics.GetOrRegisterCounter("handshake_manager.initiated", nil),
 		metricTimedOut:            metrics.GetOrRegisterCounter("handshake_manager.timed_out", nil),
@@ -246,7 +249,7 @@ func (hm *HandshakeManager) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case vpnIP := <-hm.trigger:
-			hm.handleOutbound(vpnIP, true)
+			hm.handleOutbound(vpnIP, 0, true)
 		case now := <-clockSource.C:
 			hm.NextOutboundHandshakeTimerTick(now)
 			hm.fragTable.Expire(now)
@@ -309,20 +312,30 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 	}
 }
 
+// outboundRetry is an entry in OutboundHandshakeTimer. Entries stay in the wheel after their attempt ends, so each
+// carries its attempt number and handleOutbound skips entries for an attempt that is no longer current. A number
+// rather than a pointer keeps ended attempts collectable.
+type outboundRetry struct {
+	vpnAddr netip.Addr
+	attempt uint64
+}
+
 func (hm *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time) {
 	hm.OutboundHandshakeTimer.Advance(now)
 	for {
-		vpnIp, has := hm.OutboundHandshakeTimer.Purge()
+		r, has := hm.OutboundHandshakeTimer.Purge()
 		if !has {
 			break
 		}
-		hm.handleOutbound(vpnIp, false)
+		hm.handleOutbound(r.vpnAddr, r.attempt, false)
 	}
 }
 
-func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered bool) {
+// handleOutbound sends the next msg1 to vpnIp. A non-zero attempt that is not the current attempt sends nothing;
+// lighthouse triggers pass 0.
+func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, attempt uint64, lighthouseTriggered bool) {
 	hh := hm.queryVpnIp(vpnIp)
-	if hh == nil {
+	if hh == nil || (attempt != 0 && hh.attempt != attempt) {
 		return
 	}
 	hh.Lock()
@@ -358,7 +371,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 	// Check if we have a handshake packet to transmit yet
 	if !hh.ready {
 		if !hm.buildStage0Packet(hh) {
-			hm.OutboundHandshakeTimer.Add(vpnIp, hm.config.tryInterval*time.Duration(hh.counter))
+			hm.OutboundHandshakeTimer.Add(outboundRetry{vpnIp, hh.attempt}, hm.config.tryInterval*time.Duration(hh.counter))
 			return
 		}
 	}
@@ -384,7 +397,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 	now, later, err := hh.stage0Packets()
 	if err != nil {
 		hostinfo.logger(hm.l).Error("Failed to fragment handshake", "error", err)
-		hm.OutboundHandshakeTimer.Add(vpnIp, hm.config.tryInterval*time.Duration(hh.counter))
+		hm.OutboundHandshakeTimer.Add(outboundRetry{vpnIp, hh.attempt}, hm.config.tryInterval*time.Duration(hh.counter))
 		return
 	}
 	subtype := hh.machine.Subtype()
@@ -455,7 +468,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 
 	// If a lighthouse triggered this attempt then we are still in the timer wheel and do not need to re-add
 	if !lighthouseTriggered {
-		hm.OutboundHandshakeTimer.Add(vpnIp, hm.config.tryInterval*time.Duration(hh.counter))
+		hm.OutboundHandshakeTimer.Add(outboundRetry{vpnIp, hh.attempt}, hm.config.tryInterval*time.Duration(hh.counter))
 	}
 }
 
@@ -503,13 +516,15 @@ func (hm *HandshakeManager) StartHandshake(vpnAddr netip.Addr, cacheCb func(*Han
 		},
 	}
 
+	hm.attempts++
 	hh := &HandshakeHostInfo{
 		hostinfo:  hostinfo,
 		startTime: time.Now(),
+		attempt:   hm.attempts,
 	}
 	hm.vpnIps[vpnAddr] = hh
 	hm.metricInitiated.Inc(1)
-	hm.OutboundHandshakeTimer.Add(vpnAddr, hm.config.tryInterval)
+	hm.OutboundHandshakeTimer.Add(outboundRetry{vpnAddr, hh.attempt}, hm.config.tryInterval)
 
 	if cacheCb != nil {
 		cacheCb(hh)
