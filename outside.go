@@ -101,7 +101,12 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, rxc *rxCont
 	// At this point we should have a valid existing tunnel, verify and send
 	// recvError if necessary
 	if hostinfo == nil || hostinfo.ConnectionState == nil {
-		if !via.IsRelayed {
+		// A responder uses its new tunnel as soon as it answers our
+		// handshake, so its traffic can arrive before the answer does. That
+		// index is our own handshake in progress: drop the packet (there are
+		// no keys yet), but a recv_error would make the responder close the
+		// tunnel we are about to complete.
+		if !via.IsRelayed && f.handshakeManager.QueryIndex(h.RemoteIndex) == nil {
 			f.maybeSendRecvError(via.UdpAddr, h.RemoteIndex)
 		}
 		return
