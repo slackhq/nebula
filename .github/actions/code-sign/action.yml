@@ -39,7 +39,7 @@ runs:
 
     - name: Configure AWS credentials
       if: inputs.role != '' && inputs.bucket != ''
-      uses: aws-actions/configure-aws-credentials@v6
+      uses: aws-actions/configure-aws-credentials@v6.3.0
       with:
         role-to-assume: ${{ inputs.role }}
         aws-region: ${{ inputs.region }}
