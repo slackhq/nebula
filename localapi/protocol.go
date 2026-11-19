@@ -66,7 +66,7 @@ type Request struct {
 	// Format asks for a rendering other than the default. "" and "json" return the
 	// command's result as a JSON value, which is what a program wants. "text" asks the
 	// daemon to run the command's own human rendering and return it as a string, which is
-	// how `nebula ctl` shows an operator the same output the ssh server would.
+	// how `nebula ctl` shows an operator the command's output.
 	Format string `json:"format,omitempty"`
 }
 
@@ -86,8 +86,8 @@ type Response struct {
 	// Text is what a request for text produced: the command's own human rendering, the
 	// bytes it wrote and nothing else. They travel as bytes, base64 in the envelope,
 	// rather than as a JSON string, because a string is UTF-8 and the rendering need
-	// not be: a name from a certificate is whatever the certificate holds, and the ssh
-	// server passes it through, so this does too.
+	// not be: a name from a certificate is whatever the certificate holds, and this
+	// passes it through.
 	Text []byte `json:"text,omitempty"`
 
 	// Error explains a failure in a sentence, and is absent on success. It is the only

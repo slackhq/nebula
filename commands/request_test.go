@@ -2,7 +2,6 @@ package commands
 
 import (
 	"flag"
-	"strings"
 	"testing"
 	"time"
 
@@ -79,37 +78,8 @@ func TestResolveTellsUnknownFromWithheld(t *testing.T) {
 
 	_, err = r.Resolve("withheld")
 	require.ErrorContains(t, err, "withheld is not available on this surface")
+	require.ErrorContains(t, err, testReason, "the filter's explanation, not one of the registry's own")
 
 	_, err = r.Resolve("no-such-command")
 	require.ErrorContains(t, err, `unknown command "no-such-command"`)
-}
-
-// TestLineRunsTheFlagSetItParsed: the ssh path hands Run the FlagSet the line was parsed
-// into, with no trip through a Request. A flag.Func has no String worth re-parsing, so a
-// round trip would hand Run an empty value and no error; the line's value must arrive.
-func TestLineRunsTheFlagSetItParsed(t *testing.T) {
-	var seen []string
-	r := New()
-	r.Register(&Command{
-		Name: "mode",
-		Flags: func() (*flag.FlagSet, any) {
-			fl := flag.NewFlagSet("", flag.ContinueOnError)
-			s := new(string)
-			fl.Func("mode", "the mode", func(v string) error {
-				*s = "set:" + v
-				return nil
-			})
-			return fl, s
-		},
-		Run: func(fs any, a []string) (Result, error) {
-			seen = append(seen, *fs.(*string))
-			return Value("ok"), nil
-		},
-	})
-
-	var out, errw strings.Builder
-	r.Dispatch("mode -json -mode fast", Output{Out: &out, Err: &errw})
-	require.Equal(t, []string{"set:fast"}, seen)
-	assert.Empty(t, errw.String())
-	assert.Equal(t, "\"ok\"\n", out.String(), "-json was read from the same FlagSet")
 }

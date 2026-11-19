@@ -75,9 +75,9 @@ func TestParseCommandLineOffPresentationFlagIsNoPreference(t *testing.T) {
 	}
 }
 
-// TestParseCommandLineReadsTheLineAsTheDaemonDoes: "--" ends flags, and a negative
-// number before it is parsed as a flag, as over ssh.
-func TestParseCommandLineReadsTheLineAsTheDaemonDoes(t *testing.T) {
+// TestParseCommandLineEndsFlagsAtTerminator: "--" ends flags, and a negative number
+// before it is parsed as a flag.
+func TestParseCommandLineEndsFlagsAtTerminator(t *testing.T) {
 	schema := []commands.CommandSchema{{Name: "set"}}
 
 	req, printedHelp, err := parseCommandLine(schema, []string{"set", "--", "-1"}, "nebula ctl", io.Discard)

@@ -57,14 +57,12 @@ func TestRenderHandsTextOnlyTheValue(t *testing.T) {
 	assert.JSONEq(t, `"data"`, out.String(), "JSON carries the value, never the envelope")
 }
 
-// TestRenderRefusesTextForAValueWithoutText: leaving Text nil is a statement that no
-// human form of the value exists yet, and asking for one is an error that says so.
-func TestRenderRefusesTextForAValueWithoutText(t *testing.T) {
+// TestRenderFallsBackToJSONForAValueWithoutText: a command that declares no Text answers
+// a request for text with its value as JSON, as -json prints it.
+func TestRenderFallsBackToJSONForAValueWithoutText(t *testing.T) {
 	out := &bytes.Buffer{}
-	err := Render(&Command{Name: "print-tunnel"}, Value(map[string]int{"index": 7}), FormatText, out)
-	require.ErrorIs(t, err, ErrNoTextRendering)
-	require.ErrorContains(t, err, "print-tunnel has no human readable output yet")
-	assert.Empty(t, out.String())
+	require.NoError(t, Render(&Command{Name: "print-tunnel"}, Value(map[string]int{"index": 7}), FormatText, out))
+	assert.Equal(t, "{\"index\":7}\n", out.String())
 }
 
 // TestTypedNamesTheTypeOnce: Typed replaces the assertion at the top of every renderer.

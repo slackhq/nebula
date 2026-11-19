@@ -10,9 +10,7 @@ import (
 // options by name in the form their flags parse, its operands, and the rendering the
 // line asked for, if any.
 //
-// nebula ctl builds one with ParseLine and it travels as a JSON object to the control
-// socket. An ssh line never becomes one: it is parsed straight into the command's own
-// FlagSet; see execLine.
+// nebula ctl builds one with ParseLine and it travels as a JSON object to the control socket.
 type Request struct {
 	// Command is the command to run, resolved by the surface at its edge. See
 	// Registry.Resolve for the one that tells an unknown name from a withheld one.
@@ -37,8 +35,7 @@ type Request struct {
 //
 // Every flag the line set other than the presentation flags travels by name, as its
 // flag's String, which is what the daemon's Set parses. That round trip is exact for
-// the bool and string flags a client builds from the schema; it is the client's to make,
-// and the ssh path does not make it, since it runs the FlagSet it parsed.
+// the bool and string flags a client builds from the schema.
 func ParseLine(fl *flag.FlagSet, operands []string) Request {
 	req := Request{Args: operands, Format: presentationFormat(fl)}
 

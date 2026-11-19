@@ -283,32 +283,17 @@ func (s *Server) serve(req *Request) *Response {
 		return res
 	}
 
-	// A command that acts does so now, before the one reply this surface gives, and the
-	// reply carries both halves: the line Run promised and the outcome Then produced.
-	// In JSON only the outcome travels, since the promise is for a person to read.
-	var preface []byte
-	if cmd.Then != nil && r.OK {
-		if format == commands.FormatText && !r.Empty() {
-			buf := &bytes.Buffer{}
-			if err := commands.Render(cmd, r, format, buf); err == nil {
-				preface = buf.Bytes()
-			}
-		}
-		r = cmd.Then()
-	}
-
 	// A command with nothing to say gets an empty, successful reply.
 	if r.Empty() {
-		res.Text = preface
 		return res
 	}
 
-	return render(res, cmd, r, format, preface)
+	return render(res, cmd, r, format)
 }
 
 // render turns a command's Result into the response, in the format the caller asked for,
-// through commands.Render, so the JSON is byte for byte what -json prints over ssh.
-func render(res *Response, cmd *commands.Command, r commands.Result, format commands.Format, preface []byte) *Response {
+// through commands.Render.
+func render(res *Response, cmd *commands.Command, r commands.Result, format commands.Format) *Response {
 	buf := &bytes.Buffer{}
 	if err := commands.Render(cmd, r, format, buf); err != nil {
 		res.Error = err.Error()
@@ -334,12 +319,12 @@ func render(res *Response, cmd *commands.Command, r commands.Result, format comm
 	// A command that ran and refused reads as an error to whoever asked for text: they
 	// are a person or a script, and both expect a refusal on the error stream.
 	if !r.OK {
-		res.Error = string(append(preface, buf.Bytes()...))
+		res.Error = buf.String()
 		return res
 	}
 
 	// The bytes the command wrote, as they are; see Response.Text.
-	res.Text = append(preface, buf.Bytes()...)
+	res.Text = buf.Bytes()
 	return res
 }
 

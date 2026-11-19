@@ -54,7 +54,7 @@ func TestInfoHandlerServesIdentity(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(body), &raw))
 	assert.Equal(t, string(own), raw.PEM)
 
-	// The same bytes -json prints over ssh, newline included, and -pretty's layout.
+	// The same bytes nebula ctl -json prints, newline included, and -pretty's layout.
 	status, compact := infoGet(t, h, "/v1/identity/10.0.0.2/pem")
 	require.Equal(t, http.StatusOK, status)
 	//nolint:testifylint // the exact bytes are what is under test

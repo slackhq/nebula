@@ -82,8 +82,8 @@ func wireFormat(f commands.Format) string {
 	}
 }
 
-// parseCommandLine parses argv against schema with the same rules the server applies
-// to an ssh line. printedHelp is true when -h wrote the command's help to help.
+// parseCommandLine parses argv against schema through commands.ParseArgs. printedHelp is
+// true when -h wrote the command's help to help.
 func parseCommandLine(schema []commands.CommandSchema, argv []string, prog string, help io.Writer) (req commandLine, printedHelp bool, err error) {
 	if len(argv) == 0 {
 		return commandLine{}, false, errors.New("no command given")

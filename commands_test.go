@@ -18,7 +18,7 @@ import (
 )
 
 // TestLogFormatRefusalIsShown: a format the logger does not know is a refusal the user
-// sees, rather than a bare error, which over ssh was silence.
+// sees, rather than a bare error.
 func TestLogFormatRefusalIsShown(t *testing.T) {
 	l := logging.NewLogger(io.Discard)
 

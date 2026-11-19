@@ -3,18 +3,20 @@
 package e2e
 
 import (
-	"bytes"
+	"context"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/cert_test"
-	"github.com/slackhq/nebula/commands"
-	"github.com/slackhq/nebula/sshd"
+	"github.com/slackhq/nebula/localapi"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/require"
 )
@@ -43,15 +45,15 @@ func normalise(s string) string {
 	return s
 }
 
-// outputCase is one command line to run through the ssh dispatch path.
+// outputCase is one command line to send to the control socket.
 type outputCase struct {
 	name string
 	args []string
 }
 
 // TestCommandOutput pins the bytes every command produces, in every format, through the
-// ssh dispatch path. It is the safety net for moving rendering out of the commands: a
-// change here is a change someone at an ssh prompt would see. Regenerate with:
+// control socket. A change here is a change someone running nebula ctl would see.
+// Regenerate with:
 //
 //	go test -tags e2e_testing ./e2e -run TestCommandOutput -update
 func TestCommandOutput(t *testing.T) {
@@ -65,20 +67,21 @@ func TestCommandOutput(t *testing.T) {
 	control.Start()
 	t.Cleanup(func() { control.Stop() })
 
-	// As an ssh session does: a clone of the daemon's registry with logout added, which
-	// help on the clone lists and describes. There is no session to end here.
-	reg := control.Commands().Clone()
-	reg.Register(sshd.LogoutCommand(func() {}))
-	// Dispatch with ssh's default-format policy, so the no-flag column records what an
-	// operator at an ssh prompt sees.
-	reg.DefaultFormat = sshd.DefaultFormat
+	srv := localapi.NewServer(test.NewLogger(), control.Commands())
+	// The control socket is a named pipe on windows and a unix socket everywhere else.
+	path := fmt.Sprintf(`\\.\pipe\nebula-output-golden-%d`, os.Getpid())
+	if runtime.GOOS != "windows" {
+		path = filepath.Join(test.ShortTempDir(t), "s.sock")
+	}
+	require.NoError(t, srv.Rebind(context.Background(), path, localapi.OwnerOnly()))
+	t.Cleanup(srv.Stop)
 
-	// run dispatches as the ssh exec path does and returns the output and the error, which
-	// over ssh is exit status 1.
+	client := &localapi.Client{Path: path}
+
+	// run sends a line as nebula ctl does and returns what it would print, with an error
+	// where it would exit 1.
 	run := func(args ...string) (string, error) {
-		buf := &bytes.Buffer{}
-		err := reg.DispatchArgs(args, commands.MergedOutput(buf))
-		return buf.String(), err
+		return runCtl(client, args)
 	}
 
 	// Seed a pending tunnel so the listing and per-address commands have something to show.
@@ -97,7 +100,7 @@ func TestCommandOutput(t *testing.T) {
 		{"print-cert", nil},
 		{"print-cert", []string{"-raw"}},
 		{"print-cert", []string{"10.222.0.9"}},
-		// A flag after the operand is still a flag, on both surfaces.
+		// A flag after the operand is still a flag.
 		{"print-cert", []string{"10.222.0.9", "-json"}},
 		{"print-cert", []string{"10.222.0.250"}},
 		{"print-cert", []string{"not-an-address"}},
@@ -145,8 +148,7 @@ func TestCommandOutput(t *testing.T) {
 		{"close-tunnel", []string{"not-an-address"}},
 		{"help", nil},
 		{"help", []string{"print-cert"}},
-		{"help", []string{"logout"}},
-		{"logout", []string{"-h"}},
+		{"print-cert", []string{"-h"}},
 		{"not-a-command", []string{"10.222.0.9"}},
 		// reload is last so that whatever a reload does to the daemon cannot leak into an
 		// earlier case. In this harness it fails: the config was loaded from a string and
@@ -169,7 +171,7 @@ func TestCommandOutput(t *testing.T) {
 			if out != "" && !strings.HasSuffix(out, "\n") {
 				got.WriteString("\\ No newline at end of output\n")
 			}
-			// A failed command is recorded as the exit status an ssh caller sees, so the
+			// A failed command is recorded as the exit status nebula ctl gives, so the
 			// golden pins which outcomes count as failures.
 			if err != nil {
 				got.WriteString("exit status 1\n")
@@ -179,4 +181,29 @@ func TestCommandOutput(t *testing.T) {
 	}
 
 	test.Golden(t, filepath.Join("testdata", "commands_output.golden"), got.String())
+}
+
+// runCtl runs a line through InvokeLine, as nebula ctl does, and returns what nebula ctl
+// would print, stdout and stderr together.
+func runCtl(client *localapi.Client, args []string) (string, error) {
+	buf := &strings.Builder{}
+	out, err := client.InvokeLine(args, "nebula ctl", buf)
+	if out != "" {
+		buf.WriteString(out)
+		if !strings.HasSuffix(out, "\n") {
+			buf.WriteString("\n")
+		}
+	}
+
+	// A JSON refusal is already in out; anything else is printed the way nebula ctl
+	// prints it on stderr.
+	if err != nil && out == "" {
+		var refused *localapi.DaemonError
+		if errors.As(err, &refused) {
+			buf.WriteString(strings.TrimSuffix(refused.Msg, "\n") + "\n")
+		} else {
+			fmt.Fprintf(buf, "nebula: %s\n", err)
+		}
+	}
+	return buf.String(), err
 }

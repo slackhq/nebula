@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `print-tunnel`, `print-relays` and `query-lighthouse` print JSON by default instead of refusing without `-json` or
+  `-pretty`.
+
+### Removed
+
+- The SSH debug server and the `sshd` config section. Its commands are served by the control socket and run with
+  `nebula ctl <command>`. A config that still sets `sshd.enabled` logs a warning at startup and is otherwise ignored.
+
 ## [1.12.0] - 2026-10-29
 
 This release introduces udp/tun offloading support that can be enabled for greater performance. This will be enabled by default in a future release. See the `listen.udp_offloads` and `tun.use_offloads` example config settings for more details.
