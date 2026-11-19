@@ -63,6 +63,10 @@ type LightHouse struct {
 	// from lighthouses.
 	remoteAllowList atomic.Pointer[RemoteAllowList]
 
+	// When true, host queries are only answered and relays only created between hosts whose certificates
+	// were signed by the same CA. Lets one lighthouse serve several independent CAs.
+	isolateIssuers atomic.Bool
+
 	// filters local addresses that we advertise to lighthouses
 	localAllowList atomic.Pointer[LocalAllowList]
 
@@ -283,6 +287,13 @@ func (lh *LightHouse) reload(c *config.C, initial bool, r *config.Reload) error 
 		lh.remoteAllowList.Store(ral)
 		if !initial {
 			lh.l.Info("lighthouse.remote_allow_list and/or lighthouse.remote_allow_ranges has changed")
+		}
+	}
+
+	if initial || c.HasChanged("lighthouse.isolate_issuers") {
+		lh.isolateIssuers.Store(c.GetBool("lighthouse.isolate_issuers", false))
+		if !initial {
+			lh.l.Info("lighthouse.isolate_issuers has changed", "isolateIssuers", lh.isolateIssuers.Load())
 		}
 	}
 
@@ -1243,6 +1254,16 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 		return
 	}
 
+	if !lhh.lh.SameIssuer(lhh.lh.ifce.GetHostInfo(fromVpnAddrs[0]), lhh.lh.ifce.GetHostInfo(queryVpnAddr)) {
+		if lhh.l.Enabled(context.Background(), slog.LevelDebug) {
+			lhh.l.Debug("Ignoring HostQuery across issuers",
+				"fromVpnAddrs", fromVpnAddrs,
+				"queryVpnAddr", queryVpnAddr,
+			)
+		}
+		return
+	}
+
 	found, ln, err := lhh.lh.queryAndPrepMessage(queryVpnAddr, func(c *cache) (int, error) {
 		n = lhh.resetMeta()
 		n.Type = NebulaMeta_HostQueryReply
@@ -1274,6 +1295,20 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 	w.SendMessageToVpnAddr(header.LightHouse, 0, fromVpnAddrs[0], lhh.pb[:ln], lhh.nb, lhh.out[:0])
 
 	lhh.sendHostPunchNotification(n, fromVpnAddrs, queryVpnAddr, w)
+}
+
+// SameIssuer reports whether two hosts may learn about each other through this lighthouse or relay.
+// Always true unless lighthouse.isolate_issuers is set; then both hosts must be known and their
+// certificates signed by the same CA.
+func (lh *LightHouse) SameIssuer(a, b *HostInfo) bool {
+	if !lh.isolateIssuers.Load() {
+		return true
+	}
+	if a == nil || b == nil || a.GetCert() == nil || b.GetCert() == nil {
+		return false
+	}
+	ia, ib := a.GetCert().Certificate.Issuer(), b.GetCert().Certificate.Issuer()
+	return ia != "" && ia == ib
 }
 
 // sendHostPunchNotification signals the other side to punch some zero byte udp packets

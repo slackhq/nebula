@@ -539,6 +539,10 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 			f.Handshake(target)
 			return
 		}
+		if !f.lightHouse.SameIssuer(h, peer) {
+			logMsg.Info("Discarding relay request across issuers")
+			return
+		}
 		if !peer.GetRemote().IsValid() {
 			// Only create relays to peers for whom I have a direct connection
 			return

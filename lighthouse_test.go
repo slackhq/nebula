@@ -13,6 +13,7 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/test"
@@ -1147,4 +1148,120 @@ func TestLighthouse_configTestSkipsAdvertiseAddrLookup(t *testing.T) {
 	c.Settings["lighthouse"] = map[string]any{"advertise_addrs": []any{":4242"}}
 	_, err = newLightHouseFromConfig(t.Context(), l, c, cs, nil, nil, true)
 	require.ErrorContains(t, err, "Unable to lookup")
+}
+
+// issuerEncWriter is a testEncWriter that also knows a few hosts, so the lighthouse can look up their certificates.
+type issuerEncWriter struct {
+	testEncWriter
+	hosts map[netip.Addr]*HostInfo
+}
+
+func (w *issuerEncWriter) GetHostInfo(vpnIp netip.Addr) *HostInfo {
+	return w.hosts[vpnIp]
+}
+
+func hostWithIssuer(vpnNet netip.Prefix, issuer string) *HostInfo {
+	return &HostInfo{
+		vpnAddrs: []netip.Addr{vpnNet.Addr()},
+		ConnectionState: &ConnectionState{
+			peerCert: &cert.CachedCertificate{
+				Certificate: &cert_test.DummyCert{
+					Version_:  cert.Version2,
+					Issuer_:   issuer,
+					Networks_: []netip.Prefix{vpnNet},
+				},
+			},
+		},
+	}
+}
+
+func TestLighthouse_SameIssuer(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	c.Settings["lighthouse"] = map[string]any{"am_lighthouse": true}
+	c.Settings["listen"] = map[string]any{"port": 4242}
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, testCertState(netip.MustParsePrefix("10.128.0.1/24")), nil, nil)
+	require.NoError(t, err)
+
+	a1 := hostWithIssuer(netip.MustParsePrefix("10.128.1.1/24"), "ca-a")
+	a2 := hostWithIssuer(netip.MustParsePrefix("10.128.1.2/24"), "ca-a")
+	b1 := hostWithIssuer(netip.MustParsePrefix("10.128.2.1/24"), "ca-b")
+	noIssuer := hostWithIssuer(netip.MustParsePrefix("10.128.3.1/24"), "")
+
+	// Off by default: everything goes.
+	assert.True(t, lh.SameIssuer(a1, b1))
+	assert.True(t, lh.SameIssuer(a1, nil))
+
+	lh.isolateIssuers.Store(true)
+	assert.True(t, lh.SameIssuer(a1, a2))
+	assert.False(t, lh.SameIssuer(a1, b1))
+	assert.False(t, lh.SameIssuer(a1, nil))
+	assert.False(t, lh.SameIssuer(nil, a1))
+	assert.False(t, lh.SameIssuer(a1, &HostInfo{}))
+	assert.False(t, lh.SameIssuer(noIssuer, noIssuer))
+}
+
+func TestLighthouse_IsolateIssuersHostQuery(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	c.Settings["lighthouse"] = map[string]any{"am_lighthouse": true}
+	c.Settings["listen"] = map[string]any{"port": 4242}
+
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, testCertState(netip.MustParsePrefix("10.128.0.1/24")), nil, nil)
+	require.NoError(t, err)
+
+	a1Net := netip.MustParsePrefix("10.128.0.11/24")
+	a2Net := netip.MustParsePrefix("10.128.0.12/24")
+	b1Net := netip.MustParsePrefix("10.128.0.21/24")
+	unknown := netip.MustParseAddr("10.128.0.31")
+	a1Udp := netip.MustParseAddrPort("10.0.0.11:4242")
+	a2Udp := netip.MustParseAddrPort("10.0.0.12:4242")
+	b1Udp := netip.MustParseAddrPort("10.0.0.21:4242")
+	unknownUdp := netip.MustParseAddrPort("10.0.0.31:4242")
+
+	lh.ifce = &issuerEncWriter{hosts: map[netip.Addr]*HostInfo{
+		a1Net.Addr(): hostWithIssuer(a1Net, "ca-a"),
+		a2Net.Addr(): hostWithIssuer(a2Net, "ca-a"),
+		b1Net.Addr(): hostWithIssuer(b1Net, "ca-b"),
+	}}
+	lhh := lh.NewRequestHandler()
+
+	newLHHostUpdate(a1Udp, a1Net.Addr(), []netip.AddrPort{a1Udp}, lhh)
+	newLHHostUpdate(a2Udp, a2Net.Addr(), []netip.AddrPort{a2Udp}, lhh)
+	newLHHostUpdate(b1Udp, b1Net.Addr(), []netip.AddrPort{b1Udp}, lhh)
+	newLHHostUpdate(unknownUdp, unknown, []netip.AddrPort{unknownUdp}, lhh)
+
+	// Default: a query across issuers is answered.
+	r := newLHHostRequest(b1Udp, b1Net.Addr(), a1Net.Addr(), lhh)
+	require.NotNil(t, r.msg)
+	assertIp4InArray(t, r.msg.Details.V4AddrPorts, a1Udp)
+
+	// Turn isolation on with a reload.
+	rc, err := yaml.Marshal(map[string]any{
+		"lighthouse": map[string]any{"am_lighthouse": true, "isolate_issuers": true},
+		"listen":     map[string]any{"port": 4242},
+	})
+	require.NoError(t, err)
+	c.ReloadConfigString(string(rc))
+	require.NoError(t, lh.reload(c, false, nil))
+	require.True(t, lh.isolateIssuers.Load())
+
+	// Across issuers: no reply and no punch notification, in either direction.
+	w := sendLHHostRequest(b1Udp, b1Net.Addr(), a1Net.Addr(), lhh, nil)
+	assert.Nil(t, w.lastReply.msg)
+	w = sendLHHostRequest(a1Udp, a1Net.Addr(), b1Net.Addr(), lhh, nil)
+	assert.Nil(t, w.lastReply.msg)
+
+	// A target we have no tunnel to (so no certificate to compare) is not answered either.
+	w = sendLHHostRequest(a1Udp, a1Net.Addr(), unknown, lhh, nil)
+	assert.Nil(t, w.lastReply.msg)
+
+	// Same issuer: answered, and the queried host gets the punch notification.
+	r = newLHHostRequest(a2Udp, a2Net.Addr(), a1Net.Addr(), lhh)
+	require.NotNil(t, r.msg)
+	assertIp4InArray(t, r.msg.Details.V4AddrPorts, a1Udp)
+	w = sendLHHostRequest(a2Udp, a2Net.Addr(), a1Net.Addr(), lhh, nil)
+	require.NotNil(t, w.lastReply.msg)
+	assert.Equal(t, NebulaMeta_HostPunchNotification, w.lastReply.msg.Type)
+	assert.Equal(t, a1Net.Addr(), w.lastReply.vpnIp)
 }

@@ -63,6 +63,12 @@ lighthouse:
   hosts:
     - "192.168.100.1"
 
+  # isolate_issuers lets one lighthouse/relay serve several independent CAs (all listed in pki.ca).
+  # When true, host queries are answered, punch notifications sent and relays created only between
+  # hosts whose certificates were signed by the same CA. Only meaningful on lighthouses and relays.
+  # Default false. Reloadable.
+  #isolate_issuers: false
+
   # remote_allow_list allows you to control ip ranges that this node will
   # consider when handshaking to another node. By default, any remote IPs are
   # allowed. You can provide CIDRs here with `true` to allow and `false` to
