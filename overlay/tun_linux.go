@@ -255,7 +255,7 @@ func (t *tun) reload(c *config.C, initial bool, r *config.Reload) error {
 		return err
 	}
 
-	if !initial && !routeChange && !c.HasChanged("tun.mtu") {
+	if !initial && !routeChange && !c.HasChanged("tun.mtu") && t.deviceHasConfiguredMTU() {
 		return nil
 	}
 
@@ -280,8 +280,6 @@ func (t *tun) reload(c *config.C, initial bool, r *config.Reload) error {
 	}
 	t.routesFromSystemLock.Unlock()
 
-	oldDefaultMTU := t.DefaultMTU
-	oldMaxMTU := t.MaxMTU
 	newDefaultMTU := getMTU(t.l, c)
 	newMaxMTU := newDefaultMTU
 	for i, r := range routes {
@@ -302,20 +300,27 @@ func (t *tun) reload(c *config.C, initial bool, r *config.Reload) error {
 	t.routeTree.Store(routeTree)
 
 	if !initial {
-		if oldMaxMTU != newMaxMTU {
-			t.setMTU(r)
-			t.l.Info("Set max MTU", "mtu", t.MaxMTU, "oldMTU", oldMaxMTU)
+		// Compare with the device rather than the last config, the mtu may have been refused or changed under us
+		if !t.deviceHasMaxMTU() {
+			oldMTU, _ := t.deviceMTU()
+			if err := t.setMTU(t.MaxMTU); err != nil {
+				t.l.Error("Failed to set tun mtu", "mtu", t.MaxMTU, "error", err)
+				r.Failed()
+			} else {
+				t.l.Info("Set max MTU", "mtu", t.MaxMTU, "oldMTU", oldMTU)
+			}
 		}
 
-		if oldDefaultMTU != newDefaultMTU {
-			for i := range t.vpnNetworks {
-				err := t.setDefaultRoute(t.vpnNetworks[i])
-				if err != nil {
-					t.l.Error(err.Error())
-					r.Failed()
-				} else {
-					t.l.Info("Set default MTU", "mtu", t.DefaultMTU, "oldMTU", oldDefaultMTU)
-				}
+		for _, network := range t.vpnNetworks {
+			if t.defaultRouteHasMTU(network) {
+				continue
+			}
+			err := t.setDefaultRoute(network)
+			if err != nil {
+				t.l.Error(err.Error())
+				r.Failed()
+			} else {
+				t.l.Info("Set default MTU", "mtu", t.DefaultMTU, "network", network)
 			}
 		}
 
@@ -482,7 +487,10 @@ func (t *tun) Activate() error {
 	t.deviceIndex = link.Attrs().Index
 
 	// Setup our default MTU
-	t.setMTU(nil)
+	if err := t.setMTU(t.MaxMTU); err != nil {
+		// This is currently a non fatal condition because the route table must have the MTU set appropriately as well
+		t.l.Error("Failed to set tun mtu", "error", err)
+	}
 
 	// Set the transmit queue length
 	ifrq := ifreqQLEN{Name: devName, Value: int32(t.TXQueueLen)}
@@ -527,14 +535,72 @@ func (t *tun) Activate() error {
 	return nil
 }
 
-func (t *tun) setMTU(r *config.Reload) {
-	// Set the MTU on the device
-	ifm := ifreqMTU{Name: t.deviceBytes(), MTU: int32(t.MaxMTU)}
-	if err := ioctl(t.ioctlFd, unix.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifm))); err != nil {
-		// This is currently a non fatal condition because the route table must have the MTU set appropriately as well
-		t.l.Error("Failed to set tun mtu", "error", err)
-		r.Failed()
+func (t *tun) setMTU(mtu int) error {
+	ifm := ifreqMTU{Name: t.deviceBytes(), MTU: int32(mtu)}
+	return ioctl(t.ioctlFd, unix.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifm)))
+}
+
+// deviceMTU asks the kernel for the device's mtu.
+func (t *tun) deviceMTU() (int, error) {
+	ifm := ifreqMTU{Name: t.deviceBytes()}
+	if err := ioctl(t.ioctlFd, unix.SIOCGIFMTU, uintptr(unsafe.Pointer(&ifm))); err != nil {
+		return 0, err
 	}
+	return int(ifm.MTU), nil
+}
+
+// deviceHasConfiguredMTU is true when the device and the route for each of our networks carry the mtu the config asks
+// for.
+func (t *tun) deviceHasConfiguredMTU() bool {
+	if !t.deviceHasMaxMTU() {
+		return false
+	}
+	for _, network := range t.vpnNetworks {
+		if !t.defaultRouteHasMTU(network) {
+			return false
+		}
+	}
+	return true
+}
+
+// defaultRouteHasMTU is true when the kernel's route for network on our device has the default mtu and advmss. Before
+// Activate there's nothing to check, Activate installs it.
+func (t *tun) defaultRouteHasMTU(network netip.Prefix) bool {
+	if t.deviceIndex == 0 {
+		return true
+	}
+	family := netlink.FAMILY_V4
+	if network.Addr().Is6() {
+		family = netlink.FAMILY_V6
+	}
+	filter := &netlink.Route{
+		LinkIndex: t.deviceIndex,
+		Dst: &net.IPNet{
+			IP:   network.Masked().Addr().AsSlice(),
+			Mask: net.CIDRMask(network.Bits(), network.Addr().BitLen()),
+		},
+		Table: unix.RT_TABLE_MAIN,
+	}
+	routes, err := netlink.RouteListFiltered(family, filter, netlink.RT_FILTER_OIF|netlink.RT_FILTER_DST|netlink.RT_FILTER_TABLE)
+	if err != nil {
+		return false
+	}
+	for _, r := range routes {
+		if r.MTU == t.DefaultMTU && r.AdvMSS == t.advMSS(Route{}) {
+			return true
+		}
+	}
+	return false
+}
+
+// deviceHasMaxMTU is true when the device's mtu is the one the config asks for. Before Activate there's nothing to
+// check, Activate sets it.
+func (t *tun) deviceHasMaxMTU() bool {
+	if t.ioctlFd == 0 {
+		return true
+	}
+	mtu, err := t.deviceMTU()
+	return err == nil && mtu == t.MaxMTU
 }
 
 func (t *tun) setDefaultRoute(cidr netip.Prefix) error {
