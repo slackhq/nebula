@@ -69,7 +69,8 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	// Create manager
 	conf := config.NewC(test.NewLogger())
 	punchy := NewPunchyFromConfig(test.NewLogger(), conf, nil)
-	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
+	nc, err := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
+	require.NoError(t, err)
 	nc.intf = ifce
 	p := []byte("")
 	nb := make([]byte, 12, 12)
@@ -151,7 +152,8 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	// Create manager
 	conf := config.NewC(test.NewLogger())
 	punchy := NewPunchyFromConfig(test.NewLogger(), conf, nil)
-	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
+	nc, err := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
+	require.NoError(t, err)
 	nc.intf = ifce
 	p := []byte("")
 	nb := make([]byte, 12, 12)
@@ -235,7 +237,8 @@ func Test_NewConnectionManager_CounterLimits(t *testing.T) {
 
 	conf := config.NewC(test.NewLogger())
 	punchy := NewPunchyFromConfig(test.NewLogger(), conf, nil)
-	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
+	nc, err := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
+	require.NoError(t, err)
 	nc.intf = ifce
 
 	hostinfo := &HostInfo{
@@ -311,7 +314,8 @@ func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
 		"drop_inactive": true,
 	}
 	punchy := NewPunchyFromConfig(test.NewLogger(), conf, nil)
-	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
+	nc, err := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
+	require.NoError(t, err)
 	assert.True(t, nc.dropInactive.Load())
 	nc.intf = ifce
 
@@ -436,7 +440,8 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	// Create manager
 	conf := config.NewC(test.NewLogger())
 	punchy := NewPunchyFromConfig(test.NewLogger(), conf, nil)
-	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
+	nc, err := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
+	require.NoError(t, err)
 	nc.intf = ifce
 	ifce.connectionManager = nc
 
@@ -577,4 +582,16 @@ func (d *dummyCert) MarshalJSON() ([]byte, error) {
 
 func (d *dummyCert) Copy() cert.Certificate {
 	return d
+}
+
+func Test_NewConnectionManager_RejectsNonPositiveTimers(t *testing.T) {
+	l := test.NewLogger()
+	for _, k := range []string{"connection_alive_interval", "pending_deletion_interval"} {
+		for _, v := range []int{0, -1} {
+			conf := config.NewC(l)
+			conf.Settings["timers"] = map[string]any{k: v}
+			_, err := newConnectionManagerFromConfig(l, conf, newHostMap(l), NewPunchyFromConfig(l, conf, nil))
+			require.ErrorContains(t, err, k)
+		}
+	}
 }

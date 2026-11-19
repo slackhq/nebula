@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"runtime"
 	"strconv"
 	"sync"
@@ -121,7 +122,7 @@ func newStatsServerFromConfig(ctx context.Context, l *slog.Logger, c *config.C, 
 //   - config changed (still enabled) -> Stop the old, Start the new
 //   - no change -> no-op
 func (s *statsServer) reload(c *config.C, initial bool) error {
-	newCfg, err := loadStatsConfig(c)
+	newCfg, err := loadStatsConfig(c, s.configTest)
 	if err != nil {
 		return err
 	}
@@ -350,7 +351,7 @@ func captureStatsLoop(ctx context.Context, d time.Duration, fns []func(), done c
 	}
 }
 
-func loadStatsConfig(c *config.C) (statsConfig, error) {
+func loadStatsConfig(c *config.C, configTest bool) (statsConfig, error) {
 	cfg := statsConfig{
 		typ: c.GetString("stats.type", ""),
 	}
@@ -370,7 +371,18 @@ func loadStatsConfig(c *config.C) (statsConfig, error) {
 		if cfg.graphite.host == "" {
 			return cfg, errors.New("stats.host can not be empty")
 		}
-		addr, err := net.ResolveTCPAddr(cfg.graphite.protocol, cfg.graphite.host)
+		resolveHost := cfg.graphite.host
+		if configTest {
+			// An empty host still checks the protocol and port but never hits DNS.
+			host, port, err := net.SplitHostPort(resolveHost)
+			if err != nil {
+				return cfg, fmt.Errorf("error while setting up graphite sink: %s", err)
+			}
+			if _, err := netip.ParseAddr(host); err != nil {
+				resolveHost = net.JoinHostPort("", port)
+			}
+		}
+		addr, err := net.ResolveTCPAddr(cfg.graphite.protocol, resolveHost)
 		if err != nil {
 			return cfg, fmt.Errorf("error while setting up graphite sink: %s", err)
 		}

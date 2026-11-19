@@ -244,7 +244,7 @@ func TestStatsServer_graphiteExportUsesConfig(t *testing.T) {
 	h := newGraphiteHost(t, 0)
 	s, c := newTestStatsServer(t)
 	setStatsConfig(c, map[string]any{"type": "graphite", "interval": "4s", "prefix": "pfx", "host": h.ln.Addr().String()})
-	cfg, err := loadStatsConfig(c)
+	cfg, err := loadStatsConfig(c, false)
 	require.NoError(t, err)
 
 	s.runMu.Lock()
@@ -263,7 +263,7 @@ func TestStatsServer_graphiteFailureIsLogged(t *testing.T) {
 	s, c := newTestStatsServer(t)
 	s.l = test.NewLoggerWithOutput(logs)
 	setStatsConfig(c, map[string]any{"type": "graphite", "interval": "1h", "host": "127.0.0.1:" + freeTCPPort(t)})
-	cfg, err := loadStatsConfig(c)
+	cfg, err := loadStatsConfig(c, false)
 	require.NoError(t, err)
 
 	s.runMu.Lock()
@@ -312,4 +312,22 @@ func TestStatsServer_stopAbandonsGraphiteSend(t *testing.T) {
 	assert.Less(t, n, int64(1<<20), "the send kept going after Stop")
 	// The capture loop logs on its own goroutine after Start has returned, give it the chance
 	assert.Never(t, func() bool { return strings.Contains(logs.String(), "Graphite export failed") }, 500*time.Millisecond, 10*time.Millisecond, "a stop is not a failure")
+}
+
+func TestLoadStatsConfig_configTestSkipsGraphiteLookup(t *testing.T) {
+	_, c := newTestStatsServer(t)
+	setStatsConfig(c, map[string]any{"type": "graphite", "interval": "1s", "host": "nebula-test.invalid:2003"})
+	_, err := loadStatsConfig(c, true)
+	require.NoError(t, err)
+
+	for _, cfg := range []map[string]any{
+		{"host": "nebula-test.invalid"},
+		{"host": "nebula-test.invalid:99999"},
+		{"host": "nebula-test.invalid:2003", "protocol": "udp"},
+	} {
+		cfg["type"], cfg["interval"] = "graphite", "1s"
+		setStatsConfig(c, cfg)
+		_, err = loadStatsConfig(c, true)
+		require.Error(t, err, cfg)
+	}
 }
