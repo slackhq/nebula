@@ -134,9 +134,7 @@ func (hm *HandshakeManager) resendPendingHybrid(via ViaSender, packet []byte, in
 	if hostinfo == nil {
 		return false
 	}
-	if msg := hostinfo.HandshakePacket[handshakePacketStage2]; msg != nil {
-		hm.sendHandshakeResponse(via, msg, hostinfo, true, in)
-	}
+	hm.answerAlreadySeen(via, hostinfo, in)
 	return true
 }
 
@@ -174,9 +172,7 @@ func (hm *HandshakeManager) awaitMsg3(via ViaSender, hh *HandshakeHostInfo, mach
 	// with the msg2 it already has, as a classical repeat is.
 	if existing := hm.completedBy(vpnAddrs[0], packet); existing != nil {
 		hm.DeleteHostInfo(hostinfo)
-		if msg := existing.HandshakePacket[handshakePacketStage2]; msg != nil {
-			hm.sendHandshakeResponse(via, msg, existing, true, in)
-		}
+		hm.answerAlreadySeen(via, existing, in)
 		return
 	}
 	var rh header.H

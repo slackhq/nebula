@@ -1368,7 +1368,8 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 	f.l.Info("Handshake message sent", logFields...)
 }
 
-// answerAlreadySeen answers a repeat of the msg1 that made existing, arriving by
+// answerAlreadySeen answers a repeat of the msg1 existing answered, existing being
+// the tunnel it made or a hybrid responder still waiting for msg3, arriving by
 // via: the initiator retried before the response reached it. A repeat arriving
 // unfragmented is checked as a new msg1 is before it gets here, a fragmented one
 // recognised by answerRepeat is not, so both are held to the remote allow list
@@ -1380,7 +1381,8 @@ func (hm *HandshakeManager) answerAlreadySeen(via ViaSender, existing *HostInfo,
 			"vpnAddrs", existing.vpnAddrs, "from", via)
 		return
 	}
-	if existing.SetRemoteIfPreferred(hm.mainHostMap, via) {
+	// A hybrid responder still waiting for msg3 has no tunnel to move or test yet; msg3 sets its remote.
+	if existing.ConnectionState != nil && existing.SetRemoteIfPreferred(hm.mainHostMap, via) {
 		f.SendMessageToVpnAddr(header.Test, header.TestRequest, existing.vpnAddrs[0], []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 	}
 	// Resend the original response. The peer is committed to that response's

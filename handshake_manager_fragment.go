@@ -368,7 +368,6 @@ func (hm *HandshakeManager) answerRepeat(via ViaSender, key fragKey, fh fragment
 	if hostinfo == nil {
 		return false
 	}
-	msg2 := hostinfo.HandshakePacket[handshakePacketStage2]
 	l, err := fh.Layout()
 	if err != nil {
 		return false

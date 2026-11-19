@@ -49,7 +49,6 @@ func newHybridTestManager(t *testing.T, ca cert.Certificate, cs *CertState) (*Ha
 	pool := cert.NewCAPool()
 	require.NoError(t, pool.AddCA(ca))
 	hm.f.pki.caPool.Store(pool)
-	hm.lightHouse.remoteAllowList.Store(&RemoteAllowList{})
 	hm.f.lightHouse = hm.lightHouse
 	hm.f.hostMap = hm.mainHostMap
 	hm.f.myVpnAddrsTable = cs.myVpnAddrsTable
@@ -200,6 +199,63 @@ func TestHybridRepeatAfterComplete(t *testing.T) {
 	assert.Zero(t, pendingIndexes(hm))
 	_, n := responderFragIDs(t, conn.take())
 	assert.Positive(t, n, "the cached msg2 is resent, as for a classical repeat")
+}
+
+// A repeat answered by a pending responder, reassembled or recognised fragment by fragment, is held to the remote
+// allow list for the initiator's vpn addresses. It never moves the remote, which msg3 sets, nor tests the tunnel,
+// which does not exist yet and would start a handshake of our own.
+func TestHybridRepeatChecksPeer(t *testing.T) {
+	ca, responder, initiator := newHybridPeers(t)
+	hm, conn := newHybridTestManager(t, ca, responder.cs)
+	direct := ViaSender{UdpAddr: netip.MustParseAddrPort("192.0.2.2:4242")}
+	denied := ViaSender{UdpAddr: netip.MustParseAddrPort("198.51.100.2:4242")}
+	lan := ViaSender{UdpAddr: netip.MustParseAddrPort("172.16.0.2:4242")}
+
+	c := config.NewC(test.NewLogger())
+	require.NoError(t, c.LoadString(`lighthouse: {remote_allow_ranges: {"10.0.0.2/32": {"198.51.100.0/24": false}}}`))
+	ral, err := NewRemoteAllowListFromConfig(c, "lighthouse.remote_allow_list", "lighthouse.remote_allow_ranges")
+	require.NoError(t, err)
+	hm.lightHouse.remoteAllowList.Store(ral)
+	preferred := []netip.Prefix{netip.MustParsePrefix("172.16.0.0/12")}
+	hm.mainHostMap.preferredRanges.Store(&preferred)
+
+	msg1, _ := hybridMsg1(t, ca, initiator)
+	var h header.H
+	require.NoError(t, h.Parse(msg1))
+	in := msg1Info{fragmented: true, validated: true}
+	hm.beginHandshake(direct, msg1, &h, in)
+	require.Equal(t, 1, pendingResponders(hm))
+	require.NotEmpty(t, conn.take())
+	var pending *HostInfo
+	for _, hh := range hm.hybrid.responders {
+		pending = hh.hostinfo
+	}
+
+	hm.beginHandshake(denied, msg1, &h, in)
+	assert.Empty(t, conn.take(), "a reassembled repeat from a denied address gets no answer")
+
+	s, err := fragment.NewSender(msg1, 777)
+	require.NoError(t, err)
+	retry := func(via ViaSender) int {
+		data, later, err := s.Attempt(fragment.DefaultRepair(s.Layout().K))
+		require.NoError(t, err)
+		for _, p := range append(data, later...) {
+			var ph header.H
+			require.NoError(t, ph.Parse(p))
+			hm.HandleIncoming(via, p, &ph)
+		}
+		return len(conn.take())
+	}
+	assert.Zero(t, retry(denied), "nor does a recognised one")
+	assert.Zero(t, hm.fragTable.Len(), "which is not reassembled either")
+
+	assert.Positive(t, retry(lan))
+	assert.Equal(t, direct.UdpAddr, pending.GetRemote(), "a pending responder's remote waits for msg3")
+	hm.RLock()
+	assert.Empty(t, hm.vpnIps, "no handshake of our own was started")
+	hm.RUnlock()
+	assert.Equal(t, 1, pendingResponders(hm))
+	assert.Equal(t, 1, pendingIndexes(hm))
 }
 
 // A node answers msg1s for its own curve only, and an unfragmented hybrid packet is malformed.
