@@ -48,7 +48,11 @@ func newFragTestManager(t *testing.T) (*HandshakeManager, *fragRecordingConn) {
 	cfg := defaultHandshakeConfig
 	// Repair fragments go out with the data ones, so a test sees a whole send at once.
 	cfg.fragment = fragmentConfig{}
-	hm := NewHandshakeManager(l, newHostMap(l), newTestLighthouse(), conn, cfg)
+	lh := newTestLighthouse()
+	lh.remoteAllowList.Store(&RemoteAllowList{})
+	hostMap := newHostMap(l)
+	hostMap.preferredRanges.Store(&[]netip.Prefix{})
+	hm := NewHandshakeManager(l, hostMap, lh, conn, cfg)
 	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
 	c, _, keyPEM, _ := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, ca, caKey, "me", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")}, nil, nil)
 	key, _, curve, err := cert.UnmarshalPrivateKeyFromPEM(keyPEM)
@@ -64,6 +68,9 @@ func newFragTestManager(t *testing.T) (*HandshakeManager, *fragRecordingConn) {
 		pki:              p,
 		l:                l,
 	}
+	// A Test sent to a tunnel by a repeat that moves it to a preferred remote looks these up.
+	hm.f.tryPromoteEvery.Store(defaultPromoteEvery)
+	hm.f.reQueryEvery.Store(defaultReQueryEvery)
 	return hm, conn
 }
 
@@ -325,6 +332,56 @@ func TestAnswerRepeat(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, feed(direct, data[0]))
 	assert.Equal(t, 1, hm.fragTable.Len(), "a fragment that does not match is assembled")
+}
+
+// TestAnswerRepeatChecksPeer: a repeat recognised fragment by fragment is held to what an unfragmented repeat is, the
+// remote allow list for the peer's vpn addresses, and moves the tunnel to a preferred remote.
+func TestAnswerRepeatChecksPeer(t *testing.T) {
+	hm, conn := newFragTestManager(t)
+	public := ViaSender{UdpAddr: netip.MustParseAddrPort("192.0.2.1:4242")}
+	denied := ViaSender{UdpAddr: netip.MustParseAddrPort("198.51.100.1:4242")}
+	lan := ViaSender{UdpAddr: netip.MustParseAddrPort("172.16.0.2:4242")}
+
+	c := config.NewC(test.NewLogger())
+	require.NoError(t, c.LoadString(`lighthouse: {remote_allow_ranges: {"10.0.0.2/32": {"198.51.100.0/24": false}}}`))
+	ral, err := NewRemoteAllowListFromConfig(c, "lighthouse.remote_allow_list", "lighthouse.remote_allow_ranges")
+	require.NoError(t, err)
+	hm.lightHouse.remoteAllowList.Store(ral)
+	preferred := []netip.Prefix{netip.MustParsePrefix("172.16.0.0/12")}
+	hm.mainHostMap.preferredRanges.Store(&preferred)
+
+	msg1 := make([]byte, 3000)
+	const initiator = 1234
+	hostinfo := &HostInfo{
+		localIndexId:    77,
+		remoteIndexId:   initiator,
+		vpnAddrs:        []netip.Addr{netip.MustParseAddr("10.0.0.2")},
+		HandshakePacket: map[uint8][]byte{handshakePacketStage0: msg1, handshakePacketStage2: testMsg2(500, 4)},
+		ConnectionState: &ConnectionState{},
+		remotes:         NewRemoteList([]netip.Addr{netip.MustParseAddr("10.0.0.2")}, nil),
+	}
+	hostinfo.SetRemote(public.UdpAddr)
+	hm.mainHostMap.unlockedAddHostInfo(hostinfo, hm.f)
+
+	s, err := fragment.NewSender(testMsg1(msg1), initiator)
+	require.NoError(t, err)
+	retry := func(via ViaSender) int {
+		data, repair, err := s.Attempt(fragment.DefaultRepair(s.Layout().K))
+		require.NoError(t, err)
+		for _, p := range append(data, repair...) {
+			var h header.H
+			require.NoError(t, h.Parse(p))
+			hm.HandleIncoming(via, p, &h)
+		}
+		return len(conn.take())
+	}
+
+	assert.Zero(t, retry(denied), "an address the allow list denies the peer gets no answer")
+	assert.Zero(t, hm.fragTable.Len(), "nor is its copy reassembled")
+	assert.Equal(t, public.UdpAddr, hostinfo.GetRemote())
+
+	assert.NotZero(t, retry(lan))
+	assert.Equal(t, lan.UdpAddr, hostinfo.GetRemote(), "a copy by a preferred path moves the tunnel to it")
 }
 
 func TestFragKeyFor(t *testing.T) {

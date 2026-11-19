@@ -1291,6 +1291,29 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 	f.l.Info("Handshake message sent", logFields...)
 }
 
+// answerAlreadySeen answers a repeat of the msg1 that made existing, arriving by
+// via: the initiator retried before the response reached it. A repeat arriving
+// unfragmented is checked as a new msg1 is before it gets here, a fragmented one
+// recognised by answerRepeat is not, so both are held to the remote allow list
+// here, which a peer's address must pass for each of its vpn addresses.
+func (hm *HandshakeManager) answerAlreadySeen(via ViaSender, existing *HostInfo, in msg1Info) {
+	f := hm.f
+	if !via.IsRelayed && !hm.lightHouse.GetRemoteAllowList().AllowAll(existing.vpnAddrs, via.UdpAddr.Addr()) {
+		f.l.Debug("lighthouse.remote_allow_list denied incoming handshake",
+			"vpnAddrs", existing.vpnAddrs, "from", via)
+		return
+	}
+	if existing.SetRemoteIfPreferred(hm.mainHostMap, via) {
+		f.SendMessageToVpnAddr(header.Test, header.TestRequest, existing.vpnAddrs[0], []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+	}
+	// Resend the original response. The peer is committed to that response's
+	// ephemeral keys; a freshly-built one would have different keys and break
+	// the tunnel even though both sides "completed" the handshake.
+	if msg := existing.HandshakePacket[handshakePacketStage2]; msg != nil {
+		hm.sendHandshakeResponse(via, msg, existing, true, in)
+	}
+}
+
 // handleCheckAndCompleteError handles errors from CheckAndComplete.
 // This only fires from the responder-side beginHandshake path, after the
 // peer cert has been validated and ConnectionState populated, so peerCert
@@ -1302,15 +1325,7 @@ func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hos
 
 	switch err {
 	case ErrAlreadySeen:
-		if existing.SetRemoteIfPreferred(f.hostMap, via) {
-			f.SendMessageToVpnAddr(header.Test, header.TestRequest, hostinfo.vpnAddrs[0], []byte(""), make([]byte, 12, 12), make([]byte, mtu))
-		}
-		// Resend the original response. The peer is committed to that response's
-		// ephemeral keys; a freshly-built one would have different keys and break
-		// the tunnel even though both sides "completed" the handshake.
-		if msg := existing.HandshakePacket[handshakePacketStage2]; msg != nil {
-			hm.sendHandshakeResponse(via, msg, existing, true, in)
-		}
+		hm.answerAlreadySeen(via, existing, in)
 
 	case ErrExistingHostInfo:
 		f.l.Info("Handshake too old",

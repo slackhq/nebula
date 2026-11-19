@@ -347,7 +347,7 @@ func (hm *HandshakeManager) answerRepeat(via ViaSender, key fragKey, fh fragment
 		return true
 	}
 	validated := via.IsRelayed || (fh.HasCookie() && hm.cookies.valid(key, fh.Cookie, now))
-	hm.sendHandshakeResponse(via, msg2, hostinfo, true, msg1Info{fragmented: true, validated: validated, received: got})
+	hm.answerAlreadySeen(via, hostinfo, msg1Info{fragmented: true, validated: validated, received: got})
 	return true
 }
 
