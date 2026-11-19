@@ -398,6 +398,16 @@ tun:
     #  mtu: 1300
     #  metric: 100
     #  install: true
+    # On Linux, unsafe routes can be installed in a policy routing table and selected by source prefix.
+    # `table` requires `source`; `source` requires a non-main table (not 254).
+    # Reserved tables 253 (default) and 255 (local) are not allowed.
+    # Routes with overlapping destination prefixes must use the same via gateways if either is a policy route.
+    # `source` and `route` must use the same IP family.
+    # `priority` defaults to 10000 when source is set.
+    # These options install an IPv4/IPv6 `ip rule` and are rejected on non-Linux platforms.
+    #  table: 200
+    #  source: 192.168.100.0/24
+    #  priority: 10000
 
   # On Windows only, sets the network category of the nebula interface. Without this, Windows often
   # leaves the network as "Unidentified" and treats it as Public, which makes the host firewall more
