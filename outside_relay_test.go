@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/flynn/noise"
+	"github.com/DefinedNet/noise"
 	"github.com/gaissmai/bart"
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/header"

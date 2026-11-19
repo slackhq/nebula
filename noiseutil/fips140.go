@@ -15,7 +15,7 @@ import (
 	_ "crypto/tls"
 	_ "unsafe"
 
-	"github.com/flynn/noise"
+	"github.com/DefinedNet/noise"
 )
 
 // TODO: Use NewGCMWithCounterNonce or NewGCMForQUIC once available:

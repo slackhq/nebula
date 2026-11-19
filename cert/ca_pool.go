@@ -30,7 +30,7 @@ func NewCAPool() *CAPool {
 // input bytes, which must be a PEM-encoded set of nebula certificates.
 // If the pool contains any expired certificates, an ErrExpired will be
 // returned along with the pool. Certificates this version of nebula does not
-// support, an unknown version or curve, are left out and their errors are
+// support, an unknown version or curve, or a curve this build can not run, are left out and their errors are
 // returned along with the pool too, joined with any ErrExpired. A nil pool
 // means the input could not be used at all. The caller must handle any such errors.
 func NewCAPoolFromPEM(caPEMs []byte) (*CAPool, error) {
@@ -39,6 +39,10 @@ func NewCAPoolFromPEM(caPEMs []byte) (*CAPool, error) {
 
 // NewCAPoolFromPEMReader will create a new CA pool from the provided reader.
 // The reader must contain a PEM-encoded set of nebula certificates.
+// A CA on a curve whose algorithms this build can not run, such as the hybrid curve under a FIPS module without
+// ML-DSA, is skipped like one of an unknown version, so a bundle can carry CAs for nodes that have them; its error,
+// wrapping ErrPQUnavailable, is joined into the returned error alongside the pool and the caller decides whether a
+// pool without them will do.
 func NewCAPoolFromPEMReader(r io.Reader) (*CAPool, error) {
 	pool := NewCAPool()
 
@@ -59,7 +63,7 @@ func NewCAPoolFromPEMReader(r io.Reader) (*CAPool, error) {
 		}
 
 		c, err := unmarshalCertificateBlock(block)
-		if errors.Is(err, ErrUnknownVersion) {
+		if errors.Is(err, ErrUnknownVersion) || errors.Is(err, ErrPQUnavailable) {
 			skipped = append(skipped, fmt.Errorf("certificate %d: %w", i, err))
 			continue
 		} else if err != nil {

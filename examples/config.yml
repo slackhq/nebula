@@ -5,6 +5,8 @@
 pki:
   # The CAs that are accepted by this node. Must contain one or more certificates created by 'nebula-cert ca'
   ca: /etc/nebula/ca.crt
+  # A certificate on the hybrid curve, P384_MLKEM1024_MLDSA87, makes post-quantum handshakes with nodes on the same
+  # curve, and only with them. See docs/pq-handshake.md.
   cert: /etc/nebula/host.crt
   key: /etc/nebula/host.key
   # blocklist is a list of certificate fingerprints that we will refuse to talk to

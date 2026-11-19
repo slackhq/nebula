@@ -92,6 +92,14 @@ func (cs *ConnectionState) NextMessageCounter() (uint64, bool) {
 	return c, true
 }
 
+// heardFromPeer reports whether anything from the peer has decrypted under these
+// keys, beyond the handshake messages the replay window was seeded with.
+func (cs *ConnectionState) heardFromPeer(handshakeMessages uint64) bool {
+	cs.decryptLock.Lock()
+	defer cs.decryptLock.Unlock()
+	return cs.window.current > handshakeMessages
+}
+
 func (cs *ConnectionState) Curve() cert.Curve {
 	return cs.myCert.Curve()
 }

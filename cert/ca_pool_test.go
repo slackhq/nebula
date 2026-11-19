@@ -127,7 +127,7 @@ func TestNewCAPoolFromPEM_SkipsUnsupported(t *testing.T) {
 
 	newCurve, _, _, _ := NewTestCaCert(Version2, Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
 	nc := newCurve.Copy().(*certificateV2)
-	nc.curve = Curve(2)
+	nc.curve = Curve(9)
 	newCurvePEM, err := nc.MarshalPEM()
 	require.NoError(t, err)
 	newVersionPEM := pem.EncodeToMemory(&pem.Block{Type: "NEBULA CERTIFICATE V9", Bytes: []byte{0x30, 0x00}})
@@ -195,11 +195,11 @@ func TestNewCAPoolFromPEM_SkipsUnsupported(t *testing.T) {
 func TestCAPool_AddCAUnknownCurve(t *testing.T) {
 	ca, _, _, _ := NewTestCaCert(Version2, Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
 	c := ca.Copy().(*certificateV2)
-	c.curve = Curve(2)
+	c.curve = Curve(9)
 
 	err := NewCAPool().AddCA(c)
 	require.ErrorIs(t, err, ErrUnknownCurve)
-	require.EqualError(t, err, fmt.Sprintf("%q: certificate curve unrecognized: 2", c.Name()))
+	require.EqualError(t, err, fmt.Sprintf("%q: certificate curve unrecognized: 9", c.Name()))
 }
 
 // A CA's name comes from the certificate, it is quoted so it can't inject control sequences into an error
