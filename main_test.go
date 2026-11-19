@@ -161,3 +161,40 @@ func writeTestPKI(t *testing.T, dir string) (caPath, certPath, keyPath string) {
 	require.NoError(t, os.WriteFile(keyPath, keyPEM, 0o600))
 	return caPath, certPath, keyPath
 }
+
+func TestRedactSettings(t *testing.T) {
+	pem := "-----BEGIN NEBULA X25519 PRIVATE KEY-----\nAAAA\n-----END NEBULA X25519 PRIVATE KEY-----\n"
+	settings := map[string]any{
+		"pki":    map[string]any{"key": pem, "cert": "/etc/nebula/host.crt"},
+		"sshd":   map[string]any{"host_key": pem, "listen": "127.0.0.1:2222"},
+		"punchy": map[string]any{"punch": true},
+	}
+
+	got := redactSettings(settings)
+	assert.Equal(t, map[string]any{"key": "<inline>", "cert": "/etc/nebula/host.crt"}, got["pki"])
+	assert.Equal(t, map[string]any{"host_key": "<inline>", "listen": "127.0.0.1:2222"}, got["sshd"])
+	assert.Equal(t, settings["punchy"], got["punchy"])
+	assert.Equal(t, pem, settings["pki"].(map[string]any)["key"], "the live config must not be modified")
+	assert.Equal(t, pem, settings["sshd"].(map[string]any)["host_key"], "the live config must not be modified")
+
+	paths := map[string]any{"pki": map[string]any{"key": "/etc/nebula/host.key"}, "sshd": map[string]any{"host_key": "/etc/nebula/ssh_host_ed25519_key"}}
+	assert.Equal(t, paths, redactSettings(paths))
+}
+
+func TestMain_configTestRejectsZeroTimers(t *testing.T) {
+	l := test.NewLogger()
+	caPath, certPath, keyPath := writeTestPKI(t, t.TempDir())
+
+	for stanza, want := range map[string]string{
+		"handshakes:\n  try_interval: 0s":          "handshakes.try_interval must be greater than 0",
+		"timers:\n  connection_alive_interval: 0":  "timers.connection_alive_interval must be greater than 0",
+		"timers:\n  pending_deletion_interval: -1": "timers.pending_deletion_interval must be greater than 0",
+	} {
+		c := config.NewC(l)
+		require.NoError(t, c.LoadString(fmt.Sprintf("pki:\n  ca: %s\n  cert: %s\n  key: %s\n%s\n", caPath, certPath, keyPath, stanza)))
+
+		ctrl, err := Main(c, true, "config-test", l, nil)
+		require.ErrorContains(t, err, want)
+		assert.Nil(t, ctrl)
+	}
+}

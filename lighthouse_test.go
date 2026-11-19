@@ -1129,3 +1129,22 @@ func TestLighthouse_V4OnlyDoesNotAdvertiseIPv6LocalAddrs(t *testing.T) {
 	require.Len(t, w.lastReply.msg.Details.V6AddrPorts, 1)
 	assert.Equal(t, netip.MustParseAddrPort("[2001::5]:4242"), protoV6AddrPortToNetAddrPort(w.lastReply.msg.Details.V6AddrPorts[0]))
 }
+
+func TestLighthouse_configTestSkipsAdvertiseAddrLookup(t *testing.T) {
+	l := test.NewLogger()
+	cs := testCertState(netip.MustParsePrefix("10.128.0.1/24"))
+	c := config.NewC(l)
+
+	c.Settings["lighthouse"] = map[string]any{"advertise_addrs": []any{"nebula-test.invalid:4242", "1.2.3.4:4242"}}
+	lh, err := newLightHouseFromConfig(t.Context(), l, c, cs, nil, nil, true)
+	require.NoError(t, err)
+	assert.Equal(t, []netip.AddrPort{netip.MustParseAddrPort("1.2.3.4:4242")}, lh.GetAdvertiseAddrs())
+
+	c.Settings["lighthouse"] = map[string]any{"advertise_addrs": []any{"nebula-test.invalid:port"}}
+	_, err = newLightHouseFromConfig(t.Context(), l, c, cs, nil, nil, true)
+	require.ErrorContains(t, err, "Unable to parse port")
+
+	c.Settings["lighthouse"] = map[string]any{"advertise_addrs": []any{":4242"}}
+	_, err = newLightHouseFromConfig(t.Context(), l, c, cs, nil, nil, true)
+	require.ErrorContains(t, err, "Unable to lookup")
+}

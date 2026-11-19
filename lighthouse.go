@@ -32,6 +32,7 @@ type LightHouse struct {
 	//TODO: We need a timer wheel to kick out vpnAddrs that haven't reported in a long time
 	sync.RWMutex //Because we concurrently read and write to our maps
 	ctx          context.Context
+	configTest   bool
 	amLighthouse bool
 
 	myVpnNetworks      []netip.Prefix
@@ -97,6 +98,10 @@ type LightHouse struct {
 // NewLightHouseFromConfig will build a Lighthouse struct from the values provided in the config object
 // addrMap should be nil unless this is during a config reload
 func NewLightHouseFromConfig(ctx context.Context, l *slog.Logger, c *config.C, cs *CertState, pc udp.Conn, p *Punchy) (*LightHouse, error) {
+	return newLightHouseFromConfig(ctx, l, c, cs, pc, p, false)
+}
+
+func newLightHouseFromConfig(ctx context.Context, l *slog.Logger, c *config.C, cs *CertState, pc udp.Conn, p *Punchy, configTest bool) (*LightHouse, error) {
 	amLighthouse := c.GetBool("lighthouse.am_lighthouse", false)
 	nebulaPort := uint32(c.GetInt("listen.port", 0))
 	if amLighthouse && nebulaPort == 0 {
@@ -114,6 +119,7 @@ func NewLightHouseFromConfig(ctx context.Context, l *slog.Logger, c *config.C, c
 
 	h := LightHouse{
 		ctx:                ctx,
+		configTest:         configTest,
 		amLighthouse:       amLighthouse,
 		myVpnNetworks:      cs.myVpnNetworks,
 		myVpnNetworksTable: cs.myVpnNetworksTable,
@@ -209,17 +215,21 @@ func (lh *LightHouse) reload(c *config.C, initial bool, r *config.Reload) error 
 				return util.NewContextualError("Unable to parse lighthouse.advertise_addrs entry", m{"addr": rawAddr, "entry": i + 1}, err)
 			}
 
+			port, err := strconv.Atoi(sport)
+			if err != nil {
+				return util.NewContextualError("Unable to parse port in lighthouse.advertise_addrs entry", m{"addr": rawAddr, "entry": i + 1}, err)
+			}
+
+			if lh.configTest && host != "" && net.ParseIP(host) == nil {
+				continue
+			}
+
 			addrs, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip", host)
 			if err != nil {
 				return util.NewContextualError("Unable to lookup lighthouse.advertise_addrs entry", m{"addr": rawAddr, "entry": i + 1}, err)
 			}
 			if len(addrs) == 0 {
 				return util.NewContextualError("Unable to lookup lighthouse.advertise_addrs entry", m{"addr": rawAddr, "entry": i + 1}, nil)
-			}
-
-			port, err := strconv.Atoi(sport)
-			if err != nil {
-				return util.NewContextualError("Unable to parse port in lighthouse.advertise_addrs entry", m{"addr": rawAddr, "entry": i + 1}, err)
 			}
 
 			if port == 0 {

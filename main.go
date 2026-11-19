@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/netip"
 	"os"
@@ -52,7 +53,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 
 	// Print the config if in test, the exit comes later
 	if configTest {
-		b, err := yaml.Marshal(c.Settings)
+		b, err := yaml.Marshal(redactSettings(c.Settings))
 		if err != nil {
 			return nil, err
 		}
@@ -248,8 +249,11 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 
 	hostMap := NewHostMapFromConfig(l, c)
 	punchy := NewPunchyFromConfig(l, c, udpConns[0])
-	connManager := newConnectionManagerFromConfig(l, c, hostMap, punchy)
-	lightHouse, err := NewLightHouseFromConfig(ctx, l, c, pki.getCertState(), udpConns[0], punchy)
+	connManager, err := newConnectionManagerFromConfig(l, c, hostMap, punchy)
+	if err != nil {
+		return nil, util.ContextualizeIfNeeded("Failed to initialize connection manager", err)
+	}
+	lightHouse, err := newLightHouseFromConfig(ctx, l, c, pki.getCertState(), udpConns[0], punchy, configTest)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to initialize lighthouse handler", err)
 	}
@@ -266,6 +270,9 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		retries:        int64(c.GetInt("handshakes.retries", DefaultHandshakeRetries)),
 		triggerBuffer:  c.GetInt("handshakes.trigger_buffer", DefaultHandshakeTriggerBuffer),
 		messageMetrics: messageMetrics,
+	}
+	if handshakeConfig.tryInterval <= 0 {
+		return nil, fmt.Errorf("handshakes.try_interval must be greater than 0, got: %s", handshakeConfig.tryInterval)
 	}
 
 	handshakeManager := NewHandshakeManager(l, hostMap, lightHouse, udpConns[0], handshakeConfig)
@@ -476,4 +483,22 @@ func moduleVersion() string {
 	}
 
 	return ""
+}
+
+// redactSettings returns a copy of settings with inline private key PEMs replaced, so the config test
+// dump does not log them.
+func redactSettings(settings map[string]any) map[string]any {
+	settings = maps.Clone(settings)
+	for _, k := range [][2]string{{"pki", "key"}, {"sshd", "host_key"}} {
+		section, ok := settings[k[0]].(map[string]any)
+		if !ok {
+			continue
+		}
+		if v, _ := section[k[1]].(string); strings.Contains(v, "-----BEGIN") {
+			section = maps.Clone(section)
+			section[k[1]] = "<inline>"
+			settings[k[0]] = section
+		}
+	}
+	return settings
 }

@@ -47,13 +47,32 @@ type connectionManager struct {
 	l *slog.Logger
 }
 
-func newConnectionManagerFromConfig(l *slog.Logger, c *config.C, hm *HostMap, p *Punchy) *connectionManager {
+func newConnectionManagerFromConfig(l *slog.Logger, c *config.C, hm *HostMap, p *Punchy) (*connectionManager, error) {
+	checkInterval := time.Duration(c.GetInt("timers.connection_alive_interval", 5)) * time.Second
+	pendingDeletionInterval := time.Duration(c.GetInt("timers.pending_deletion_interval", 10)) * time.Second
+
+	if checkInterval <= 0 {
+		return nil, fmt.Errorf("timers.connection_alive_interval must be greater than 0, got: %s", checkInterval)
+	}
+	if pendingDeletionInterval <= 0 {
+		return nil, fmt.Errorf("timers.pending_deletion_interval must be greater than 0, got: %s", pendingDeletionInterval)
+	}
+
+	// We want at least a minimum resolution of 500ms per tick so that we can hit these intervals
+	// pretty close to their configured duration.
+	// The inactivity duration is checked each time a hostinfo ticks through so we don't need the wheel to contain it.
+	minDuration := min(time.Millisecond*500, checkInterval, pendingDeletionInterval)
+	maxDuration := max(checkInterval, pendingDeletionInterval)
+
 	cm := &connectionManager{
-		hostMap:       hm,
-		l:             l,
-		punchy:        p,
-		relayUsed:     make(map[uint32]struct{}),
-		relayUsedLock: &sync.RWMutex{},
+		hostMap:                 hm,
+		l:                       l,
+		punchy:                  p,
+		relayUsed:               make(map[uint32]struct{}),
+		relayUsedLock:           &sync.RWMutex{},
+		checkInterval:           checkInterval,
+		pendingDeletionInterval: pendingDeletionInterval,
+		trafficTimer:            NewLockingTimerWheel[uint32](minDuration, maxDuration),
 	}
 
 	cm.reload(c, true)
@@ -62,22 +81,10 @@ func newConnectionManagerFromConfig(l *slog.Logger, c *config.C, hm *HostMap, p 
 		cm.reload(c, false)
 	})
 
-	return cm
+	return cm, nil
 }
 
 func (cm *connectionManager) reload(c *config.C, initial bool) {
-	if initial {
-		cm.checkInterval = time.Duration(c.GetInt("timers.connection_alive_interval", 5)) * time.Second
-		cm.pendingDeletionInterval = time.Duration(c.GetInt("timers.pending_deletion_interval", 10)) * time.Second
-
-		// We want at least a minimum resolution of 500ms per tick so that we can hit these intervals
-		// pretty close to their configured duration.
-		// The inactivity duration is checked each time a hostinfo ticks through so we don't need the wheel to contain it.
-		minDuration := min(time.Millisecond*500, cm.checkInterval, cm.pendingDeletionInterval)
-		maxDuration := max(cm.checkInterval, cm.pendingDeletionInterval)
-		cm.trafficTimer = NewLockingTimerWheel[uint32](minDuration, maxDuration)
-	}
-
 	if initial || c.HasChanged("tunnels.inactivity_timeout") {
 		old := cm.getInactivityTimeout()
 		cm.inactivityTimeout.Store((int64)(c.GetDuration("tunnels.inactivity_timeout", 10*time.Minute)))
