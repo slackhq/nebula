@@ -25,7 +25,10 @@ endif
 DOCKER_IMAGE_REPO ?= nebulaoss/nebula
 DOCKER_IMAGE_TAG ?= latest
 
-LDFLAGS = -X main.Build=$(BUILD_NUMBER)
+# -w drops DWARF, which only debuggers read. pprof and panic tracebacks use the
+# runtime's own symbol tables, which -w keeps. `make debug` keeps DWARF.
+STRIP_LDFLAGS = -w
+LDFLAGS = -X main.Build=$(BUILD_NUMBER) $(STRIP_LDFLAGS)
 
 ALL_LINUX = linux-amd64 \
 	linux-386 \
@@ -177,8 +180,9 @@ bin-pkcs11: BUILD_ARGS += -tags pkcs11
 bin-pkcs11: CGO_ENABLED = 1
 bin-pkcs11: bin
 
-# Build with the pprof debug server (serves on :6060). See startPprofServer.
+# Build with the pprof debug server (serves on :6060) and DWARF. See startPprofServer.
 debug: BUILD_ARGS += -tags debug
+debug: STRIP_LDFLAGS =
 debug: bin
 
 bin:
@@ -193,7 +197,7 @@ build/linux-arm-%: GOENV += GOARM=$(word 3, $(subst -, ,$*))
 build/linux-mips-%: GOENV += GOMIPS=$(word 3, $(subst -, ,$*))
 
 # Build an extra small binary for mips-softfloat
-build/linux-mips-softfloat/%: LDFLAGS += -s -w
+build/linux-mips-softfloat/%: LDFLAGS += -s
 
 # boringcrypto
 build/linux-amd64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1
