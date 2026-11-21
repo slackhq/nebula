@@ -488,6 +488,7 @@ func (u *StdConn) Close() error {
 }
 
 func NewUDPStatsEmitter(udpConns []Conn) func() {
+	udpConns = unwrapConns(udpConns)
 	// Check if our kernel supports SO_MEMINFO before registering the gauges
 	var udpGauges [][unix.SK_MEMINFO_VARS]metrics.Gauge
 	var meminfo [unix.SK_MEMINFO_VARS]uint32
