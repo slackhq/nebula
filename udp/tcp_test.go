@@ -279,3 +279,55 @@ func TestTCPTransportNoDeliveryAfterClose(t *testing.T) {
 	assertHungUp(t, conn)
 	assert.Empty(t, server.rx)
 }
+
+func TestTCPTransportSustainedLoad(t *testing.T) {
+	const writeTimeout = 500 * time.Millisecond
+	// A slow reader that keeps up with each write but never lets the client's queue drain
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+	accepted := make(chan net.Conn, 4)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- c
+			go func() {
+				defer c.Close()
+				buf := make([]byte, 64*1024)
+				for {
+					if _, err := c.Read(buf); err != nil {
+						return
+					}
+					time.Sleep(time.Millisecond)
+				}
+			}()
+		}
+	}()
+
+	server := netip.MustParseAddrPort(ln.Addr().String())
+	client := newTCPNode(t, fmt.Sprintf("tcp:\n  remotes: [%q]\n", server), 1)
+	client.t.writeTimeout = writeTimeout
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		pkt := make([]byte, 1200)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = client.conns[0].WriteTo(pkt, server)
+		}
+	}()
+
+	<-accepted
+	select {
+	case <-accepted:
+		t.Fatal("connection was re-established under sustained load")
+	case <-time.After(5 * writeTimeout):
+	}
+}

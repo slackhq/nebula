@@ -23,6 +23,7 @@ import (
 
 const (
 	tcpFrameHeader     = 2
+	tcpSmallFrame      = 128
 	tcpSendQueue       = 1024
 	tcpDialTimeout     = 5 * time.Second
 	tcpWriteTimeout    = 10 * time.Second
@@ -46,8 +47,9 @@ type TCPTransport struct {
 	cancel context.CancelFunc
 	ln     net.Listener
 
-	maxConns    int
-	idleTimeout time.Duration
+	maxConns     int
+	idleTimeout  time.Duration
+	writeTimeout time.Duration
 
 	// peers and remotes are copy on write so the per packet lookup is lock free, peersMu serializes writers
 	peers      atomic.Pointer[map[netip.AddrPort]*tcpPeer]
@@ -57,9 +59,10 @@ type TCPTransport struct {
 	inbound    int
 	inboundIPs map[netip.Addr]int
 
-	// remotesMu guards rawRemotes and resolved, the last good addresses of each tcp.remotes entry
+	// remotesMu guards rawRemotes, remotesGen and resolved, the last good addresses of each tcp.remotes entry
 	remotesMu  sync.Mutex
 	rawRemotes []string
+	remotesGen uint64
 	resolved   map[string][]netip.AddrPort
 
 	// deliverMu serializes TCP deliveries with the primary UDP reader, they share its EncReader state
@@ -71,7 +74,10 @@ type TCPTransport struct {
 	closeOnce sync.Once
 	readers   sync.WaitGroup
 
-	bufPool sync.Pool
+	// Queued frames come from two size classes so small packets, like unauthenticated recv_error replies, do not pin
+	// MTU sized buffers
+	smallPool sync.Pool
+	largePool sync.Pool
 }
 
 type tcpPeer struct {
@@ -96,16 +102,21 @@ func NewTCPTransportFromConfig(l *slog.Logger, c *config.C, listen netip.AddrPor
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &TCPTransport{
-		l:           l,
-		ctx:         ctx,
-		cancel:      cancel,
-		maxConns:    c.GetInt("tcp.max_conns", defaultTCPMaxConns),
-		idleTimeout: c.GetDuration("tcp.idle_timeout", defaultTCPIdleTimeout),
-		dialFailed:  map[netip.AddrPort]time.Time{},
-		inboundIPs:  map[netip.Addr]int{},
-		resolved:    map[string][]netip.AddrPort{},
-		ready:       make(chan struct{}),
-		bufPool: sync.Pool{New: func() any {
+		l:            l,
+		ctx:          ctx,
+		cancel:       cancel,
+		maxConns:     c.GetInt("tcp.max_conns", defaultTCPMaxConns),
+		idleTimeout:  c.GetDuration("tcp.idle_timeout", defaultTCPIdleTimeout),
+		writeTimeout: tcpWriteTimeout,
+		dialFailed:   map[netip.AddrPort]time.Time{},
+		inboundIPs:   map[netip.Addr]int{},
+		resolved:     map[string][]netip.AddrPort{},
+		ready:        make(chan struct{}),
+		smallPool: sync.Pool{New: func() any {
+			b := make([]byte, 0, tcpFrameHeader+tcpSmallFrame)
+			return &b
+		}},
+		largePool: sync.Pool{New: func() any {
 			b := make([]byte, 0, tcpFrameHeader+MTU)
 			return &b
 		}},
@@ -153,11 +164,15 @@ func (t *TCPTransport) start(r EncReader, flush func()) {
 func (t *TCPTransport) Close() error {
 	var err error
 	t.closeOnce.Do(func() {
+		// Under peersMu so acceptLoop either sees the cancel or adds its peer before the snapshot
+		t.peersMu.Lock()
 		t.cancel()
+		peers := *t.peers.Load()
+		t.peersMu.Unlock()
 		if t.ln != nil {
 			err = t.ln.Close()
 		}
-		for _, p := range *t.peers.Load() {
+		for _, p := range peers {
 			p.close()
 		}
 
@@ -337,13 +352,20 @@ func (t *TCPTransport) goRun(p *tcpPeer) {
 	}()
 }
 
-func (t *TCPTransport) getBuf() *[]byte {
-	return t.bufPool.Get().(*[]byte)
+func (t *TCPTransport) getBuf(n int) *[]byte {
+	if n <= tcpSmallFrame {
+		return t.smallPool.Get().(*[]byte)
+	}
+	return t.largePool.Get().(*[]byte)
 }
 
 func (t *TCPTransport) putBuf(b *[]byte) {
 	*b = (*b)[:0]
-	t.bufPool.Put(b)
+	if cap(*b) < tcpFrameHeader+MTU {
+		t.smallPool.Put(b)
+		return
+	}
+	t.largePool.Put(b)
 }
 
 // Rebind drops dialed connections, the old route is likely gone after a network change
@@ -361,38 +383,68 @@ func (t *TCPTransport) ReloadConfig(c *config.C) {
 	}
 }
 
-// setRemotes applies tcp.remotes, ip literals right away and hostnames in the background so startup never waits on DNS
+// setRemotes applies tcp.remotes. IP literals apply right away, hostnames resolve in the background so startup and
+// reloads never wait on DNS.
 func (t *TCPTransport) setRemotes(raw []string) {
 	t.remotesMu.Lock()
 	t.rawRemotes = raw
+	t.remotesGen++
+	prev := t.resolved
+	t.resolved = map[string][]netip.AddrPort{}
+	for _, r := range raw {
+		addrs, err := t.resolveRemote(r, false)
+		if err != nil {
+			t.l.Warn("invalid tcp.remotes entry", "remote", r, "error", err)
+			continue
+		}
+		if addrs == nil {
+			addrs = prev[r]
+		}
+		t.resolved[r] = addrs
+	}
+	t.publishRemotesLocked()
 	t.remotesMu.Unlock()
-	t.resolveRemotes(false)
-	go t.resolveRemotes(true)
+	t.lookupRemotes()
 }
 
-// resolveRemotes rebuilds the remote set. Without lookup, hostnames keep their last addresses. A hostname that fails
-// to resolve keeps its last addresses too.
-func (t *TCPTransport) resolveRemotes(lookup bool) {
+// lookupRemotes resolves each hostname independently, so a slow one does not hold up the rest. A hostname that fails
+// to resolve keeps its last addresses.
+func (t *TCPTransport) lookupRemotes() {
 	t.remotesMu.Lock()
-	defer t.remotesMu.Unlock()
-
-	m := map[netip.AddrPort]struct{}{}
-	resolved := map[string][]netip.AddrPort{}
-	for _, r := range t.rawRemotes {
-		addrs, err := t.resolveRemote(r, lookup)
-		if err != nil {
-			t.l.Warn("failed to resolve tcp.remotes entry", "remote", r, "error", err)
-			addrs = t.resolved[r]
+	raw, gen := t.rawRemotes, t.remotesGen
+	t.remotesMu.Unlock()
+	for _, r := range raw {
+		if addrs, err := t.resolveRemote(r, false); err != nil || addrs != nil {
+			continue
 		}
-		resolved[r] = addrs
+		go func() {
+			addrs, err := t.resolveRemote(r, true)
+			if err != nil {
+				t.l.Warn("failed to resolve tcp.remotes entry", "remote", r, "error", err)
+				return
+			}
+			t.remotesMu.Lock()
+			defer t.remotesMu.Unlock()
+			if t.remotesGen != gen {
+				return
+			}
+			t.resolved[r] = addrs
+			t.publishRemotesLocked()
+		}()
+	}
+}
+
+func (t *TCPTransport) publishRemotesLocked() {
+	m := map[netip.AddrPort]struct{}{}
+	for _, addrs := range t.resolved {
 		for _, a := range addrs {
 			m[a] = struct{}{}
 		}
 	}
-	t.resolved = resolved
 	t.remotes.Store(&m)
 }
 
+// resolveRemote parses a tcp.remotes entry. Without lookup a hostname returns nil.
 func (t *TCPTransport) resolveRemote(r string, lookup bool) ([]netip.AddrPort, error) {
 	host, portStr, err := net.SplitHostPort(r)
 	if err != nil {
@@ -406,7 +458,7 @@ func (t *TCPTransport) resolveRemote(r string, lookup bool) ([]netip.AddrPort, e
 		return []netip.AddrPort{netip.AddrPortFrom(ip.Unmap(), uint16(port))}, nil
 	}
 	if !lookup {
-		return t.resolved[r], nil
+		return nil, nil
 	}
 	ctx, cancel := context.WithTimeout(t.ctx, tcpDialTimeout)
 	defer cancel()
@@ -430,7 +482,7 @@ func (t *TCPTransport) resolveLoop() {
 			return
 		case <-tick.C:
 		}
-		t.resolveRemotes(true)
+		t.lookupRemotes()
 	}
 }
 
@@ -444,7 +496,7 @@ func (p *tcpPeer) send(b []byte) error {
 		return net.ErrClosed
 	default:
 	}
-	buf := p.t.getBuf()
+	buf := p.t.getBuf(len(b))
 	*buf = binary.BigEndian.AppendUint16(*buf, uint16(len(b)))
 	*buf = append(*buf, b...)
 	select {
@@ -560,7 +612,7 @@ func (p *tcpPeer) logClose(err error) {
 
 func (p *tcpPeer) writeLoop() {
 	defer p.close()
-	bw := bufio.NewWriterSize(p.conn, 64*1024)
+	bw := bufio.NewWriterSize(deadlineWriter{p.conn, p.t.writeTimeout}, 64*1024)
 	for {
 		var buf *[]byte
 		select {
@@ -569,7 +621,6 @@ func (p *tcpPeer) writeLoop() {
 		case buf = <-p.queue:
 		}
 
-		_ = p.conn.SetWriteDeadline(time.Now().Add(tcpWriteTimeout))
 		for buf != nil {
 			_, err := bw.Write(*buf)
 			p.t.putBuf(buf)
@@ -588,6 +639,17 @@ func (p *tcpPeer) writeLoop() {
 			return
 		}
 	}
+}
+
+// deadlineWriter bounds each write rather than a whole burst, a peer that keeps up stays connected under sustained load
+type deadlineWriter struct {
+	c       net.Conn
+	timeout time.Duration
+}
+
+func (w deadlineWriter) Write(b []byte) (int, error) {
+	_ = w.c.SetWriteDeadline(time.Now().Add(w.timeout))
+	return w.c.Write(b)
 }
 
 func unwrapConns(conns []Conn) []Conn {
