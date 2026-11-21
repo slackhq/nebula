@@ -305,6 +305,21 @@ relay:
   # default true
   use_relays: true
 
+# EXPERIMENTAL: TCP transport for networks that block UDP. Nebula packets are framed over TCP unchanged, encryption is
+# the same as UDP. Combine with relays to reach hosts that only speak UDP through a lighthouse.
+#tcp:
+  # Also accept nebula over TCP on listen.host:listen.port. Typically set on a lighthouse with am_relay. Default false.
+  # Not reloadable.
+  #listen: false
+  # Underlay addresses (ip:port or hostname:port) to always reach over TCP instead of UDP, typically the static_host_map
+  # entry of a lighthouse with tcp.listen. Hostnames are re-resolved every 30s. Reloadable once the transport is running.
+  #remotes:
+    #- "lighthouse.example.com:4242"
+  # Max inbound TCP connections. Default 1024. Not reloadable.
+  #max_conns: 1024
+  # Close TCP connections that receive nothing for this long. Default 5m. Not reloadable.
+  #idle_timeout: 5m
+
 # Configure the private interface. Note: addr is baked into the nebula certificate
 tun:
   # When tun is disabled, a lighthouse can be started without a local tun interface (and therefore without root)

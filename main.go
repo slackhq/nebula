@@ -245,6 +245,18 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 				port = int(uPort.Port())
 			}
 		}
+
+		tcpListen, err := udpConns[0].LocalAddr()
+		if err != nil {
+			return nil, util.NewContextualError("Failed to get listening address", nil, err)
+		}
+		tcp, err := udp.NewTCPTransportFromConfig(l, c, tcpListen)
+		if err != nil {
+			return nil, util.ContextualizeIfNeeded("Failed to start tcp transport", err)
+		}
+		if tcp != nil {
+			udpConns = tcp.Wrap(udpConns)
+		}
 	}
 
 	hostMap := NewHostMapFromConfig(l, c)
@@ -358,7 +370,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 				"routines", "tun.routines", "listen.routines", "firewall.conntrack.routine_cache_timeout",
 				"listen.port", "listen.host", "stats.message_metrics",
 				"handshakes.try_interval", "handshakes.retries", "handshakes.trigger_buffer",
-				"tun.drop_local_broadcast", "tun.drop_multicast",
+				"tun.drop_local_broadcast", "tun.drop_multicast", "tcp.listen", "tcp.max_conns", "tcp.idle_timeout",
 			)
 			r.RestartRequiredIfChanged(osStartupOnlyKeys...)
 		})
