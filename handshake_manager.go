@@ -133,8 +133,8 @@ func (hh *HandshakeHostInfo) cachePacket(l *slog.Logger, t header.MessageType, s
 //   - That includes a flow started after a down gateway has recovered but before we know: its first packet goes to
 //     another gateway and starts the handshake that tells us, so the window is one handshake.
 //
-// Only the routing path adds entries, for gateways of multi-gateway routes, so this holds one entry per such gateway
-// however many other hosts we handshake with.
+// Only the routing path adds entries, for gateways of multi-gateway routes, so this holds one entry per address of
+// such a gateway however many other hosts we handshake with.
 type ecmpGateways struct {
 	sync.RWMutex
 	up map[netip.Addr]bool
@@ -160,6 +160,26 @@ func (g *ecmpGateways) isUp(gateway netip.Addr) bool {
 	}
 
 	return up
+}
+
+// trackTunnel starts tracking the host of a tunnel that a packet for a multi-gateway route is about to be sent over.
+// isUp only hears of a gateway that has no tunnel, so a gateway whose tunnel came up before any flow hashed to it would
+// stay unknown, and markDown would pass it over when that tunnel dies. Every address of the host is tracked, since
+// another route may name the gateway by another of them. Only the first packet over a tunnel gets past the flag.
+func (g *ecmpGateways) trackTunnel(hostinfo *HostInfo) {
+	if hostinfo.ecmpTracked.Load() {
+		return
+	}
+
+	g.Lock()
+	for _, addr := range hostinfo.vpnAddrs {
+		if _, ok := g.up[addr]; !ok {
+			g.up[addr] = true
+		}
+	}
+	g.Unlock()
+
+	hostinfo.ecmpTracked.Store(true)
 }
 
 // markDown marks any tracked gateway in addrs down.

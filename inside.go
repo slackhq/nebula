@@ -328,6 +328,7 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 		}
 
 		if hostinfo, ready = f.handshakeManager.GetOrHandshake(gatewayAddr, nil); ready {
+			f.handshakeManager.ecmpGateways.trackTunnel(hostinfo)
 			return hostinfo, true
 		}
 
@@ -362,6 +363,7 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 
 			// We do not need the HandshakeHostInfo since we cache the packet in the originally chosen gateway
 			if hostinfo, ready = f.handshakeManager.GetOrHandshake(gateways[i].Addr(), nil); ready {
+				f.handshakeManager.ecmpGateways.trackTunnel(hostinfo)
 				return hostinfo, true
 			}
 		}

@@ -245,6 +245,9 @@ type HostInfo struct {
 	// Traffic bits, pendingDeletion, and the rebind epoch we last sent under
 	state atomic.Uint32
 
+	// ecmpTracked is set by ecmpGateways.trackTunnel, which only acts on the first packet routed over this tunnel
+	ecmpTracked atomic.Bool
+
 	promoteCounter atomic.Uint32
 	remoteIndexId  uint32
 	localIndexId   uint32
