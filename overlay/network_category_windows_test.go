@@ -88,6 +88,11 @@ func Test_NLM_round_trip(t *testing.T) {
 			t.Fatalf("INetworkConnection.GetNetwork: %v", err)
 		}
 
+		if _, err := net.GetNetworkId(); err != nil {
+			net.Release()
+			t.Fatalf("INetwork.GetNetworkId: %v", err)
+		}
+
 		cat, err := net.GetCategory()
 		if err != nil {
 			net.Release()

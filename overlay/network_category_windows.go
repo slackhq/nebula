@@ -3,6 +3,7 @@
 package overlay
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -223,6 +224,17 @@ func (n *iNetwork) Release() {
 	syscall.SyscallN(n.Vtbl.Release, uintptr(unsafe.Pointer(n)))
 }
 
+func (n *iNetwork) GetNetworkId() (windows.GUID, error) {
+	var g windows.GUID
+	r1, _, _ := syscall.SyscallN(n.Vtbl.GetNetworkId,
+		uintptr(unsafe.Pointer(n)), uintptr(unsafe.Pointer(&g)),
+	)
+	if hr := hresult(r1); hr.failed() {
+		return windows.GUID{}, fmt.Errorf("INetwork.GetNetworkId: %s", hr)
+	}
+	return g, nil
+}
+
 func (n *iNetwork) GetCategory() (networkCategory, error) {
 	var c networkCategory
 	r1, _, _ := syscall.SyscallN(n.Vtbl.GetCategory,
@@ -279,35 +291,36 @@ func createNetworkListManager() (*iNetworkListManager, error) {
 	return nlm, nil
 }
 
-// setNetworkCategory locates the network connection bound to adapterGUID and
-// sets the category of its parent network. Returns errAdapterNotFound if the
-// adapter is not yet visible in the NLM enumeration.
-func setNetworkCategory(adapterGUID windows.GUID, cat networkCategory) error {
+// setNetworkCategory locates the network connection bound to adapterGUID, sets
+// the category of its parent network if it differs from cat, and returns the
+// network's ID and whether the category was changed. Returns errAdapterNotFound
+// if the adapter is not yet visible in the NLM enumeration.
+func setNetworkCategory(adapterGUID windows.GUID, cat networkCategory) (windows.GUID, bool, error) {
 	deinit, err := coInit()
 	if err != nil {
-		return err
+		return windows.GUID{}, false, err
 	}
 	defer deinit()
 
 	nlm, err := createNetworkListManager()
 	if err != nil {
-		return err
+		return windows.GUID{}, false, err
 	}
 	defer nlm.Release()
 
 	enum, err := nlm.GetNetworkConnections()
 	if err != nil {
-		return err
+		return windows.GUID{}, false, err
 	}
 	defer enum.Release()
 
 	for {
 		conn, err := enum.Next()
 		if err != nil {
-			return err
+			return windows.GUID{}, false, err
 		}
 		if conn == nil {
-			return errAdapterNotFound
+			return windows.GUID{}, false, errAdapterNotFound
 		}
 
 		guid, err := conn.GetAdapterId()
@@ -319,36 +332,77 @@ func setNetworkCategory(adapterGUID windows.GUID, cat networkCategory) error {
 		net, err := conn.GetNetwork()
 		conn.Release()
 		if err != nil {
-			return err
+			return windows.GUID{}, false, err
 		}
-		err = net.SetCategory(cat)
-		net.Release()
-		return err
+		defer net.Release()
+
+		netID, err := net.GetNetworkId()
+		if err != nil {
+			return windows.GUID{}, false, err
+		}
+		cur, err := net.GetCategory()
+		if err != nil {
+			return windows.GUID{}, false, err
+		}
+		if cur == cat {
+			return netID, false, nil
+		}
+		if err := net.SetCategory(cat); err != nil {
+			return windows.GUID{}, false, err
+		}
+		return netID, true, nil
 	}
 }
 
 // applyNetworkCategory polls until the wintun adapter shows up in the NLM
-// enumeration, then sets the category. Intended to run in its own goroutine.
-func applyNetworkCategory(l *slog.Logger, adapterGUID windows.GUID, cat networkCategory) {
+// enumeration, then sets the category and returns the network's ID. When
+// reapply is true (after a session reset), it continues watching briefly if it
+// still sees prevNetID with the desired category so a delayed NLA link-flap
+// transition is not missed. Intended to run in its own goroutine.
+func applyNetworkCategory(ctx context.Context, l *slog.Logger, adapterGUID windows.GUID, cat networkCategory, reapply bool, prevNetID windows.GUID, onApplied func(windows.GUID)) {
 	// COM Init/Uninit must be paired on the same OS thread.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
 	const (
-		attempts = 30
-		interval = 500 * time.Millisecond
+		attempts       = 30
+		settleAttempts = 6 // 3s to observe a delayed NLA transition after a session reset
+		interval       = 500 * time.Millisecond
 	)
+	sawAbsent := false
 	for i := 0; i < attempts; i++ {
-		err := setNetworkCategory(adapterGUID, cat)
-		if err == nil {
-			l.Info("Set Windows network category", "category", cat.String())
+		if ctx.Err() != nil {
 			return
 		}
-		if !errors.Is(err, errAdapterNotFound) {
+		netID, changed, err := setNetworkCategory(adapterGUID, cat)
+		if err == nil {
+			if onApplied != nil {
+				onApplied(netID)
+			}
+			if !reapply {
+				l.Info("Set Windows network category", "category", cat.String())
+				return
+			}
+			if changed {
+				l.Debug("Re-applied Windows network category after session reset", "category", cat.String())
+				return
+			}
+			if sawAbsent || (prevNetID != (windows.GUID{}) && netID != prevNetID) || i >= settleAttempts-1 {
+				return
+			}
+		} else if errors.Is(err, errAdapterNotFound) {
+			sawAbsent = true
+		} else {
 			l.Warn("Failed to set Windows network category", "error", err, "category", cat.String())
 			return
 		}
-		time.Sleep(interval)
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
 	}
 	l.Warn("Gave up waiting for adapter to appear in NLM enumeration; network category not set",
 		"category", cat.String(),
