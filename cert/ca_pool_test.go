@@ -271,6 +271,31 @@ func TestNewCAPoolFromPEMReader_OneByteReads(t *testing.T) {
 	assert.Contains(t, pool.CAs, fp2)
 }
 
+// A CA that is commented out or indented in a bundle is not loaded, and the rest of the bundle is
+func TestNewCAPoolFromPEMReader_PrefixedCertificate(t *testing.T) {
+	_, _, _, retiredPEM := NewTestCaCert(Version2, Curve_CURVE25519, time.Now(), time.Now().Add(time.Hour), nil, nil, nil)
+	ca, _, _, caPEM := NewTestCaCert(Version2, Curve_CURVE25519, time.Now(), time.Now().Add(time.Hour), nil, nil, nil)
+	fp, err := ca.Fingerprint()
+	require.NoError(t, err)
+
+	for _, prefix := range []string{"# ", "  "} {
+		var bundle []byte
+		for _, line := range bytes.SplitAfter(retiredPEM, []byte("\n")) {
+			if len(line) > 0 {
+				bundle = append(append(bundle, prefix...), line...)
+			}
+		}
+		bundle = append(bundle, caPEM...)
+
+		for _, r := range []io.Reader{bytes.NewReader(bundle), &oneByteReader{r: bytes.NewReader(bundle)}} {
+			pool, err := NewCAPoolFromPEMReader(r)
+			require.NoError(t, err)
+			assert.Len(t, pool.CAs, 1)
+			assert.Contains(t, pool.CAs, fp)
+		}
+	}
+}
+
 func TestNewCAPoolFromPEMReader_TruncatedPEM(t *testing.T) {
 	_, err := NewCAPoolFromPEMReader(strings.NewReader("-----BEGIN NEBULA CERTIFICATE-----\npartialdata"))
 	assert.ErrorIs(t, err, ErrInvalidPEMBlock)

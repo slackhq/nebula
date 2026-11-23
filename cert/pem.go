@@ -22,10 +22,35 @@ func NewPEMScanner(r io.Reader) *bufio.Scanner {
 	return s
 }
 
+var (
+	pemBegin = []byte("-----BEGIN ")
+	utf8BOM  = []byte("\xef\xbb\xbf")
+)
+
+// indexPEMBegin returns the index of the first BEGIN marker in data that starts a line, or -1. That is where pem.Decode
+// reads a block from. A marker further into a line belongs to a block that is commented out or indented, which is text
+// between blocks. A byte order mark may come before the marker.
+func indexPEMBegin(data []byte) int {
+	for i := 0; ; i += len(pemBegin) {
+		n := bytes.Index(data[i:], pemBegin)
+		if n == -1 {
+			return -1
+		}
+		i += n
+		lineStart := i
+		if bytes.HasSuffix(data[:i], utf8BOM) {
+			lineStart -= len(utf8BOM)
+		}
+		if lineStart == 0 || data[lineStart-1] == '\n' {
+			return i
+		}
+	}
+}
+
 // SplitPEM is a split function for bufio.Scanner that returns each PEM block.
 func SplitPEM(data []byte, atEOF bool) (advance int, token []byte, err error) {
 	// Look for the start of a PEM block
-	start := bytes.Index(data, []byte("-----BEGIN "))
+	start := indexPEMBegin(data)
 	if start == -1 {
 		if atEOF && len(bytes.TrimSpace(data)) > 0 {
 			// Non-whitespace content with no PEM block
