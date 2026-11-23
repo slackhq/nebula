@@ -97,7 +97,7 @@ jobs:
       # parse-json-secrets unpacks into SIGNING_* and ASC_*, masked on the way in
       - name: Fetch signing credentials
         if: env.HAS_SIGNING_CREDS == 'true'
-        uses: aws-actions/aws-secretsmanager-get-secrets@v3
+        uses: aws-actions/aws-secretsmanager-get-secrets@v4
         with:
           parse-json-secrets: true
           secret-ids: |
