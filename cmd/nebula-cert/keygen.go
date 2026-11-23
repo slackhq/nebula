@@ -125,7 +125,12 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 // existsNotDevice reports whether path exists and is not a device or fifo, like /dev/stdout, which are written through
 func existsNotDevice(path string) bool {
 	fi, err := os.Stat(path)
-	return err == nil && fi.Mode()&(os.ModeDevice|os.ModeCharDevice|os.ModeNamedPipe) == 0
+	return err == nil && !isDevice(fi)
+}
+
+// isDevice reports whether fi is a device or fifo
+func isDevice(fi os.FileInfo) bool {
+	return fi.Mode()&(os.ModeDevice|os.ModeCharDevice|os.ModeNamedPipe) != 0
 }
 
 func keygenSummary() string {

@@ -6,8 +6,10 @@ import (
 	"bytes"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/bits"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -266,6 +268,28 @@ func Test_ca(t *testing.T) {
 	assert.Empty(t, eb.String())
 	os.Remove(keyF.Name())
 
+}
+
+func Test_ca_sameOutput(t *testing.T) {
+	ob := &bytes.Buffer{}
+	eb := &bytes.Buffer{}
+	nopw := &StubPasswordReader{}
+	dir := t.TempDir()
+	crtPath := filepath.Join(dir, "ca.crt")
+	keyPath := filepath.Join(dir, "ca.key")
+
+	// test that one file for the key and the certificate is refused before the certificate replaces the key
+	args := []string{"-name", "test", "-duration", "100m", "-out-crt", crtPath, "-out-key", crtPath}
+	require.EqualError(t, ca(args, ob, eb, nopw), fmt.Sprintf("-out-key and -out-crt both write to %q, each output needs its own file", crtPath))
+	assert.NoFileExists(t, crtPath)
+
+	// test that the qr code is refused the same way
+	args = []string{"-name", "test", "-duration", "100m", "-out-crt", crtPath, "-out-key", keyPath, "-out-qr", keyPath}
+	require.EqualError(t, ca(args, ob, eb, nopw), fmt.Sprintf("-out-key and -out-qr both write to %q, each output needs its own file", keyPath))
+	assert.NoFileExists(t, crtPath)
+	assert.NoFileExists(t, keyPath)
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 }
 
 func Test_ca_stdio(t *testing.T) {

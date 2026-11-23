@@ -134,6 +134,8 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		if outKeySet {
 			return newHelpErrorf("cannot set -out-key with -pkcs11")
 		}
+		// no key is written, so its default path is not an output
+		*cf.outKeyPath = ""
 	}
 	if err := mustFlagString("out-crt", cf.outCertPath); err != nil {
 		return err

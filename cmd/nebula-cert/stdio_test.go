@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -114,6 +116,60 @@ func Test_reserveOutputs_conflict(t *testing.T) {
 		"out-crt", "-",
 	)
 	require.EqualError(t, err, `-out-key and -out-crt both set to "-", only one output may write to stdout`)
+}
+
+func Test_reserveOutputs_sameFile(t *testing.T) {
+	var claims ioClaims
+	err := reserveOutputs(&claims,
+		"out-key", "same.pem",
+		"out-crt", "same.pem",
+	)
+	require.EqualError(t, err, `-out-key and -out-crt both write to "same.pem", each output needs its own file`)
+
+	// the same file spelled another way
+	err = reserveOutputs(&claims,
+		"out-key", "key.pem",
+		"out-crt", "same.pem",
+		"out-qr", "./same.pem",
+	)
+	require.EqualError(t, err, `-out-crt and -out-qr both write to "./same.pem", each output needs its own file`)
+
+	// the same file through a symlinked directory, and two files that only look like one before the link is resolved
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "nested", "deeper")
+	require.NoError(t, os.MkdirAll(nested, 0700))
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(nested, link); err == nil {
+		err = reserveOutputs(&claims,
+			"out-key", filepath.Join(nested, "same.pem"),
+			"out-crt", filepath.Join(link, "same.pem"),
+		)
+		require.EqualError(t, err, fmt.Sprintf("-out-key and -out-crt both write to %q, each output needs its own file", filepath.Join(link, "same.pem")))
+
+		// link/.. is nested, not dir. Windows resolves .. before the link, so there it is dir.
+		if runtime.GOOS != "windows" {
+			require.NoError(t, reserveOutputs(&claims,
+				"out-key", filepath.Join(dir, "same.pem"),
+				"out-crt", link+"/../same.pem",
+			))
+		}
+	}
+
+	// a directory that does not exist is left for the write to report
+	missing := filepath.Join(dir, "missing", "same.pem")
+	require.NoError(t, reserveOutputs(&claims, "out-key", missing, "out-crt", missing))
+
+	// unset outputs and devices are not files to share
+	require.NoError(t, reserveOutputs(&claims,
+		"out-key", "",
+		"out-crt", os.DevNull,
+		"out-qr", os.DevNull,
+	))
+	require.NoError(t, reserveOutputs(&claims,
+		"out-key", "",
+		"out-crt", "same.pem",
+		"out-qr", "",
+	))
 }
 
 func Test_reserveOutputs_panicsOnOddPairs(t *testing.T) {

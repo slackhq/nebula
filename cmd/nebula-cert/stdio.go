@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 )
 
 // stdioPath is the special path value that selects stdin (for inputs) or
@@ -52,11 +53,50 @@ func reserveInputs(claims *ioClaims, pairs ...string) error {
 }
 
 // reserveOutputs walks alternating (flagName, path) pairs and claims stdout
-// for any path equal to stdioPath. It must be called before any output is
-// written so a conflict cannot leave one stream half written before the
-// second flag fails.
+// for any path equal to stdioPath. It also refuses two outputs that name the
+// same file, where the second write would replace the first. It must be
+// called before any output is written so a conflict cannot leave one stream
+// half written before the second flag fails.
 func reserveOutputs(claims *ioClaims, pairs ...string) error {
-	return reserveStdio(claims, "reserveOutputs", (*ioClaims).claimOut, pairs)
+	if err := reserveStdio(claims, "reserveOutputs", (*ioClaims).claimOut, pairs); err != nil {
+		return err
+	}
+
+	type file struct {
+		flagName string
+		dir      os.FileInfo
+		base     string
+	}
+	var files []file
+	for i := 0; i < len(pairs); i += 2 {
+		name, path := pairs[i], pairs[i+1]
+		if path == "" || path == stdioPath {
+			continue
+		}
+		if fi, err := os.Stat(path); err == nil && isDevice(fi) {
+			// written through, so outputs can share it
+			continue
+		}
+
+		// Two outputs are one file when they have the same name in the same directory. The filesystem says whether
+		// the directories are the same, since it resolves ./, .. and symlinks where comparing the paths would guess.
+		dirPath, base := filepath.Split(path)
+		if dirPath == "" {
+			dirPath = "."
+		}
+		dir, err := os.Stat(dirPath)
+		if err != nil {
+			// nothing can be written there, the write reports it
+			continue
+		}
+		for _, other := range files {
+			if other.base == base && os.SameFile(other.dir, dir) {
+				return fmt.Errorf("-%s and -%s both write to %q, each output needs its own file", other.flagName, name, path)
+			}
+		}
+		files = append(files, file{name, dir, base})
+	}
+	return nil
 }
 
 func reserveStdio(claims *ioClaims, who string, claim func(*ioClaims, string) error, pairs []string) error {
