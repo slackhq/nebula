@@ -397,6 +397,9 @@ func loadStatsConfig(c *config.C, configTest bool) (statsConfig, error) {
 		if cfg.prom.path == "" {
 			return cfg, errors.New("stats.path should not be empty")
 		}
+		if err := checkStatsPath(cfg.prom.path); err != nil {
+			return cfg, fmt.Errorf("stats.path was invalid: %s", err)
+		}
 		cfg.prom.namespace = c.GetString("stats.namespace", "")
 		cfg.prom.subsystem = c.GetString("stats.subsystem", "")
 	default:
@@ -404,4 +407,16 @@ func loadStatsConfig(c *config.C, configTest bool) (statsConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// checkStatsPath reports why http.ServeMux refuses path as a pattern. ServeMux refuses by panicking, which would take
+// the process down from the goroutine that builds the runtime, so the pattern is tried here on a mux of its own.
+func checkStatsPath(path string) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%v", r)
+		}
+	}()
+	http.NewServeMux().Handle(path, http.NotFoundHandler())
+	return nil
 }
