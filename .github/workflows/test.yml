@@ -11,6 +11,7 @@ on:
       - '**.proto'
       - 'go.mod'
       - 'go.sum'
+      - '.golangci.yaml'
 jobs:
 
   static:
