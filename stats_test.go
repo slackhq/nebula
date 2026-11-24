@@ -114,6 +114,58 @@ func TestStatsServer_reload_initial_prometheus(t *testing.T) {
 	assert.Nil(t, currentRuntime(s))
 }
 
+// http.ServeMux panics on each of these when the runtime is built, the config has to refuse them first
+func TestStatsServer_reload_initial_invalidPath(t *testing.T) {
+	for _, path := range []string{"metrics", "/my metrics", "/metrics/{name"} {
+		for _, configTest := range []bool{false, true} {
+			s, c := newTestStatsServer(t)
+			s.configTest = configTest
+			setStatsConfig(c, map[string]any{
+				"type":     "prometheus",
+				"interval": "1s",
+				"listen":   "127.0.0.1:0",
+				"path":     path,
+			})
+
+			require.ErrorContains(t, s.reload(c, true), "stats.path was invalid", path)
+			assert.False(t, s.enabled.Load())
+		}
+	}
+}
+
+func TestStatsServer_reload_invalidPath_keepsRunningRuntime(t *testing.T) {
+	port := freeTCPPort(t)
+	s, c := newTestStatsServer(t)
+	setStatsConfig(c, map[string]any{
+		"type":     "prometheus",
+		"interval": "1s",
+		"listen":   "127.0.0.1:" + port,
+		"path":     "/metrics",
+	})
+	require.NoError(t, s.reload(c, true))
+
+	go s.Start()
+	waitForListening(t, "127.0.0.1:"+port)
+	first := currentRuntime(s)
+	require.NotNil(t, first)
+
+	setStatsConfig(c, map[string]any{
+		"type":     "prometheus",
+		"interval": "1s",
+		"listen":   "127.0.0.1:" + port,
+		"path":     "metrics",
+	})
+	require.ErrorContains(t, s.reload(c, false), "stats.path was invalid")
+	assert.Same(t, first, currentRuntime(s), "a refused reload must leave the runtime alone")
+
+	resp, err := http.Get("http://127.0.0.1:" + port + "/metrics")
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	s.Stop()
+}
+
 func TestStatsServer_Start_graphite_blocksUntilStop(t *testing.T) {
 	h := newGraphiteHost(t, 0)
 
