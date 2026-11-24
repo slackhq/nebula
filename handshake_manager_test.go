@@ -409,3 +409,31 @@ func TestECMPGateways(t *testing.T) {
 	assert.True(t, g.isUp(gw), "a completed handshake marks the gateway up")
 	assert.Len(t, g.up, 1)
 }
+
+func TestECMPGatewaysTrackTunnel(t *testing.T) {
+	g := newECMPGateways()
+	v4 := netip.MustParseAddr("10.128.0.2")
+	v6 := netip.MustParseAddr("fd00::2")
+	tunnel := &HostInfo{vpnAddrs: []netip.Addr{v4, v6}}
+
+	// The tunnel came up before any flow hashed to its gateway, so nothing is tracked and its death would be missed
+	g.markDown(tunnel.vpnAddrs...)
+	assert.Empty(t, g.up)
+
+	// The first packet routed over the tunnel tracks every address of its host, another route may use the other one
+	g.trackTunnel(tunnel)
+	assert.Len(t, g.up, 2)
+	assert.True(t, g.isUp(v4))
+	assert.True(t, g.isUp(v6))
+
+	g.markDown(tunnel.vpnAddrs...)
+	assert.False(t, g.isUp(v4))
+	assert.False(t, g.isUp(v6))
+
+	// Tracking never changes what is known: not for a later packet, and not for a new tunnel to the same host
+	g.trackTunnel(tunnel)
+	g.trackTunnel(&HostInfo{vpnAddrs: []netip.Addr{v4, v6}})
+	assert.False(t, g.isUp(v4))
+	assert.False(t, g.isUp(v6))
+	assert.Len(t, g.up, 2)
+}

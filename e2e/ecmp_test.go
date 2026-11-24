@@ -257,3 +257,68 @@ func TestECMPFallsBackRightAwayWhenTunnelDies(t *testing.T) {
 	require.True(t, got, "packet waited for g2 after its tunnel was found dead")
 	assertUdpPacket(t, []byte("fallback"), n.g1.GetFromTun(true), n.myAddr, n.vip, port, 80)
 }
+
+func TestECMPFallsBackRightAwayWhenPreexistingTunnelDies(t *testing.T) {
+	t.Parallel()
+	n := newECMPNet(t, nil)
+	defer n.r.RenderFlow()
+	n.warmG1(t)
+
+	t.Log("Stand up a tunnel to g2 with a packet to g2 itself, before any flow has hashed to g2")
+	n.me.InjectTunPacket(BuildTunUDPPacket(n.gateways[1], 80, n.myAddr, 9999, []byte("direct")))
+	got, _ := n.route(5*time.Second, n.g2)
+	require.True(t, got, "direct packet never reached g2")
+	assertUdpPacket(t, []byte("direct"), n.g2.GetFromTun(true), n.myAddr, n.gateways[1], 9999, 80)
+
+	t.Log("The first flow that hashes to g2 finds the tunnel ready")
+	port := n.portFor(t, 1)
+	n.send(port, "first")
+	got, others := n.route(5*time.Second, n.g2)
+	require.True(t, got, "first packet never reached g2")
+	assert.Zero(t, others, "first packet went to another gateway")
+	assertUdpPacket(t, []byte("first"), n.g2.GetFromTun(true), n.myAddr, n.vip, port, 80)
+
+	t.Log("g2 becomes unreachable with its tunnel up, and the connection manager finds the tunnel dead")
+	n.send(port, "lost")
+	n.routeUntil(t, func() bool { return !n.me.HasTunnel(n.gateways[1]) }, n.g2)
+
+	t.Log("New flows that hash to g2 go to g1 right away, as when a flow that hashed to g2 had brought the tunnel up")
+	port = n.portFor(t, 1)
+	n.send(port, "fallback")
+	got, _ = n.route(time.Second, n.g1, n.g2)
+	require.True(t, got, "packet waited for g2 after its tunnel was found dead")
+	assertUdpPacket(t, []byte("fallback"), n.g1.GetFromTun(true), n.myAddr, n.vip, port, 80)
+}
+
+func TestECMPFallsBackRightAwayWhenFallbackTunnelDies(t *testing.T) {
+	t.Parallel()
+	n := newECMPNet(t, m{"handshakes": m{"try_interval": "100ms", "retries": 2}})
+	defer n.r.RenderFlow()
+
+	t.Log("Stand up a tunnel to g1 with a packet to g1 itself, so no flow has hashed to g1")
+	n.me.InjectTunPacket(BuildTunUDPPacket(n.gateways[0], 80, n.myAddr, 9999, []byte("direct")))
+	got, _ := n.route(5*time.Second, n.g1)
+	require.True(t, got, "direct packet never reached g1")
+	assertUdpPacket(t, []byte("direct"), n.g1.GetFromTun(true), n.myAddr, n.gateways[0], 9999, 80)
+
+	t.Log("g2's handshake times out, and the flows that hash to g2 fall back to g1's tunnel")
+	n.send(n.portFor(t, 1), "held")
+	n.timeOutG2(t)
+	port := n.portFor(t, 1)
+	n.send(port, "fallback")
+	got, _ = n.route(time.Second, n.g1, n.g2)
+	require.True(t, got, "fallback packet never reached g1")
+	assertUdpPacket(t, []byte("fallback"), n.g1.GetFromTun(true), n.myAddr, n.vip, port, 80)
+
+	t.Log("g2 comes back, then g1 becomes unreachable with its tunnel up and the connection manager finds the tunnel dead")
+	n.routeUntil(t, func() bool { return n.me.HasTunnel(n.gateways[1]) })
+	n.me.InjectTunPacket(BuildTunUDPPacket(n.gateways[0], 80, n.myAddr, 9999, []byte("lost")))
+	n.routeUntil(t, func() bool { return !n.me.HasTunnel(n.gateways[0]) }, n.g1)
+
+	t.Log("New flows that hash to g1 go to g2 right away: the fallback was the first use of g1's tunnel, and tracked g1")
+	port = n.portFor(t, 0)
+	n.send(port, "moved")
+	got, _ = n.route(time.Second, n.g2, n.g1)
+	require.True(t, got, "packet waited for g1 after its tunnel was found dead")
+	assertUdpPacket(t, []byte("moved"), n.g2.GetFromTun(true), n.myAddr, n.vip, port, 80)
+}
