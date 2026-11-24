@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Removed the deprecated boringcrypto builds (`make bin-boringcrypto`, `make release-boringcrypto`). Use the native
   FIPS 140-3 builds (`make bin-fips140`, `make release-fips140`) instead. The `boringcrypto` field is no longer logged
-  at startup or reported as a label on the `info` metric.
+  at startup or reported as a label on the `info` metric. (#2079)
 
 ## [1.12.0] - 2026-10-29
 
