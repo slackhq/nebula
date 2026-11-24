@@ -13,12 +13,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestSSHCommandSurface is a characterization test for the ssh command surface.
-// It pins the registered command set, their descriptions, help text and flag definitions
-// so that moving the registry to a transport neutral package is provably a relocation
-// rather than a rewrite. Regenerate with `go test . -run TestSSHCommandSurface -update`.
-
-func TestSSHCommandSurface(t *testing.T) {
+// TestCommandSurface is a characterization test for the commands nebula serves. It pins
+// the registered command set, their descriptions, help text and flag definitions.
+// Regenerate with `go test . -run TestCommandSurface -update`.
+func TestCommandSurface(t *testing.T) {
 	got := renderCommandSurface(registeredCommands(t).Schema())
 	test.Golden(t, filepath.Join("testdata", "command_surfaces.golden"), got)
 }

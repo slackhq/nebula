@@ -20,7 +20,9 @@ import (
 // Intentionally NOT t.Parallel()'d: concurrent tests would have their own
 // goroutines running and trip the assertion.
 func TestNoGoroutineLeaks(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	// go-winio starts one completion port goroutine for the process the first time any
+	// test uses a named pipe, and it lives as long as the process does.
+	defer goleak.VerifyNone(t, goleak.IgnoreAnyFunction("github.com/Microsoft/go-winio.ioCompletionProcessor"))
 
 	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
 	myControl, myVpnIpNet, myUdpAddr, _ := newSimpleServer(cert.Version1, ca, caKey, "me", "10.128.0.1/24", nil)
