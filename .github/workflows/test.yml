@@ -56,11 +56,6 @@ jobs:
           build-cmd: go build ./cmd/nebula ./cmd/nebula-cert
           test-cmd: make test
           e2e-cmd: make e2evv
-        - name: linux-boringcrypto
-          os: ubuntu-latest
-          build-cmd: make boringcrypto
-          test-cmd: make boringcrypto test
-          e2e-cmd: make boringcrypto e2evv
         - name: linux-fips140
           os: ubuntu-latest
           build-cmd: make fips140-all

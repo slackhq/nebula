@@ -157,15 +157,6 @@ make fips140 test
 make release-fips140
 ```
 
-Nebula can also be built using the [BoringCrypto GOEXPERIMENT](https://github.com/golang/go/blob/go1.20/src/crypto/internal/boring/README.md) by running either of the following make targets.
-
-```sh
-make bin-boringcrypto
-make release-boringcrypto
-```
-
-NOTE: boringcrypto support is deprecated and will be removed in the next release. Users should migrate to the native FIPS 140-3 mode described above.
-
 This is not the recommended default deployment, but may be useful based on your compliance requirements.
 
 ## Credits

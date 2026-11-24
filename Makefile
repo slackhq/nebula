@@ -146,8 +146,6 @@ release-openbsd: $(ALL_OPENBSD:%=build/nebula-%.tar.gz)
 
 release-netbsd: $(ALL_NETBSD:%=build/nebula-%.tar.gz)
 
-release-boringcrypto: build/nebula-linux-$(shell go env GOARCH)-boringcrypto.tar.gz
-
 release-fips140: $(ALL_FIPS140:%=build/nebula-%.tar.gz)
 
 BUILD_ARGS += -trimpath
@@ -165,9 +163,6 @@ bin-freebsd: build/freebsd-amd64/nebula build/freebsd-amd64/nebula-cert
 	mv $? .
 
 bin-freebsd-arm64: build/freebsd-arm64/nebula build/freebsd-arm64/nebula-cert
-	mv $? .
-
-bin-boringcrypto: build/linux-$(shell go env GOARCH)-boringcrypto/nebula build/linux-$(shell go env GOARCH)-boringcrypto/nebula-cert
 	mv $? .
 
 bin-fips140: build/linux-$(shell go env GOARCH)-fips140/nebula build/linux-$(shell go env GOARCH)-fips140/nebula-cert
@@ -194,10 +189,6 @@ build/linux-mips-%: GOENV += GOMIPS=$(word 3, $(subst -, ,$*))
 
 # Build an extra small binary for mips-softfloat
 build/linux-mips-softfloat/%: LDFLAGS += -s -w
-
-# boringcrypto
-build/linux-amd64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1
-build/linux-arm64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1
 
 # fips140
 FIPSVERSION = v1.0.0
@@ -308,19 +299,6 @@ $(foreach _rule, $(ALL_GOFIPS140), $(eval $(call FIPS140_rule,$(_rule))))
 fips140-all:
 	@$(foreach _v,$(ALL_GOFIPS140),$(MAKE) fips140-$(_v) $(GOALS) &&) true
 
-# Useful to chain together, like:
-# - make boringcrypto e2evv
-# - make boringcrypto smoke-docker
-# Use `release-boringcrypto` or `bin-boringcrypto` to build release binaries
-boringcrypto:
-	@echo > $(NULL_FILE)
-	$(eval GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1)
-	$(eval TEST_ENV += $(GOENV))
-	$(eval CURVE = P256)
-ifeq ($(words $(MAKECMDGOALS)),1)
-	@$(MAKE) boringcrypto ${.DEFAULT_GOAL} --no-print-directory
-endif
-
 bin-docker: bin build/linux-amd64/nebula build/linux-amd64/nebula-cert
 
 smoke-docker: BUILD_ARGS += -race
@@ -349,5 +327,5 @@ smoke-vagrant/%: bin-docker build/%/nebula
 	cd .github/workflows/smoke/ && ./smoke-vagrant.sh $*
 
 .FORCE:
-.PHONY: all all-linux all-freebsd all-openbsd all-netbsd all-darwin all-windows all-cross-linux all-cross-linux-arm all-cross-linux-mips all-cross-linux-other all-cross-darwin all-cross-windows bench bench-cpu bench-cpu-long bin bin-windows bin-windows-arm64 bin-darwin bin-freebsd bin-freebsd-arm64 bin-boringcrypto bin-fips140 bin-pkcs11 bin-docker boringcrypto build-test-mobile debug docker e2e e2ev e2evv e2evvv e2evvvv e2e-bench fips140 fips140-all $(ALL_GOFIPS140:%=fips140-%) install proto release release-linux release-freebsd release-openbsd release-netbsd release-boringcrypto release-fips140 service smoke-docker smoke-relay-docker smoke-docker-ipv6 smoke-self test test-pkcs11 test-cov-html vet smoke-vagrant/%
+.PHONY: all all-linux all-freebsd all-openbsd all-netbsd all-darwin all-windows all-cross-linux all-cross-linux-arm all-cross-linux-mips all-cross-linux-other all-cross-darwin all-cross-windows bench bench-cpu bench-cpu-long bin bin-windows bin-windows-arm64 bin-darwin bin-freebsd bin-freebsd-arm64 bin-fips140 bin-pkcs11 bin-docker build-test-mobile debug docker e2e e2ev e2evv e2evvv e2evvvv e2e-bench fips140 fips140-all $(ALL_GOFIPS140:%=fips140-%) install proto release release-linux release-freebsd release-openbsd release-netbsd release-fips140 service smoke-docker smoke-relay-docker smoke-docker-ipv6 smoke-self test test-pkcs11 test-cov-html vet smoke-vagrant/%
 .DEFAULT_GOAL := bin

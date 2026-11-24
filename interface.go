@@ -293,7 +293,6 @@ func (f *Interface) activate() error {
 		"networks", f.myVpnNetworks,
 		"build", f.version,
 		"udpAddr", addr,
-		"boringcrypto", boringEnabled(),
 		"fips140Version", fips140.Version(),
 		"fips140Enabled", fips140.Enabled(),
 		"fips140Enforced", fips140.Enforced(),

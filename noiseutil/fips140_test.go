@@ -11,8 +11,8 @@ import (
 
 // Ensure NewAESGCM validates the nonce is non-repeating
 func TestNewAESGCM(t *testing.T) {
-	if !boringEnabled && !fips140.Enabled() {
-		t.Skip("TestNewAESGCM is only for fips140/boringcrypto")
+	if !fips140.Enabled() {
+		t.Skip("TestNewAESGCM is only for fips140")
 	}
 
 	key, _ := hex.DecodeString("feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308")
@@ -32,10 +32,6 @@ func TestNewAESGCM(t *testing.T) {
 
 	// We expect this to fail since we are re-encrypting with a repeat IV
 	switch {
-	case boringEnabled:
-		assert.PanicsWithError(t, "boringcrypto: EVP_AEAD_CTX_seal failed", func() {
-			dst = aead.Seal([]byte{}, iv, plaintext, aad)
-		})
 	case fips140.Version() == "v1.0.0":
 		assert.PanicsWithValue(t, "crypto/cipher: counter decreased", func() {
 			dst = aead.Seal([]byte{}, iv, plaintext, aad)

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the deprecated boringcrypto builds (`make bin-boringcrypto`, `make release-boringcrypto`). Use the native
+  FIPS 140-3 builds (`make bin-fips140`, `make release-fips140`) instead. The `boringcrypto` field is no longer logged
+  at startup or reported as a label on the `info` metric.
+
 ## [1.12.0] - 2026-10-29
 
 This release introduces udp/tun offloading support that can be enabled for greater performance. This will be enabled by default in a future release. See the `listen.udp_offloads` and `tun.use_offloads` example config settings for more details.
