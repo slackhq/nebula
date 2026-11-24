@@ -46,6 +46,35 @@ func TestSplitPEM_CommentsAndWhitespaceBetweenBlocks(t *testing.T) {
 	require.Len(t, blocks, 2)
 }
 
+// A block that is commented out or indented is text between blocks, as it is for pem.Decode
+func TestSplitPEM_PrefixedBlock(t *testing.T) {
+	block1 := "-----BEGIN TEST-----\naaa\n-----END TEST-----\n"
+	block2 := "-----BEGIN TEST-----\nbbb\n-----END TEST-----\n"
+	for _, prefix := range []string{"# ", "#", "  ", "\t"} {
+		prefixed := prefix + "-----BEGIN TEST-----\n" + prefix + "ccc\n" + prefix + "-----END TEST-----\n"
+
+		blocks, err := scanAll(t, prefixed+block2)
+		require.NoError(t, err)
+		require.Equal(t, []string{block2}, blocks)
+
+		blocks, err = scanAll(t, block1+prefixed+block2)
+		require.NoError(t, err)
+		require.Equal(t, []string{block1, block2}, blocks)
+
+		// After the last block it is trailing text like any other
+		blocks, err = scanAll(t, block1+prefixed)
+		require.ErrorIs(t, err, ErrTruncatedPEMBlock)
+		require.Equal(t, []string{block1}, blocks)
+	}
+}
+
+func TestSplitPEM_ByteOrderMark(t *testing.T) {
+	block := "-----BEGIN TEST-----\ndata\n-----END TEST-----\n"
+	blocks, err := scanAll(t, "\xef\xbb\xbf"+block)
+	require.NoError(t, err)
+	require.Equal(t, []string{block}, blocks)
+}
+
 func TestSplitPEM_Empty(t *testing.T) {
 	blocks, err := scanAll(t, "")
 	require.NoError(t, err)

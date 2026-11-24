@@ -299,6 +299,30 @@ func TestLoadCAPoolSkipsUnsupported(t *testing.T) {
 	require.ErrorIs(t, err, cert.ErrInvalidPEMCertificateBanner)
 }
 
+// A certificate that is commented out or indented in pki.ca or pki.cert is not read, the ones beside it are
+func TestPKISkipsPrefixedCertificates(t *testing.T) {
+	ca, _, caKey, caPEM := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	_, _, _, retiredCAPEM := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	_, _, keyPEM, certPEM := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, ca, caKey, "host", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.2/24")}, nil, nil)
+	_, _, _, retiredCertPEM := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, ca, caKey, "host", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.2/24")}, nil, nil)
+	fp, err := ca.Fingerprint()
+	require.NoError(t, err)
+
+	for _, prefix := range []string{"# ", "  "} {
+		prefixed := func(b []byte) string {
+			return prefix + strings.ReplaceAll(strings.TrimSuffix(string(b), "\n"), "\n", "\n"+prefix) + "\n"
+		}
+
+		c := config.NewC(test.NewLogger())
+		require.NoError(t, c.LoadString(fmt.Sprintf("pki:\n  ca: %q\n  cert: %q\n  key: %q\n",
+			prefixed(retiredCAPEM)+string(caPEM), prefixed(retiredCertPEM)+string(certPEM), keyPEM)))
+		p, err := NewPKIFromConfig(test.NewLogger(), c)
+		require.NoError(t, err)
+		assert.Len(t, p.GetCAPool().CAs, 1)
+		assert.Contains(t, p.GetCAPool().CAs, fp)
+	}
+}
+
 // pki.cert may hold certificates for versions a newer nebula added, we use the ones we can and skip the rest
 func TestPKICertSkipsUnsupported(t *testing.T) {
 	ca, _, caKey, caPEM := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
