@@ -229,8 +229,22 @@ build/nebula-%.zip: build/%/nebula.exe build/%/nebula-cert.exe
 docker/%: build/%/nebula build/%/nebula-cert
 	docker build . $(DOCKER_BUILD_ARGS) -f docker/Dockerfile --platform "$(subst -,/,$*)" --tag "${DOCKER_IMAGE_REPO}:${DOCKER_IMAGE_TAG}" --tag "${DOCKER_IMAGE_REPO}:$(BUILD_NUMBER)"
 
-vet:
+# The host build keeps cgo; the rest are cgo-free cross vets, so CI on one OS covers every platform.
+VET_GOOS = linux darwin windows freebsd openbsd netbsd android
+
+vet: vet-host $(VET_GOOS:%=vet-%)
+
+vet-host:
 	go vet $(VET_FLAGS) -v ./...
+	go vet $(VET_FLAGS) -tags=e2e_testing -v ./...
+
+# RIO on windows does pointer stuff that makes go vet angry
+vet-%: VET_CROSS_FLAGS = $(if $(filter windows,$*),-unsafeptr=false)
+# android/amd64 needs cgo to link, and the cross vets run without it
+vet-%: VET_CROSS_ENV = $(if $(filter android,$*),GOARCH=arm64)
+$(VET_GOOS:%=vet-%): vet-%:
+	GOOS=$* $(VET_CROSS_ENV) CGO_ENABLED=0 go vet $(VET_CROSS_FLAGS) ./...
+	GOOS=$* $(VET_CROSS_ENV) CGO_ENABLED=0 go vet $(VET_CROSS_FLAGS) -tags=e2e_testing ./...
 
 test:
 	$(TEST_ENV) go test $(TEST_FLAGS) -v ./...
@@ -349,5 +363,5 @@ smoke-vagrant/%: bin-docker build/%/nebula
 	cd .github/workflows/smoke/ && ./smoke-vagrant.sh $*
 
 .FORCE:
-.PHONY: all all-linux all-freebsd all-openbsd all-netbsd all-darwin all-windows all-cross-linux all-cross-linux-arm all-cross-linux-mips all-cross-linux-other all-cross-darwin all-cross-windows bench bench-cpu bench-cpu-long bin bin-windows bin-windows-arm64 bin-darwin bin-freebsd bin-freebsd-arm64 bin-boringcrypto bin-fips140 bin-pkcs11 bin-docker boringcrypto build-test-mobile debug docker e2e e2ev e2evv e2evvv e2evvvv e2e-bench fips140 fips140-all $(ALL_GOFIPS140:%=fips140-%) install proto release release-linux release-freebsd release-openbsd release-netbsd release-boringcrypto release-fips140 service smoke-docker smoke-relay-docker smoke-docker-ipv6 smoke-self test test-pkcs11 test-cov-html vet smoke-vagrant/%
+.PHONY: all all-linux all-freebsd all-openbsd all-netbsd all-darwin all-windows all-cross-linux all-cross-linux-arm all-cross-linux-mips all-cross-linux-other all-cross-darwin all-cross-windows bench bench-cpu bench-cpu-long bin bin-windows bin-windows-arm64 bin-darwin bin-freebsd bin-freebsd-arm64 bin-boringcrypto bin-fips140 bin-pkcs11 bin-docker boringcrypto build-test-mobile debug docker e2e e2ev e2evv e2evvv e2evvvv e2e-bench fips140 fips140-all $(ALL_GOFIPS140:%=fips140-%) install proto release release-linux release-freebsd release-openbsd release-netbsd release-boringcrypto release-fips140 service smoke-docker smoke-relay-docker smoke-docker-ipv6 smoke-self test test-pkcs11 test-cov-html vet vet-host $(VET_GOOS:%=vet-%) smoke-vagrant/%
 .DEFAULT_GOAL := bin
