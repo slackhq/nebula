@@ -4,9 +4,12 @@ package main
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	"crypto/rand"
 	"errors"
+	"net/netip"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -530,4 +533,61 @@ func Test_signCert_stdio(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "in-pub-test", stdinCrt.Name())
 	assert.Equal(t, inPub, stdinCrt.PublicKey())
+}
+
+func Test_signCert_nonCASigner(t *testing.T) {
+	ob := &bytes.Buffer{}
+	eb := &bytes.Buffer{}
+	nopw := &StubPasswordReader{}
+	dir := t.TempDir()
+
+	// On P256 a host private key is also a valid ECDSA signing key, so the key/cert match check can't
+	// catch a host certificate being supplied as the signer.
+	newKey := func() ([]byte, []byte) {
+		k, err := ecdh.P256().GenerateKey(rand.Reader)
+		require.NoError(t, err)
+		return k.PublicKey().Bytes(), k.Bytes()
+	}
+	notBefore := time.Now()
+	notAfter := notBefore.Add(time.Hour)
+
+	caPub, caPriv := newKey()
+	caTBS := &cert.TBSCertificate{
+		Version:   cert.Version2,
+		Name:      "ca",
+		NotBefore: notBefore,
+		NotAfter:  notAfter,
+		PublicKey: caPub,
+		IsCA:      true,
+		Curve:     cert.Curve_P256,
+	}
+	ca, err := caTBS.Sign(nil, cert.Curve_P256, caPriv)
+	require.NoError(t, err)
+
+	hostPub, hostPriv := newKey()
+	hostTBS := &cert.TBSCertificate{
+		Version:   cert.Version2,
+		Name:      "host",
+		Networks:  []netip.Prefix{netip.MustParsePrefix("10.1.0.1/24")},
+		NotBefore: notBefore,
+		NotAfter:  notAfter,
+		PublicKey: hostPub,
+		Curve:     cert.Curve_P256,
+	}
+	host, err := hostTBS.Sign(ca, cert.Curve_P256, caPriv)
+	require.NoError(t, err)
+
+	hostCrtPath := filepath.Join(dir, "host.crt")
+	hostKeyPath := filepath.Join(dir, "host.key")
+	b, err := host.MarshalPEM()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(hostCrtPath, b, 0600))
+	require.NoError(t, os.WriteFile(hostKeyPath, cert.MarshalSigningPrivateKeyToPEM(cert.Curve_P256, hostPriv), 0600))
+
+	crtPath := filepath.Join(dir, "out.crt")
+	keyPath := filepath.Join(dir, "out.key")
+	args := []string{"-ca-crt", hostCrtPath, "-ca-key", hostKeyPath, "-name", "test", "-networks", "10.1.0.2/24", "-out-crt", crtPath, "-out-key", keyPath}
+	require.EqualError(t, signCert(args, ob, eb, nopw), `error while signing: signing certificate "host": certificate is not a CA`)
+	assert.NoFileExists(t, crtPath)
+	assert.NoFileExists(t, keyPath)
 }

@@ -317,6 +317,10 @@ func CheckCAConstraints(signer Certificate, sub Certificate) error {
 
 // checkCAConstraints is a very generic function allowing both Certificates and TBSCertificates to be tested.
 func checkCAConstraints(signer Certificate, notBefore, notAfter time.Time, groups []string, networks, unsafeNetworks []netip.Prefix) error {
+	if !signer.IsCA() {
+		return fmt.Errorf("signing certificate %s: %w", QuoteName(signer.Name()), ErrNotCA)
+	}
+
 	// Make sure this cert isn't valid after the root
 	if notAfter.After(signer.NotAfter()) {
 		return fmt.Errorf("certificate expires after signing certificate")
