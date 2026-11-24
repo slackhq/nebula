@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"maps"
 	"net/netip"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/cert_test"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/e2e/router"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
@@ -17,12 +19,14 @@ import (
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.yaml.in/yaml/v3"
 )
 
 const ecmpVip = "192.168.6.10/32"
 
 type ecmpNet struct {
 	me, g1, g2 *nebula.Control
+	myConfig   *config.C
 	myAddr     netip.Addr
 	vip        netip.Addr
 	gateways   []netip.Addr
@@ -48,7 +52,7 @@ func newECMPNet(t *testing.T, myOverrides m) *ecmpNet {
 	for k, v := range myOverrides {
 		overrides[k] = v
 	}
-	me, myNet, _, _ := newSimpleServerWithUdp(cert.Version2, ca, caKey, "me", "10.128.0.1/24", netip.MustParseAddrPort("10.64.0.1:4242"), overrides)
+	me, myNet, _, myConfig := newSimpleServerWithUdp(cert.Version2, ca, caKey, "me", "10.128.0.1/24", netip.MustParseAddrPort("10.64.0.1:4242"), overrides)
 	me.InjectLightHouseAddr(gateways[0], g1Udp)
 	me.InjectLightHouseAddr(gateways[1], g2Udp)
 
@@ -65,6 +69,7 @@ func newECMPNet(t *testing.T, myOverrides m) *ecmpNet {
 		me:       me,
 		g1:       g1,
 		g2:       g2,
+		myConfig: myConfig,
 		myAddr:   myNet[0].Addr(),
 		vip:      netip.MustParsePrefix(ecmpVip).Addr(),
 		gateways: gateways,
@@ -152,6 +157,21 @@ func (n *ecmpNet) warmG1(t *testing.T) {
 	n.me.KillPendingTunnel(n.gateways[1])
 }
 
+// blocklistG2 reloads me with g2's certificate on pki.blocklist, so g2 still answers a handshake and we refuse the answer.
+func (n *ecmpNet) blocklistG2(t *testing.T) {
+	fingerprint, err := n.g2.GetCertState().GetDefaultCertificate().Fingerprint()
+	require.NoError(t, err)
+
+	settings := maps.Clone(n.myConfig.Settings)
+	pki := maps.Clone(settings["pki"].(m))
+	pki["blocklist"] = []string{fingerprint}
+	settings["pki"] = pki
+
+	cfg, err := yaml.Marshal(settings)
+	require.NoError(t, err)
+	require.NoError(t, n.myConfig.ReloadConfigString(string(cfg)).Err)
+}
+
 func TestECMPHoldsPacketsForHashedGateway(t *testing.T) {
 	t.Parallel()
 	n := newECMPNet(t, nil)
@@ -199,6 +219,33 @@ func TestECMPFallsBackAfterHashedGatewayTimesOut(t *testing.T) {
 	require.True(t, got, "packet after recovery never reached g2")
 	assert.Zero(t, others, "packet after recovery went to another gateway")
 	assertUdpPacket(t, []byte("recovered"), n.g2.GetFromTun(true), n.myAddr, n.vip, port, 80)
+}
+
+func TestECMPFallsBackAfterHashedGatewayIsRefused(t *testing.T) {
+	t.Parallel()
+	n := newECMPNet(t, nil)
+	defer n.r.RenderFlow()
+	n.warmG1(t)
+	n.blocklistG2(t)
+
+	t.Log("g2 answers the handshake a flow that hashes to it starts, and we abandon the handshake over g2's certificate")
+	port := n.portFor(t, 1)
+	sent := time.Now()
+	n.send(port, "held")
+	// g2 has a tunnel once it has answered, and the handshake leaves our pending list once we have refused the answer
+	abandoned := func() bool {
+		return n.g2.HasTunnel(n.myAddr) && !n.me.HasPendingHandshake(n.gateways[1])
+	}
+	assert.Zero(t, n.routeUntil(t, abandoned), "held packet went to a gateway")
+	// A handshake times out after 5.5s here
+	require.Less(t, time.Since(sent), 3*time.Second, "the handshake was not abandoned when g2 answered")
+
+	t.Log("The rest of the flow goes to g1 right away: no handshake with g2 lives long enough to time out")
+	n.send(port, "fallback")
+	got, others := n.route(time.Second, n.g1)
+	require.True(t, got, "packet waited for g2 after we refused its certificate")
+	assert.Zero(t, others, "packet went to g2, whose certificate we refuse")
+	assertUdpPacket(t, []byte("fallback"), n.g1.GetFromTun(true), n.myAddr, n.vip, port, 80)
 }
 
 func TestECMPDownGatewayRecoversOnFirstFlow(t *testing.T) {

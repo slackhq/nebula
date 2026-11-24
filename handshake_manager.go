@@ -119,7 +119,8 @@ func (hh *HandshakeHostInfo) cachePacket(l *slog.Logger, t header.MessageType, s
 }
 
 // ecmpGateways remembers whether each gateway of a multi-gateway route is up. A gateway is down once a handshake with
-// it times out or the connection manager finds its tunnel dead, and up again once a handshake with it completes.
+// it times out or is abandoned, or the connection manager finds its tunnel dead, and up again once a handshake with it
+// completes.
 //
 // A packet whose flow hashes to a gateway without a tunnel waits for that gateway's handshake instead of going to
 // another gateway. Sending it elsewhere would split the flow: once the handshake completes, the rest of the flow goes
@@ -618,6 +619,14 @@ func (hm *HandshakeManager) DeleteHostInfo(hostinfo *HostInfo) {
 	hm.unlockedDeleteHostInfo(hostinfo)
 }
 
+// abandon gives up on a pending handshake that an answer ended without a tunnel, most often because we refuse the
+// certificate in it as expired or blocklisted. A gateway of a multi-gateway route is down from then on, as it is after
+// a timeout: the next handshake with it would be answered and refused within a round trip, so none would ever time out.
+func (hm *HandshakeManager) abandon(hostinfo *HostInfo) {
+	hm.ecmpGateways.markDown(hostinfo.vpnAddrs...)
+	hm.DeleteHostInfo(hostinfo)
+}
+
 func (hm *HandshakeManager) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 	for _, addr := range hostinfo.vpnAddrs {
 		if cur, ok := hm.vpnIps[addr]; ok && cur.hostinfo == hostinfo {
@@ -937,7 +946,7 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	if machine == nil {
 		f.l.Error("No handshake machine available for continuation",
 			"vpnAddrs", hostinfo.vpnAddrs, "from", via)
-		hm.DeleteHostInfo(hostinfo)
+		hm.abandon(hostinfo)
 		return
 	}
 
@@ -950,7 +959,7 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		if machine.Failed() {
 			f.l.Warn("Failed to process handshake packet, abandoning",
 				"vpnAddrs", hostinfo.vpnAddrs, "from", via, "error", err)
-			hm.DeleteHostInfo(hostinfo)
+			hm.abandon(hostinfo)
 		} else {
 			f.l.Debug("Failed to process handshake packet",
 				"vpnAddrs", hostinfo.vpnAddrs, "from", via, "error", err)
@@ -970,7 +979,7 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	cs, err := newConnectionStateFromResult(result)
 	if err != nil {
 		f.l.Error("Discarding handshake with an invalid message index", "error", err, "vpnAddrs", hostinfo.vpnAddrs)
-		hm.DeleteHostInfo(hostinfo)
+		hm.abandon(hostinfo)
 		return
 	}
 	hostinfo.ConnectionState = cs
@@ -979,7 +988,7 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	if remoteCert == nil {
 		f.l.Error("Handshake completed without peer certificate",
 			"vpnAddrs", hostinfo.vpnAddrs, "from", via)
-		hm.DeleteHostInfo(hostinfo)
+		hm.abandon(hostinfo)
 		return
 	}
 
@@ -1013,7 +1022,7 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 				"issuer", remoteCert.Certificate.Issuer(),
 				"handshake", m{"stage": uint64(machine.MessageIndex()), "style": header.SubTypeName(header.Handshake, machine.Subtype())},
 			)
-			hm.DeleteHostInfo(hostinfo)
+			hm.abandon(hostinfo)
 			return
 		}
 		vpnAddrs[i] = network.Addr()
