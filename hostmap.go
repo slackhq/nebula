@@ -711,6 +711,18 @@ func (hm *HostMap) GetPreferredRanges() []netip.Prefix {
 	return *hm.preferredRanges.Load()
 }
 
+// ForVpnAddr calls f with the hostinfo for vpnAddr while holding the read lock, reporting whether there was one.
+func (hm *HostMap) ForVpnAddr(vpnAddr netip.Addr, f controlEach) bool {
+	hm.RLock()
+	defer hm.RUnlock()
+
+	h, ok := hm.Hosts[vpnAddr]
+	if ok {
+		f(h)
+	}
+	return ok
+}
+
 func (hm *HostMap) ForEachVpnAddr(f controlEach) {
 	hm.RLock()
 	defer hm.RUnlock()

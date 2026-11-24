@@ -61,17 +61,22 @@ func (rm *relayManager) GetUseRelays() bool {
 // stage 0 handshake packet for vpnIp through it.
 func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hh *HandshakeHostInfo, stage0 []byte) {
 	hostinfo := hh.hostinfo
-	if !rm.GetUseRelays() || len(hostinfo.remotes.relays) == 0 {
+	if !rm.GetUseRelays() {
 		hh.lastRelays = nil
 		return
 	}
 
-	relays := hostinfo.remotes.relays
+	relays := hostinfo.remotes.CopyRelays()
+	if len(relays) == 0 {
+		hh.lastRelays = nil
+		return
+	}
+
 	listLevel := slog.LevelDebug
 	prior := hh.lastRelays
 	if !slices.Equal(relays, prior) {
 		listLevel = slog.LevelInfo
-		hh.lastRelays = slices.Clone(relays)
+		hh.lastRelays = relays
 	}
 	hl := hostinfo.logger(rm.l)
 	hl.Log(context.Background(), listLevel, "Attempt to relay through hosts", "relays", relays)
