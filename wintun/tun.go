@@ -26,28 +26,49 @@ import (
 )
 
 const (
+	ringCapacity = 0x800000 // Ring capacity, 8 MiB
+
 	rateMeasurementGranularity = uint64((time.Second / 2) / time.Nanosecond)
 	spinloopRateThreshold      = 800000000 / 8                                   // 800mbps
 	spinloopDuration           = uint64(time.Millisecond / 80 / time.Nanosecond) // ~1gbit/s
 )
 
+// ErrSendRingCorrupt is returned when Wintun reports ERROR_INVALID_DATA on the
+// send ring and in-process session recovery either failed or tripped its rate limit.
+var ErrSendRingCorrupt = errors.New("Send ring corrupt")
+
+// startRetryDelays bounds retries when WintunStartSession transiently returns
+// ERROR_ALREADY_EXISTS right after WintunEndSession.
+var startRetryDelays = []time.Duration{
+	5 * time.Millisecond,
+	15 * time.Millisecond,
+	30 * time.Millisecond,
+}
+
 type rateJuggler struct {
-	current       uint64
-	nextByteCount uint64
-	nextStartTime int64
-	changing      int32
+	current       atomic.Uint64
+	nextByteCount atomic.Uint64
+	nextStartTime atomic.Int64
+	changing      atomic.Int32
 }
 
 type NativeTun struct {
-	wt        *wintun.Adapter
-	name      string
-	handle    windows.Handle
-	rate      rateJuggler
-	session   wintun.Session
-	readWait  windows.Handle
-	running   sync.WaitGroup
-	closeOnce sync.Once
-	close     int32
+	wt         *wintun.Adapter
+	name       string
+	handle     windows.Handle
+	rate       rateJuggler
+	sessionMu  sync.RWMutex
+	session    wintun.Session
+	readWait   windows.Handle
+	hasSession bool
+	closed     bool
+	fatalErr   error
+	limiter    resetLimiter
+	resetCount atomic.Uint64
+	onReset    func(resets uint64)
+	waiting    sync.WaitGroup
+	closeOnce  sync.Once
+	closedAtom atomic.Bool
 }
 
 var WintunTunnelType = "Nebula"
@@ -74,18 +95,29 @@ func CreateTUNWithRequestedGUID(ifname string, requestedGUID *windows.GUID, mtu 
 	}
 
 	tun := &NativeTun{
-		wt:     wt,
-		name:   ifname,
-		handle: windows.InvalidHandle,
+		wt:      wt,
+		name:    ifname,
+		handle:  windows.InvalidHandle,
+		limiter: newResetLimiter(defaultMaxSessionResets, defaultSessionResetWindow, time.Now),
 	}
 
-	tun.session, err = wt.StartSession(0x800000) // Ring capacity, 8 MiB
+	tun.session, err = wt.StartSession(ringCapacity)
 	if err != nil {
 		tun.wt.Close()
 		return nil, fmt.Errorf("Error starting session: %w", err)
 	}
 	tun.readWait = tun.session.ReadWaitEvent()
+	tun.hasSession = true
 	return tun, nil
+}
+
+// SetOnSessionReset registers a callback invoked after the Wintun session is
+// restarted in-process to recover from a corrupted send ring. The callback runs
+// synchronously on the Read goroutine and must not block or call Read.
+func (tun *NativeTun) SetOnSessionReset(fn func(resets uint64)) {
+	tun.sessionMu.Lock()
+	tun.onReset = fn
+	tun.sessionMu.Unlock()
 }
 
 func (tun *NativeTun) Name() (string, error) {
@@ -97,56 +129,162 @@ func (tun *NativeTun) File() *os.File {
 }
 
 func (tun *NativeTun) Close() error {
-	var err error
 	tun.closeOnce.Do(func() {
-		atomic.StoreInt32(&tun.close, 1)
-		windows.SetEvent(tun.readWait)
-		tun.running.Wait()
-		tun.session.End()
+		tun.closedAtom.Store(true)
+
+		tun.sessionMu.Lock()
+		tun.closed = true
+		if tun.hasSession {
+			windows.SetEvent(tun.readWait)
+		}
+		tun.sessionMu.Unlock()
+
+		tun.waiting.Wait()
+
+		tun.sessionMu.Lock()
+		if tun.hasSession {
+			tun.session.End()
+			tun.session = wintun.Session{}
+			tun.readWait = 0
+			tun.hasSession = false
+		}
 		if tun.wt != nil {
 			tun.wt.Close()
+			tun.wt = nil
 		}
+		tun.sessionMu.Unlock()
 	})
-	return err
+	return nil
 }
 
-// Note: Read() and Write() assume the caller comes only from a single thread; there's no locking.
+// Note: Read() assumes the caller comes only from a single goroutine.
 
 func (tun *NativeTun) Read(buff []byte, offset int) (int, error) {
-	tun.running.Add(1)
-	defer tun.running.Done()
 retry:
-	if atomic.LoadInt32(&tun.close) == 1 {
+	if tun.closedAtom.Load() {
 		return 0, os.ErrClosed
 	}
 	start := nanotime()
-	shouldSpin := atomic.LoadUint64(&tun.rate.current) >= spinloopRateThreshold && uint64(start-atomic.LoadInt64(&tun.rate.nextStartTime)) <= rateMeasurementGranularity*2
+	shouldSpin := tun.rate.current.Load() >= spinloopRateThreshold && uint64(start-tun.rate.nextStartTime.Load()) <= rateMeasurementGranularity*2
+
+	tun.sessionMu.RLock()
+	if tun.closed {
+		tun.sessionMu.RUnlock()
+		return 0, os.ErrClosed
+	}
+	if tun.fatalErr != nil {
+		err := tun.fatalErr
+		tun.sessionMu.RUnlock()
+		return 0, err
+	}
+	if !tun.hasSession {
+		tun.sessionMu.RUnlock()
+		return 0, os.ErrClosed
+	}
+	sess := tun.session
+	readWait := tun.readWait
 	for {
-		if atomic.LoadInt32(&tun.close) == 1 {
+		if tun.closedAtom.Load() {
+			tun.sessionMu.RUnlock()
 			return 0, os.ErrClosed
 		}
-		packet, err := tun.session.ReceivePacket()
+		packet, err := sess.ReceivePacket()
 		switch err {
 		case nil:
 			packetSize := len(packet)
 			copy(buff[offset:], packet)
-			tun.session.ReleaseReceivePacket(packet)
+			sess.ReleaseReceivePacket(packet)
+			tun.sessionMu.RUnlock()
 			tun.rate.update(uint64(packetSize))
 			return packetSize, nil
 		case windows.ERROR_NO_MORE_ITEMS:
 			if !shouldSpin || uint64(nanotime()-start) >= spinloopDuration {
-				windows.WaitForSingleObject(tun.readWait, windows.INFINITE)
+				tun.waiting.Add(1)
+				tun.sessionMu.RUnlock()
+				windows.WaitForSingleObject(readWait, windows.INFINITE)
+				tun.waiting.Done()
 				goto retry
 			}
 			procyield(1)
 			continue
 		case windows.ERROR_HANDLE_EOF:
+			tun.sessionMu.RUnlock()
 			return 0, os.ErrClosed
 		case windows.ERROR_INVALID_DATA:
-			return 0, errors.New("Send ring corrupt")
+			tun.sessionMu.RUnlock()
+			if rerr := tun.recoverCorruptSession(); rerr != nil {
+				return 0, rerr
+			}
+			goto retry
 		}
+		tun.sessionMu.RUnlock()
 		return 0, fmt.Errorf("Read failed: %w", err)
 	}
+}
+
+// recoverCorruptSession replaces the active Wintun session in-process.
+// Must only be called from the single Read goroutine.
+func (tun *NativeTun) recoverCorruptSession() error {
+	tun.sessionMu.Lock()
+	if tun.closed {
+		tun.sessionMu.Unlock()
+		return os.ErrClosed
+	}
+	if tun.fatalErr != nil {
+		err := tun.fatalErr
+		tun.sessionMu.Unlock()
+		return err
+	}
+	if !tun.hasSession {
+		tun.sessionMu.Unlock()
+		return os.ErrClosed
+	}
+
+	tun.session.End()
+	tun.session = wintun.Session{}
+	tun.readWait = 0
+	tun.hasSession = false
+
+	if !tun.limiter.allow() {
+		err := fmt.Errorf("%w (exceeded %d session resets in %s)", ErrSendRingCorrupt, tun.limiter.maxResets, tun.limiter.window)
+		tun.fatalErr = err
+		tun.sessionMu.Unlock()
+		return err
+	}
+
+	var (
+		sess wintun.Session
+		err  error
+	)
+	for attempt := 0; ; attempt++ {
+		if tun.closedAtom.Load() {
+			tun.sessionMu.Unlock()
+			return os.ErrClosed
+		}
+		sess, err = tun.wt.StartSession(ringCapacity)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, windows.ERROR_ALREADY_EXISTS) || attempt >= len(startRetryDelays) {
+			fatal := fmt.Errorf("%w (session restart failed: %w)", ErrSendRingCorrupt, err)
+			tun.fatalErr = fatal
+			tun.sessionMu.Unlock()
+			return fatal
+		}
+		time.Sleep(startRetryDelays[attempt])
+	}
+
+	tun.session = sess
+	tun.readWait = sess.ReadWaitEvent()
+	tun.hasSession = true
+	resets := tun.resetCount.Add(1)
+	cb := tun.onReset
+	tun.sessionMu.Unlock()
+
+	if cb != nil {
+		cb(resets)
+	}
+	return nil
 }
 
 func (tun *NativeTun) Flush() error {
@@ -154,21 +292,32 @@ func (tun *NativeTun) Flush() error {
 }
 
 func (tun *NativeTun) Write(buff []byte, offset int) (int, error) {
-	tun.running.Add(1)
-	defer tun.running.Done()
-	if atomic.LoadInt32(&tun.close) == 1 {
+	tun.sessionMu.RLock()
+	if tun.closed {
+		tun.sessionMu.RUnlock()
+		return 0, os.ErrClosed
+	}
+	if tun.fatalErr != nil {
+		err := tun.fatalErr
+		tun.sessionMu.RUnlock()
+		return 0, err
+	}
+	if !tun.hasSession {
+		tun.sessionMu.RUnlock()
 		return 0, os.ErrClosed
 	}
 
 	packetSize := len(buff) - offset
-	tun.rate.update(uint64(packetSize))
-
 	packet, err := tun.session.AllocateSendPacket(packetSize)
 	if err == nil {
 		copy(packet, buff[offset:])
 		tun.session.SendPacket(packet)
+		tun.sessionMu.RUnlock()
+		tun.rate.update(uint64(packetSize))
 		return packetSize, nil
 	}
+	tun.sessionMu.RUnlock()
+
 	switch err {
 	case windows.ERROR_HANDLE_EOF:
 		return 0, os.ErrClosed
@@ -180,9 +329,9 @@ func (tun *NativeTun) Write(buff []byte, offset int) (int, error) {
 
 // LUID returns Windows interface instance ID.
 func (tun *NativeTun) LUID() uint64 {
-	tun.running.Add(1)
-	defer tun.running.Done()
-	if atomic.LoadInt32(&tun.close) == 1 {
+	tun.sessionMu.RLock()
+	defer tun.sessionMu.RUnlock()
+	if tun.closed || tun.wt == nil {
 		return 0
 	}
 	return tun.wt.LUID()
@@ -195,15 +344,15 @@ func (tun *NativeTun) RunningVersion() (version uint32, err error) {
 
 func (rate *rateJuggler) update(packetLen uint64) {
 	now := nanotime()
-	total := atomic.AddUint64(&rate.nextByteCount, packetLen)
-	period := uint64(now - atomic.LoadInt64(&rate.nextStartTime))
+	total := rate.nextByteCount.Add(packetLen)
+	period := uint64(now - rate.nextStartTime.Load())
 	if period >= rateMeasurementGranularity {
-		if !atomic.CompareAndSwapInt32(&rate.changing, 0, 1) {
+		if !rate.changing.CompareAndSwap(0, 1) {
 			return
 		}
-		atomic.StoreInt64(&rate.nextStartTime, now)
-		atomic.StoreUint64(&rate.current, total*uint64(time.Second/time.Nanosecond)/period)
-		atomic.StoreUint64(&rate.nextByteCount, 0)
-		atomic.StoreInt32(&rate.changing, 0)
+		rate.nextStartTime.Store(now)
+		rate.current.Store(total * uint64(time.Second/time.Nanosecond) / period)
+		rate.nextByteCount.Store(0)
+		rate.changing.Store(0)
 	}
 }

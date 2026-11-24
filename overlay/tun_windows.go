@@ -3,6 +3,7 @@
 package overlay
 
 import (
+	"context"
 	"crypto"
 	"errors"
 	"fmt"
@@ -12,11 +13,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
 
 	"github.com/gaissmai/bart"
+	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
@@ -44,6 +47,12 @@ type winTun struct {
 	bypassWDF       bool
 	wdfBypass       closer
 	l               *slog.Logger
+
+	ctx       context.Context
+	cancel    context.CancelFunc
+	catMu     sync.Mutex
+	catCancel context.CancelFunc
+	catNetID  windows.GUID
 
 	tun *wintun.NativeTun
 }
@@ -73,6 +82,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*w
 		return nil, err
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	t := &winTun{
 		Device:          deviceName,
 		vpnNetworks:     vpnNetworks,
@@ -82,6 +92,8 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*w
 		setCategory:     setCat,
 		bypassWDF:       c.GetBool("tun.windows_bypass_wdf", true),
 		l:               l,
+		ctx:             ctx,
+		cancel:          cancel,
 	}
 
 	err = t.reload(c, true, nil)
@@ -104,6 +116,19 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*w
 		}
 	}
 	t.tun = tunDevice.(*wintun.NativeTun)
+	sessionResets := metrics.GetOrRegisterCounter("tun.wintun.session_resets", nil)
+	t.tun.SetOnSessionReset(func(resets uint64) {
+		sessionResets.Inc(1)
+		t.l.Warn("Wintun send ring corrupt; restarted session",
+			"interface", t.Device,
+			"resets", resets,
+		)
+		if t.setCategory {
+			// Ending/starting a Wintun session flaps media state, which can cause
+			// NLA to recreate the network connection with category Public.
+			t.scheduleApplyNetworkCategory(true)
+		}
+	})
 
 	// Disable registration before Activate assigns addresses and triggers it.
 	disableDNSRegistration(l, *guid)
@@ -185,7 +210,7 @@ func (t *winTun) Activate() error {
 		// The wintun adapter takes a moment to register with the Network List
 		// Manager, so we apply the category in the background and retry until
 		// it shows up.
-		go applyNetworkCategory(t.l, t.guid, t.networkCategory)
+		t.scheduleApplyNetworkCategory(false)
 	}
 
 	if t.bypassWDF {
@@ -332,7 +357,32 @@ func (t *winTun) Queues(int) ([]tio.Queue, error) {
 	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}, nil
 }
 
+func (t *winTun) scheduleApplyNetworkCategory(reapply bool) {
+	t.catMu.Lock()
+	if t.ctx.Err() != nil {
+		t.catMu.Unlock()
+		return
+	}
+	if t.catCancel != nil {
+		t.catCancel()
+	}
+	ctx, cancel := context.WithCancel(t.ctx)
+	t.catCancel = cancel
+	prevNetID := t.catNetID
+	t.catMu.Unlock()
+
+	go func() {
+		defer cancel()
+		applyNetworkCategory(ctx, t.l, t.guid, t.networkCategory, reapply, prevNetID, func(id windows.GUID) {
+			t.catMu.Lock()
+			t.catNetID = id
+			t.catMu.Unlock()
+		})
+	}()
+}
+
 func (t *winTun) Close() error {
+	t.cancel()
 	// It seems that the Windows networking stack doesn't like it when we destroy interfaces that have active routes,
 	// so to be certain, just remove everything before destroying.
 	luid := winipcfg.LUID(t.tun.LUID())
