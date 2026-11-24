@@ -67,7 +67,38 @@ const (
 const (
 	HandshakeIXPSK0 MessageSubType = 0
 	HandshakeXXPSK0 MessageSubType = 1
+
+	// HandshakeIXPSK0Fragmented and HandshakeXXPSK0Fragmented are the subtypes of those patterns' messages when they
+	// travel as fragments, see handshake/fragment.
+	HandshakeIXPSK0Fragmented MessageSubType = 0x80
+	HandshakeXXPSK0Fragmented MessageSubType = 0x81
 )
+
+// FragmentedSubtype returns the subtype a handshake message of this pattern carries as fragments, and false for a
+// subtype with no fragmented form.
+func FragmentedSubtype(pattern MessageSubType) (MessageSubType, bool) {
+	switch pattern {
+	case HandshakeIXPSK0:
+		return HandshakeIXPSK0Fragmented, true
+	case HandshakeXXPSK0:
+		return HandshakeXXPSK0Fragmented, true
+	default:
+		return 0, false
+	}
+}
+
+// FragmentedPattern returns the handshake pattern a fragmented subtype carries, and false for a subtype that does not
+// travel as fragments.
+func FragmentedPattern(st MessageSubType) (MessageSubType, bool) {
+	switch st {
+	case HandshakeIXPSK0Fragmented:
+		return HandshakeIXPSK0, true
+	case HandshakeXXPSK0Fragmented:
+		return HandshakeXXPSK0, true
+	default:
+		return 0, false
+	}
+}
 
 var ErrHeaderTooShort = errors.New("header is too short")
 
@@ -88,7 +119,8 @@ var subTypeMap = map[MessageType]*map[MessageSubType]string{
 	Test:        &subTypeTestMap,
 	CloseTunnel: &subTypeNoneMap,
 	Handshake: {
-		HandshakeIXPSK0: "ix_psk0",
+		HandshakeIXPSK0:           "ix_psk0",
+		HandshakeIXPSK0Fragmented: "ix_psk0_fragmented",
 	},
 	Control: &subTypeNoneMap,
 }
@@ -199,7 +231,7 @@ func IsValidSubType(t MessageType, s MessageSubType) bool {
 	case Message:
 		return s == MessageNone || s == MessageRelay
 	case Handshake:
-		return s == HandshakeIXPSK0
+		return s == HandshakeIXPSK0 || s == HandshakeIXPSK0Fragmented
 	case Test:
 		return s == TestReply || s == TestRequest
 	case Control, CloseTunnel, RecvError, LightHouse:
