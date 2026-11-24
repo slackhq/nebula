@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -116,6 +117,19 @@ func Test_keygen(t *testing.T) {
 	require.EqualError(t, keygen(args, ob, eb), "refusing to overwrite existing public key: "+dir)
 	_, err = os.Stat(keyPath)
 	assert.True(t, os.IsNotExist(err), "key must not be written when pub is refused")
+}
+
+func Test_keygen_sameOutput(t *testing.T) {
+	ob := &bytes.Buffer{}
+	eb := &bytes.Buffer{}
+	same := filepath.Join(t.TempDir(), "same.pem")
+
+	// test that one file for both outputs is refused before the pub replaces the key
+	args := []string{"-out-key", same, "-out-pub", same}
+	require.EqualError(t, keygen(args, ob, eb), fmt.Sprintf("-out-key and -out-pub both write to %q, each output needs its own file", same))
+	assert.NoFileExists(t, same)
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 }
 
 func Test_keygen_stdio(t *testing.T) {

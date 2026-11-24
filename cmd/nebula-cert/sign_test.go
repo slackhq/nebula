@@ -7,6 +7,7 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -106,7 +107,7 @@ func Test_signCert(t *testing.T) {
 	// failed to read key
 	ob.Reset()
 	eb.Reset()
-	args := []string{"-version", "1", "-ca-crt", "./nope", "-ca-key", "./nope", "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", "nope", "-out-key", "nope", "-duration", "100m"}
+	args := []string{"-version", "1", "-ca-crt", "./nope", "-ca-key", "./nope", "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", "nope.crt", "-out-key", "nope.key", "-duration", "100m"}
 	require.EqualError(t, signCert(args, ob, eb, nopw), "error while reading ca-key: open ./nope: "+NoSuchFileError)
 
 	// failed to unmarshal key
@@ -116,7 +117,7 @@ func Test_signCert(t *testing.T) {
 	require.NoError(t, err)
 	defer os.Remove(caKeyF.Name())
 
-	args = []string{"-version", "1", "-ca-crt", "./nope", "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", "nope", "-out-key", "nope", "-duration", "100m"}
+	args = []string{"-version", "1", "-ca-crt", "./nope", "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", "nope.crt", "-out-key", "nope.key", "-duration", "100m"}
 	require.EqualError(t, signCert(args, ob, eb, nopw), "error while parsing ca-key: input did not contain a valid PEM encoded block")
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
@@ -128,7 +129,7 @@ func Test_signCert(t *testing.T) {
 	caKeyF.Write(cert.MarshalSigningPrivateKeyToPEM(cert.Curve_CURVE25519, caPriv))
 
 	// failed to read cert
-	args = []string{"-version", "1", "-ca-crt", "./nope", "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", "nope", "-out-key", "nope", "-duration", "100m"}
+	args = []string{"-version", "1", "-ca-crt", "./nope", "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", "nope.crt", "-out-key", "nope.key", "-duration", "100m"}
 	require.EqualError(t, signCert(args, ob, eb, nopw), "error while reading ca-crt: open ./nope: "+NoSuchFileError)
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
@@ -140,7 +141,7 @@ func Test_signCert(t *testing.T) {
 	require.NoError(t, err)
 	defer os.Remove(caCrtF.Name())
 
-	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", "nope", "-out-key", "nope", "-duration", "100m"}
+	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", "nope.crt", "-out-key", "nope.key", "-duration", "100m"}
 	require.EqualError(t, signCert(args, ob, eb, nopw), "error while parsing ca-crt: input did not contain a valid PEM encoded block")
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
@@ -177,21 +178,21 @@ func Test_signCert(t *testing.T) {
 	// bad ip cidr
 	ob.Reset()
 	eb.Reset()
-	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "a1.1.1.1/24", "-out-crt", "nope", "-out-key", "nope", "-duration", "100m"}
+	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "a1.1.1.1/24", "-out-crt", "nope.crt", "-out-key", "nope.key", "-duration", "100m"}
 	assertHelpError(t, signCert(args, ob, eb, nopw), "invalid -networks definition: a1.1.1.1/24")
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
 
 	ob.Reset()
 	eb.Reset()
-	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "100::100/100", "-out-crt", "nope", "-out-key", "nope", "-duration", "100m"}
+	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "100::100/100", "-out-crt", "nope.crt", "-out-key", "nope.key", "-duration", "100m"}
 	assertHelpError(t, signCert(args, ob, eb, nopw), "invalid -networks definition: v1 certificates can only have a single ipv4 address")
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
 
 	ob.Reset()
 	eb.Reset()
-	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24,1.1.1.2/24", "-out-crt", "nope", "-out-key", "nope", "-duration", "100m"}
+	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24,1.1.1.2/24", "-out-crt", "nope.crt", "-out-key", "nope.key", "-duration", "100m"}
 	assertHelpError(t, signCert(args, ob, eb, nopw), "invalid -networks definition: v1 certificates can only have a single ipv4 address")
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
@@ -199,14 +200,14 @@ func Test_signCert(t *testing.T) {
 	// bad subnet cidr
 	ob.Reset()
 	eb.Reset()
-	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", "nope", "-out-key", "nope", "-duration", "100m", "-subnets", "a"}
+	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", "nope.crt", "-out-key", "nope.key", "-duration", "100m", "-subnets", "a"}
 	assertHelpError(t, signCert(args, ob, eb, nopw), "invalid -unsafe-networks definition: a")
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
 
 	ob.Reset()
 	eb.Reset()
-	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", "nope", "-out-key", "nope", "-duration", "100m", "-subnets", "100::100/100"}
+	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", "nope.crt", "-out-key", "nope.key", "-duration", "100m", "-subnets", "100::100/100"}
 	assertHelpError(t, signCert(args, ob, eb, nopw), "invalid -unsafe-networks definition: v1 certificates can only contain ipv4 addresses")
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
@@ -220,7 +221,7 @@ func Test_signCert(t *testing.T) {
 
 	ob.Reset()
 	eb.Reset()
-	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF2.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", "nope", "-out-key", "nope", "-duration", "100m", "-subnets", "a"}
+	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF2.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", "nope.crt", "-out-key", "nope.key", "-duration", "100m", "-subnets", "a"}
 	require.EqualError(t, signCert(args, ob, eb, nopw), "refusing to sign, root certificate does not match private key")
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
@@ -435,6 +436,36 @@ func Test_signCert(t *testing.T) {
 	assert.Equal(t, "Enter passphrase: ", eb.String())
 }
 
+func Test_signCert_sameOutput(t *testing.T) {
+	ob := &bytes.Buffer{}
+	eb := &bytes.Buffer{}
+	nopw := &StubPasswordReader{}
+	dir := t.TempDir()
+
+	caCrtPath := filepath.Join(dir, "ca.crt")
+	caKeyPath := filepath.Join(dir, "ca.key")
+	require.NoError(t, ca([]string{"-name", "ca", "-duration", "1h", "-out-crt", caCrtPath, "-out-key", caKeyPath}, ob, eb, nopw))
+
+	// test that one file for the key and the certificate is refused before the certificate replaces the key
+	same := filepath.Join(dir, "same.pem")
+	args := []string{"-ca-crt", caCrtPath, "-ca-key", caKeyPath, "-name", "test", "-networks", "10.1.0.2/24", "-out-crt", same, "-out-key", same}
+	require.EqualError(t, signCert(args, ob, eb, nopw), fmt.Sprintf("-out-key and -out-crt both write to %q, each output needs its own file", same))
+	assert.NoFileExists(t, same)
+
+	// test that the default key path is not an output when the public key comes from -in-pub
+	name := filepath.Join(dir, "host")
+	pubPath := filepath.Join(dir, "host.pub")
+	require.NoError(t, keygen([]string{"-out-key", filepath.Join(dir, "in.key"), "-out-pub", pubPath}, ob, eb))
+	args = []string{"-ca-crt", caCrtPath, "-ca-key", caKeyPath, "-name", name, "-networks", "10.1.0.2/24", "-in-pub", pubPath, "-out-crt", name + ".key"}
+	require.NoError(t, signCert(args, ob, eb, nopw))
+	rb, err := os.ReadFile(name + ".key")
+	require.NoError(t, err)
+	_, _, err = cert.UnmarshalCertificateFromPEM(rb)
+	require.NoError(t, err)
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
+}
+
 func Test_signCert_stdio(t *testing.T) {
 	nopw := &StubPasswordReader{
 		password: []byte(""),
@@ -481,7 +512,7 @@ func Test_signCert_stdio(t *testing.T) {
 	withStdin(t, stdinIn)
 	ob.Reset()
 	eb.Reset()
-	args = []string{"-version", "1", "-ca-crt", "-", "-ca-key", "-", "-name", "stdin-test", "-ip", "1.1.1.1/24", "-out-crt", "nope", "-out-key", "nope", "-duration", "100m"}
+	args = []string{"-version", "1", "-ca-crt", "-", "-ca-key", "-", "-name", "stdin-test", "-ip", "1.1.1.1/24", "-out-crt", "nope.crt", "-out-key", "nope.key", "-duration", "100m"}
 	require.EqualError(t, signCert(args, ob, eb, nopw),
 		`-ca-key and -ca-crt both set to "-", only one input may read from stdin`)
 	assert.Equal(t, len(rawCAKey), stdinIn.Len(), "stdin should be untouched when conflict is caught up front")

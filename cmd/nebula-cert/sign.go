@@ -106,7 +106,8 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		return newHelpErrorf("-version must be either %v or %v", cert.Version1, cert.Version2)
 	}
 
-	if *sf.outKeyPath == "" {
+	if !isP11 && *sf.inPubPath == "" && *sf.outKeyPath == "" {
+		// only a key we generate is written
 		*sf.outKeyPath = *sf.name + ".key"
 	}
 	if *sf.outCertPath == "" {
