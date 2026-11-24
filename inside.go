@@ -163,7 +163,7 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 
 	// One traffic-out mark covers every segment of the superpacket; doing it
 	// per segment in sendInsideEncrypt paid an atomic store up to ~45 extra
-	// times per TSO packet, inside writeLock under boring crypto.
+	// times per TSO packet, inside writeLock under fips140.
 	//
 	// We rebound since this tunnel last sent, ask the lighthouse to get the far side punching at us again
 	if f.connectionManager.Out(hostinfo) {
@@ -448,7 +448,7 @@ func (f *Interface) prepareSendVia(via *HostInfo,
 	nocopy bool,
 ) ([]byte, error) {
 	if noiseutil.EncryptLockNeeded {
-		// NOTE: for goboring AESGCMTLS we need to lock because of the nonce check
+		// NOTE: for fips140 AESGCMTLS we need to lock because of the nonce check
 		via.ConnectionState.writeLock.Lock()
 	}
 	c, ok := via.ConnectionState.NextMessageCounter()
@@ -552,7 +552,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	}
 
 	if noiseutil.EncryptLockNeeded {
-		// NOTE: for goboring AESGCMTLS we need to lock because of the nonce check
+		// NOTE: for fips140 AESGCMTLS we need to lock because of the nonce check
 		ci.writeLock.Lock()
 	}
 	c, ok := ci.NextMessageCounter()

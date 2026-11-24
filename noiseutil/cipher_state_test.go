@@ -24,7 +24,7 @@ func TestNewCipherStateDispatch(t *testing.T) {
 	encA, _ := buildCipherStates(t, CipherAESGCM)
 	encC, _ := buildCipherStates(t, noise.CipherChaChaPoly)
 
-	if !boringEnabled && !fips140.Enabled() {
+	if !fips140.Enabled() {
 		assert.IsType(t, &CipherStateAESGCM{}, NewCipherState(encA, CipherAESGCM))
 	} else {
 		// fips140

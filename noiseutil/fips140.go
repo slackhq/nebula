@@ -22,8 +22,7 @@ import (
 // - https://github.com/golang/go/issues/73110
 // - https://github.com/golang/go/issues/79219
 // Using tls.aeadAESGCMTLS13 gives us the TLS 1.3 GCM, which also verifies
-// that the nonce is strictly increasing. This works for both boringcrypto
-// and fips140.
+// that the nonce is strictly increasing.
 //
 //go:linkname aeadAESGCMTLS13 crypto/tls.aeadAESGCMTLS13
 func aeadAESGCMTLS13(key, noncePrefix []byte) cipher.AEAD
@@ -36,7 +35,7 @@ type cipherFn struct {
 func (c cipherFn) Cipher(k [32]byte) noise.Cipher { return c.fn(k) }
 func (c cipherFn) CipherName() string             { return c.name }
 
-// CipherAESGCMFIPS140 is the AES256-GCM AEAD cipher (using tls.aeadAESGCMTLS13, for both boringcrypto and fips140)
+// CipherAESGCMFIPS140 is the AES256-GCM AEAD cipher (using tls.aeadAESGCMTLS13)
 var CipherAESGCMFIPS140 noise.CipherFunc = cipherFn{cipherAESGCMFIPS140, "AESGCM"}
 
 // tls.aeadAESGCMTLS13 uses a 4 byte static prefix and an 8 byte XOR mask
@@ -148,7 +147,7 @@ func aeadGCMFIPS140CipherNonce(n uint64) []byte {
 }
 
 func init() {
-	if boringEnabled || fips140.Enabled() {
+	if fips140.Enabled() {
 		initSelfTestAESGCMFIPS140()
 	}
 }

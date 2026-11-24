@@ -314,7 +314,6 @@ func (s *statsServer) buildRuntime(ctx context.Context, cfg statsConfig) ([]func
 			ConstLabels: prometheus.Labels{
 				"version":         s.buildVersion,
 				"goversion":       runtime.Version(),
-				"boringcrypto":    strconv.FormatBool(boringEnabled()),
 				"fips140Version":  fips140.Version(),
 				"fips140Enabled":  strconv.FormatBool(fips140.Enabled()),
 				"fips140Enforced": strconv.FormatBool(fips140.Enforced()),

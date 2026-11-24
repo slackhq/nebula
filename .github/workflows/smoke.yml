@@ -34,9 +34,6 @@ jobs:
     - name: Smoke Relay Docker
       run: make smoke-relay-docker
 
-    - name: Smoke Docker boringcrypto
-      run: make boringcrypto smoke-docker
-
     - name: Smoke Docker fips140
       run: make fips140-all GOALS=smoke-docker
 
