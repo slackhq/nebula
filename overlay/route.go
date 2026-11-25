@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"runtime"
+	"slices"
 	"strconv"
 
 	"github.com/gaissmai/bart"
@@ -14,12 +15,17 @@ import (
 	"github.com/slackhq/nebula/routing"
 )
 
+const mainRouteTable = 254
+
 type Route struct {
-	MTU     int
-	Metric  int
-	Cidr    netip.Prefix
-	Via     routing.Gateways
-	Install bool
+	MTU      int
+	Metric   int
+	Cidr     netip.Prefix
+	Source   *netip.Prefix
+	Table    int
+	Priority int
+	Via      routing.Gateways
+	Install  bool
 }
 
 // Equal determines if a route that could be installed in the system route table is equal to another
@@ -35,6 +41,12 @@ func (r Route) Equal(t Route) bool {
 		return false
 	}
 	if r.Install != t.Install {
+		return false
+	}
+	if r.Source == nil != (t.Source == nil) || (r.Source != nil && *r.Source != *t.Source) {
+		return false
+	}
+	if r.Table != t.Table || r.Priority != t.Priority {
 		return false
 	}
 	return true
@@ -126,6 +138,7 @@ func parseRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 		r := Route{
 			Install: true,
 			MTU:     mtu,
+			Table:   mainRouteTable,
 		}
 
 		r.Cidr, err = netip.ParsePrefix(fmt.Sprintf("%v", rRoute))
@@ -179,6 +192,13 @@ func parseUnsafeRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 		if !ok {
 			return nil, fmt.Errorf("entry %v in tun.unsafe_routes is invalid", i+1)
 		}
+		if runtime.GOOS != "linux" {
+			for _, field := range []string{"table", "source", "priority"} {
+				if _, ok := m[field]; ok {
+					return nil, fmt.Errorf("entry %v.%s in tun.unsafe_routes is only supported on Linux", i+1, field)
+				}
+			}
+		}
 
 		var mtu int
 		if rMtu, ok := m["mtu"]; ok {
@@ -204,17 +224,9 @@ func parseUnsafeRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 			rMetric = 0
 		}
 
-		metric, ok := rMetric.(int)
-		if !ok {
-			s, ok := rMetric.(string)
-			if !ok {
-				return nil, fmt.Errorf("entry %v.metric in tun.unsafe_routes is not an integer: %v", i+1, rMetric)
-			}
-			n, err := strconv.ParseInt(s, 10, 32)
-			if err != nil {
-				return nil, fmt.Errorf("entry %v.metric in tun.unsafe_routes is not an integer: %v", i+1, err)
-			}
-			metric = int(n)
+		metric, err := parseRouteInt(rMetric, "metric", i+1)
+		if err != nil {
+			return nil, err
 		}
 
 		if metric < 0 || metric > math.MaxInt32 {
@@ -309,11 +321,54 @@ func parseUnsafeRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 			MTU:     mtu,
 			Metric:  metric,
 			Install: install,
+			Table:   mainRouteTable,
+		}
+
+		if rTable, ok := m["table"]; ok {
+			r.Table, err = parseRouteInt(rTable, "table", i+1)
+			if err != nil {
+				return nil, err
+			}
+			if r.Table < 1 || r.Table > math.MaxInt32 {
+				return nil, fmt.Errorf("entry %v.table in tun.unsafe_routes is not in range (1-%d): %v", i+1, math.MaxInt32, r.Table)
+			}
+			if r.Table == 253 || r.Table == 255 {
+				return nil, fmt.Errorf("entry %v.table in tun.unsafe_routes uses a reserved routing table: %v", i+1, r.Table)
+			}
+		}
+
+		if rSource, ok := m["source"]; ok {
+			source, parseErr := netip.ParsePrefix(fmt.Sprintf("%v", rSource))
+			if parseErr != nil {
+				return nil, fmt.Errorf("entry %v.source in tun.unsafe_routes failed to parse: %v", i+1, parseErr)
+			}
+			r.Source = &source
+		}
+
+		if rPriority, ok := m["priority"]; ok {
+			r.Priority, err = parseRouteInt(rPriority, "priority", i+1)
+			if err != nil {
+				return nil, err
+			}
+			if r.Priority < 1 || r.Priority > math.MaxInt32 {
+				return nil, fmt.Errorf("entry %v.priority in tun.unsafe_routes is not in range (1-%d): %v", i+1, math.MaxInt32, r.Priority)
+			}
+		} else if r.Source != nil {
+			r.Priority = 10000
+		}
+		if r.Source == nil && r.Table != mainRouteTable {
+			return nil, fmt.Errorf("entry %v.table requires entry %v.source in tun.unsafe_routes", i+1, i+1)
+		}
+		if r.Source != nil && r.Table == mainRouteTable {
+			return nil, fmt.Errorf("entry %v.source requires a non-main table in tun.unsafe_routes", i+1)
 		}
 
 		r.Cidr, err = netip.ParsePrefix(fmt.Sprintf("%v", rRoute))
 		if err != nil {
 			return nil, fmt.Errorf("entry %v.route in tun.unsafe_routes failed to parse: %v", i+1, err)
+		}
+		if r.Source != nil && r.Source.Addr().Is4() != r.Cidr.Addr().Is4() {
+			return nil, fmt.Errorf("entry %v.source and entry %v.route in tun.unsafe_routes must use the same IP family", i+1, i+1)
 		}
 
 		for _, network := range networks {
@@ -327,10 +382,31 @@ func parseUnsafeRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 			}
 		}
 
+		// Nebula selects gateways by destination only, not by source or table.
+		for j, previous := range routes[:i] {
+			if previous.Cidr.Overlaps(r.Cidr) && (previous.Source != nil || r.Source != nil) && !slices.Equal(previous.Via, r.Via) {
+				return nil, fmt.Errorf("entries %v and %v in tun.unsafe_routes have conflicting gateways for policy route %v", j+1, i+1, r.Cidr.Masked())
+			}
+		}
 		routes[i] = r
 	}
 
 	return routes, nil
+}
+
+func parseRouteInt(value any, field string, entry int) (int, error) {
+	if n, ok := value.(int); ok {
+		return n, nil
+	}
+	s, ok := value.(string)
+	if !ok {
+		return 0, fmt.Errorf("entry %v.%s in tun.unsafe_routes is not an integer: %v", entry, field, value)
+	}
+	n, err := strconv.ParseInt(s, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("entry %v.%s in tun.unsafe_routes is not an integer: %v", entry, field, err)
+	}
+	return int(n), nil
 }
 
 func ipWithin(o *net.IPNet, i *net.IPNet) bool {

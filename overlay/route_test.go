@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/netip"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -105,6 +106,7 @@ func Test_parseRoutes(t *testing.T) {
 	tested := 0
 	for _, r := range routes {
 		assert.True(t, r.Install)
+		assert.Equal(t, mainRouteTable, r.Table)
 
 		if r.MTU == 8000 {
 			assert.Equal(t, "10.0.0.1/32", r.Cidr.String())
@@ -263,6 +265,7 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 
 	tested := 0
 	for _, r := range routes {
+		assert.Equal(t, mainRouteTable, r.Table)
 		if r.MTU == 8000 {
 			assert.Equal(t, "1.0.0.1/32", r.Cidr.String())
 			assert.False(t, r.Install)
@@ -283,6 +286,225 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 
 	if tested != 4 {
 		t.Fatal("Did not see all unsafe_routes")
+	}
+}
+
+func Test_parseUnsafeRoutesPolicyRouting(t *testing.T) {
+	t.Run("ipv4", func(t *testing.T) {
+		c := config.NewC(test.NewLogger())
+		require.NoError(t, c.LoadString(`tun:
+  unsafe_routes:
+    - route: 192.168.100.0/24
+      via:
+        - gateway: 10.0.0.1
+        - gateway: 10.0.0.2
+      table: 200
+      source: 192.168.200.0/24
+      priority: 10000
+`))
+
+		routes, err := parseUnsafeRoutes(c, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")})
+		if runtime.GOOS != "linux" {
+			require.ErrorContains(t, err, "is only supported on Linux")
+			assert.Nil(t, routes)
+			return
+		}
+		require.NoError(t, err)
+		require.Len(t, routes, 1)
+		assert.Equal(t, 200, routes[0].Table)
+		assert.Equal(t, 10000, routes[0].Priority)
+		require.NotNil(t, routes[0].Source)
+		assert.Equal(t, netip.MustParsePrefix("192.168.200.0/24"), *routes[0].Source)
+		assert.Equal(t, netip.MustParsePrefix("192.168.100.0/24"), routes[0].Cidr)
+		require.Len(t, routes[0].Via, 2)
+		assert.Equal(t, netip.MustParseAddr("10.0.0.1"), routes[0].Via[0].Addr())
+		assert.Equal(t, netip.MustParseAddr("10.0.0.2"), routes[0].Via[1].Addr())
+	})
+
+	t.Run("ipv6", func(t *testing.T) {
+		c := config.NewC(test.NewLogger())
+		require.NoError(t, c.LoadString(`tun:
+  unsafe_routes:
+    - route: 2000::/3
+      via:
+        - gateway: 2001:db8:1::1
+        - gateway: 2001:db8:1::2
+      table: 200
+      source: 2001:db8:1200::/44
+      priority: 10000
+`))
+
+		routes, err := parseUnsafeRoutes(c, []netip.Prefix{netip.MustParsePrefix("2001:db8:1::/64")})
+		if runtime.GOOS != "linux" {
+			require.ErrorContains(t, err, "is only supported on Linux")
+			assert.Nil(t, routes)
+			return
+		}
+		require.NoError(t, err)
+		require.Len(t, routes, 1)
+		assert.Equal(t, 200, routes[0].Table)
+		assert.Equal(t, 10000, routes[0].Priority)
+		require.NotNil(t, routes[0].Source)
+		assert.Equal(t, netip.MustParsePrefix("2001:db8:1200::/44"), *routes[0].Source)
+		assert.Equal(t, netip.MustParsePrefix("2000::/3"), routes[0].Cidr)
+		require.Len(t, routes[0].Via, 2)
+		assert.Equal(t, netip.MustParseAddr("2001:db8:1::1"), routes[0].Via[0].Addr())
+		assert.Equal(t, netip.MustParseAddr("2001:db8:1::2"), routes[0].Via[1].Addr())
+	})
+}
+
+func Test_parseUnsafeRoutesConflictingPolicyGateways(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("policy routes are only supported on Linux")
+	}
+	for _, tc := range []struct {
+		name         string
+		firstRoute   string
+		secondRoute  string
+		firstPolicy  string
+		secondPolicy string
+		secondVia    string
+		wantError    bool
+	}{
+		{name: "different gateways", firstPolicy: "source: 192.168.200.0/24\n      table: 200", secondPolicy: "source: 192.168.201.0/24\n      table: 201", secondVia: "10.0.0.2", wantError: true},
+		{name: "same gateways", firstPolicy: "source: 192.168.200.0/24\n      table: 200", secondPolicy: "source: 192.168.201.0/24\n      table: 201", secondVia: "10.0.0.1"},
+		{name: "policy followed by ordinary route", firstPolicy: "source: 192.168.200.0/24\n      table: 200", secondVia: "10.0.0.2", wantError: true},
+		{name: "ordinary followed by policy route", secondPolicy: "source: 192.168.201.0/24\n      table: 201", secondVia: "10.0.0.2", wantError: true},
+		{name: "ordinary duplicate unchanged", secondVia: "10.0.0.2"},
+		{name: "normalized destination", firstRoute: "192.168.100.1/24", secondRoute: "192.168.100.2/24", firstPolicy: "source: 192.168.200.0/24\n      table: 200", secondVia: "10.0.0.2", wantError: true},
+		{name: "ipv6", firstRoute: "2001:db8:100::/64", secondRoute: "2001:db8:100::/64", firstPolicy: "source: 2001:db8:200::/64\n      table: 200", secondVia: "10.0.0.2", wantError: true},
+		{name: "overlapping policy routes", firstRoute: "192.168.0.0/16", secondRoute: "192.168.1.0/24", firstPolicy: "source: 172.16.1.0/24\n      table: 200", secondPolicy: "source: 172.16.2.0/24\n      table: 201", secondVia: "10.0.0.2", wantError: true},
+		{name: "overlapping policy routes reversed", firstRoute: "192.168.1.0/24", secondRoute: "192.168.0.0/16", firstPolicy: "source: 172.16.1.0/24\n      table: 200", secondPolicy: "source: 172.16.2.0/24\n      table: 201", secondVia: "10.0.0.2", wantError: true},
+		{name: "overlapping ordinary route", firstRoute: "192.168.0.0/16", secondRoute: "192.168.1.0/24", firstPolicy: "source: 172.16.1.0/24\n      table: 200", secondVia: "10.0.0.2", wantError: true},
+		{name: "overlapping same gateways", firstRoute: "192.168.0.0/16", secondRoute: "192.168.1.0/24", firstPolicy: "source: 172.16.1.0/24\n      table: 200", secondPolicy: "source: 172.16.2.0/24\n      table: 201", secondVia: "10.0.0.1"},
+		{name: "disjoint policy routes", firstRoute: "192.168.1.0/24", secondRoute: "192.168.2.0/24", firstPolicy: "source: 172.16.1.0/24\n      table: 200", secondPolicy: "source: 172.16.2.0/24\n      table: 201", secondVia: "10.0.0.2"},
+		{name: "ordinary overlap unchanged", firstRoute: "192.168.0.0/16", secondRoute: "192.168.1.0/24", secondVia: "10.0.0.2"},
+		{name: "ipv6 overlap", firstRoute: "2001:db8:100::/48", secondRoute: "2001:db8:100:1::/64", firstPolicy: "source: 2001:db8:200::/64\n      table: 200", secondVia: "10.0.0.2", wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.firstRoute == "" {
+				tc.firstRoute = "192.168.100.0/24"
+			}
+			if tc.secondRoute == "" {
+				tc.secondRoute = "192.168.100.0/24"
+			}
+			c := config.NewC(test.NewLogger())
+			require.NoError(t, c.LoadString(fmt.Sprintf(`tun:
+  unsafe_routes:
+    - route: %s
+      via: 10.0.0.1
+      %s
+    - route: %s
+      via: %s
+      %s
+`, tc.firstRoute, tc.firstPolicy, tc.secondRoute, tc.secondVia, tc.secondPolicy)))
+			routes, err := parseUnsafeRoutes(c, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")})
+			if tc.wantError {
+				require.ErrorContains(t, err, "entries 1 and 2 in tun.unsafe_routes have conflicting gateways for policy route")
+				assert.Nil(t, routes)
+			} else {
+				require.NoError(t, err)
+				assert.Len(t, routes, 2)
+			}
+		})
+	}
+}
+
+func Test_parseUnsafeRoutesReservedTables(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("policy routes are only supported on Linux")
+	}
+	for _, table := range []int{253, 255} {
+		t.Run(fmt.Sprint(table), func(t *testing.T) {
+			c := config.NewC(test.NewLogger())
+			require.NoError(t, c.LoadString(fmt.Sprintf(`tun:
+  unsafe_routes:
+    - route: 192.168.100.0/24
+      via: 10.0.0.1
+      source: 192.168.200.0/24
+      table: %d
+`, table)))
+			routes, err := parseUnsafeRoutes(c, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")})
+			require.EqualError(t, err, fmt.Sprintf("entry 1.table in tun.unsafe_routes uses a reserved routing table: %d", table))
+			assert.Nil(t, routes)
+		})
+	}
+}
+
+func Test_parseUnsafeRoutesSourceRequiresCustomTable(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("policy routes are only supported on Linux")
+	}
+	for _, table := range []string{"", "      table: 254\n"} {
+		t.Run(fmt.Sprintf("ipv4/table=%q", table), func(t *testing.T) {
+			c := config.NewC(test.NewLogger())
+			require.NoError(t, c.LoadString("tun:\n  unsafe_routes:\n"+
+				"    - route: 192.168.100.0/24\n      via: 10.0.0.1\n"+
+				"      source: 192.168.200.0/24\n"+table))
+			routes, err := parseUnsafeRoutes(c, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")})
+			require.EqualError(t, err, "entry 1.source requires a non-main table in tun.unsafe_routes")
+			assert.Nil(t, routes)
+		})
+		t.Run(fmt.Sprintf("ipv6/table=%q", table), func(t *testing.T) {
+			c := config.NewC(test.NewLogger())
+			require.NoError(t, c.LoadString("tun:\n  unsafe_routes:\n"+
+				"    - route: 2000::/3\n      via: 2001:db8:1::1\n"+
+				"      source: 2001:db8:1200::/44\n"+table))
+			routes, err := parseUnsafeRoutes(c, []netip.Prefix{netip.MustParsePrefix("2001:db8:1::/64")})
+			require.EqualError(t, err, "entry 1.source requires a non-main table in tun.unsafe_routes")
+			assert.Nil(t, routes)
+		})
+	}
+}
+
+func Test_parseUnsafeRoutesPolicySourceFamily(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("policy routes are only supported on Linux")
+	}
+	for _, tc := range []struct {
+		route  string
+		source string
+	}{
+		{route: "192.168.100.0/24", source: "2001:db8:200::/64"},
+		{route: "2001:db8:100::/64", source: "192.168.200.0/24"},
+	} {
+		t.Run(tc.route, func(t *testing.T) {
+			c := config.NewC(test.NewLogger())
+			require.NoError(t, c.LoadString(fmt.Sprintf(`tun:
+  unsafe_routes:
+    - route: %s
+      via: 10.0.0.1
+      source: %s
+      table: 200
+`, tc.route, tc.source)))
+			routes, err := parseUnsafeRoutes(c, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")})
+			require.EqualError(t, err, "entry 1.source and entry 1.route in tun.unsafe_routes must use the same IP family")
+			assert.Nil(t, routes)
+		})
+	}
+}
+
+func Test_parseUnsafeRoutesPolicyOptionsUnsupported(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("policy routes are supported on Linux")
+	}
+	for _, option := range []struct {
+		field string
+		value any
+	}{
+		{field: "table", value: 200},
+		{field: "source", value: "192.168.200.0/24"},
+		{field: "priority", value: 10000},
+	} {
+		t.Run(option.field, func(t *testing.T) {
+			c := config.NewC(test.NewLogger())
+			c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{
+				"route": "0.0.0.0/0", "via": "10.0.0.1", option.field: option.value,
+			}}}
+			routes, err := parseUnsafeRoutes(c, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")})
+			require.EqualError(t, err, fmt.Sprintf("entry 1.%s in tun.unsafe_routes is only supported on Linux", option.field))
+			assert.Nil(t, routes)
+		})
 	}
 }
 
