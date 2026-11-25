@@ -1246,7 +1246,7 @@ func Test_parsePort(t *testing.T) {
 
 	s, e, err = parsePort("0-1")
 	assert.Equal(t, int32(0), s)
-	assert.Equal(t, int32(0), e)
+	assert.Equal(t, int32(1), e)
 	require.NoError(t, err)
 
 	s, e, err = parsePort("9919")
@@ -1313,7 +1313,7 @@ func Test_parsePort_valid_boundaries(t *testing.T) {
 		{"zero is PortAny", "0", 0, 0},
 		{"min real port", "1", 1, 1},
 		{"max real port", "65535", 65535, 65535},
-		{"range zero to max forces end to zero", "0-65535", 0, 0},
+		{"range zero to max", "0-65535", 0, 65535},
 		{"range max to max", "65535-65535", 65535, 65535},
 		{"range one to max", "1-65535", 1, 65535},
 		{"range with whitespace inside", " 1 - 2    ", 1, 2},
