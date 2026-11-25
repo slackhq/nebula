@@ -124,6 +124,7 @@ jobs:
         - {name: freebsd,     make-target: all-freebsd}
         - {name: openbsd,     make-target: all-openbsd}
         - {name: netbsd,      make-target: all-netbsd}
+        - {name: illumos,     make-target: all-illumos}
         - {name: windows,     make-target: all-cross-windows}
         - {name: mobile,      make-target: build-test-mobile}
     steps:
