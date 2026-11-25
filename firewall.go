@@ -1170,10 +1170,6 @@ func parsePort(s string) (int32, int32, error) {
 		return notAPort, notAPort, err
 	}
 
-	if startPort == firewall.PortAny {
-		endPort = firewall.PortAny
-	}
-
 	return startPort, endPort, nil
 }
 
