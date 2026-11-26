@@ -5,6 +5,8 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -347,4 +349,42 @@ func TestPKICertSkipsUnsupported(t *testing.T) {
 	_, _, _, expiredHostPEM := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, oldCA, oldCAKey, "host", time.Now().Add(-2*time.Hour), time.Now().Add(-time.Hour), []netip.Prefix{netip.MustParsePrefix("10.1.0.2/24")}, nil, nil)
 	_, err = load(append(append([]byte{}, cert_test.WithCurve(expiredHostPEM, cert.Curve(2))...), certPEM...))
 	require.NoError(t, err)
+}
+
+func TestNewCertStateFromConfig_Inputs(t *testing.T) {
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_P256, time.Time{}, time.Time{}, nil, nil, nil)
+	_, _, keyPEM, certPEM := cert_test.NewTestCert(cert.Version2, cert.Curve_P256, ca, caKey, "host", time.Time{}, time.Time{}, []netip.Prefix{netip.MustParsePrefix("10.1.0.1/24")}, nil, nil)
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "host.crt")
+	require.NoError(t, os.WriteFile(certPath, certPEM, 0o600))
+	tests := []struct {
+		description      string
+		key, certificate string
+		wantError        bool
+	}{
+		{"valid inline certificate", string(keyPEM), string(certPEM), false},
+		{"valid certificate file", string(keyPEM), certPath, false},
+		{"missing key", "", string(certPEM), true},
+		{"missing certificate with a valid key", string(keyPEM), "", true},
+		{"missing certificate file with a valid key", string(keyPEM), filepath.Join(dir, "missing.crt"), true},
+		{"empty certificate bundle", string(keyPEM), "-----BEGIN NEBULA CERTIFICATE V2-----\n-----END NEBULA CERTIFICATE V2-----", true},
+		{"invalid key with a valid certificate", "-----BEGIN PRIVATE KEY-----\ninvalid", string(certPEM), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.description, func(t *testing.T) {
+			l := test.NewLogger()
+			c := config.NewC(l)
+			c.Settings["pki"] = map[string]any{"key": tt.key, "cert": tt.certificate}
+			got, err := newCertStateFromConfig(l, c, "aes")
+			if tt.wantError {
+				require.Error(t, err)
+				require.Nil(t, got)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.Equal(t, "host", got.GetDefaultCertificate().Name())
+			assert.Equal(t, cert.Version2, got.DefaultVersion())
+		})
+	}
 }

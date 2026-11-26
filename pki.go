@@ -362,8 +362,6 @@ func newCertStateFromConfig(l *slog.Logger, c *config.C, cipher string) (*CertSt
 
 	if strings.Contains(pubPathOrPEM, "-----BEGIN") {
 		rawCert = []byte(pubPathOrPEM)
-		pubPathOrPEM = "<inline>"
-
 	} else {
 		rawCert, err = os.ReadFile(pubPathOrPEM)
 		if err != nil {
