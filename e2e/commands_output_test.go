@@ -5,6 +5,7 @@ package e2e
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -154,6 +155,11 @@ func TestCommandOutput(t *testing.T) {
 		{"reload", nil},
 	}
 
+	// The empty-path stat error wording differs between operating systems.
+	_, statErr := os.Stat("")
+	require.Error(t, statErr)
+	reloadStatError := fmt.Sprintf("failed to stat config file at : %s", statErr)
+
 	got := &strings.Builder{}
 	for _, c := range cases {
 		for _, fmtFlags := range [][]string{nil, {"-json"}, {"-pretty"}} {
@@ -162,6 +168,9 @@ func TestCommandOutput(t *testing.T) {
 
 			fmt.Fprintf(got, "$ %s\n", strings.Join(args, " "))
 			out, err := run(args...)
+			if c.name == "reload" {
+				out = strings.ReplaceAll(out, reloadStatError, "failed to stat config file at : <stat error>")
+			}
 			out = normalise(out)
 			got.WriteString(out)
 			// Output that does not end in a newline is recorded as such, the way diff marks
