@@ -1038,11 +1038,7 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		)
 
 		hm.DeleteHostInfo(hostinfo)
-		hm.StartHandshake(hostinfo.vpnAddrs[0], func(newHH *HandshakeHostInfo) {
-			newHH.hostinfo.remotes.BlockRemote(via)
-			newHH.packetStore = hh.packetStore
-			hh.packetStore = []*cachedPacket{}
-		})
+		hm.retryHandshake(hh, via)
 		// sendCloseTunnel may take the hostmap lock, so it must not run under the handshake
 		// manager lock that StartHandshake holds around the callback.
 		hostinfo.vpnAddrs = vpnAddrs
@@ -1272,4 +1268,23 @@ func (hm *HandshakeManager) certVerifier() handshake.CertVerifier {
 	return func(c cert.Certificate) (*cert.CachedCertificate, error) {
 		return hm.f.pki.GetCAPool().VerifyCertificate(time.Now(), c)
 	}
+}
+
+// retryHandshake restarts a handshake after a wrong responder. The caller must
+// hold hh's lock and remove hh from the pending map before calling this method.
+func (hm *HandshakeManager) retryHandshake(hh *HandshakeHostInfo, via ViaSender) {
+	hm.StartHandshake(hh.hostinfo.vpnAddrs[0], func(newHH *HandshakeHostInfo) {
+		newHH.hostinfo.remotes.BlockRemote(via)
+		// Traffic may have started this replacement after DeleteHostInfo, so its
+		// packets are newer than the old cache's. Keep arrival order and, like
+		// cachePacket, drop the newest packets beyond the limit.
+		if len(hh.packetStore) > 0 {
+			n := min(len(newHH.packetStore), maxCachedPackets-len(hh.packetStore))
+			if dropped := len(newHH.packetStore) - n; dropped > 0 {
+				hm.f.cachedPacketMetrics.dropped.Inc(int64(dropped))
+			}
+			newHH.packetStore = append(hh.packetStore, newHH.packetStore[:n]...)
+		}
+		hh.packetStore = nil
+	})
 }
