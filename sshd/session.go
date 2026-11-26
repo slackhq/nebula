@@ -106,11 +106,17 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 			var payload = struct{ Value string }{}
 			cErr := ssh.Unmarshal(req.Payload, &payload)
 			if cErr != nil {
-				req.Reply(false, nil)
+				_ = replyAndLog(req, false, nil, s.l)
 				return
 			}
 
-			req.Reply(true, nil)
+			if replyErr := replyAndLog(req, true, nil, s.l); replyErr != nil {
+				// Accept never reached the client; skip dispatch.
+				if err := channel.Close(); err != nil {
+					s.l.Warn("ssh: failed to close rejected exec channel", "error", err)
+				}
+				return
+			}
 			err := s.dispatchCommand(payload.Value, commands.MergedOutput(channel))
 
 			// A command that failed exits 1, so `ssh host cmd` callers can tell.
@@ -118,7 +124,7 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 			if err != nil {
 				status.Status = 1
 			}
-			channel.SendRequest("exit-status", false, ssh.Marshal(status))
+			_, _ = sendRequestAndLog(channel, "exit-status", false, ssh.Marshal(status), s.l)
 			channel.Close()
 			return
 
